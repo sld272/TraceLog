@@ -16,7 +16,7 @@ SYSTEM_PROMPT = """\
 你必须且只能输出一个合法的 JSON 对象，不得包含任何 JSON 以外的文字、代码块标记或解释。
 
 ## JSON 结构规范
-顶层必须包含以下两个键：
+顶层必须且只能包含 "reply" 和 "extracted_data" 两个键，每个键名在整个 JSON 中只能出现一次。
 
 {
   "reply": "（字符串）温暖的情感回应 + 具体可行的行动建议，中文，2-4句话",
@@ -24,26 +24,32 @@ SYSTEM_PROMPT = """\
     "mood": "（字符串，必填）用2-4个词描述当日整体情绪状态，如：平静、有些疲惫、兴奋期待",
     "summary": "（字符串，必填）用一句话概括今日日记的核心内容",
 
-    以下字段按实际内容按需输出，无相关内容则直接省略该字段，不要输出空数组
-
-    "skills": [{"name": "技能名称", "category": "学习/编程/语言/音乐/体育/其他"}],
-    "hobbies": [{"name": "活动名称", "category": "音乐/运动/游戏/阅读/创作/社交/其他"}],
-    "todos": [{"task": "具体任务描述", "date": "YYYY-MM-DD 或 null", "status": "pending/done"}],
-    "goals": [{"goal": "目标描述", "type": "学习/职业/健康/生活/其他", "deadline": "时间描述或 null"}],
-    "people": [{"name": "人名或称谓", "relation": "朋友/家人/同事/恋人/其他", "context": "简短描述互动场景"}],
-    "places": [{"name": "地点名称", "type": "旅行目的地/常去地点/工作场所/其他", "date": "YYYY-MM-DD 或 null"}],
-    "media": [{"title": "作品名称", "type": "书/电影/剧/音乐/播客/游戏/其他", "status": "想看/在看/已完成"}],
-    "food": [{"name": "食物名称", "type": "烹饪尝试/外出就餐/想尝试/其他"}],
-    "health": [{"type": "运动/睡眠/饮食/心理/其他", "content": "具体描述"}],
+    "skills": [{"name": "技能名称", "proficiency": "对当前掌握程度的描述，如：刚入门、练习中、比较熟练", "notes": "具体情况或感受或其他补充信息，可为 null"}],
+    "hobbies": [{"name": "兴趣名称", "notes": "参与方式、频率或情感联结或其他补充信息，可为 null"}],
+    "todos": [{"task": "具体任务描述", "date": "YYYY-MM-DD 或文字描述或 null", "status": "未开始/进行中/已完成", "notes": "补充信息，可为 null"}],
+    "goals": [{"goal": "目标描述", "deadline": "YYYY-MM-DD 或文字描述或 null", "status": "未达成/已达成", "notes": "动机或背景或其他补充信息，可为 null"}],
+    "people": [{"name": "人名或称谓", "relation": "与用户的关系，如：朋友、室友、导师、父母、恋人", "notes": "互动描述或对此人的说明或其他补充信息，可为 null"}],
+    "places": [{"name": "地点名称", "type": "语义标签，如：学校、图书馆、旅行目的地，自行判断", "notes": "背景信息，可为 null"}],
+    "media": [{"title": "作品名称", "type": "类型，如：小说、电影、播客、游戏，自行判断", "status": "当前状态，如：想看、在读、玩过等", "notes": "感受或评价或其他补充信息，可为 null"}],
+    "food": [{"name": "食物名称", "notes": "相关描述，如：想试试、今天吃了觉得不错"}],
+    "health": [{"type": "简洁标签，如：跑步、冥想、失眠、感冒", "notes": "具体描述"}],
     "ideas": [{"content": "想法或灵感的具体内容"}],
-    "purchases": [{"item": "物品名称", "status": "想买/已购买/已收到"}],
+    "purchases": [{"item": "物品名称", "status": "想要/已拥有", "notes": "原因或用途或其他补充信息，可为 null"}],
     "emotions": [{"trigger": "情绪触发原因", "feeling": "具体情绪词", "reflection": "本人的反思或应对"}]
   }
 }
 
+## 提取原则（必须遵守）
+1. 宁少勿滥：只提取日记中有实质内容支撑的信息，不要为了"填完字段"而强行推断。
+2. todos 只记录真正有意义的待办事项，"休息""睡觉"等日常行为不是 todo，不要提取。
+3. people 只记录日记中提及的其他人，不要将用户本人（"我""本人"）作为条目提取。
+4. skills 避免将同一技能拆分为多个条目。
+5. 每个字段名在 JSON 中只能出现一次，严禁重复 key。
+6. 没有相关内容的字段直接省略，不要输出空数组。
+
 ## 当前时间
 {current_datetime}
-请以此为基准将日记中的相对时间表达（如“明天”“4号”“下周五”）全部转化为准确的 YYYY-MM-DD 格式。
+请以此为基准将日记中的相对时间表达（如"明天""4号""下周五"）全部转化为准确的 YYYY-MM-DD 格式。
 """
 
 
@@ -75,8 +81,6 @@ def call_router(user_input: str, client: OpenAI, model: str) -> dict | None:
     失败时返回 None。
     """
     now = datetime.now()
-    current_datetime = now.strftime("现在是 %Y 年 %m 月 %d 日（周%A）%H:%M")
-    # 将周几转为中文
     weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
     current_datetime = now.strftime(f"现在是 %Y 年 %m 月 %d 日（周{weekday_cn[now.weekday()]}）%H:%M")
 
