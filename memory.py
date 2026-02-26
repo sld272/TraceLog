@@ -4,14 +4,16 @@ TraceLog - Memory Layer
 
 import json
 import os
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
+
+BEIJING = timezone(timedelta(hours=8))
 
 PROFILE_FILE = "profile.json"
 DIARY_LIMIT = 50
 
 
 def _empty_profile() -> dict:
-    today = date.today().isoformat()
+    today = datetime.now(BEIJING).date().isoformat()
     return {
         "meta": {"created_at": today, "last_updated": today, "entry_count": 0},
         "portrait": "",
@@ -44,8 +46,10 @@ def save_profile(profile: dict) -> None:
     os.replace(tmp, PROFILE_FILE)
 
 
-def apply_profile_update(profile: dict, updated: dict) -> dict:
-    today = date.today().isoformat()
+def apply_profile_update(profile: dict, updated: dict, raw_input: str = "") -> dict:
+    now = datetime.now(BEIJING)
+    today = now.date().isoformat()
+    timestamp = now.strftime("%Y-%m-%dT%H:%M")
 
     for field in ("skills", "hobbies", "todos", "goals", "people", "places",
                   "media", "food", "health", "ideas", "purchases"):
@@ -53,13 +57,14 @@ def apply_profile_update(profile: dict, updated: dict) -> dict:
             profile[field] = updated[field]
 
     profile.setdefault("diary_summaries", []).append({
-        "date": today,
+        "timestamp": timestamp,
         "mood": updated.get("mood", ""),
         "summary": updated.get("summary", ""),
+        "content": raw_input,
     })
     profile["diary_summaries"] = profile["diary_summaries"][-DIARY_LIMIT:]
 
-    profile["meta"]["last_updated"] = today
+    profile["meta"]["last_updated"] = timestamp
     profile["meta"]["entry_count"] = profile["meta"].get("entry_count", 0) + 1
 
     return profile
@@ -119,7 +124,7 @@ def build_context_summary(profile: dict) -> str:
     recent = profile.get("diary_summaries", [])[-5:]
     if recent:
         lines.append("近期日记：\n  " + "\n  ".join(
-            f"{e['date']} [{e.get('mood', '')}] {e.get('summary', '')}" for e in recent
+            f"{e['timestamp']} [{e.get('mood', '')}] {e.get('summary', '')}" for e in recent
         ))
 
     return "\n".join(lines)
