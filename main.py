@@ -74,7 +74,7 @@ def main():
     )
     model = config["model"]
     base_url_display = config.get("base_url", "https://api.openai.com/v1")
-    print(f"模型: {model}  |  Base URL: {base_url_display}  |  输入 'q' / 'quit' 以退出TraceLog\n")
+    print(f"模型: {model}  |  Base URL: {base_url_display}\n")
 
     while True:
         try:
@@ -85,10 +85,6 @@ def main():
 
         if not user_input:
             continue
-
-        if user_input.lower() in ("q", "quit"):
-            print("再见！")
-            break
 
         print("\n[TraceLog 正在思考...]\n")
         try:
