@@ -8,7 +8,7 @@ from datetime import datetime
 from openai import OpenAI
 
 SYSTEM_PROMPT = """\
-你是 TraceLog 拾迹的日记分析引擎。用户会输入一段自然语言日记，你需要完成两件事：
+{context}你是 TraceLog 拾迹的日记分析引擎。用户会输入一段自然语言日记，你需要完成两件事：
 1. 给出温暖、有洞察力的中文情感回应与行动建议（reply）
 2. 从日记中提取结构化信息（extracted_data）
 
@@ -53,6 +53,44 @@ SYSTEM_PROMPT = """\
 """
 
 
+PORTRAIT_PROMPT = """\
+根据以下结构化数据和旧的画像简介，用第二人称写一段个人简介（以"你是"开头）。
+
+严格规则：
+- 只描述数据中明确存在的信息，禁止推断、联想或填充任何未出现的内容。
+- 如果某方面数据为空，就不要提这方面，绝对不允许用模糊语言替代（如"充满可能""保持开放"等）。
+- 如果数据非常少，简介可以很短，甚至只有一两句话，这是正确的行为。
+- 语言简洁直接，像百科词条而非文学描写。
+- 只输出简介文本，不要任何标题、格式符号或多余说明。
+"""
+
+
+def update_portrait(profile: dict, client: OpenAI, model: str) -> str:
+    """调用 LLM 根据最新 profile 重写用户画像简介。"""
+    old = profile.get("portrait", "")
+    compact = {
+        "skills":  profile.get("skills", []),
+        "hobbies": profile.get("hobbies", []),
+        "goals":   profile.get("goals", []),
+        "people":  profile.get("people", []),
+        "places":  profile.get("places", []),
+        "ideas":   profile.get("ideas", []),
+    }
+    user_content = f"旧的简介（仅供参考，不得延续其中任何推断或模糊表述）：{old or '（无）'}\n\n结构化数据：{json.dumps(compact, ensure_ascii=False)}"
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": PORTRAIT_PROMPT},
+                {"role": "user",   "content": user_content},
+            ],
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[Router] 画像更新失败：{e}")
+        return old
+
+
 def parse_response(response_text: str) -> dict | None:
     """解析 LLM 返回的 JSON 字符串，校验必要字段，失败返回 None。"""
     try:
@@ -75,7 +113,7 @@ def parse_response(response_text: str) -> dict | None:
     return data
 
 
-def call_router(user_input: str, client: OpenAI, model: str) -> dict | None:
+def call_router(user_input: str, client: OpenAI, model: str, context: str = "") -> dict | None:
     """
     将用户日记发给 LLM，返回包含 reply 和 extracted_data 的结构化 dict。
     失败时返回 None。
@@ -84,7 +122,8 @@ def call_router(user_input: str, client: OpenAI, model: str) -> dict | None:
     weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
     current_datetime = now.strftime(f"现在是 %Y 年 %m 月 %d 日（周{weekday_cn[now.weekday()]}）%H:%M")
 
-    system_prompt = SYSTEM_PROMPT.replace("{current_datetime}", current_datetime)
+    context_block = f"## 用户历史画像\n{context}\n\n" if context.strip() else ""
+    system_prompt = SYSTEM_PROMPT.replace("{context}", context_block).replace("{current_datetime}", current_datetime)
 
     try:
         response = client.chat.completions.create(
@@ -100,3 +139,4 @@ def call_router(user_input: str, client: OpenAI, model: str) -> dict | None:
         return None
 
     return parse_response(response.choices[0].message.content)
+
