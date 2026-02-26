@@ -82,7 +82,7 @@ def main():
         print("\n[TraceLog 正在思考...]\n")
         result = router.call_router(
             user_input, client, model,
-            context=memory.build_context_summary(profile),
+            profile=profile,
         )
 
         if result is None:
@@ -92,7 +92,7 @@ def main():
         print(f"TraceLog: {result['reply']}\n")
 
         # 合并画像、更新简介、持久化
-        profile = memory.merge_profile(profile, result["extracted_data"])
+        profile = memory.apply_profile_update(profile, result["updated_profile"])
         print("[记忆] 正在更新画像简介...")
         profile["portrait"] = router.update_portrait(profile, client, model)
         memory.save_profile(profile)
@@ -100,8 +100,8 @@ def main():
 
         # 调试输出：打印提取的结构化数据
         print("-" * 40)
-        print("[调试] extracted_data:")
-        print(json.dumps(result["extracted_data"], ensure_ascii=False, indent=2))
+        print("[调试] updated_profile:")
+        print(json.dumps(result["updated_profile"], ensure_ascii=False, indent=2))
         print("-" * 40 + "\n")
 
 

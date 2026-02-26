@@ -26,7 +26,6 @@ def _empty_profile() -> dict:
         "health": [],
         "ideas": [],
         "purchases": [],
-        "emotions": [],
         "diary_summaries": [],
     }
 
@@ -45,40 +44,18 @@ def save_profile(profile: dict) -> None:
     os.replace(tmp, PROFILE_FILE)
 
 
-def _upsert(existing: list, incoming: list, key: str) -> list:
-    index = {item.get(key, "").strip().lower(): i for i, item in enumerate(existing)}
-    for new_item in incoming:
-        k = new_item.get(key, "").strip().lower()
-        if k and k in index:
-            existing[index[k]].update(new_item)
-        else:
-            existing.append(new_item)
-    return existing
-
-
-def merge_profile(profile: dict, extracted: dict) -> dict:
+def apply_profile_update(profile: dict, updated: dict) -> dict:
     today = date.today().isoformat()
 
-    for field, key in [
-        ("skills",  "name"),
-        ("hobbies", "name"),
-        ("goals",   "goal"),
-        ("people",  "name"),
-        ("places",  "name"),
-        ("media",   "title"),
-        ("todos",   "task"),
-    ]:
-        if field in extracted:
-            profile[field] = _upsert(profile.get(field, []), extracted[field], key)
-
-    for field in ("food", "health", "ideas", "purchases", "emotions"):
-        if field in extracted:
-            profile.setdefault(field, []).extend(extracted[field])
+    for field in ("skills", "hobbies", "todos", "goals", "people", "places",
+                  "media", "food", "health", "ideas", "purchases"):
+        if field in updated:
+            profile[field] = updated[field]
 
     profile.setdefault("diary_summaries", []).append({
         "date": today,
-        "mood": extracted.get("mood", ""),
-        "summary": extracted.get("summary", ""),
+        "mood": updated.get("mood", ""),
+        "summary": updated.get("summary", ""),
     })
     profile["diary_summaries"] = profile["diary_summaries"][-DIARY_LIMIT:]
 

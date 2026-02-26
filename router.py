@@ -8,19 +8,19 @@ from datetime import datetime
 from openai import OpenAI
 
 SYSTEM_PROMPT = """\
-{context}你是 TraceLog 拾迹的日记分析引擎。用户会输入一段自然语言日记，你需要完成两件事：
+你是 TraceLog 拾迹的日记分析引擎。用户会输入一段自然语言日记，你需要完成两件事：
 1. 给出温暖、有洞察力的中文情感回应与行动建议（reply）
-2. 从日记中提取结构化信息（extracted_data）
+2. 结合现有用户档案和日记内容，输出整合后的完整档案（updated_profile）
 
 ## 输出格式要求
 你必须且只能输出一个合法的 JSON 对象，不得包含任何 JSON 以外的文字、代码块标记或解释。
 
 ## JSON 结构规范
-顶层必须且只能包含 "reply" 和 "extracted_data" 两个键，每个键名在整个 JSON 中只能出现一次。
+顶层必须且只能包含 "reply" 和 "updated_profile" 两个键，每个键名在整个 JSON 中只能出现一次。
 
 {
   "reply": "（字符串）温暖的情感回应 + 具体可行的行动建议，中文，2-4句话",
-  "extracted_data": {
+  "updated_profile": {
     "mood": "（字符串，必填）用2-4个词描述当日整体情绪状态，如：平静、有些疲惫、兴奋期待",
     "summary": "（字符串，必填）用一句话概括今日日记的核心内容",
 
@@ -34,18 +34,22 @@ SYSTEM_PROMPT = """\
     "food": [{"name": "食物名称", "notes": "相关描述，如：想试试、今天吃了觉得不错"}],
     "health": [{"type": "简洁标签，如：跑步、冥想、失眠、感冒", "notes": "具体描述"}],
     "ideas": [{"content": "想法或灵感的具体内容"}],
-    "purchases": [{"item": "物品名称", "status": "想要/已拥有", "notes": "原因或用途或其他补充信息，可为 null"}],
-    "emotions": [{"trigger": "情绪触发原因", "feeling": "具体情绪词", "reflection": "本人的反思或应对"}]
+    "purchases": [{"item": "物品名称", "status": "想要/已拥有", "notes": "原因或用途或其他补充信息，可为 null"}]
   }
 }
 
-## 提取原则（必须遵守）
-1. 宁少勿滥：只提取日记中有实质内容支撑的信息，不要为了"填完字段"而强行推断。
-2. todos 只记录真正有意义的待办事项，"休息""睡觉"等日常行为不是 todo，不要提取。
-3. people 只记录日记中提及的其他人，不要将用户本人（"我""本人"）作为条目提取。
-4. skills 避免将同一技能拆分为多个条目。
-5. 每个字段名在 JSON 中只能出现一次，严禁重复 key。
-6. 没有相关内容的字段直接省略，不要输出空数组。
+## 整合原则（必须遵守）
+1. updated_profile 中每个列表字段都是**完整的最新版本**：完整保留旧档案中的全部条目，再将日记中的新信息整合进去，不得遗漏任何旧条目。
+2. 只整合日记中**明确出现**的信息，禁止推断、联想或填充未出现的内容。
+3. todos 只记录用户**明确表示要做**的事，不得从担忧、压力或你自己的建议中推断待办事项。
+4. goals 只记录用户**明确提出的目标**，不得从"担心做不到""希望能……"等情绪表达中推断目标。
+5. people 只记录日记中提及的其他人，不要将用户本人（"我""本人"）作为条目提取。
+6. skills 避免将同一技能拆分为多个条目。
+7. 每个字段名在 JSON 中只能出现一次，严禁重复 key。
+8. 没有内容的字段输出空数组 []，不要省略字段。
+
+## 现有用户档案
+{profile_json}
 
 ## 当前时间
 {current_datetime}
@@ -100,30 +104,37 @@ def parse_response(response_text: str) -> dict | None:
         print(f"[Router] 原始响应：\n{response_text}")
         return None
 
-    if "reply" not in data or "extracted_data" not in data:
-        print("[Router] 响应缺少必要字段 'reply' 或 'extracted_data'")
+    if "reply" not in data or "updated_profile" not in data:
+        print("[Router] 响应缺少必要字段 'reply' 或 'updated_profile'")
         print(f"[Router] 原始响应：\n{response_text}")
         return None
 
-    extracted = data["extracted_data"]
-    if "mood" not in extracted or "summary" not in extracted:
-        print("[Router] extracted_data 缺少必要字段 'mood' 或 'summary'")
+    updated = data["updated_profile"]
+    if "mood" not in updated or "summary" not in updated:
+        print("[Router] updated_profile 缺少必要字段 'mood' 或 'summary'")
         return None
 
     return data
 
 
-def call_router(user_input: str, client: OpenAI, model: str, context: str = "") -> dict | None:
+def call_router(user_input: str, client: OpenAI, model: str, profile: dict | None = None) -> dict | None:
     """
-    将用户日记发给 LLM，返回包含 reply 和 extracted_data 的结构化 dict。
+    将用户日记和现有档案发给 LLM，返回包含 reply 和 updated_profile 的结构化 dict。
     失败时返回 None。
     """
     now = datetime.now()
     weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
     current_datetime = now.strftime(f"现在是 %Y 年 %m 月 %d 日（周{weekday_cn[now.weekday()]}）%H:%M")
 
-    context_block = f"## 用户历史画像\n{context}\n\n" if context.strip() else ""
-    system_prompt = SYSTEM_PROMPT.replace("{context}", context_block).replace("{current_datetime}", current_datetime)
+    _list_fields = ("skills", "hobbies", "todos", "goals", "people", "places",
+                    "media", "food", "health", "ideas", "purchases", "emotions")
+    if profile:
+        profile_data = {k: profile.get(k, []) for k in _list_fields}
+        profile_json = json.dumps(profile_data, ensure_ascii=False)
+    else:
+        profile_json = "（暂无数据）"
+
+    system_prompt = SYSTEM_PROMPT.replace("{profile_json}", profile_json).replace("{current_datetime}", current_datetime)
 
     try:
         response = client.chat.completions.create(
