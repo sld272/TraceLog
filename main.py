@@ -92,7 +92,7 @@ def main():
         print(f"TraceLog: {result['reply']}\n")
 
         # 合并画像、更新简介、持久化
-        profile = memory.apply_profile_update(profile, result["updated_profile"])
+        profile = memory.apply_profile_update(profile, result["updated_profile"], user_input)
         print("[记忆] 正在更新画像简介...")
         profile["portrait"] = router.update_portrait(profile, client, model)
         memory.save_profile(profile)
