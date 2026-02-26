@@ -6,6 +6,7 @@ import json
 import os
 import getpass
 from openai import OpenAI
+import router
 
 CONFIG_FILE = "config.json"
 
@@ -43,20 +44,6 @@ def load_config() -> dict:
     return config
 
 
-def chat(user_input: str, client: OpenAI, model: str) -> str:
-    """
-    临时接口：直接将用户输入发送给 LLM，返回原始文本回复。
-    """
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": "你是一个友好的个人成长 AI 伴侣，用中文回复。"},
-            {"role": "user", "content": user_input},
-        ],
-    )
-    return response.choices[0].message.content
-
-
 def main():
     print("\n" + "=" * 50)
     print("  TraceLog 拾迹 ✦ 个人成长 AI 伴侣")
@@ -87,11 +74,19 @@ def main():
             continue
 
         print("\n[TraceLog 正在思考...]\n")
-        try:
-            reply = chat(user_input, client, model)
-            print(f"TraceLog: {reply}\n")
-        except Exception as e:
-            print(f"[错误] API 调用失败：{e}\n")
+        result = router.call_router(user_input, client, model)
+
+        if result is None:
+            print("[TraceLog] 本次解析失败，请重试。\n")
+            continue
+
+        print(f"TraceLog: {result['reply']}\n")
+
+        # 调试输出：打印提取的结构化数据
+        print("-" * 40)
+        print("[调试] extracted_data:")
+        print(json.dumps(result["extracted_data"], ensure_ascii=False, indent=2))
+        print("-" * 40 + "\n")
 
 
 if __name__ == "__main__":
