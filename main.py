@@ -7,6 +7,7 @@ import os
 import getpass
 from openai import OpenAI
 import router
+import memory
 
 CONFIG_FILE = "config.json"
 
@@ -63,6 +64,11 @@ def main():
     base_url_display = config.get("base_url", "https://api.openai.com/v1")
     print(f"模型: {model}  |  Base URL: {base_url_display}\n")
 
+    profile = memory.load_profile()
+    entry_count = profile["meta"].get("entry_count", 0)
+    if entry_count > 0:
+        print(f"[记忆] 已加载画像，共 {entry_count} 条日记记录。\n")
+
     while True:
         try:
             user_input = input("你: ").strip()
@@ -74,13 +80,23 @@ def main():
             continue
 
         print("\n[TraceLog 正在思考...]\n")
-        result = router.call_router(user_input, client, model)
+        result = router.call_router(
+            user_input, client, model,
+            context=memory.build_context_summary(profile),
+        )
 
         if result is None:
             print("[TraceLog] 本次解析失败，请重试。\n")
             continue
 
         print(f"TraceLog: {result['reply']}\n")
+
+        # 合并画像、更新简介、持久化
+        profile = memory.merge_profile(profile, result["extracted_data"])
+        print("[记忆] 正在更新画像简介...")
+        profile["portrait"] = router.update_portrait(profile, client, model)
+        memory.save_profile(profile)
+        print("[记忆] 画像已保存。\n")
 
         # 调试输出：打印提取的结构化数据
         print("-" * 40)
