@@ -1,153 +1,128 @@
 ﻿"""
-TraceLog 拾迹  LLM Router
-负责：Prompt 设计 + API 调用 + JSON 解析
+TraceLog 拾迹 — LLM Router（双引擎）
+Post Reply: 共情回复 + 待办提取
+Memory Flush: 重写 profile.md 画像
 """
 
 import json
 from datetime import datetime
 from openai import OpenAI
 
-SYSTEM_PROMPT = """\
-你是 TraceLog 拾迹的日记分析引擎。用户会输入一段自然语言日记，你需要完成两件事：
-1. 给出温暖、有洞察力的中文情感回应与行动建议（reply）
-2. 结合现有用户档案和日记内容，输出整合后的完整档案（updated_profile）
 
-## 输出格式要求
-你必须且只能输出一个合法的 JSON 对象，不得包含任何 JSON 以外的文字、代码块标记或解释。
+# 引擎 1：Post Reply
 
-## JSON 结构规范
-顶层必须且只能包含 "reply" 和 "updated_profile" 两个键，每个键名在整个 JSON 中只能出现一次。
+POST_REPLY_PROMPT = """\
+你是 TraceLog 拾迹，一个温暖且有洞察力的个人成长 AI 伴侣。
+
+## 你的任务
+1. **reply**：给出真诚、有温度的中文回应与建议，2-4 句话。
+2. **todos_to_upsert**：从帖子中提取用户**明确提出**的新增或状态变更的待办。
+3. **todos_to_delete**：用户明确表示取消或不再需要的待办。
+
+## 输出格式
+严格输出一个合法 JSON 对象，不得包含任何 JSON 以外的文字或代码块标记。
 
 {
-  "reply": "（字符串）温暖的情感回应 + 具体可行的行动建议，中文，2-4句话",
-  "updated_profile": {
-    "mood": "（字符串，必填）用2-4个词描述当日整体情绪状态，如：平静、有些疲惫、兴奋期待",
-    "summary": "（字符串，必填）用一句话概括今日日记的核心内容",
-
-    "skills": [{"name": "技能名称", "proficiency": "对当前掌握程度的描述，如：刚入门、练习中、比较熟练", "notes": "具体情况或感受或其他补充信息，可为 null"}],
-    "hobbies": [{"name": "兴趣名称", "notes": "参与方式、频率或情感联结或其他补充信息，可为 null"}],
-    "todos": [{"task": "具体任务描述", "date": "YYYY-MM-DD 或文字描述或 null", "status": "未开始/进行中/已完成", "notes": "补充信息，可为 null"}],
-    "goals": [{"goal": "目标描述", "deadline": "YYYY-MM-DD 或文字描述或 null", "status": "未达成/已达成", "notes": "动机或背景或其他补充信息，可为 null"}],
-    "people": [{"name": "人名或称谓", "relation": "与用户的关系，如：朋友、室友、导师、父母、恋人", "notes": "互动描述或对此人的说明或其他补充信息，可为 null"}],
-    "places": [{"name": "地点名称", "type": "语义标签，如：学校、图书馆、旅行目的地，自行判断", "notes": "背景信息，可为 null"}],
-    "media": [{"title": "作品名称", "type": "类型，如：小说、电影、播客、游戏，自行判断", "status": "当前状态，如：想看、在读、玩过等", "notes": "感受或评价或其他补充信息，可为 null"}],
-    "food": [{"name": "食物名称", "notes": "相关描述，如：想试试、今天吃了觉得不错"}],
-    "health": [{"type": "简洁标签，如：跑步、冥想、失眠、感冒", "notes": "具体描述"}],
-    "ideas": [{"content": "想法或灵感的具体内容"}],
-    "purchases": [{"item": "物品名称", "status": "想要/已拥有", "notes": "原因或用途或其他补充信息，可为 null"}]
-  }
+  "reply": "...",
+  "todos_to_upsert": [
+    {"task": "待办描述", "date": "YYYY-MM-DD 或 null", "start_time": "HH:MM 或 null", "end_time": "HH:MM 或 null", "status": "未完成/已完成"}
+  ],
+  "todos_to_delete": [
+    {"id": "要删除的待办 id"}
+  ]
 }
 
-## 整合原则（必须遵守）
-1. updated_profile 中每个列表字段都是**完整的最新版本**：完整保留旧档案中的全部条目，再将日记中的新信息整合进去，不得遗漏任何旧条目。
-2. 只整合日记中**明确出现**的信息，禁止推断、联想或填充未出现的内容。
-3. todos 只记录用户**明确表示要做**的事，不得从担忧、压力或你自己的建议中推断待办事项。
-4. goals 只记录用户**明确提出的目标**，不得从"担心做不到""希望能……"等情绪表达中推断目标。
-5. people 只记录日记中提及的其他人，不要将用户本人（"我""本人"）作为条目提取。
-6. skills 避免将同一技能拆分为多个条目。
-7. 每个字段名在 JSON 中只能出现一次，严禁重复 key。
-8. 没有内容的字段输出空数组 []，不要省略字段。
-
-## 现有用户档案
-{profile_json}
+## 待办提取原则
+1. 只提取用户**明确表示要做**的事，不要从情绪、担忧或你自己的建议中推断待办。
+2. 已有待办列表中状态发生变化的，使用相同 id 放入 todos_to_upsert 更新状态。
+3. 没有新增或变更时，todos_to_upsert 和 todos_to_delete 都输出空数组。
+4. 新增待办不需要 id 字段，系统会自动生成。仅更新已有待办时才需要 id。
+5. start_time 和 end_time 为 24 小时制时间（如 "09:00"），仅在用户提及具体时间时填写，否则置 null。
+6. 【极其重要防误删规则】如果用户表示要取消、放弃或完成某件事，你必须先在「当前上下文」的「待办事项」中寻找它。**如果找不到对应的旧任务，请直接忽略，todos_to_delete 输出空数组 []。绝对严禁张冠李戴，使用无关任务的 id！**
 
 ## 当前时间
 {current_datetime}
-请以此为基准将日记中的相对时间表达（如"明天""4号""下周五"）全部转化为准确的 YYYY-MM-DD 格式。
+请以此为基准将相对时间表达转化为 YYYY-MM-DD 格式。
 """
 
 
-PORTRAIT_PROMPT = """\
-根据以下结构化数据和旧的画像简介，用第二人称写一段个人简介（以"你是"开头）。
-
-严格规则：
-- 只描述数据中明确存在的信息，禁止推断、联想或填充任何未出现的内容。
-- 如果某方面数据为空，就不要提这方面，绝对不允许用模糊语言替代（如"充满可能""保持开放"等）。
-- 如果数据非常少，简介可以很短，甚至只有一两句话，这是正确的行为。
-- 语言简洁直接，像百科词条而非文学描写。
-- 只输出简介文本，不要任何标题、格式符号或多余说明。
-"""
+def _now_str() -> str:
+    now = datetime.now().astimezone()
+    weekday = ["一", "二", "三", "四", "五", "六", "日"]
+    return now.strftime(f"%Y 年 %m 月 %d 日（周{weekday[now.weekday()]}）%H:%M")
 
 
-def update_portrait(profile: dict, client: OpenAI, model: str) -> str:
-    """调用 LLM 根据最新 profile 重写用户画像简介。"""
-    old = profile.get("portrait", "")
-    compact = {
-        "skills":  profile.get("skills", []),
-        "hobbies": profile.get("hobbies", []),
-        "goals":   profile.get("goals", []),
-        "people":  profile.get("people", []),
-        "places":  profile.get("places", []),
-        "ideas":   profile.get("ideas", []),
-    }
-    user_content = f"旧的简介（仅供参考，不得延续其中任何推断或模糊表述）：{old or '（无）'}\n\n结构化数据：{json.dumps(compact, ensure_ascii=False)}"
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": PORTRAIT_PROMPT},
-                {"role": "user",   "content": user_content},
-            ],
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"[Router] 画像更新失败：{e}")
-        return old
-
-
-def parse_response(response_text: str) -> dict | None:
-    """解析 LLM 返回的 JSON 字符串，校验必要字段，失败返回 None。"""
-    try:
-        data = json.loads(response_text)
-    except json.JSONDecodeError as e:
-        print(f"[Router] JSON 解析失败：{e}")
-        print(f"[Router] 原始响应：\n{response_text}")
-        return None
-
-    if "reply" not in data or "updated_profile" not in data:
-        print("[Router] 响应缺少必要字段 'reply' 或 'updated_profile'")
-        print(f"[Router] 原始响应：\n{response_text}")
-        return None
-
-    updated = data["updated_profile"]
-    if "mood" not in updated or "summary" not in updated:
-        print("[Router] updated_profile 缺少必要字段 'mood' 或 'summary'")
-        return None
-
-    return data
-
-
-def call_router(user_input: str, client: OpenAI, model: str, profile: dict | None = None) -> dict | None:
-    """
-    将用户日记和现有档案发给 LLM，返回包含 reply 和 updated_profile 的结构化 dict。
-    失败时返回 None。
-    """
-    now = datetime.now()
-    weekday_cn = ["一", "二", "三", "四", "五", "六", "日"]
-    current_datetime = now.strftime(f"现在是 %Y 年 %m 月 %d 日（周{weekday_cn[now.weekday()]}）%H:%M")
-
-    _list_fields = ("skills", "hobbies", "todos", "goals", "people", "places",
-                    "media", "food", "health", "ideas", "purchases", "emotions")
-    if profile:
-        profile_data = {k: profile.get(k, []) for k in _list_fields}
-        profile_json = json.dumps(profile_data, ensure_ascii=False)
-    else:
-        profile_json = "（暂无数据）"
-
-    system_prompt = SYSTEM_PROMPT.replace("{profile_json}", profile_json).replace("{current_datetime}", current_datetime)
+def call_post_reply(user_input: str, client: OpenAI, model: str, context: str) -> dict | None:
+    """Post Reply：共情回复 + 待办增量提取。"""
+    system_msg = POST_REPLY_PROMPT.replace("{current_datetime}", _now_str())
+    user_msg = f"## 当前上下文\n{context or '（暂无历史数据）'}\n\n---\n\n## 帖子内容\n{user_input}"
 
     try:
         response = client.chat.completions.create(
             model=model,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
             ],
         )
     except Exception as e:
         print(f"[Router] API 调用失败：{e}")
         return None
 
-    return parse_response(response.choices[0].message.content)
+    try:
+        data = json.loads(response.choices[0].message.content)
+    except json.JSONDecodeError as e:
+        print(f"[Router] JSON 解析失败：{e}")
+        return None
+
+    if "reply" not in data:
+        print("[Router] 响应缺少 'reply' 字段")
+        return None
+
+    data.setdefault("todos_to_upsert", [])
+    data.setdefault("todos_to_delete", [])
+    return data
+
+
+# 引擎 2：Memory Flush
+
+FLUSH_PROMPT = """\
+你是 TraceLog 拾迹的记忆整理引擎。
+
+你的任务：根据下方提供的「旧画像」和「近期帖子」，输出一篇全新的、完整的 Markdown 格式用户画像。
+
+## 画像要求
+- 以第二人称"你"叙述。
+- 使用清晰的 Markdown 结构（标题、列表、粗体等），排版精美。
+- 涵盖以下维度（按需选择，没有内容的维度直接省略，不要写"暂无"）：
+  - 身份背景
+  - 技能与专长
+  - 兴趣爱好
+  - 长远目标
+  - 身边的人
+  - 常去地点
+  - 性格与情绪倾向
+- 只描述日记和旧画像中**明确出现**的信息，禁止推断或联想。
+- 信息不足时画像可以很短，这是正确的行为。
+- 只输出 Markdown 画像文本，不要任何额外说明。
+"""
+
+
+def flush_profile(client: OpenAI, model: str, old_profile: str, recent_posts: str) -> str | None:
+    """Memory Flush：读取旧画像 + 近期帖子，让 LLM 重写 profile.md。"""
+    user_content = f"## 旧画像\n\n{old_profile or '（无）'}\n\n---\n\n## 近期帖子\n\n{recent_posts or '（无）'}"
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": FLUSH_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[Router] 画像刷新失败：{e}")
+        return None
 
