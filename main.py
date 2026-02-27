@@ -14,7 +14,7 @@ CONFIG_FILE = "config.json"
 
 def load_config() -> dict:
     """
-    加载配置文件。若不存在，引导用户首次输入 API Key 和模型名并保存。
+    加载配置文件。若不存在，引导用户首次配置和模型并保存。
     """
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -61,48 +61,67 @@ def main():
         base_url=config.get("base_url", "https://api.openai.com/v1"),
     )
     model = config["model"]
-    base_url_display = config.get("base_url", "https://api.openai.com/v1")
-    print(f"模型: {model}  |  Base URL: {base_url_display}\n")
+    print(f"模型: {model}  |  Base URL: {config.get('base_url')}\n")
 
-    profile = memory.load_profile()
-    entry_count = profile["meta"].get("entry_count", 0)
-    if entry_count > 0:
-        print(f"[记忆] 已加载画像，共 {entry_count} 条日记记录。\n")
+    memory.init_workspace()
+    todos = memory.load_todos()
 
     while True:
         try:
             user_input = input("你: ").strip()
+            if user_input.lower() == "/quit":
+                raise KeyboardInterrupt
         except (KeyboardInterrupt, EOFError):
-            print("\n\n再见！")
+            print("\n\n[记忆] 正在静默整理今日记忆...")
+            new_profile = router.flush_profile(
+                client, model,
+                old_profile=memory.read_profile(),
+                recent_posts=memory.read_recent_posts(),
+            )
+            if new_profile and len(new_profile) > 50:
+                memory.write_profile(new_profile)
+                print("[记忆] 画像已更新。")
+            else:
+                print("[记忆] 画像生成异常或过短，已放弃本次覆盖，保护旧数据。")
+            print("再见！\n")
             break
 
         if not user_input:
             continue
 
+        # 1. 保存帖子
+        memory.save_post(user_input)
+
+        # 2. 处理帖子回复
         print("\n[TraceLog 正在思考...]\n")
-        result = router.call_router(
-            user_input, client, model,
-            profile=profile,
-        )
+        context = memory.build_context()
+        result = router.call_post_reply(user_input, client, model, context)
 
         if result is None:
             print("[TraceLog] 本次解析失败，请重试。\n")
             continue
 
+        # 3. 打印回复
         print(f"TraceLog: {result['reply']}\n")
 
-        # 合并画像、更新简介、持久化
-        profile = memory.apply_profile_update(profile, result["updated_profile"], user_input)
-        print("[记忆] 正在更新画像简介...")
-        profile["portrait"] = router.update_portrait(profile, client, model)
-        memory.save_profile(profile)
-        print("[记忆] 画像已保存。\n")
+        # 4. 更新待办
+        to_upsert = result.get("todos_to_upsert", [])
+        to_delete = result.get("todos_to_delete", [])
+        if to_upsert or to_delete:
+            todos = memory.upsert_todos(todos, to_upsert, to_delete)
+            memory.save_todos(todos)
+            print(f"[记忆] 待办已更新，当前 {len(todos)} 条。\n")
 
-        # 调试输出：打印提取的结构化数据
-        print("-" * 40)
-        print("[调试] updated_profile:")
-        print(json.dumps(result["updated_profile"], ensure_ascii=False, indent=2))
-        print("-" * 40 + "\n")
+        # 调试输出
+        if to_upsert or to_delete:
+            print("-" * 40)
+            if to_upsert:
+                print("[调试] todos_to_upsert:")
+                print(json.dumps(to_upsert, ensure_ascii=False, indent=2))
+            if to_delete:
+                print("[调试] todos_to_delete:")
+                print(json.dumps(to_delete, ensure_ascii=False, indent=2))
+            print("-" * 40 + "\n")
 
 
 if __name__ == "__main__":
