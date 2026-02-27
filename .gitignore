@@ -206,6 +206,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# TraceLog - 本地数据（含 API Key，严禁提交）
+# TraceLog
 config.json
-profile.json
+workspace/
