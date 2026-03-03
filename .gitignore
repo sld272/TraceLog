@@ -209,3 +209,11 @@ __marimo__/
 # TraceLog
 config.json
 workspace/
+AGENTS.md
+APP_FLOW.md
+BACKEND_STRUCTURE.md
+FRONTEND_GUIDELINES.md
+IMPLEMENTATION_PLAN.md
+PRD.md
+progress.txt
+TECH_STACK.md
