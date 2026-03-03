@@ -8,6 +8,7 @@ import getpass
 from openai import OpenAI
 import router
 import memory
+import vectorstore
 
 CONFIG_FILE = "config.json"
 
@@ -18,7 +19,26 @@ def load_config() -> dict:
     """
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            config = json.load(f)
+        if "embedding_model" not in config:
+            print("\n[配置] 检测到 Embedding 配置缺失，需要补充：")
+            emb_model = input("请输入 Embedding 模型名称（直接回车使用 text-embedding-3-small）: ").strip()
+            config["embedding_model"] = emb_model or "text-embedding-3-small"
+            use_sep = input("是否为 Embedding 单独配置 API Key 和 Base URL？（直接回车跳过，复用主配置）: ").strip().lower()
+            if use_sep in ("y", "yes", "是"):
+                emb_key = getpass.getpass("请输入 Embedding API Key（回车跳过）: ").strip()
+                config["embedding_api_key"] = emb_key or None
+                emb_url = input("请输入 Embedding Base URL（回车跳过）: ").strip()
+                config["embedding_base_url"] = emb_url or None
+            else:
+                config.setdefault("embedding_api_key", None)
+                config.setdefault("embedding_base_url", None)
+            tmp = CONFIG_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, CONFIG_FILE)
+            print("[配置] Embedding 配置已保存。\n")
+        return config
 
     print("=" * 50)
     print("  欢迎使用 TraceLog 拾迹！首次运行需要配置。")
@@ -37,7 +57,27 @@ def load_config() -> dict:
     if not model:
         model = "gpt-4o-mini"
 
-    config = {"api_key": api_key, "base_url": base_url, "model": model}
+    print("\n接下来配置向量 Embedding（用于语义记忆检索）：")
+    emb_model = input("请输入 Embedding 模型名称（直接回车使用 text-embedding-3-small）: ").strip()
+    embedding_model = emb_model or "text-embedding-3-small"
+
+    use_sep = input("是否为 Embedding 单独配置 API Key 和 Base URL？（直接回车跳过，复用主配置）: ").strip().lower()
+    embedding_api_key = None
+    embedding_base_url = None
+    if use_sep in ("y", "yes", "是"):
+        emb_key = getpass.getpass("请输入 Embedding API Key（回车跳过复用主 Key）: ").strip()
+        embedding_api_key = emb_key or None
+        emb_url = input("请输入 Embedding Base URL（回车跳过复用主 URL）: ").strip()
+        embedding_base_url = emb_url or None
+
+    config = {
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model,
+        "embedding_model": embedding_model,
+        "embedding_api_key": embedding_api_key,
+        "embedding_base_url": embedding_base_url,
+    }
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
 
@@ -64,6 +104,13 @@ def main():
     print(f"模型: {model}  |  Base URL: {config.get('base_url')}\n")
 
     memory.init_workspace()
+    vectorstore.init_vectorstore(
+        config["api_key"],
+        config["base_url"],
+        config["embedding_model"],
+        config.get("embedding_base_url"),
+        config.get("embedding_api_key"),
+    )
     todos = memory.load_todos()
 
     while True:
@@ -89,12 +136,14 @@ def main():
         if not user_input:
             continue
 
-        # 1. 保存帖子
-        memory.save_post(user_input)
+        # 1. 保存帖子 + 向量索引
+        post_id = memory.save_post(user_input)
+        vectorstore.index_post(post_id, user_input)
 
-        # 2. 处理帖子回复
+        # 2. 语义检索 + 组装混合上下文
+        relevant_ids = vectorstore.search_relevant_posts(user_input, n_results=3)
         print("\n[TraceLog 正在思考...]\n")
-        context = memory.build_context()
+        context = memory.build_context(relevant_post_ids=relevant_ids)
         result = router.call_post_reply(user_input, client, model, context)
 
         if result is None:

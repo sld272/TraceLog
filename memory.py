@@ -46,19 +46,23 @@ def _next_post_path() -> str:
     return os.path.join(POSTS_DIR, f"{today}-{seq:03d}.md")
 
 
-def save_post(user_input: str):
-    """将用户输入保存为独立的帖子文件，并注入 YAML Frontmatter。"""
+def save_post(user_input: str) -> str:
+    """将用户输入保存为独立的帖子文件，并注入 YAML Frontmatter。返回 post_id。"""
     now = datetime.now().astimezone()
-    iso_time = now.isoformat() 
-    
+    iso_time = now.isoformat()
+
     path = _next_post_path()
     post_id = os.path.basename(path).replace(".md", "")
-    
-    # 构建标准的 YAML Frontmatter
+
     frontmatter = f"---\nid: \"{post_id}\"\ndate: \"{iso_time}\"\ntype: \"post\"\n---\n\n"
-    
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(frontmatter + f"\n{user_input}\n")
+    content = frontmatter + f"\n{user_input}\n"
+
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp, path)
+
+    return post_id
 
 
 def read_recent_posts(count: int = CONTEXT_POST_COUNT) -> str:
@@ -152,17 +156,44 @@ def upsert_todos(existing: list, to_upsert: list, to_delete: list) -> list:
 
 # 上下文组装
 
-def build_context() -> str:
-    """拼接 profile + 近期日记 + 任务列表，供 LLM 阅读。"""
+def read_posts_by_ids(post_ids: list[str]) -> str:
+    """按 post_id 列表读取对应帖子文件，返回 --- 分隔的拼接内容。"""
+    parts = []
+    for pid in post_ids:
+        path = os.path.join(POSTS_DIR, f"{pid}.md")
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            parts.append(f.read().strip())
+    return "\n\n---\n\n".join(parts)
+
+
+def build_context(relevant_post_ids: list[str] | None = None) -> str:
+    """拼接 profile + 近期帖子 + 相关帖子（可选，去重）+ 待办，供 LLM 阅读。"""
     sections = []
 
     profile = read_profile().strip()
     if profile and "暂无数据" not in profile:
         sections.append(profile)
 
+    # 近期帖子（收集文件名 ID 用于去重）
+    recent_files = sorted(
+        [f for f in os.listdir(POSTS_DIR) if f.endswith(".md")],
+        reverse=True,
+    ) if os.path.exists(POSTS_DIR) else []
+    recent_ids = {f.replace(".md", "") for f in recent_files[:CONTEXT_POST_COUNT]}
+
     posts = read_recent_posts()
     if posts:
         sections.append(f"# 近期帖子\n\n{posts}")
+
+    # 相关帖子（语义检索结果，去重后追加）
+    if relevant_post_ids:
+        deduped = [pid for pid in relevant_post_ids if pid not in recent_ids]
+        if deduped:
+            relevant_posts = read_posts_by_ids(deduped)
+            if relevant_posts:
+                sections.append(f"# 相关帖子\n\n{relevant_posts}")
 
     todos = load_todos()
     pending = [t for t in todos if t.get("status") != "已完成"]
