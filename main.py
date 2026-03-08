@@ -13,6 +13,17 @@ import vectorstore
 CONFIG_FILE = "config.json"
 
 
+def _is_valid_profile(content: str | None) -> bool:
+    """校验画像文本是否具备最小有效性，避免仅靠长度阈值误判。"""
+    if not content:
+        return False
+    text = content.strip()
+    if len(text) < 10:
+        return False
+    has_markdown_structure = ("##" in text) or ("- " in text)
+    return has_markdown_structure
+
+
 def load_config() -> dict:
     """
     加载配置文件。若不存在，引导用户首次配置和模型并保存。
@@ -21,9 +32,11 @@ def load_config() -> dict:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
 
-        required_keys = ("api_key", "base_url", "model", "embedding_model", "embedding_api_key", "embedding_base_url")
+        required_keys = ("api_key", "base_url", "model", "embedding_model")
         missing = [k for k in required_keys if not config.get(k)]
         if not missing:
+            config.setdefault("embedding_api_key", None)
+            config.setdefault("embedding_base_url", None)
             return config
 
         print(f"[配置] 检测到配置不完整（缺少：{', '.join(missing)}），将重新配置。")
@@ -66,8 +79,10 @@ def load_config() -> dict:
         "embedding_api_key": embedding_api_key,
         "embedding_base_url": embedding_base_url,
     }
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+    tmp = CONFIG_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CONFIG_FILE)
 
     print(f"\n配置已保存到 {CONFIG_FILE} 。\n")
     return config
@@ -107,17 +122,22 @@ def main():
             if user_input.lower() == "/quit":
                 raise KeyboardInterrupt
         except (KeyboardInterrupt, EOFError):
-            print("\n\n[记忆] 正在静默整理今日记忆...")
-            new_profile = router.flush_profile(
-                client, model,
-                old_profile=memory.read_profile(),
-                recent_posts=memory.read_recent_posts(),
-            )
-            if new_profile and len(new_profile) > 50:
-                memory.write_profile(new_profile)
-                print("[记忆] 画像已更新。")
-            else:
-                print("[记忆] 画像生成异常或过短，已放弃本次覆盖，保护旧数据。")
+            print("\n\n[记忆] 正在静默整理今日记忆，请稍候（请勿再次终止）...")
+            try:
+                new_profile = router.flush_profile(
+                    client, model,
+                    old_profile=memory.read_profile(),
+                    recent_posts=memory.read_recent_posts(),
+                )
+                if _is_valid_profile(new_profile):
+                    memory.write_profile(new_profile.strip())
+                    print("[记忆] 画像已更新。")
+                else:
+                    print("[记忆] 画像内容无效或过短，已放弃本次覆盖，保护旧数据。")
+            except KeyboardInterrupt:
+                print("\n[警告] 记忆整理被强制中断，已保留旧画像。")
+            except Exception as e:
+                print(f"[记忆] 画像整理失败：{e}，已保留旧画像。")
             print("再见！\n")
             break
 

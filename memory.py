@@ -5,6 +5,7 @@ TraceLog 拾迹 - Memory Layer
 
 import json
 import os
+import uuid
 from datetime import datetime
 
 WORKSPACE_DIR = "workspace"
@@ -117,20 +118,16 @@ def save_todos(todos: list):
 
 
 def _next_todo_id(existing: list) -> str:
-    """生成下一个待办 ID，格式为 YYYYMMDD-NNN。"""
+    """生成唯一待办 ID，避免删除后序号复用导致碰撞。"""
     today = datetime.now().astimezone().strftime("%Y%m%d")
-    seqs = [
-        int(t["id"].split("-")[1])
-        for t in existing
-        if t.get("id", "").startswith(today + "-") and t["id"].split("-")[1].isdigit()
-    ]
-    seq = (max(seqs) + 1) if seqs else 1
-    return f"{today}-{seq:03d}"
+    short_uuid = uuid.uuid4().hex[:6]
+    return f"{today}-{short_uuid}"
 
 
 def upsert_todos(existing: list, to_upsert: list, to_delete: list) -> list:
     """按 id 执行 UPSERT 和删除，返回更新后的列表。删除前校验 ID 是否实际存在。"""
     existing_ids = {t.get("id") for t in existing if t.get("id")}
+    allowed_keys = {"task", "date", "start_time", "end_time", "status"}
 
     safe_delete_ids = set()
     for item in to_delete:
@@ -144,12 +141,27 @@ def upsert_todos(existing: list, to_upsert: list, to_delete: list) -> list:
 
     index = {t.get("id"): i for i, t in enumerate(todos) if t.get("id")}
     for item in to_upsert:
+        if not isinstance(item, dict):
+            continue
+
         tid = item.get("id")
+
         if tid and tid in index:
-            todos[index[tid]].update(item)
+            # 只允许白名单字段进入持久化，避免 LLM 脏字段污染 todos.json
+            for k in allowed_keys:
+                if k in item:
+                    todos[index[tid]][k] = item[k]
+        elif tid and tid not in index:
+            print(f"[记忆] 忽略未命中的待办更新 id：{tid}")
         else:
-            item["id"] = _next_todo_id(todos)
-            todos.append(item)
+            # 新增任务必须具备 task，其他字段按白名单落盘
+            task = item.get("task")
+            if not isinstance(task, str) or not task.strip():
+                continue
+            new_item = {k: item.get(k) for k in allowed_keys if k in item}
+            new_item["task"] = task.strip()
+            new_item["id"] = _next_todo_id(todos)
+            todos.append(new_item)
 
     return todos
 
@@ -200,7 +212,14 @@ def build_context(relevant_post_ids: list[str] | None = None) -> str:
     if pending:
         def _fmt_todo(t):
             date_str = t.get('date') or '待定'
-            time_str = f" {t.get('start_time')}~{t.get('end_time')}" if t.get('start_time') else ""
+            start = t.get('start_time')
+            end = t.get('end_time')
+            if start and end:
+                time_str = f" {start}~{end}"
+            elif start:
+                time_str = f" {start}"
+            else:
+                time_str = ""
             return f"- [{t.get('id', '?')}] {t['task']}（{date_str}{time_str}）"
         lines = [_fmt_todo(t) for t in pending]
         sections.append("# 待办事项\n\n" + "\n".join(lines))
