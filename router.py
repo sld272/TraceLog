@@ -74,6 +74,7 @@ def call_post_reply(user_input: str, client: OpenAI, model: str, context: str) -
     try:
         response = client.chat.completions.create(
             model=model,
+            timeout=30,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": system_msg},
@@ -181,6 +182,7 @@ def flush_profile(client: OpenAI, model: str, old_profile: str, recent_posts: st
     try:
         response = client.chat.completions.create(
             model=model,
+            timeout=30,
             messages=[
                 {"role": "system", "content": FLUSH_PROMPT},
                 {"role": "user", "content": user_content},
