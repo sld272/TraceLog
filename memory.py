@@ -8,7 +8,8 @@ import os
 import uuid
 from datetime import datetime
 
-WORKSPACE_DIR = "workspace"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
 POSTS_DIR = os.path.join(WORKSPACE_DIR, "posts")
 PROFILE_PATH = os.path.join(WORKSPACE_DIR, "profile.md")
 TODOS_PATH = os.path.join(WORKSPACE_DIR, "todos.json")
@@ -106,8 +107,19 @@ def write_profile(content: str):
 def load_todos() -> list:
     if not os.path.exists(TODOS_PATH):
         return []
-    with open(TODOS_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(TODOS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        print("[警告] todos.json 顶层结构不是数组，已作为空列表加载。")
+        return []
+    except json.JSONDecodeError:
+        print("[警告] todos.json 格式损坏，已作为空列表加载。请检查文件！")
+        return []
+    except OSError as e:
+        print(f"[警告] 读取 todos.json 失败：{e}，已作为空列表加载。")
+        return []
 
 
 def save_todos(todos: list):
@@ -117,7 +129,7 @@ def save_todos(todos: list):
     os.replace(tmp, TODOS_PATH)
 
 
-def _next_todo_id(existing: list) -> str:
+def _next_todo_id() -> str:
     """生成唯一待办 ID，避免删除后序号复用导致碰撞。"""
     today = datetime.now().astimezone().strftime("%Y%m%d")
     short_uuid = uuid.uuid4().hex[:6]
@@ -160,7 +172,7 @@ def upsert_todos(existing: list, to_upsert: list, to_delete: list) -> list:
                 continue
             new_item = {k: item.get(k) for k in allowed_keys if k in item}
             new_item["task"] = task.strip()
-            new_item["id"] = _next_todo_id(todos)
+            new_item["id"] = _next_todo_id()
             todos.append(new_item)
 
     return todos
