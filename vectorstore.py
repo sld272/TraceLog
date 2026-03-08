@@ -10,6 +10,8 @@ import chromadb
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 _collection = None
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CHROMA_DB_DIR = os.path.join(BASE_DIR, "workspace", "chroma_db")
 
 
 def init_vectorstore(
@@ -30,7 +32,7 @@ def init_vectorstore(
             api_base=actual_base_url,
             model_name=embedding_model,
         )
-        client = chromadb.PersistentClient(path="workspace/chroma_db/")
+        client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
         _collection = client.get_or_create_collection(
             name="posts",
             embedding_function=embed_fn,
