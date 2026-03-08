@@ -60,4 +60,6 @@ def search_relevant_posts(query: str, n_results: int = 3) -> list[str]:
         return []
     n = min(n_results, count)
     results = _collection.query(query_texts=[query], n_results=n)
-    return results["ids"][0]
+    if results and results.get("ids") and len(results["ids"]) > 0:
+        return results["ids"][0]
+    return []
