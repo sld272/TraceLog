@@ -4,7 +4,6 @@ ChromaDB + OpenAIEmbeddingFunction 封装
 """
 
 import os
-import re
 import sys
 
 import chromadb
@@ -43,10 +42,10 @@ def init_vectorstore(
 
 
 def index_post(post_id: str, content: str):
-    """将帖子正文写入向量索引（自动剥离 YAML frontmatter）。"""
+    """将帖子正文写入向量索引。"""
     if _collection is None:
         return
-    body = re.sub(r"^---\n.*?\n---\n", "", content, flags=re.DOTALL).strip()
+    body = content.strip()
     if not body:
         return
     _collection.upsert(ids=[post_id], documents=[body])
