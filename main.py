@@ -144,14 +144,18 @@ def main():
         if not user_input:
             continue
 
-        # 1. 保存帖子 + 向量索引
+        # 1. 先检索历史（不包含当前输入），避免“自己搜自己”
+        relevant_ids = vectorstore.search_relevant_posts(user_input, n_results=3)
+
+        # 2. 基于历史组装上下文，避免当前输入在上下文中重复出现
+        print("\n[TraceLog 正在思考...]\n")
+        context = memory.build_context(relevant_post_ids=relevant_ids)
+
+        # 3. 落盘与索引当前输入，确保即使后续 LLM 失败也不丢用户数据
         post_id = memory.save_post(user_input)
         vectorstore.index_post(post_id, user_input)
 
-        # 2. 语义检索 + 组装混合上下文
-        relevant_ids = vectorstore.search_relevant_posts(user_input, n_results=3)
-        print("\n[TraceLog 正在思考...]\n")
-        context = memory.build_context(relevant_post_ids=relevant_ids)
+        # 4. 调用 LLM
         result = router.call_post_reply(user_input, client, model, context)
 
         if result is None:
