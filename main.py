@@ -20,30 +20,18 @@ def load_config() -> dict:
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             config = json.load(f)
-        if "embedding_model" not in config:
-            print("\n[配置] 检测到 Embedding 配置缺失，需要补充：")
-            emb_model = input("请输入 Embedding 模型名称（直接回车使用 text-embedding-3-small）: ").strip()
-            config["embedding_model"] = emb_model or "text-embedding-3-small"
-            use_sep = input("是否为 Embedding 单独配置 API Key 和 Base URL？（直接回车跳过，复用主配置）: ").strip().lower()
-            if use_sep in ("y", "yes", "是"):
-                emb_key = getpass.getpass("请输入 Embedding API Key（回车跳过）: ").strip()
-                config["embedding_api_key"] = emb_key or None
-                emb_url = input("请输入 Embedding Base URL（回车跳过）: ").strip()
-                config["embedding_base_url"] = emb_url or None
-            else:
-                config.setdefault("embedding_api_key", None)
-                config.setdefault("embedding_base_url", None)
-            tmp = CONFIG_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-            os.replace(tmp, CONFIG_FILE)
-            print("[配置] Embedding 配置已保存。\n")
-        return config
+
+        required_keys = ("api_key", "base_url", "model", "embedding_model", "embedding_api_key", "embedding_base_url")
+        missing = [k for k in required_keys if not config.get(k)]
+        if not missing:
+            return config
+
+        print(f"[配置] 检测到配置不完整（缺少：{', '.join(missing)}），将重新配置。")
+        os.remove(CONFIG_FILE)
 
     print("=" * 50)
-    print("  欢迎使用 TraceLog 拾迹！首次运行需要配置。")
+    print("欢迎使用 TraceLog 拾迹！首次运行需要配置。")
     print("=" * 50)
-    print("请前往你的 API 提供商获取 API Key。")
 
     api_key = getpass.getpass("请输入 API Key（输入时不显示）: ").strip()
     if not api_key:
@@ -61,10 +49,10 @@ def load_config() -> dict:
     emb_model = input("请输入 Embedding 模型名称（直接回车使用 text-embedding-3-small）: ").strip()
     embedding_model = emb_model or "text-embedding-3-small"
 
-    use_sep = input("是否为 Embedding 单独配置 API Key 和 Base URL？（直接回车跳过，复用主配置）: ").strip().lower()
+    use_sep = input("是否为 Embedding 单独配置 API Key 和 Base URL？[y/n]（回车跳过复用主配置）: ").strip().lower()
     embedding_api_key = None
     embedding_base_url = None
-    if use_sep in ("y", "yes", "是"):
+    if use_sep and use_sep[0] == "y":
         emb_key = getpass.getpass("请输入 Embedding API Key（回车跳过复用主 Key）: ").strip()
         embedding_api_key = emb_key or None
         emb_url = input("请输入 Embedding Base URL（回车跳过复用主 URL）: ").strip()
@@ -87,7 +75,7 @@ def load_config() -> dict:
 
 def main():
     print("\n" + "=" * 50)
-    print("  TraceLog 拾迹 ✦ 个人成长 AI 伴侣")
+    print("TraceLog 拾迹 ✦ 个人成长 AI 伴侣")
     print("=" * 50)
 
     try:

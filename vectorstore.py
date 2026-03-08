@@ -23,7 +23,6 @@ def init_vectorstore(
     """初始化 ChromaDB 向量存储。失败时报错退出，不允许静默降级。"""
     global _collection
     try:
-        os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
         actual_api_key = embedding_api_key or api_key
         actual_base_url = embedding_base_url or base_url
 
