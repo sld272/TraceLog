@@ -121,11 +121,11 @@ TraceLog 同时承担两个角色：
 
 ## 📁 仓库结构
 
-- `docs/memory_architecture.md` — 工程级技术设计文档（v3）
+- `docs/architecture.md` — 工程级项目架构设计文档（v3）
 - `docs/competition_roadmap.md` — 三阶段参赛路线
 - `main.py` / `router.py` / `memory.py` / `vectorstore.py` — 当前 CLI 原型，向新架构演进中
 
-完整设计请阅 [`docs/memory_architecture.md`](docs/memory_architecture.md)。
+完整设计请阅 [`docs/architecture.md`](docs/architecture.md)。
 
 ---
 

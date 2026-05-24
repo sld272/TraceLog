@@ -1,6 +1,8 @@
-# TraceLog 记忆系统架构设计 v3
+# TraceLog 项目架构设计 v3
 
-本文档是 TraceLog 记忆系统的工程级技术设计，基于以下输入综合得出：
+本文档是 TraceLog 的工程级项目架构设计。它以记忆系统为核心，但覆盖的不只是"记忆模块"，还包括产品分层、数据布局、SOUL 体系、私聊边界、反思器、导出、实施清单与现有代码迁移。
+
+本文档基于以下输入综合得出：
 
 - 当前仓库现状（CLI + Markdown/JSON + ChromaDB）
 - Hermes Agent（NousResearch）源码深度阅读
@@ -10,6 +12,12 @@
 > 本架构同时承担两个角色：
 > 1. 入口层"向内的 AI 社交媒体"的数据底座
 > 2. 价值层"AI 成长记忆引擎"的核心实现
+
+### 当前实现状态（2026-05-24）
+
+当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。
+
+尚未完成：多 SOUL 并发评论、正式 `SoulService` / `ReplyService` / `RecordService` 拆分、RRF 双轨检索、私聊服务、轻反思/深反思、导出/迁移脚本和 Web/API 层。
 
 ---
 
@@ -104,11 +112,11 @@ workspace/
 ├── user.md                   # 用户档案 + 成长画像（合并）
 ├── souls/                    # AI 人格库：设定这个 SOUL 是谁
 │   ├── default.md            # 默认人格
-│   ├── 毒舌闺蜜.md
+│   ├── 毒舌好友.md
 │   └── ...                   # 用户/社区自定义
 └── soul_memories/            # SOUL 相处记忆：这个 SOUL 如何理解用户
     ├── default.md
-    ├── 毒舌闺蜜.md
+    ├── 毒舌好友.md
     └── ...
 ```
 
@@ -436,7 +444,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_user_md_status ON pending_user_md_changes
 
 - 文件名 = SOUL 名称，支持中文
 - 首次启动时，迁移脚本至少创建一个内置 SOUL（如 `souls/默认.md`），并默认 `enabled=1`
-- 用户自定义示例：`souls/毒舌闺蜜.md`、`souls/林黛玉.md`、`souls/十年后的自己.md`
+- 用户自定义示例：`souls/毒舌好友.md`、`souls/林黛玉.md`、`souls/十年后的自己.md`
 - SOUL 启用/禁用与排序状态由 `state.db.souls` 表管理；文件存在但表里 `enabled=0` 的 SOUL 不会参与评论
 - 交互项目不存在"当前激活的唯一 SOUL"概念；如需让某个 SOUL 在 Agent 项目里担任主回复，写入 `meta.main_soul`
 
@@ -446,7 +454,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_user_md_status ON pending_user_md_changes
 
 ```markdown
 ---
-name: 毒舌闺蜜
+name: 毒舌好友
 version: 1
 description: 直白吐槽型，习惯戳破自我安慰，但底色是关心
 created_at: 2026-05-23
@@ -483,11 +491,11 @@ tags: [直白, 幽默, 反鸡汤]
 ```markdown
 ---
 schema: tracelog/soul_memory.md@v1
-soul: 毒舌闺蜜
+soul: 毒舌好友
 updated_at: 2026-05-23T22:00:00+08:00
 ---
 
-# 毒舌闺蜜的相处记忆
+# 毒舌好友的相处记忆
 
 ## 对用户的理解
 - 用户接受直接反馈，但讨厌空泛鸡汤。 <!-- id: understand-feedback -->
@@ -1334,15 +1342,17 @@ my-tracelog-backup/
 
 核心技术项（按优先级推进，不要求全部卡在 5/31 前完成）：
 
-- [ ] 建立 `state.db` 与所有表（含 FTS5 双表、`souls` 表、`comments` 表、`user_md_revisions`、`soul_memory_revisions`、`pending_user_md_changes`）
-- [ ] 实现 `schema.sql` 作为唯一 SQLite 初始化脚本
-- [ ] 实现 `core/db.py` 封装连接 + WAL + 重试（参考 Hermes `hermes_state.py`）
-- [ ] `RecordService.save_post`：双写 SQLite + ChromaDB
+- [x] 建立 `state.db` 与所有表（含 FTS5 双表、`souls` 表、`comments` 表、`user_md_revisions`、`soul_memory_revisions`、`pending_user_md_changes`）
+- [x] 实现 `schema.sql` 作为唯一 SQLite 初始化脚本
+- [x] 实现 `core/db.py` 封装连接 + WAL + 重试（参考 Hermes `hermes_state.py`）
+- [x] 当前 CLI 发帖写入 SQLite `posts`，并继续写入 ChromaDB（临时由 `memory.py` + `main.py` 承担，后续再抽 `RecordService`）
+- [ ] 抽出正式 `RecordService.save_post`：双写 SQLite + ChromaDB
 - [ ] `ContextBuilder`：读启用 SOUL 列表 + user.md，调用 RRF 双轨检索
-- [ ] 引入 `souls/默认.md` 和 `souls/毒舌闺蜜.md`，迁移时默认 `enabled=1`
-- [ ] 为每个默认 SOUL 创建 `soul_memories/<name>.md` 空模板
+- [x] 运行时初始化 `workspace/souls/默认.md` 和 `workspace/souls/毒舌好友.md`，默认写入 `state.db.souls(enabled=1)`
+- [x] 运行时为每个默认 SOUL 创建 `workspace/soul_memories/<name>.md` 空模板
 - [ ] `ReplyService.fanout`：对启用 SOUL 列表并发调用 LLM，把每条 reply 写入 `comments`
-- [ ] `SoulService`：扫描 `souls/` 与 `souls` 表 upsert、启用/禁用、排序
+- [x] 启动时扫描 `souls/` 与 `souls` 表 upsert，缺失文件自动 `enabled=0`（临时由 `memory._init_souls` 承担）
+- [ ] 抽出正式 `SoulService`：启用/禁用、排序、新建/编辑 SOUL
 - [ ] `SoulMemoryService`：加载/保存 `soul_memories/<name>.md`，写 `soul_memory_revisions`
 - [ ] CLI 至少能展示多个 SOUL 的评论流（前端在第二期）
 - [ ] 多 SOUL 待办抽取的合并与去重（§6.1 [4]）
@@ -1494,16 +1504,16 @@ def migrate():
     Path("workspace/souls").mkdir(exist_ok=True)
     Path("workspace/soul_memories").mkdir(exist_ok=True)
     Path("workspace/souls/默认.md").write_text(DEFAULT_SOUL, encoding="utf-8")
-    Path("workspace/souls/毒舌闺蜜.md").write_text(SHARP_FRIEND_SOUL, encoding="utf-8")
+    Path("workspace/souls/毒舌好友.md").write_text(SHARP_FRIEND_SOUL, encoding="utf-8")
     Path("workspace/soul_memories/默认.md").write_text(DEFAULT_SOUL_MEMORY, encoding="utf-8")
-    Path("workspace/soul_memories/毒舌闺蜜.md").write_text(SHARP_FRIEND_MEMORY, encoding="utf-8")
+    Path("workspace/soul_memories/毒舌好友.md").write_text(SHARP_FRIEND_MEMORY, encoding="utf-8")
     now = time.time()
     db.executemany(
         "INSERT OR IGNORE INTO souls(name, file_path, enabled, sort_order, "
         "description, created_at, updated_at) VALUES (?, ?, 1, ?, ?, ?, ?)",
         [
             ("默认", "souls/默认.md", 0, "温暖共情型，默认启用", now, now),
-            ("毒舌闺蜜", "souls/毒舌闺蜜.md", 1, "直白吐槽型，默认启用", now, now),
+            ("毒舌好友", "souls/毒舌好友.md", 1, "直白吐槽型，默认启用", now, now),
         ],
     )
 
