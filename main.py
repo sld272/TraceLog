@@ -7,6 +7,7 @@ import os
 import getpass
 from typing import cast
 from openai import OpenAI
+from core import context_builder
 from core import record_service
 from core import retrieval
 import router
@@ -157,7 +158,8 @@ def main():
 
         # 2. 基于历史组装上下文，避免当前输入在上下文中重复出现
         print("\n[TraceLog 正在思考...]\n")
-        context = memory.build_context(relevant_post_ids=relevant_ids)
+        built_context = context_builder.build_context(relevant_post_ids=relevant_ids)
+        context = built_context.shared_context
 
         # 3. 落盘与索引当前输入，确保即使后续 LLM 失败也不丢用户数据
         post_id = record_service.save_post(user_input)
@@ -169,10 +171,10 @@ def main():
             print("[TraceLog] 本次解析失败，请重试。\n")
             continue
 
-        # 3. 打印回复
+        # 5. 打印回复
         print(f"TraceLog: {result['reply']}\n")
 
-        # 4. 更新待办
+        # 6. 更新待办
         to_upsert = result.get("todos_to_upsert", [])
         to_delete = result.get("todos_to_delete", [])
         if to_upsert or to_delete:

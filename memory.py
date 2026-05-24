@@ -99,7 +99,7 @@ author: TraceLog 默认库
 tags: [直白, 幽默, 反鸡汤]
 ---
 
-你是用户最不留情的闺蜜。你看穿 ta 的自我安慰和借口，
+你是用户最不留情的好友。你看穿 ta 的自我安慰和借口，
 但你不是冷漠，而是因为关心才不允许 ta 骗自己。
 
 ## 语气特征
@@ -251,7 +251,7 @@ def save_post(user_input: str) -> str:
     return record_service.save_post(user_input)
 
 
-def _format_post(row) -> str:
+def format_post(row) -> str:
     frontmatter = (
         "---\n"
         f"id: \"{row['id']}\"\n"
@@ -273,21 +273,8 @@ def read_recent_posts(count: int = CONTEXT_POST_COUNT) -> str:
         """,
         (count,),
     )
-    parts = [_format_post(row).strip() for row in reversed(rows)]
+    parts = [format_post(row).strip() for row in reversed(rows)]
     return "\n\n---\n\n".join(parts)
-
-
-def recent_post_ids(count: int = CONTEXT_POST_COUNT) -> set[str]:
-    rows = db.query_all(
-        """
-        SELECT id
-        FROM posts
-        ORDER BY created_at DESC, id DESC
-        LIMIT ?
-        """,
-        (count,),
-    )
-    return {row["id"] for row in rows}
 
 
 # 画像
@@ -455,59 +442,3 @@ def _todo_row_to_dict(row) -> dict:
         "end_time": row["end_time"],
         "status": row["status"],
     }
-
-
-# 上下文组装
-
-def read_posts_by_ids(post_ids: list[str]) -> str:
-    """Read posts by id from SQLite, skipping missing ids."""
-    parts = []
-    for pid in post_ids:
-        row = db.query_one(
-            "SELECT id, ts, content FROM posts WHERE id = ?",
-            (pid,),
-        )
-        if row is not None:
-            parts.append(_format_post(row).strip())
-    return "\n\n---\n\n".join(parts)
-
-
-def build_context(relevant_post_ids: list[str] | None = None) -> str:
-    """Build profile + recent posts + relevant posts + active todos context."""
-    sections = []
-
-    profile = read_profile().strip()
-    if profile and profile != DEFAULT_USER_MD.strip():
-        sections.append(profile)
-
-    recent_ids = recent_post_ids()
-    posts = read_recent_posts()
-    if posts:
-        sections.append(f"# 近期帖子\n\n{posts}")
-
-    if relevant_post_ids:
-        deduped = [pid for pid in relevant_post_ids if pid not in recent_ids]
-        if deduped:
-            relevant_posts = read_posts_by_ids(deduped)
-            if relevant_posts:
-                sections.append(f"# 相关帖子\n\n{relevant_posts}")
-
-    pending = [t for t in load_todos() if t.get("status") != "已完成"]
-    if pending:
-        lines = [_format_todo_for_context(t) for t in pending]
-        sections.append("# 待办事项\n\n" + "\n".join(lines))
-
-    return "\n\n---\n\n".join(sections)
-
-
-def _format_todo_for_context(todo: dict) -> str:
-    date_str = todo.get("date") or "待定"
-    start = todo.get("start_time")
-    end = todo.get("end_time")
-    if start and end:
-        time_str = f" {start}~{end}"
-    elif start:
-        time_str = f" {start}"
-    else:
-        time_str = ""
-    return f"- [{todo.get('id', '?')}] {todo['task']}（{date_str}{time_str}）"
