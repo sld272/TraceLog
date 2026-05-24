@@ -1,217 +1,349 @@
-﻿"""
-TraceLog 拾迹 - Memory Layer
-基于 Markdown + JSON 的本地记忆系统
 """
+TraceLog 拾迹 - Memory Layer
+SQLite state.db + user.md backed local memory system.
+"""
+
+from __future__ import annotations
 
 import json
 import os
 import uuid
 from datetime import datetime
 
+from core import db
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
-POSTS_DIR = os.path.join(WORKSPACE_DIR, "posts")
-PROFILE_PATH = os.path.join(WORKSPACE_DIR, "profile.md")
-TODOS_PATH = os.path.join(WORKSPACE_DIR, "todos.json")
+USER_MD_PATH = os.path.join(WORKSPACE_DIR, "user.md")
 CONTEXT_POST_COUNT = 3
+
+DEFAULT_USER_MD = """---
+schema: tracelog/user.md@v1
+sensitivity:
+  基本信息: high
+  关键身份: high
+  身份与现状: normal
+  技能与专长: normal
+  兴趣与习惯: normal
+  关注的核心人际关系: normal
+  性格与情绪倾向: normal
+  长期目标与当前痛点: normal
+---
+
+# 用户档案
+
+## 基本信息
+（暂无，可在后续版本补充。）
+
+## 关键身份
+（暂无，可在后续版本补充。）
+
+## 身份与现状
+（暂无）
+
+## 技能与专长
+（暂无）
+
+## 兴趣与习惯
+（暂无）
+
+## 关注的核心人际关系
+（暂无）
+
+## 性格与情绪倾向
+（暂无）
+
+## 长期目标与当前痛点
+（暂无）
+"""
 
 
 def init_workspace():
-    """确保 workspace 目录结构存在。"""
-    os.makedirs(POSTS_DIR, exist_ok=True)
-    if not os.path.exists(PROFILE_PATH):
-        with open(PROFILE_PATH, "w", encoding="utf-8") as f:
-            f.write("# 用户画像\n\n（暂无数据，将在首次记忆整理后生成。）\n")
-    if not os.path.exists(TODOS_PATH):
-        with open(TODOS_PATH, "w", encoding="utf-8") as f:
-            json.dump([], f)
+    """Ensure workspace, state.db, and user.md exist."""
+    os.makedirs(WORKSPACE_DIR, exist_ok=True)
+    db.init_db()
+    if not os.path.exists(USER_MD_PATH):
+        _write_user_md(DEFAULT_USER_MD)
+        _record_user_md_revision(DEFAULT_USER_MD, {"op": "init"}, "user")
 
 
 # 帖子
 
-def _next_post_path() -> str:
-    """生成下一个帖子文件路径，格式为 YYYYMMDD-NNN.md。"""
-    now = datetime.now().astimezone()
-    today = now.strftime("%Y%m%d")
-    if not os.path.exists(POSTS_DIR):
-        return os.path.join(POSTS_DIR, f"{today}-001.md")
-
-    seqs = []
-    for f in os.listdir(POSTS_DIR):
-        if f.startswith(today + "-") and f.endswith(".md"):
-            try:
-                seqs.append(int(f.replace(".md", "").split("-")[1]))
-            except ValueError:
-                continue
-
-    seq = (max(seqs) + 1) if seqs else 1
-    return os.path.join(POSTS_DIR, f"{today}-{seq:03d}.md")
+def _next_post_id() -> str:
+    """Generate the next post id in YYYYMMDD-NNN format from SQLite rows."""
+    today = datetime.now().astimezone().strftime("%Y%m%d")
+    row = db.query_one(
+        """
+        SELECT id
+        FROM posts
+        WHERE id LIKE ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (f"{today}-%",),
+    )
+    if row is None:
+        return f"{today}-001"
+    try:
+        seq = int(str(row["id"]).split("-")[1]) + 1
+    except (IndexError, ValueError):
+        seq = 1
+    return f"{today}-{seq:03d}"
 
 
 def save_post(user_input: str) -> str:
-    """将用户输入保存为独立的帖子文件，并注入 YAML Frontmatter。返回 post_id。"""
+    """Save a post to state.db and return its post_id."""
     now = datetime.now().astimezone()
     iso_time = now.isoformat()
-
-    path = _next_post_path()
-    post_id = os.path.basename(path).replace(".md", "")
-
-    frontmatter = f"---\nid: \"{post_id}\"\ndate: \"{iso_time}\"\ntype: \"post\"\n---\n\n"
-    content = frontmatter + f"\n{user_input}\n"
-
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(content)
-    os.replace(tmp, path)
-
+    now_unix = now.timestamp()
+    post_id = _next_post_id()
+    db.execute(
+        """
+        INSERT INTO posts(id, ts, content, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (post_id, iso_time, user_input, now_unix, now_unix),
+    )
     return post_id
 
 
+def _format_post(row) -> str:
+    frontmatter = (
+        "---\n"
+        f"id: \"{row['id']}\"\n"
+        f"date: \"{row['ts']}\"\n"
+        "type: \"post\"\n"
+        "---\n\n"
+    )
+    return frontmatter + f"\n{row['content']}\n"
+
+
 def read_recent_posts(count: int = CONTEXT_POST_COUNT) -> str:
-    """读取最近 N 篇帖子内容，拼接为字符串。"""
-    files = sorted(
-        [f for f in os.listdir(POSTS_DIR) if f.endswith(".md")],
-        reverse=True,
-    ) if os.path.exists(POSTS_DIR) else []
-
-    parts = []
-    for fname in files[:count]:
-        path = os.path.join(POSTS_DIR, fname)
-        with open(path, "r", encoding="utf-8") as f:
-            parts.append(f.read().strip())
-
-    parts.reverse()
+    """Read recent posts from SQLite and join them in chronological order."""
+    rows = db.query_all(
+        """
+        SELECT id, ts, content
+        FROM posts
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (count,),
+    )
+    parts = [_format_post(row).strip() for row in reversed(rows)]
     return "\n\n---\n\n".join(parts)
+
+
+def recent_post_ids(count: int = CONTEXT_POST_COUNT) -> set[str]:
+    rows = db.query_all(
+        """
+        SELECT id
+        FROM posts
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (count,),
+    )
+    return {row["id"] for row in rows}
 
 
 # 画像
 
 def read_profile() -> str:
-    """读取画像文件。"""
-    if not os.path.exists(PROFILE_PATH):
+    """Read the v3 user.md profile."""
+    if not os.path.exists(USER_MD_PATH):
         return ""
-    with open(PROFILE_PATH, "r", encoding="utf-8") as f:
+    with open(USER_MD_PATH, "r", encoding="utf-8") as f:
         return f.read()
 
 
 def write_profile(content: str):
-    """覆写画像文件。"""
-    tmp = PROFILE_PATH + ".tmp"
+    """Overwrite user.md and record a revision snapshot."""
+    _write_user_md(content)
+    _record_user_md_revision(content, {"op": "overwrite_profile"}, "reflector")
+
+
+def _write_user_md(content: str) -> None:
+    tmp = USER_MD_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
-    os.replace(tmp, PROFILE_PATH)
+    os.replace(tmp, USER_MD_PATH)
+
+
+def _record_user_md_revision(snapshot: str, patch: dict, source: str) -> None:
+    db.execute(
+        """
+        INSERT INTO user_md_revisions(snapshot, patch, source, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (snapshot, json.dumps(patch, ensure_ascii=False), source, db.now_ts()),
+    )
 
 
 # 待办
 
 def load_todos() -> list:
-    if not os.path.exists(TODOS_PATH):
-        return []
-    try:
-        with open(TODOS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return data
-        print("[警告] todos.json 顶层结构不是数组，已作为空列表加载。")
-        return []
-    except json.JSONDecodeError:
-        print("[警告] todos.json 格式损坏，已作为空列表加载。请检查文件！")
-        return []
-    except OSError as e:
-        print(f"[警告] 读取 todos.json 失败：{e}，已作为空列表加载。")
-        return []
+    rows = db.query_all(
+        """
+        SELECT id, task, date, start_time, end_time, status
+        FROM todos
+        ORDER BY COALESCE(date, '9999-99-99'), created_at, id
+        """
+    )
+    return [_todo_row_to_dict(row) for row in rows]
 
 
 def save_todos(todos: list):
-    tmp = TODOS_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(todos, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, TODOS_PATH)
+    """Persist a complete todos list to SQLite."""
+    now = db.now_ts()
+    with db.transaction() as conn:
+        existing = {
+            row["id"]: row
+            for row in conn.execute(
+                "SELECT id, created_at, completed_at FROM todos"
+            ).fetchall()
+        }
+        conn.execute("DELETE FROM todos")
+        for item in todos:
+            normalized = _normalize_todo(item)
+            if normalized is None:
+                continue
+            tid = normalized["id"]
+            old = existing.get(tid)
+            created_at = old["created_at"] if old else now
+            completed_at = old["completed_at"] if old else None
+            if normalized["status"] == "已完成" and completed_at is None:
+                completed_at = now
+            if normalized["status"] != "已完成":
+                completed_at = None
+            conn.execute(
+                """
+                INSERT INTO todos(
+                    id, task, date, start_time, end_time, status,
+                    created_at, updated_at, completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tid,
+                    normalized["task"],
+                    normalized.get("date"),
+                    normalized.get("start_time"),
+                    normalized.get("end_time"),
+                    normalized["status"],
+                    created_at,
+                    now,
+                    completed_at,
+                ),
+            )
 
 
 def _next_todo_id() -> str:
-    """生成唯一待办 ID，避免删除后序号复用导致碰撞。"""
+    """Generate a unique todo id."""
     today = datetime.now().astimezone().strftime("%Y%m%d")
     short_uuid = uuid.uuid4().hex[:6]
     return f"{today}-{short_uuid}"
 
 
 def upsert_todos(existing: list, to_upsert: list, to_delete: list) -> list:
-    """按 id 执行 UPSERT 和删除，返回更新后的列表。删除前校验 ID 是否实际存在。"""
-    existing_ids = {t.get("id") for t in existing if t.get("id")}
-    allowed_keys = {"task", "date", "start_time", "end_time", "status"}
+    """Apply todo changes to SQLite and return the updated list."""
+    del existing  # SQLite is the source of truth.
+    todos = load_todos()
+    existing_ids = {t.get("id") for t in todos if t.get("id")}
 
     safe_delete_ids = set()
     for item in to_delete:
+        if not isinstance(item, dict):
+            continue
         tid = item.get("id")
         if not tid or tid not in existing_ids:
             print(f"[记忆] 忽略不存在的待办 id：{tid}")
             continue
         safe_delete_ids.add(tid)
 
-    todos = [t for t in existing if t.get("id") not in safe_delete_ids]
-
+    todos = [t for t in todos if t.get("id") not in safe_delete_ids]
     index = {t.get("id"): i for i, t in enumerate(todos) if t.get("id")}
+
     for item in to_upsert:
         if not isinstance(item, dict):
             continue
 
         tid = item.get("id")
-
         if tid and tid in index:
-            # 只允许白名单字段进入持久化，避免 LLM 脏字段污染 todos.json
-            for k in allowed_keys:
-                if k in item:
-                    todos[index[tid]][k] = item[k]
+            updated = dict(todos[index[tid]])
+            for key in ("task", "date", "start_time", "end_time", "status"):
+                if key in item:
+                    updated[key] = item[key]
+            normalized = _normalize_todo(updated)
+            if normalized is not None:
+                todos[index[tid]] = normalized
         elif tid and tid not in index:
             print(f"[记忆] 忽略未命中的待办更新 id：{tid}")
         else:
-            # 新增任务必须具备 task，其他字段按白名单落盘
-            task = item.get("task")
-            if not isinstance(task, str) or not task.strip():
-                continue
-            new_item = {k: item.get(k) for k in allowed_keys if k in item}
-            new_item["task"] = task.strip()
-            new_item["id"] = _next_todo_id()
-            todos.append(new_item)
+            normalized = _normalize_todo({**item, "id": _next_todo_id()})
+            if normalized is not None:
+                todos.append(normalized)
 
-    return todos
+    save_todos(todos)
+    return load_todos()
+
+
+def _normalize_todo(item: dict) -> dict | None:
+    task = item.get("task")
+    if not isinstance(task, str) or not task.strip():
+        return None
+    status = item.get("status") or "未完成"
+    if status not in ("未完成", "已完成"):
+        status = "未完成"
+    tid = item.get("id") or _next_todo_id()
+    return {
+        "id": str(tid),
+        "task": task.strip(),
+        "date": item.get("date"),
+        "start_time": item.get("start_time"),
+        "end_time": item.get("end_time"),
+        "status": status,
+    }
+
+
+def _todo_row_to_dict(row) -> dict:
+    return {
+        "id": row["id"],
+        "task": row["task"],
+        "date": row["date"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+        "status": row["status"],
+    }
 
 
 # 上下文组装
 
 def read_posts_by_ids(post_ids: list[str]) -> str:
-    """按 post_id 列表读取对应帖子文件，返回 --- 分隔的拼接内容。"""
+    """Read posts by id from SQLite, skipping missing ids."""
     parts = []
     for pid in post_ids:
-        path = os.path.join(POSTS_DIR, f"{pid}.md")
-        if not os.path.exists(path):
-            continue
-        with open(path, "r", encoding="utf-8") as f:
-            parts.append(f.read().strip())
+        row = db.query_one(
+            "SELECT id, ts, content FROM posts WHERE id = ?",
+            (pid,),
+        )
+        if row is not None:
+            parts.append(_format_post(row).strip())
     return "\n\n---\n\n".join(parts)
 
 
 def build_context(relevant_post_ids: list[str] | None = None) -> str:
-    """拼接 profile + 近期帖子 + 相关帖子（可选，去重）+ 待办，供 LLM 阅读。"""
+    """Build profile + recent posts + relevant posts + active todos context."""
     sections = []
 
     profile = read_profile().strip()
-    if profile and "暂无数据" not in profile:
+    if profile and profile != DEFAULT_USER_MD.strip():
         sections.append(profile)
 
-    # 近期帖子（收集文件名 ID 用于去重）
-    recent_files = sorted(
-        [f for f in os.listdir(POSTS_DIR) if f.endswith(".md")],
-        reverse=True,
-    ) if os.path.exists(POSTS_DIR) else []
-    recent_ids = {f.replace(".md", "") for f in recent_files[:CONTEXT_POST_COUNT]}
-
+    recent_ids = recent_post_ids()
     posts = read_recent_posts()
     if posts:
         sections.append(f"# 近期帖子\n\n{posts}")
 
-    # 相关帖子（语义检索结果，去重后追加）
     if relevant_post_ids:
         deduped = [pid for pid in relevant_post_ids if pid not in recent_ids]
         if deduped:
@@ -219,21 +351,22 @@ def build_context(relevant_post_ids: list[str] | None = None) -> str:
             if relevant_posts:
                 sections.append(f"# 相关帖子\n\n{relevant_posts}")
 
-    todos = load_todos()
-    pending = [t for t in todos if t.get("status") != "已完成"]
+    pending = [t for t in load_todos() if t.get("status") != "已完成"]
     if pending:
-        def _fmt_todo(t):
-            date_str = t.get('date') or '待定'
-            start = t.get('start_time')
-            end = t.get('end_time')
-            if start and end:
-                time_str = f" {start}~{end}"
-            elif start:
-                time_str = f" {start}"
-            else:
-                time_str = ""
-            return f"- [{t.get('id', '?')}] {t['task']}（{date_str}{time_str}）"
-        lines = [_fmt_todo(t) for t in pending]
+        lines = [_format_todo_for_context(t) for t in pending]
         sections.append("# 待办事项\n\n" + "\n".join(lines))
 
     return "\n\n---\n\n".join(sections)
+
+
+def _format_todo_for_context(todo: dict) -> str:
+    date_str = todo.get("date") or "待定"
+    start = todo.get("start_time")
+    end = todo.get("end_time")
+    if start and end:
+        time_str = f" {start}~{end}"
+    elif start:
+        time_str = f" {start}"
+    else:
+        time_str = ""
+    return f"- [{todo.get('id', '?')}] {todo['task']}（{date_str}{time_str}）"
