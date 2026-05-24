@@ -207,6 +207,18 @@ CREATE TABLE IF NOT EXISTS user_md_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS soul_memory_revisions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    soul_name  TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
+    snapshot   TEXT NOT NULL,
+    patch      TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
+    ON soul_memory_revisions(soul_name, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS pending_user_md_changes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     section     TEXT NOT NULL,

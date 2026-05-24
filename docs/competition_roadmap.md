@@ -238,8 +238,7 @@ core/
 api/                       # FastAPI 接口（第二期）
 frontend/                  # Web 前端（第二期）
 agent/                     # Coze tools 适配（第三期）
-migrations/
-└── 001_init.sql           # SQLite schema
+schema.sql                 # SQLite 初始化 schema
 scripts/
 └── migrate_to_v3.py       # 一次性数据迁移
 demo/                      # 演示数据 + 演示脚本

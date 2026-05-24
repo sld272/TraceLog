@@ -1335,7 +1335,7 @@ my-tracelog-backup/
 核心技术项（按优先级推进，不要求全部卡在 5/31 前完成）：
 
 - [ ] 建立 `state.db` 与所有表（含 FTS5 双表、`souls` 表、`comments` 表、`user_md_revisions`、`soul_memory_revisions`、`pending_user_md_changes`）
-- [ ] 实现 `migrations/001_init.sql`
+- [ ] 实现 `schema.sql` 作为唯一 SQLite 初始化脚本
 - [ ] 实现 `core/db.py` 封装连接 + WAL + 重试（参考 Hermes `hermes_state.py`）
 - [ ] `RecordService.save_post`：双写 SQLite + ChromaDB
 - [ ] `ContextBuilder`：读启用 SOUL 列表 + user.md，调用 RRF 双轨检索
@@ -1437,7 +1437,7 @@ my-tracelog-backup/
 ```python
 # scripts/migrate_to_v3.py
 def migrate():
-    db = init_state_db()  # 应用 migrations/001_init.sql
+    db = init_state_db()  # 应用 schema.sql
 
     # 1. 导入 posts
     for md in sorted(Path("workspace/posts").glob("*.md")):
