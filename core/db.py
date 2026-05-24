@@ -48,6 +48,9 @@ def init_db() -> None:
         conn.commit()
     except sqlite3.Error as exc:
         raise RuntimeError(f"Failed to initialize state.db: {exc}") from exc
+    except BaseException:
+        _rollback_safely(conn)
+        raise
     finally:
         conn.close()
 
@@ -69,11 +72,18 @@ def transaction() -> Iterator[sqlite3.Connection]:
         conn.execute("BEGIN")
         yield conn
         conn.commit()
-    except Exception:
-        conn.rollback()
+    except BaseException:
+        _rollback_safely(conn)
         raise
     finally:
         conn.close()
+
+
+def _rollback_safely(conn: sqlite3.Connection) -> None:
+    try:
+        conn.rollback()
+    except sqlite3.Error:
+        pass
 
 
 def execute(sql: str, params: Sequence[Any] = ()) -> None:

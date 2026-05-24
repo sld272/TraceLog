@@ -112,18 +112,22 @@ def main():
     model = config["model"]
     print(f"模型: {model}  |  Base URL: {config.get('base_url')}\n")
 
-    memory.init_workspace()
-    vectorstore.init_vectorstore(
-        config["api_key"],
-        config["base_url"],
-        config["embedding_model"],
-        config.get("embedding_base_url"),
-        config.get("embedding_api_key"),
-    )
-    fixed_embeddings = record_service.retry_pending_embeddings()
-    if fixed_embeddings:
-        print(f"[向量存储] 已补齐 {fixed_embeddings} 条待索引帖子。")
-    todos = memory.load_todos()
+    try:
+        memory.init_workspace()
+        vectorstore.init_vectorstore(
+            config["api_key"],
+            config["base_url"],
+            config["embedding_model"],
+            config.get("embedding_base_url"),
+            config.get("embedding_api_key"),
+        )
+        fixed_embeddings = record_service.retry_pending_embeddings()
+        if fixed_embeddings:
+            print(f"[向量存储] 已补齐 {fixed_embeddings} 条待索引帖子。")
+        todos = memory.load_todos()
+    except KeyboardInterrupt:
+        print("\n[启动] 初始化被中断，已尽量回滚数据库事务。请重新运行。")
+        return
 
     while True:
         try:
