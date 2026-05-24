@@ -15,9 +15,9 @@
 
 ### 当前实现状态（2026-05-24）
 
-当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`，启用 SOUL 的只读加载已抽到 `core/soul_service.py`。
+当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`，启用 SOUL 的只读加载已抽到 `core/soul_service.py`；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`，多 SOUL 待办结果由 `core/todo_service.py` 合并落库。
 
-尚未完成：多 SOUL 并发评论、完整 `SoulService` 管理能力、`ReplyService`、私聊服务、轻反思/深反思、导出/迁移脚本和 Web/API 层。
+尚未完成：完整 `SoulService` 管理能力、私聊服务、轻反思/深反思、导出/迁移脚本和 Web/API 层。
 
 ---
 
@@ -1350,12 +1350,12 @@ my-tracelog-backup/
 - [x] `ContextBuilder`：读启用 SOUL 列表 + user.md，组装共享上下文与每个 SOUL 的私有记忆（当前 CLI 只使用共享上下文，SOUL 列表留给下一步 `ReplyService`）
 - [x] 运行时初始化 `workspace/souls/默认.md` 和 `workspace/souls/毒舌好友.md`，默认写入 `state.db.souls(enabled=1)`
 - [x] 运行时为每个默认 SOUL 创建 `workspace/soul_memories/<name>.md` 空模板
-- [ ] `ReplyService.fanout`：对启用 SOUL 列表并发调用 LLM，把每条 reply 写入 `comments`
+- [x] `ReplyService.fanout`：对启用 SOUL 列表并发调用 LLM，把每条 reply 写入 `comments`
 - [x] 启动时扫描 `souls/` 与 `souls` 表 upsert，缺失文件自动 `enabled=0`（临时由 `memory._init_souls` 承担）
 - [ ] 抽出完整 `SoulService`：启用/禁用、排序、新建/编辑 SOUL
 - [ ] `SoulMemoryService`：加载/保存 `soul_memories/<name>.md`，写 `soul_memory_revisions`
-- [ ] CLI 至少能展示多个 SOUL 的评论流（前端在第二期）
-- [ ] 多 SOUL 待办抽取的合并与去重（§6.1 [4]）
+- [x] CLI 至少能展示多个 SOUL 的评论流（前端在第二期）
+- [x] 多 SOUL 待办抽取的合并与去重（§6.1 [4]）
 - [ ] `chat_threads` / `chat_messages` 表 + `ChatService`：与单个 SOUL 私聊、按 thread 加载历史
 - [ ] CLI 私聊命令：`/chat <soul>` 进入线程，`/chat list` 看线程列表
 - [ ] 私聊检索：用 thread 最近若干轮做 query 对 posts 走 RRF + 拉取该 SOUL 历史评论

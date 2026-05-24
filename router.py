@@ -8,12 +8,12 @@ import json
 from datetime import datetime
 from openai import OpenAI
 
+from core.soul_service import SoulContext
+
 
 # 引擎 1：Post Reply
 
-POST_REPLY_PROMPT = """\
-你是 TraceLog 拾迹，一个温暖且有洞察力的个人成长 AI 伴侣。
-
+POST_REPLY_TASK_PROMPT = """\
 ## 核心任务
 1. **回复 (reply)**：结合上下文给出真诚、有温度的中文回应，字数控制在 2-4 句话。
 2. **待办提取 (todos_to_upsert & todos_to_delete)**：精准提取用户【明确提出】的新增、状态变更或取消任务。
@@ -59,6 +59,12 @@ POST_REPLY_PROMPT = """\
 请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
 """
 
+POST_REPLY_PROMPT = """\
+你是 TraceLog 拾迹，一个温暖且有洞察力的个人成长 AI 伴侣。
+
+{task_prompt}
+"""
+
 
 def _now_str() -> str:
     now = datetime.now().astimezone()
@@ -68,8 +74,41 @@ def _now_str() -> str:
 
 def call_post_reply(user_input: str, client: OpenAI, model: str, context: str) -> dict | None:
     """Post Reply：共情回复 + 待办增量提取。"""
-    system_msg = POST_REPLY_PROMPT.replace("{current_datetime}", _now_str())
-    user_msg = f"## 当前上下文\n{context or '（暂无历史数据）'}\n\n---\n\n## 帖子内容\n{user_input}"
+    system_msg = POST_REPLY_PROMPT.format(
+        task_prompt=_post_reply_task_prompt(),
+    )
+    return _call_post_reply_json(user_input, client, model, context, system_msg)
+
+
+def call_soul_post_reply(
+    user_input: str,
+    client: OpenAI,
+    model: str,
+    shared_context: str,
+    soul: SoulContext,
+) -> dict | None:
+    """Call one SOUL for a public post reply."""
+    soul_memory = soul.soul_memory.strip() or "（暂无）"
+    system_msg = (
+        f"## SOUL 人格\n{soul.persona.strip()}\n\n"
+        f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
+        f"---\n\n{_post_reply_task_prompt()}"
+    )
+    return _call_post_reply_json(user_input, client, model, shared_context, system_msg)
+
+
+def _post_reply_task_prompt() -> str:
+    return POST_REPLY_TASK_PROMPT.replace("{current_datetime}", _now_str())
+
+
+def _call_post_reply_json(
+    user_input: str,
+    client: OpenAI,
+    model: str,
+    context: str,
+    system_msg: str,
+) -> dict | None:
+    user_msg = _post_reply_user_message(user_input, context)
 
     try:
         response = client.chat.completions.create(
@@ -85,7 +124,15 @@ def call_post_reply(user_input: str, client: OpenAI, model: str, context: str) -
         print(f"[Router] API 调用失败：{e}")
         return None
 
-    content = (response.choices[0].message.content or "").strip()
+    return _parse_post_reply_content(response.choices[0].message.content)
+
+
+def _post_reply_user_message(user_input: str, context: str) -> str:
+    return f"## 当前上下文\n{context or '（暂无历史数据）'}\n\n---\n\n## 帖子内容\n{user_input}"
+
+
+def _parse_post_reply_content(content: str | None) -> dict | None:
+    content = (content or "").strip()
     if content.startswith("```json"):
         content = content[7:]
     if content.startswith("```"):

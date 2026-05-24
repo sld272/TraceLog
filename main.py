@@ -9,7 +9,9 @@ from typing import cast
 from openai import OpenAI
 from core import context_builder
 from core import record_service
+from core import reply_service
 from core import retrieval
+from core import todo_service
 import router
 import memory
 import vectorstore
@@ -159,27 +161,31 @@ def main():
         # 2. 基于历史组装上下文，避免当前输入在上下文中重复出现
         print("\n[TraceLog 正在思考...]\n")
         built_context = context_builder.build_context(relevant_post_ids=relevant_ids)
-        context = built_context.shared_context
 
         # 3. 落盘与索引当前输入，确保即使后续 LLM 失败也不丢用户数据
         post_id = record_service.save_post(user_input)
 
-        # 4. 调用 LLM
-        result = router.call_post_reply(user_input, client, model, context)
-
-        if result is None:
-            print("[TraceLog] 本次解析失败，请重试。\n")
+        # 4. 并发调用启用 SOUL，写入 comments
+        results = reply_service.fanout(post_id, user_input, client, model, built_context)
+        if not results:
+            print("[TraceLog] 当前没有启用 SOUL，未生成评论。\n")
             continue
 
-        # 5. 打印回复
-        print(f"TraceLog: {result['reply']}\n")
+        # 5. 打印多 SOUL 评论
+        for result in results:
+            if result.ok:
+                print(f"[{result.soul_name}] {result.reply}\n")
+            else:
+                print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
 
-        # 6. 更新待办
-        to_upsert = result.get("todos_to_upsert", [])
-        to_delete = result.get("todos_to_delete", [])
+        if not any(result.ok for result in results):
+            print("[TraceLog] 所有 SOUL 本次都回复失败，post 已保存，可稍后重试。\n")
+            continue
+
+        # 6. 合并成功 SOUL 抽取的待办
+        to_upsert, to_delete = todo_service.merge_reply_todos(results)
         if to_upsert or to_delete:
-            todos = memory.upsert_todos(todos, to_upsert, to_delete)
-            memory.save_todos(todos)
+            todos = todo_service.apply_reply_todos(todos, results)
             print(f"[记忆] 待办已更新，当前 {len(todos)} 条。\n")
 
         # 调试输出
