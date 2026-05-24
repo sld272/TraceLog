@@ -5,6 +5,7 @@ TraceLog 拾迹 — 个人成长 AI 伴侣
 import json
 import os
 import getpass
+from typing import cast
 from openai import OpenAI
 from core import record_service
 from core import retrieval
@@ -123,7 +124,8 @@ def main():
 
     while True:
         try:
-            user_input = input("你: ").strip()
+            raw_input = cast(str, input("你: "))
+            user_input = raw_input.strip()
             if user_input.lower() == "/quit":
                 raise KeyboardInterrupt
         except (KeyboardInterrupt, EOFError):
@@ -135,7 +137,8 @@ def main():
                     recent_posts=memory.read_recent_posts(),
                 )
                 if _is_valid_profile(new_profile):
-                    memory.write_profile(new_profile.strip())
+                    profile_text = cast(str, new_profile)
+                    memory.write_profile(profile_text.strip())
                     print("[记忆] 画像已更新。")
                 else:
                     print("[记忆] 画像内容无效或过短，已放弃本次覆盖，保护旧数据。")
