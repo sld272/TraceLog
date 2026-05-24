@@ -5,9 +5,11 @@ ChromaDB + OpenAIEmbeddingFunction 封装
 
 import os
 import sys
+from typing import cast
 
 import chromadb
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+from chromadb.api.types import Embeddable, EmbeddingFunction
+from chromadb.utils.embedding_functions.openai_embedding_function import OpenAIEmbeddingFunction
 
 _collection = None
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -39,7 +41,7 @@ def init_vectorstore(
         client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
         _collection = client.get_or_create_collection(
             name="posts",
-            embedding_function=embed_fn,
+            embedding_function=cast(EmbeddingFunction[Embeddable], embed_fn),
         )
         print(f"[向量存储] 初始化成功，已索引 {_collection.count()} 篇帖子。")
     except Exception as e:
