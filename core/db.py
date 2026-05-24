@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -13,8 +13,7 @@ from typing import Any
 BASE_DIR = Path(__file__).resolve().parent.parent
 WORKSPACE_DIR = BASE_DIR / "workspace"
 DB_PATH = WORKSPACE_DIR / "state.db"
-MIGRATIONS_DIR = BASE_DIR / "migrations"
-INIT_SQL_PATH = MIGRATIONS_DIR / "001_init.sql"
+INIT_SQL_PATH = BASE_DIR / "schema.sql"
 
 
 def connect() -> sqlite3.Connection:
@@ -30,7 +29,7 @@ def connect() -> sqlite3.Connection:
 def init_db() -> None:
     """Create and validate the state database schema."""
     if not INIT_SQL_PATH.exists():
-        raise FileNotFoundError(f"Missing migration file: {INIT_SQL_PATH}")
+        raise FileNotFoundError(f"Missing schema file: {INIT_SQL_PATH}")
 
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     sql = INIT_SQL_PATH.read_text(encoding="utf-8")
@@ -63,7 +62,7 @@ def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:
 
 
 @contextmanager
-def transaction() -> Iterable[sqlite3.Connection]:
+def transaction() -> Iterator[sqlite3.Connection]:
     """Run statements in a write transaction."""
     conn = connect()
     try:
