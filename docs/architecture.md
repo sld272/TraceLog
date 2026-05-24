@@ -15,9 +15,9 @@
 
 ### 当前实现状态（2026-05-24）
 
-当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。
+当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索。
 
-尚未完成：多 SOUL 并发评论、正式 `SoulService` / `ReplyService` / `RecordService` 拆分、RRF 双轨检索、私聊服务、轻反思/深反思、导出/迁移脚本和 Web/API 层。
+尚未完成：多 SOUL 并发评论、正式 `SoulService` / `ReplyService` / `ContextBuilder` 拆分、私聊服务、轻反思/深反思、导出/迁移脚本和 Web/API 层。
 
 ---
 
@@ -821,7 +821,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_user_md_status ON pending_user_md_changes
 | --- | --- |
 | 写 posts | 整个流程失败，返回错误 |
 | 写 FTS5 | trigger 自动处理，正常不会失败 |
-| ChromaDB upsert | 记录到 `meta.pending_embeddings`，下次启动重试 |
+| ChromaDB upsert | 记录到 `meta.pending_embedding:<post_id>`，下次启动重试 |
 | 单个 SOUL 评论 LLM 调用失败 | 仅丢弃该 SOUL 的评论，其他 SOUL 正常落 comments；前端给该 SOUL 卡片标灰，提供"重试"按钮 |
 | 全部 SOUL 评论失败 | 已落盘的 post 不动，前端在评论流位置展示"AI 暂时无法回复，可重试"，不阻塞用户继续发帖 |
 | 主 SOUL 调用失败（Agent 项目） | 工具调用入口失效，降级为纯评论；提示用户重试或临时切主 SOUL |
@@ -1345,9 +1345,9 @@ my-tracelog-backup/
 - [x] 建立 `state.db` 与所有表（含 FTS5 双表、`souls` 表、`comments` 表、`user_md_revisions`、`soul_memory_revisions`、`pending_user_md_changes`）
 - [x] 实现 `schema.sql` 作为唯一 SQLite 初始化脚本
 - [x] 实现 `core/db.py` 封装连接 + WAL + 重试（参考 Hermes `hermes_state.py`）
-- [x] 当前 CLI 发帖写入 SQLite `posts`，并继续写入 ChromaDB（临时由 `memory.py` + `main.py` 承担，后续再抽 `RecordService`）
-- [ ] 抽出正式 `RecordService.save_post`：双写 SQLite + ChromaDB
-- [ ] `ContextBuilder`：读启用 SOUL 列表 + user.md，调用 RRF 双轨检索
+- [x] 抽出正式 `RecordService.save_post`：双写 SQLite + ChromaDB，ChromaDB 失败时记录 `pending_embedding:<post_id>` 等待补索引
+- [x] CLI 相关历史检索接入 FTS5 + ChromaDB + RRF hybrid 检索（由 `core/retrieval.py` 承担）
+- [ ] `ContextBuilder`：读启用 SOUL 列表 + user.md，组装共享上下文与每个 SOUL 的私有记忆
 - [x] 运行时初始化 `workspace/souls/默认.md` 和 `workspace/souls/毒舌好友.md`，默认写入 `state.db.souls(enabled=1)`
 - [x] 运行时为每个默认 SOUL 创建 `workspace/soul_memories/<name>.md` 空模板
 - [ ] `ReplyService.fanout`：对启用 SOUL 列表并发调用 LLM，把每条 reply 写入 `comments`

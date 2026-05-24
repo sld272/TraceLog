@@ -14,6 +14,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CHROMA_DB_DIR = os.path.join(BASE_DIR, "workspace", "chroma_db")
 
 
+def is_initialized() -> bool:
+    return _collection is not None
+
+
 def init_vectorstore(
     api_key: str,
     base_url: str,
@@ -55,6 +59,11 @@ def index_post(post_id: str, content: str):
 
 def search_relevant_posts(query: str, n_results: int = 3) -> list[str]:
     """语义检索相关帖子，返回 post_id 列表。"""
+    return query_post_ids(query, n_results)
+
+
+def query_post_ids(query: str, n_results: int = 20) -> list[str]:
+    """语义检索相关帖子，返回按相关性排序的 post_id 列表。"""
     if _collection is None:
         return []
     count = _collection.count()

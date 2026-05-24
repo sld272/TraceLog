@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from core import record_service
 from core import db
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -245,44 +246,9 @@ def _write_text_atomic(path: str, content: str) -> None:
     os.replace(tmp, path)
 
 
-# 帖子
-
-def _next_post_id() -> str:
-    """Generate the next post id in YYYYMMDD-NNN format from SQLite rows."""
-    today = datetime.now().astimezone().strftime("%Y%m%d")
-    row = db.query_one(
-        """
-        SELECT id
-        FROM posts
-        WHERE id LIKE ?
-        ORDER BY id DESC
-        LIMIT 1
-        """,
-        (f"{today}-%",),
-    )
-    if row is None:
-        return f"{today}-001"
-    try:
-        seq = int(str(row["id"]).split("-")[1]) + 1
-    except (IndexError, ValueError):
-        seq = 1
-    return f"{today}-{seq:03d}"
-
-
 def save_post(user_input: str) -> str:
-    """Save a post to state.db and return its post_id."""
-    now = datetime.now().astimezone()
-    iso_time = now.isoformat()
-    now_unix = now.timestamp()
-    post_id = _next_post_id()
-    db.execute(
-        """
-        INSERT INTO posts(id, ts, content, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (post_id, iso_time, user_input, now_unix, now_unix),
-    )
-    return post_id
+    """Compatibility wrapper for post persistence."""
+    return record_service.save_post(user_input)
 
 
 def _format_post(row) -> str:

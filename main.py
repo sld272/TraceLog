@@ -6,6 +6,8 @@ import json
 import os
 import getpass
 from openai import OpenAI
+from core import record_service
+from core import retrieval
 import router
 import memory
 import vectorstore
@@ -114,6 +116,9 @@ def main():
         config.get("embedding_base_url"),
         config.get("embedding_api_key"),
     )
+    fixed_embeddings = record_service.retry_pending_embeddings()
+    if fixed_embeddings:
+        print(f"[向量存储] 已补齐 {fixed_embeddings} 条待索引帖子。")
     todos = memory.load_todos()
 
     while True:
@@ -145,15 +150,14 @@ def main():
             continue
 
         # 1. 先检索历史（不包含当前输入），避免“自己搜自己”
-        relevant_ids = vectorstore.search_relevant_posts(user_input, n_results=3)
+        relevant_ids = retrieval.hybrid_search(user_input, k=3)
 
         # 2. 基于历史组装上下文，避免当前输入在上下文中重复出现
         print("\n[TraceLog 正在思考...]\n")
         context = memory.build_context(relevant_post_ids=relevant_ids)
 
         # 3. 落盘与索引当前输入，确保即使后续 LLM 失败也不丢用户数据
-        post_id = memory.save_post(user_input)
-        vectorstore.index_post(post_id, user_input)
+        post_id = record_service.save_post(user_input)
 
         # 4. 调用 LLM
         result = router.call_post_reply(user_input, client, model, context)
