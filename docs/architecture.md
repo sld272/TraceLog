@@ -15,9 +15,53 @@
 
 ### 当前实现状态（2026-05-25）
 
-当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；`core/workspace_service.py` 负责初始化 workspace、`user.md` 与默认 SOUL；CLI 已拆为极薄 `main.py` 与 `core/cli/`，业务能力改为依赖 `core/profile_service.py`、`core/record_service.py`、`core/todo_service.py` 等明确 service。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；LLM prompt 与 JSON 解析按能力拆到 `core/llm/reply_router.py`、`core/llm/todo_router.py`、`core/llm/reflection_router.py`；`core/vectorstore.py` 已成为 API 友好的向量 provider，初始化失败抛异常，由 CLI 或未来 API 层决定如何处理。`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`；`core/todo_service.py` 已作为可选 TodoTool 只从公开 post 独立抽取待办并写入 `todos.source_post`；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装与 LLM 回复，不触发待办抽取；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表；`core/profile_service.py` 已支持深反思画像 patch，normal 章节自动落盘，high 章节使用更高阈值自动落盘。
+代码侧 v3 第一阶段的 CLI 闭环已基本跑通。核心 service 落位、SQLite + FTS5 + ChromaDB 三轨数据底座、SOUL 与私聊/评论双通道、轻反思与全局/SOUL 深反思、TodoTool 开关全部可用；尚未启动的是 FastAPI、Web 前端、`tracelog export`、demo 数据脚本与异步反思队列。
 
-尚未完成：导出、Web/API 层，以及发帖后的后台异步处理队列。
+**已完成（按模块）**
+
+- 数据底座：`schema.sql` 是唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键、FTS5/trigram 校验，并提供 `require_lastrowid` 在 lastrowid 缺失时显式抛错。
+- workspace 编排：`core/workspace_service.py` 初始化 workspace、`user.md`、默认 SOUL 与对应 `soul_memories/` 文件。
+- CLI 入口：`main.py` 极薄；`core/cli/` 拆为 `app.py`（主循环）、`config.py`（首次配置）、`commands.py`（命令解析与展示）、`sessions.py`（私聊/评论/反思/Todo 会话）。
+- 记录与检索：`core/record_service.py` 双写 SQLite + ChromaDB，并支持 `pending_embedding` 失败重索引；`core/retrieval.py` 对 FTS5 双 tokenizer + ChromaDB 做 RRF 融合；`core/context_builder.py` 组装共享上下文。
+- LLM 路由：`core/llm/` 按能力分为 `reply_router` / `todo_router` / `reflection_router`，全部依赖 `core/llm/types.LLMClient` Protocol（不再硬绑 OpenAI 类型）。
+- SOUL 体系：`core/soul_service.py` 同步、列表、新建/编辑、启用/禁用、排序、缺失文件自动 `enabled=0`；`core/soul_memory_service.py` 读写相处记忆并写 `soul_memory_revisions`。默认初始化生成"默认"与"毒舌好友"两个 SOUL。
+- 评论与私聊：`core/reply_service.py` 对启用 SOUL 并发生成评论并落 `comments`；`core/comment_service.py` 在 `comment_threads` / `comment_messages` 上支持单 SOUL 多轮往返；`core/chat_service.py` 在 `chat_threads` / `chat_messages` 上支持单 SOUL 私聊。两者都不写 posts、不进 FTS5/ChromaDB、不触发轻反思。
+- 待办：`core/todo_service.py` 严格只从公开 post 抽取，写入 `todos.source_post`；`core/tool_config_service.py` 提供 `/tool todo on|off` 开关；私聊与评论线程一律不触发待办抽取。
+- 反思器：`core/reflector.py` 实现每条 post 后的轻反思（含失败 pending 重试）、CLI 退出时的全局深反思、按 SOUL 增量游标的 SOUL 深反思（读原始私聊与评论消息，写 `soul_memories/<name>.md` + `soul_memory_revisions`）。
+- 画像：`core/profile_service.py` 解析 sensitivity 阈值，normal 章节直落，high 章节使用更高阈值落盘，写 `user_md_revisions`。
+- 测试：`tests/` 覆盖 chat / comment / profile / reflector / todo / soul / cli / vectorstore / workspace；`tests/helpers.py` 提供 `require_not_none` 收窄 `query_one` 的 Optional 返回。
+
+**尚未完成**
+
+- API 与前端：FastAPI 后端、Web 前端最小闭环（记录、时间线、AI 回复、待办、画像、SOUL/私聊管理）。
+- 数据导出：`tracelog export --format=markdown` 一键打包尚未实现。
+- demo 资产：用于报名与演示的 10—20 条 post + 预生成 profile / todos / 反思的脚本未启动。
+- 异步反思队列：当前轻/深反思都同步跑在 CLI 主线程；`pending_embedding` 与 `pending_light_reflection` 的补跑已就位，但未做后台 worker。
+- 三因子重排、ChromaDB vs posts 计数校验、可视化（情绪曲线、关系图）等增强项。
+
+### 当前真实数据流（2026-05-25）
+
+`post`（公开记录）链路：
+
+```
+read_cli_input
+  → retrieval.hybrid_search(top_k=3)            # FTS5 双表 + ChromaDB → RRF
+  → context_builder.build_context               # user.md + 启用 SOUL + 相关 post + 活跃 todos
+  → record_service.save_post                    # 写 posts，触发 FTS5 trigger，upsert ChromaDB
+  → todo_service.run_for_post_safely            # TodoTool 开关时才跑，写 todos.source_post
+  → reply_service.fanout                        # 启用 SOUL 并发评论，写 comments
+  → reflector.run_light_reflection_safely       # 轻反思 → entities/emotions/events，失败入 pending
+  → CLI 退出
+      → reflector.trigger_global_deep_reflection
+        → 写 reflections + profile_service.apply_patch（normal / high 双阈值）
+      → reflector.trigger_pending_soul_deep_reflections
+        → 每个 SOUL 读原始私聊+评论消息 → soul_memories/<name>.md + revision
+```
+
+`/chat <soul>` 私聊链路：仅按 thread 加载历史 + 检索 posts/相关评论，调用单 SOUL，写 `chat_messages`，不触发任何反思与待办。
+`/comment <post> <soul>` 评论线程链路：与私聊对称，但 thread 与 root comment 绑定到 `comment_threads`，由 SOUL 深反思统一吸收。
+
+
 
 ---
 
@@ -361,9 +405,7 @@ CREATE TABLE IF NOT EXISTS todos (
     start_time  TEXT,                        -- HH:MM 或 NULL
     end_time    TEXT,
     status      TEXT NOT NULL DEFAULT '未完成',  -- 未完成 / 已完成
-    source_post         TEXT REFERENCES posts(id) ON DELETE SET NULL,
-    source_chat_message INTEGER REFERENCES chat_messages(id) ON DELETE SET NULL, -- 兼容旧版本，新流程不再写
-    source_comment_message INTEGER REFERENCES comment_messages(id) ON DELETE SET NULL, -- 兼容旧版本，新流程不再写
+    source_post TEXT REFERENCES posts(id) ON DELETE SET NULL,
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL,
     completed_at REAL
@@ -1293,60 +1335,97 @@ my-tracelog-backup/
 
 ---
 
-## 10. 三阶段实施清单
+## 10. API 与前端最小实现（高阶设计）
 
-### 10.1 第一期：5/23—5/31（江苏 AIGC 报名前）
+5/31 报名前需要交付的最小 Web 闭环。本节只到路由分组与页面骨架的粒度，字段级细节随实现一起在代码里固化。
 
-目标：**给 v3 第一阶段提供技术拆解；5/31 前以 demo 能跑起来 + 至少一个新能力可演示为准，未完成项顺延到第二期**
+### 10.1 设计原则
 
-核心技术项（按优先级推进，不要求全部卡在 5/31 前完成）：
+- **只暴露 service，不暴露 SQLite**：所有 HTTP 路由都是 `core/*_service.py` 的薄封装，禁止在路由里写 SQL；service 已经按业务边界拆好。
+- **沿用 LLMClient Protocol**：API 启动时构造一个 `OpenAI` 客户端实例并依赖注入到 service，service 依赖 `core/llm/types.LLMClient`，与 CLI 共用同一份 LLM 路由。
+- **同步优先**：第一期的反思仍同步跑在 request 内（与 CLI 一致），不引入后台 worker；返回时一并把派生数据交给前端。`pending_*` 队列由后续异步化承接。
+- **本地优先**：服务默认 bind `127.0.0.1`；不要求登录；workspace 路径与 CLI 共享。
+- **演示稳定优先**：错误以 JSON 标准结构返回，前端在出错位置给出"重试"按钮，不让任一失败阻塞页面。
 
-- [x] 建立 `state.db` 与所有表（含 FTS5 双表、`souls` 表、`comments` 表、`user_md_revisions`、`soul_memory_revisions`）
-- [x] 实现 `schema.sql` 作为唯一 SQLite 初始化脚本
-- [x] 实现 `core/db.py` 封装连接 + WAL + 重试（参考 Hermes `hermes_state.py`）
-- [x] 抽出正式 `RecordService.save_post`：双写 SQLite + ChromaDB，ChromaDB 失败时记录 `pending_embedding:<post_id>` 等待补索引
-- [x] CLI 相关历史检索接入 FTS5 + ChromaDB + RRF hybrid 检索（由 `core/retrieval.py` 承担）
-- [x] `ContextBuilder`：读启用 SOUL 列表 + user.md，组装共享上下文与每个 SOUL 的私有记忆（当前 CLI 只使用共享上下文，SOUL 列表留给下一步 `ReplyService`）
-- [x] 运行时初始化 `workspace/souls/默认.md` 和 `workspace/souls/毒舌好友.md`，默认写入 `state.db.souls(enabled=1)`
-- [x] 运行时为每个默认 SOUL 创建 `workspace/soul_memories/<name>.md` 空模板
-- [x] `ReplyService.fanout`：对启用 SOUL 列表并发调用 LLM，把每条 reply 写入 `comments`
-- [x] 启动时扫描 `souls/` 与 `souls` 表 upsert，缺失文件自动 `enabled=0`（由 `SoulService.sync_souls` 承担）
-- [x] 抽出完整 `SoulService`：启用/禁用、排序、新建/编辑 SOUL
-- [x] `SoulMemoryService`：加载/保存 `soul_memories/<name>.md`，写 `soul_memory_revisions`
-- [x] CLI 至少能展示多个 SOUL 的评论流
-- [x] TodoTool 从公开 post 独立抽取待办，写入 `todos.source_post`
-- [x] `chat_threads` / `chat_messages` 表 + `ChatService`：与单个 SOUL 私聊、按 thread 加载历史
-- [x] CLI 私聊命令：`/chat <soul>` 进入线程，`/chat list` 看线程列表
-- [x] 私聊检索：用 thread 最近若干轮做 query 对 posts 走 RRF + 拉取该 SOUL 历史评论
-- [x] SOUL 深反思读取对应 SOUL 的私聊/评论原始互动，写入对应 `soul_memories/<name>.md`，不进入全局 `user.md`
-- [x] 私聊不触发 TodoTool；待办工具作为可选工具只处理公开 post
-- [x] `ProfileService.apply_patch`：解析 sensitivity 阈值 → 直落或丢弃；写 `user_md_revisions`
-- [x] 轻反思最简版（同步实现也可以，第一期不强求异步）：每帖抽取 entities + emotions + events + importance
-- [x] 深反思最简版：CLI 退出时触发，生成 reflection 并写入 `reflections`
-- [x] 深反思增强：CLI 退出触发，生成 reflection + user.md patch，normal 自动落盘，high 使用更高阈值自动落盘
-- [x] 将核心记忆、LLM 路由与向量索引模块完整迁移进 `core/`
-- [ ] `tracelog export --format=markdown` 命令
-- [ ] FastAPI 后端接口暴露
-- [ ] Web 前端最小可用版本：记录、时间线、AI 回复、待办、画像、搜索
-- [ ] SOUL 管理页：启用/禁用开关、排序、新建/编辑 SOUL
-- [ ] 私聊页：按 SOUL 进入私聊线程，展示消息流
-- [ ] 准备 demo 数据集（10—20 条 post 覆盖典型场景）
-- [ ] 录制基础演示视频
-- [ ] PPT 写"分层记忆架构"页（参考本文 §1.1 的图）
+### 10.2 路由分组
 
-可选（视时间）：
+| 分组 | 路由（示意） | 后端 service |
+| --- | --- | --- |
+| 记录与时间线 | `POST /posts`、`GET /posts`、`GET /posts/{id}` | `record_service`、`reply_service`、`reflector` |
+| 评论流 | `GET /posts/{id}/comments`、`POST /posts/{id}/comments/{soul}/messages` | `comment_service` |
+| 私聊 | `GET /chat/threads`、`POST /chat/threads`、`POST /chat/threads/{id}/messages` | `chat_service` |
+| 待办 | `GET /todos`、`PATCH /todos/{id}` | `todo_service` |
+| 画像 | `GET /profile`、`PUT /profile` | `profile_service` |
+| SOUL | `GET /souls`、`POST /souls`、`PATCH /souls/{name}`、`POST /souls/reorder` | `soul_service`、`soul_memory_service` |
+| 工具开关 | `GET /tools`、`PATCH /tools/{name}` | `tool_config_service` |
+| 检索 | `GET /search?q=...&mode=hybrid|fts|vector` | `retrieval` |
+| 反思 | `POST /reflections/global`、`GET /reflections` | `reflector` |
+| 导出（P1） | `POST /export` | `export_service`（待实现） |
 
-- [ ] 异步轻反思（用 threading）
+### 10.3 前端页面骨架
+
+| 页面 | 主要组件 | 说明 |
+| --- | --- | --- |
+| 首页 | 输入框 + AI 回复（按 SOUL 卡片） + 最近帖子 | 与 CLI `read_cli_input` 路径对齐 |
+| 时间线 | 按日期分组的 post 列表，附 SOUL 评论数 | 演示"长期记忆"的最直观入口 |
+| 待办页 | 按日期/状态分组的 todo 卡片，可勾选完成 | 显示 `source_post` 跳转回原帖 |
+| 画像页 | `user.md` 各章节渲染 + 章节级编辑 | sensitivity 调节延后到第二期 |
+| SOUL 管理页 | SOUL 卡片：启用开关、排序、人格/记忆查看 | 排序复用 `soul_service.reorder_souls` |
+| 私聊页 | 左栏线程列表 + 右栏消息流 | 私聊不进检索，纯线程顺序 |
+| 复盘页（P1） | 最近一次深反思摘要 + reflections 列表 | 第二期增可视化 |
+
+### 10.4 与 CLI 的关系
+
+API 层不取代 CLI，而是与 CLI 平行调用同一组 service。CLI 用于本地开发与备用演示（录屏），Web 用于评委演示与体验。
+
+---
+
+## 11. 三阶段实施清单
+
+### 11.1 第一期：5/23—5/31（江苏 AIGC 报名前）
+
+目标：5/31 报名前以"CLI 闭环 + Web 最小演示 + 报名材料"三件套交付。截至 2026-05-25，CLI 链路全部跑通，剩余重点是 API/前端最小闭环、demo 资产与导出。
+
+**已完成（Done）**
+
+- [x] `schema.sql` 唯一初始化 + `core/db.py`（WAL、外键、FTS5 trigram 校验、`require_lastrowid`）
+- [x] `RecordService.save_post`：双写 SQLite + ChromaDB，失败时入 `pending_embedding`
+- [x] `core/retrieval.py`：FTS5 双 tokenizer + ChromaDB + RRF 融合
+- [x] `core/context_builder.py`：共享上下文（user.md、启用 SOUL、相关 post、活跃 todos）
+- [x] 默认 SOUL 初始化：`workspace/souls/默认.md`、`workspace/souls/毒舌好友.md` + 对应 `soul_memories/`
+- [x] `core/soul_service.py`：sync、列表、新建/编辑、启用/禁用、排序，缺失文件自动 `enabled=0`
+- [x] `core/soul_memory_service.py`：读写相处记忆 + `soul_memory_revisions`
+- [x] `core/reply_service.py`：启用 SOUL 并发评论 → `comments`
+- [x] `core/comment_service.py` + `comment_threads` / `comment_messages`：单 SOUL 多轮评论线程
+- [x] `core/chat_service.py` + `chat_threads` / `chat_messages`：单 SOUL 私聊
+- [x] CLI 命令：`/souls`、`/soul *`、`/chat *`、`/comment *`、`/tool *`、`/tools`
+- [x] `core/todo_service.py` + `core/tool_config_service.py`：TodoTool 开关，严格只接 post 正文
+- [x] `core/reflector.py`：每帖轻反思（含 pending 重试）、CLI 退出全局深反思、按 SOUL 增量游标的 SOUL 深反思
+- [x] `core/profile_service.py`：sensitivity 阈值 patch + `user_md_revisions`，normal 直落 / high 高阈值
+- [x] `core/llm/types.LLMClient` Protocol：service / 路由不再硬绑 OpenAI 类型
+- [x] `tests/`：chat / comment / profile / reflector / todo / soul / cli / vectorstore / workspace 覆盖
+
+**待 5/31 前完成（P0）**
+
+- [ ] FastAPI 后端按 §10.2 暴露最小路由集
+- [ ] Web 前端按 §10.3 完成首页 / 时间线 / 待办 / 画像 / SOUL 管理 / 私聊
+- [ ] demo 数据脚本：10—20 条 post + 预生成 profile / todos / 反思
+- [ ] 录制基础演示视频（含 CLI 备份录屏）
+- [ ] PPT "分层记忆架构"页（参考 §1.1）
+
+**P1（视时间）**
+
+- [ ] `tracelog export --format=markdown`
+- [ ] 异步轻反思（threading）
 - [ ] 三因子重排
-- [x] 深反思输出多 patch，并接入 ProfileService.apply_patch
 - [ ] 前端可视化：情绪曲线、关系图、实体提及频次
 
-不做：
+**不做（顺延到第三期）**
 
-- [ ] 主 SOUL / Agent 模式（第三期再做）
-- [ ] 自动定时反思
+- 主 SOUL / Agent 模式
+- 自动定时反思
 
-### 10.2 第二期：6—7 月（EL 交互组）
+### 11.2 第二期：6—7 月（EL 交互组）
 
 - [ ] Web 前端体验打磨：动效、移动端适配、加载/错误状态、演示数据切换
 - [ ] 画像页增强：展示当前 `user.md` 的所有章节和条目，支持新增、编辑、删除、排序
@@ -1365,28 +1444,34 @@ my-tracelog-backup/
 - [ ] 大学生场景模板：课程、DDL、社团、竞赛
 - [ ] 移动端适配
 
-### 10.3 第三期：7—9 月（EL Agent 组）
+### 11.3 第三期：7—9 月（EL Agent 组）
 
-把记忆系统作为 Agent tools 暴露给 Coze（火山引擎扣子）：
+把记忆系统作为 Agent tools 暴露给 Coze（火山引擎扣子）。状态标记：✅ service 已就绪、可直接薄封装；🟡 部分 service 已就绪、缺少专门字段或聚合；🔴 service 缺失，需要先在 core 里实现。
 
-- [ ] Tool: `search_memory(query, mode="hybrid|fts|vector")`
-- [ ] Tool: `query_entity(name, type)`
-- [ ] Tool: `get_emotion_trend(days)`
-- [ ] Tool: `list_todos(filter)`
-- [ ] Tool: `add_todo(...)` / `update_todo(...)` / `complete_todo(id)`
-- [ ] Tool: `generate_reflection(scope="custom")`
-- [ ] Tool: `set_main_soul(name)` / `get_main_soul()`：设置或读取 Agent 模式下的主 SOUL（写 `meta.main_soul`）
-- [ ] Tool: `list_souls(enabled_only)` / `enable_soul(name)` / `disable_soul(name)`：让 Agent 自助管理评论团队
-- [ ] Tool: `list_chat_threads(soul_name?)` / `get_chat_history(thread_id, limit)`：Agent 读私聊
-- [ ] Tool: `send_chat_message(thread_id, content)` / `start_chat_thread(soul_name, title?)`：Agent 替用户在私聊里推进话题或开新线程
-- [ ] Tool: `add_post(content)` （Agent 也能帮用户记录）
-- [ ] Tool: `read_user_md(section?)` / `propose_user_md_patch(patch)`：Agent 读取或对 user.md 提交 patch（沿用 sensitivity 阈值规则）
-- [ ] Coze 工作流：成长教练、复盘助手、目标拆解
-- [ ] 部署后端 API 到云端供 Coze 调用
+**就绪的工具（薄封装即可）**
+
+- [ ] ✅ `add_post(content)` —— `record_service.save_post`
+- [ ] ✅ `list_todos(filter)` / `add_todo(...)` / `update_todo(...)` / `complete_todo(id)` —— `todo_service`
+- [ ] ✅ `search_memory(query, mode="hybrid|fts|vector")` —— `retrieval.hybrid_search` 已支持，需补 fts/vector 单模式开关
+- [ ] ✅ `list_souls(enabled_only)` / `enable_soul(name)` / `disable_soul(name)` —— `soul_service`
+- [ ] ✅ `list_chat_threads(soul_name?)` / `get_chat_history(thread_id, limit)` / `send_chat_message(thread_id, content)` / `start_chat_thread(soul_name, title?)` —— `chat_service`
+- [ ] ✅ `read_user_md(section?)` / `propose_user_md_patch(patch)` —— `profile_service.apply_patch`，沿用 sensitivity 阈值
+- [ ] ✅ `generate_reflection(scope="custom")` —— `reflector.trigger_global_deep_reflection`，扩展 scope 参数
+
+**部分就绪（需要 service 增量）**
+
+- [ ] 🟡 `query_entity(name, type)` —— SQLite 已有 `entities` / `post_entities`，需要新建 `entity_service` 暴露查询 API
+- [ ] 🟡 `get_emotion_trend(days)` —— `emotions` 表数据齐全，需要新建聚合查询
+
+**待 Agent 期再做**
+
+- [ ] 🔴 `set_main_soul(name)` / `get_main_soul()` —— 第三期才引入 main_soul，需先在 `meta` 表写入并扩 `soul_service`
+- [ ] 🔴 Coze 工作流：成长教练、复盘助手、目标拆解
+- [ ] 🔴 部署后端 API 到云端供 Coze 调用
 
 ---
 
-## 11. 关键设计决策摘要
+## 12. 关键设计决策摘要
 
 | 决策 | 选择 | 主要理由 |
 | --- | --- | --- |
@@ -1406,24 +1491,24 @@ my-tracelog-backup/
 
 ---
 
-## 12. 风险与回退
+## 13. 风险与回退
 
-| 风险 | 影响 | 缓解 |
-| --- | --- | --- |
-| 5/31 前完成不了 | 江苏 AIGC 报名材料只能讲旧架构 | 报名材料先讲设计 + 部分实现，正式开发期完成 |
-| trigram FTS5 性能不达预期 | 中文检索慢 | 限制 query 长度、增加 ChromaDB 比重 |
-| 反思器抽取质量差 | 实体/情绪表充满噪声 | 第一期只做 demo 数据，第二期再加人工反馈循环 |
-| 异步反思导致并发 bug | post 已落盘但派生数据缺失 | 第一期同步实现，第二期再异步化 |
-| ChromaDB 与 SQLite 不一致 | 检索结果偏 | 启动时校验 chroma 计数 vs posts 计数，差异时重建 |
-| 用户改 souls/*.md 后状态混乱 | 启用集合与文件不一致 | 启动时扫描 `souls/` 与 `souls` 表对账，缺文件的 SOUL 自动 `enabled=0` |
-| 多 SOUL 全启用导致延迟与成本上升 | 单帖触发 N 倍 token | 第一期内置 SOUL 控制在 2—3 个；并发执行；前端流式渲染先到先显示；`enabled` 默认值由用户自行调整 |
-| SOUL 记忆被私聊噪声带偏 | 某个 SOUL 对用户的理解变得片面 | SOUL 深反思 prompt 强调"短期情绪 vs 稳定偏好"；SOUL 记忆写入保留内部留痕；全局 user.md 不读私聊/评论线程 |
-| 用户与 AI 对同一条目同时编辑 | 后写覆盖前写 | 内部留痕保留写入快照；前端以当前画像为准，用户可直接再次编辑 |
-| post 待办重复 | 同一 deadline 被记两次 | TodoTool 只从公开 post 抽取；合并键统一为 (task, date, start_time)，前端展示时显示 `source_post` |
+| 风险 | 影响 | 缓解 | 当前状态（2026-05-25） |
+| --- | --- | --- | --- |
+| 5/31 前完成不了 | 江苏 AIGC 报名材料只能讲 CLI demo | 报名材料先讲设计 + CLI 录屏 + 部分 Web；Web 视进度收敛到首页/时间线/待办 | CLI 闭环已就绪；Web 尚未启动，是当前最大压力点 |
+| trigram FTS5 性能不达预期 | 中文检索慢 | 限制 query 长度、增加 ChromaDB 比重 | RRF 已在 `core/retrieval.py` 上线，未做压力测试 |
+| 反思器抽取质量差 | 实体/情绪表充满噪声 | 第一期只做 demo 数据，第二期再加人工反馈循环 | 轻反思 + 全局深反思 + SOUL 深反思全部跑通；尚无 demo 数据校验 |
+| 异步反思导致并发 bug | post 已落盘但派生数据缺失 | 第一期同步实现，第二期再异步化 | 当前同步执行；`pending_embedding` / `pending_light_reflection` 重试已就位 |
+| ChromaDB 与 SQLite 不一致 | 检索结果偏 | 启动时校验 chroma 计数 vs posts 计数，差异时重建 | `vectorstore.init_vectorstore` 返回 `indexed_count`，但还未做 vs `posts` 计数校验 |
+| 用户改 souls/*.md 后状态混乱 | 启用集合与文件不一致 | 启动时扫描 `souls/` 与 `souls` 表对账，缺文件的 SOUL 自动 `enabled=0` | `soul_service.sync_souls` 已实现 |
+| 多 SOUL 全启用导致延迟与成本上升 | 单帖触发 N 倍 token | 内置 SOUL 控制在 2—3 个；并发执行；前端流式渲染先到先显示 | `reply_service.fanout` 已并发；CLI 串行打印，前端流式渲染待第二期 |
+| SOUL 记忆被私聊噪声带偏 | 某个 SOUL 对用户的理解变得片面 | SOUL 深反思 prompt 强调"短期情绪 vs 稳定偏好"；保留 revision 留痕；全局 user.md 不读私聊/评论 | 已在 prompt + reflector 落实 |
+| 用户与 AI 对同一条目同时编辑 | 后写覆盖前写 | 内部留痕保留快照；前端以当前画像为准 | 留痕已实现；前端冲突 UX 待 Web 实现时考虑 |
+| post 待办重复 | 同一 deadline 被记两次 | TodoTool 严格只从公开 post 抽取；合并键统一为 (task, date, start_time) | `todo_service` 已实现，schema 不再保留 chat/comment 来源列 |
 
 ---
 
-## 13. 后续可选扩展
+## 14. 后续可选扩展
 
 第一—三期之后，TraceLog 还能基于本架构生长出：
 
