@@ -547,13 +547,14 @@ def _is_valid_reflection(content: str | None) -> bool:
 
 
 def _apply_profile_patches(patches: list) -> dict:
-    summary = {"applied": 0, "skipped": 0}
+    summary = {"applied": 0, "skipped": 0, "skipped_details": []}
     if not isinstance(patches, list):
         return summary
 
     for patch in patches:
         if not isinstance(patch, dict):
             summary["skipped"] += 1
+            summary["skipped_details"].append({"reason": "invalid_patch"})
             continue
         result = profile_service.apply_patch(patch, source="reflector")
         status = result.get("status")
@@ -561,4 +562,16 @@ def _apply_profile_patches(patches: list) -> dict:
             summary[status] += 1
         else:
             summary["skipped"] += 1
+        if status != "applied":
+            summary["skipped_details"].append(_profile_patch_skip_detail(patch, result))
     return summary
+
+
+def _profile_patch_skip_detail(patch: dict, result: dict) -> dict:
+    return {
+        "reason": result.get("reason") or result.get("status") or "unknown",
+        "section": patch.get("section"),
+        "ops": patch.get("ops"),
+        "evidence": patch.get("evidence"),
+        "confidence": patch.get("confidence"),
+    }

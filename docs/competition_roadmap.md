@@ -232,7 +232,7 @@ core/
 ├── soul_service.py        # SOUL 加载、启用/禁用、排序、（Agent 模式下）主 SOUL 切换
 ├── soul_memory_service.py # 每个 SOUL 的相处记忆加载、更新、revision
 ├── chat_service.py        # 私聊：线程管理、消息追加、按线程组装上下文、单 SOUL 调用
-├── profile_service.py     # user.md 条目级 patch：解析 sensitivity 阈值并写 user_md_revisions
+├── profile_service.py     # user.md 条目级 patch：解析 sensitivity 阈值并记录内部写入留痕
 ├── todo_service.py        # 待办 CRUD
 └── export_service.py      # tracelog export 实现
 api/                       # FastAPI 接口（5/31 前最小版）
@@ -252,7 +252,7 @@ tests/
 - 首页：今日记录输入框、AI 回复、最近记录。
 - 时间线页：按日期展示历史帖子。
 - 待办页：展示 AI 提取的任务、DDL、完成状态。
-- 画像页：展示 `user.md` 全部章节，所有条目均可就地编辑、新增、删除、拖拽排序；底部"历史版本"区基于 user_md_revisions 提供时间线与一键回滚；每章节可调 sensitivity。
+- 画像页：展示当前 `user.md` 全部章节，所有条目均可就地编辑、新增、删除、拖拽排序；用户点击保存时弹一次简单确认；每章节可调 sensitivity。
 - SOUL 管理页：SOUL 库列表、启用/禁用开关、拖拽排序、新建/编辑 SOUL、查看每个 SOUL 的历史评论和相处记忆。
 - 私聊页：左栏按 SOUL 分组的线程列表（未读数 + 最近消息预览），右栏对话 UI。私聊里 SOUL 能引用相关 post、自己历史评论和自己的相处记忆；私聊摘要只沉淀到当前 SOUL 的记忆中。
 - 复盘页：展示深反思结果、情绪曲线、关键词、关系图、行动建议。

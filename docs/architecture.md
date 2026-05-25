@@ -127,7 +127,7 @@ workspace/
 | SOUL 启用与排序状态 | `state.db` souls 表 | ✗ | 用户在前端启用/禁用 |
 | 主 SOUL（仅 Agent 项目使用） | `state.db.meta.main_soul` | ✓ 由 Agent 决定何时使用 | 用户/Agent 设置 |
 | 用户档案（基本信息 + 成长画像） | `user.md`（章节带 sensitivity 元数据） | ✓ 整体 | 用户与反思器共同维护：normal 章节直接落盘；high 章节由更高阈值约束后直接落盘（详见 §5） |
-| user.md 编辑历史 | `state.db` user_md_revisions 表 | ✗ | ProfileService 每次写入时记录 |
+| user.md 内部写入留痕 | `state.db` user_md_revisions 表 | ✗ | ProfileService 每次写入时记录；用于调试和事故恢复，不作为默认前端功能 |
 | SOUL 相处记忆历史 | `state.db` soul_memory_revisions 表 | ✗ | SoulMemoryService 每次写入时记录 |
 | 帖子原文 | `state.db` posts 表 | ✗（按需检索） | RecordService |
 | AI 评论（每帖每 SOUL 一条） | `state.db` comments 表 | ✗（按需引用） | ReplyService |
@@ -371,7 +371,7 @@ CREATE TABLE IF NOT EXISTS todos (
 CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status, date);
 CREATE INDEX IF NOT EXISTS idx_todos_date   ON todos(date);
 
--- user.md 编辑历史：每次落盘的整文件快照 + 触发该次写入的 patch（详见 §5.5）
+-- user.md 内部写入留痕：每次落盘的整文件快照 + 触发该次写入的 patch（详见 §5.5）
 CREATE TABLE IF NOT EXISTS user_md_revisions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     snapshot    TEXT NOT NULL,
@@ -382,7 +382,7 @@ CREATE TABLE IF NOT EXISTS user_md_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DESC);
 
--- SOUL 相处记忆编辑历史：每次落盘的整文件快照 + 触发该次写入的摘要/patch
+-- SOUL 相处记忆内部写入留痕：每次落盘的整文件快照 + 触发该次写入的摘要/patch
 CREATE TABLE IF NOT EXISTS soul_memory_revisions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     soul_name   TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
@@ -551,7 +551,7 @@ updated_at: 2026-05-23T22:00:00+08:00
 - **整文档统一编辑**：不再用双 marker 把 user.md 划成"AI 段 / 用户段"。整篇都是一份用户档案，AI 反思器和用户都可以编辑任何条目，任何条目也可以由任一方新增、删除、改写。
 - **结构是 H2 章节 + 列表项**：每个 H2（`##`）是一个章节，章节内的条目是 markdown 列表项（一行一条）或一段连续的描述文字。条目就是 patch 的最小单位。
 - **章节带敏感度元数据**：每个章节通过 frontmatter 或 HTML 注释挂一个 `sensitivity` 标记（`high` / `normal`），决定 AI 自动落盘前使用普通阈值还是更高阈值。
-- **每次写入都进 diff 历史**：所有改动（无论 AI 或用户）都落 `user_md_revisions` 表，可在前端查看时间线、回滚到任意版本。
+- **每次写入都进内部留痕**：所有改动（无论 AI 或用户）都落 `user_md_revisions` 表，用于调试和事故恢复；前端默认只展示当前画像。
 
 ### 5.2 文件结构
 
@@ -624,8 +624,8 @@ sensitivity:
 
 | sensitivity | AI 反思器写入 | 用户前端写入 |
 | --- | --- | --- |
-| high | 达到更高 evidence/confidence 阈值后直接落盘，记录 revision | 直接落盘；写入需用户在前端经过二次确认（避免误改基本事实） |
-| normal | 直接落盘，记录 revision；前端审核条展示"已被反思器更新"，可一键回滚 | 直接落盘 |
+| high | 达到更高 evidence/confidence 阈值后直接落盘，记录内部留痕 | 与 normal 一样保存；用户点击保存时统一弹一次保存确认 |
+| normal | 达到 evidence/confidence 阈值后直接落盘，记录内部留痕 | 用户点击保存时统一弹一次保存确认 |
 
 章节自动落盘阈值：
 
@@ -641,8 +641,8 @@ sensitivity:
 补充规则：
 
 - 删除条目（remove）一律比 add/update 严格；high 章节整体比 normal 章节更严格。
-- 用户前端的写入不受上述阈值约束；用户改 high 章节时只多一道二次确认。
-- evidence 必须是真实存在的 post_id（深反思跑前先 SELECT 校验），伪造的 evidence 整条 patch 拒绝。
+- 用户前端的写入不受上述阈值约束；用户编辑任意章节后，点击保存时统一弹一次简单保存确认。
+- evidence 必须是真实存在的 post_id（深反思跑前先 SELECT 校验），伪造的 evidence 会让整条 patch 跳过。
 - 不允许写入“暂无”“待补充”“未知”等无信息条目；空章节保持空白。
 
 ### 5.4 条目级 patch 协议
@@ -669,7 +669,7 @@ sensitivity:
 字段说明：
 
 - `op=add`：不需要 anchor，落盘时由 `ProfileService` 自动生成并写回文件；返回值带新 anchor 供调用方记录。
-- `op=update` / `op=remove`：必须带 `anchor`，且必须存在于当前 user.md 中；anchor 不存在时整条 patch 拒绝（不部分应用）。
+- `op=update` / `op=remove`：必须带 `anchor`，且必须存在于当前 user.md 中；anchor 不存在时整条 patch 跳过（不部分应用）。
 - AI 输出的 patch 中所有 anchor 必须来自它本次读到的 user.md；prompt 中明确禁止"生造"。
 - 用户在前端编辑后由后端按"原 anchor 不变 + 新 anchor 自动分配"序列化回来，无需用户感知 anchor。
 
@@ -679,10 +679,10 @@ sensitivity:
 2. 解析 sensitivity → 决定使用普通阈值还是高敏阈值
 3. 写入文件 + 同步写一行到 `user_md_revisions`
 
-### 5.5 revision 表
+### 5.5 内部写入留痕表
 
 ```sql
--- user.md 编辑历史：每次落盘的整文件快照 + 触发该次写入的 patch
+-- user.md 内部写入留痕：每次落盘的整文件快照 + 触发该次写入的 patch
 CREATE TABLE IF NOT EXISTS user_md_revisions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     snapshot    TEXT NOT NULL,                -- 写入后的完整 user.md
@@ -744,8 +744,8 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
 [4] TodoService.merge_and_apply(all_todos_from_souls)
     │   - 多 SOUL 抽取的 todos_to_upsert 用 (task, date, start_time) 去重
     │   - todos_to_delete 取并集，但只有引用现存 id 才生效（沿用现有校验）
-    │   - 交互项目：默认采纳所有启用 SOUL 的合并结果
-    │   - Agent 项目：默认只采纳主 SOUL，其他 SOUL 的待办抽取存入 comments.metadata 备查
+    │   - 交互项目：默认采用所有启用 SOUL 的合并结果
+    │   - Agent 项目：默认只采用主 SOUL，其他 SOUL 的待办抽取存入 comments.metadata 备查
     │
     ▼
 [5] 前端展示评论流
@@ -1220,7 +1220,7 @@ CREATE TABLE IF NOT EXISTS relations_log (
 1. 写入 `reflections` 表
 2. 把 `reflection_md` 单独导出为 Markdown 文件（可选）
 3. 对每个 patch 调用 `ProfileService.apply_patch(patch, source="reflector")`：
-   - normal 章节满足普通阈值后直接落盘 + 写 `user_md_revisions`
+   - normal 章节满足普通阈值后直接落盘 + 写内部留痕
    - high 章节满足更高 evidence/confidence 阈值后直接落盘；不达阈值则丢弃并记日志
 
 ### 8.5 SOUL 记忆反思 prompt 模板要点
@@ -1351,8 +1351,8 @@ my-tracelog-backup/
 ### 10.2 第二期：6—7 月（EL 交互组）
 
 - [ ] Web 前端体验打磨：动效、移动端适配、加载/错误状态、演示数据切换
-- [ ] 画像页增强：所有章节的所有条目均可在前端就地编辑、新增、删除、拖拽排序
-- [ ] 画像页"历史版本"区：基于 `user_md_revisions` 的时间线，可一键回滚
+- [ ] 画像页增强：展示当前 `user.md` 的所有章节和条目，支持新增、编辑、删除、排序
+- [ ] 画像页保存确认：用户完成任意章节修改后，点击保存时弹一次简单确认
 - [ ] 画像页 sensitivity 配置：用户可对任一章节调高/调低敏感度
 - [ ] 深反思输出多 patch（替代第一期可能存在的全文反思文档简化版）
 - [ ] SOUL 管理页增强：查看每个 SOUL 的历史评论
@@ -1419,8 +1419,8 @@ my-tracelog-backup/
 | ChromaDB 与 SQLite 不一致 | 检索结果偏 | 启动时校验 chroma 计数 vs posts 计数，差异时重建 |
 | 用户改 souls/*.md 后状态混乱 | 启用集合与文件不一致 | 启动时扫描 `souls/` 与 `souls` 表对账，缺文件的 SOUL 自动 `enabled=0` |
 | 多 SOUL 全启用导致延迟与成本上升 | 单帖触发 N 倍 token | 第一期内置 SOUL 控制在 2—3 个；并发执行；前端流式渲染先到先显示；`enabled` 默认值由用户自行调整 |
-| SOUL 记忆被私聊噪声带偏 | 某个 SOUL 对用户的理解变得片面 | 私聊摘要 prompt 强调"短期情绪 vs 稳定偏好"；SOUL 记忆写入走 revision，可在 SOUL 记忆页回滚；全局 user.md 不读私聊摘要 |
-| 用户与 AI 对同一条目同时编辑 | 后写覆盖前写 | revision 表记录所有版本，前端列出冲突时显示 diff，让用户选择保留哪一版 |
+| SOUL 记忆被私聊噪声带偏 | 某个 SOUL 对用户的理解变得片面 | 私聊摘要 prompt 强调"短期情绪 vs 稳定偏好"；SOUL 记忆写入保留内部留痕；全局 user.md 不读私聊摘要 |
+| 用户与 AI 对同一条目同时编辑 | 后写覆盖前写 | 内部留痕保留写入快照；前端以当前画像为准，用户可直接再次编辑 |
 | 私聊待办与 post 待办重复 | 同一 deadline 被记两次 | 合并键统一为 (task, date, start_time)，最近一次为准；前端展示时显示唯一来源 |
 
 ---

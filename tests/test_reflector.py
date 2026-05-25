@@ -119,9 +119,9 @@ class ReflectorTest(unittest.TestCase):
         row = db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,))
         metadata = json.loads(row["metadata"])
 
-        self.assertEqual({"applied": 1, "skipped": 0}, result.patch_summary)
+        self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, result.patch_summary)
         self.assertIn("正在准备比赛 <!-- id: status-", memory.read_profile())
-        self.assertEqual({"applied": 1, "skipped": 0}, metadata["profile_patch_summary"])
+        self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, metadata["profile_patch_summary"])
 
     def test_empty_patches_do_not_write_profile_revision(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我叫喜多郁代，是高一生。")
@@ -134,7 +134,7 @@ class ReflectorTest(unittest.TestCase):
         result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
         rows = db.query_all("SELECT id FROM user_md_revisions")
 
-        self.assertEqual({"applied": 0, "skipped": 0}, result.patch_summary)
+        self.assertEqual({"applied": 0, "skipped": 0, "skipped_details": []}, result.patch_summary)
         self.assertEqual([], rows)
         self.assertNotIn("姓名：喜多郁代 <!-- id: bf-", memory.read_profile())
 
@@ -167,8 +167,24 @@ class ReflectorTest(unittest.TestCase):
 
         result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
         content = memory.read_profile()
+        row = db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,))
+        metadata = json.loads(row["metadata"])
 
-        self.assertEqual({"applied": 2, "skipped": 1}, result.patch_summary)
+        self.assertEqual(2, result.patch_summary["applied"])
+        self.assertEqual(1, result.patch_summary["skipped"])
+        self.assertEqual(
+            [
+                {
+                    "reason": "invalid_value",
+                    "section": "身份与现状",
+                    "ops": [{"op": "add", "value": "暂无"}],
+                    "evidence": ["20260525-001"],
+                    "confidence": 0.9,
+                }
+            ],
+            result.patch_summary["skipped_details"],
+        )
+        self.assertEqual(result.patch_summary, metadata["profile_patch_summary"])
         self.assertIn("比赛项目参与者 <!-- id: status-user -->", content)
         self.assertNotIn("bf-empty", content)
         self.assertNotIn("- 暂无", content)

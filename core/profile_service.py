@@ -46,7 +46,7 @@ class PatchResult:
 
 
 def apply_patch(patch: dict, source: str = "reflector") -> dict:
-    """Apply one user.md patch or store it for review."""
+    """Apply one user.md patch when it passes gates; otherwise skip it."""
     parsed = _normalize_patch(patch)
     if parsed is None:
         return PatchResult("skipped", "invalid_patch").to_dict()
