@@ -123,7 +123,7 @@ class ReflectorTest(unittest.TestCase):
         self.assertIn("正在准备比赛 <!-- id: status-", memory.read_profile())
         self.assertEqual({"applied": 1, "skipped": 0}, metadata["profile_patch_summary"])
 
-    def test_self_intro_name_fallback_applies_high_section_when_model_returns_no_patch(self) -> None:
+    def test_empty_patches_do_not_write_profile_revision(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我叫喜多郁代，是高一生。")
         payload = {
             "reflection_md": "## 深反思\n\n你做了一次清晰的自我介绍。",
@@ -132,9 +132,11 @@ class ReflectorTest(unittest.TestCase):
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
 
         result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
+        rows = db.query_all("SELECT id FROM user_md_revisions")
 
-        self.assertEqual({"applied": 1, "skipped": 0}, result.patch_summary)
-        self.assertIn("姓名：喜多郁代 <!-- id: bf-", memory.read_profile())
+        self.assertEqual({"applied": 0, "skipped": 0}, result.patch_summary)
+        self.assertEqual([], rows)
+        self.assertNotIn("姓名：喜多郁代 <!-- id: bf-", memory.read_profile())
 
     def test_global_deep_reflection_applies_update_remove_and_skips_placeholder_patch(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我不再用测试用户这个说法，改为比赛项目参与者。")
