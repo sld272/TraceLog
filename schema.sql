@@ -205,18 +205,16 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);
 
 CREATE TABLE IF NOT EXISTS todos (
-    id                  TEXT PRIMARY KEY,
-    task                TEXT NOT NULL,
-    date                TEXT,
-    start_time          TEXT,
-    end_time            TEXT,
-    status              TEXT NOT NULL DEFAULT '未完成',
-    source_post         TEXT REFERENCES posts(id) ON DELETE SET NULL,
-    source_chat_message INTEGER REFERENCES chat_messages(id) ON DELETE SET NULL,
-    source_comment_message INTEGER REFERENCES comment_messages(id) ON DELETE SET NULL,
-    created_at          REAL NOT NULL,
-    updated_at          REAL NOT NULL,
-    completed_at        REAL
+    id           TEXT PRIMARY KEY,
+    task         TEXT NOT NULL,
+    date         TEXT,
+    start_time   TEXT,
+    end_time     TEXT,
+    status       TEXT NOT NULL DEFAULT '未完成',
+    source_post  TEXT REFERENCES posts(id) ON DELETE SET NULL,
+    created_at   REAL NOT NULL,
+    updated_at   REAL NOT NULL,
+    completed_at REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status, date);
