@@ -6,6 +6,7 @@ import sys
 import termios
 import tty
 import unicodedata
+from shutil import get_terminal_size
 
 
 def read_cli_input(prompt: str) -> str:
@@ -27,6 +28,8 @@ class _LineEditor:
         self.prompt = prompt
         self.buffer: list[str] = []
         self.cursor = 0
+        self._rendered_rows = 0
+        self._cursor_row = 0
 
     def read(self) -> str:
         self._redraw()
@@ -102,13 +105,40 @@ class _LineEditor:
 
     def _redraw(self) -> None:
         text = "".join(self.buffer)
-        cursor_col = _display_width(self.prompt) + _display_width("".join(self.buffer[: self.cursor]))
-        sys.stdout.write("\r\x1b[2K")
+        width = max(1, get_terminal_size(fallback=(80, 24)).columns)
+        total_width = _display_width(self.prompt + text)
+        cursor_width = _display_width(self.prompt) + _display_width("".join(self.buffer[: self.cursor]))
+        rendered_rows = max(1, (total_width // width) + 1)
+        cursor_row = min(rendered_rows - 1, cursor_width // width)
+        cursor_col = cursor_width % width
+
+        self._clear_previous_render()
         sys.stdout.write(self.prompt + text)
-        sys.stdout.write("\r")
+        self._move_to_start()
+        if cursor_row:
+            sys.stdout.write(f"\x1b[{cursor_row}B")
         if cursor_col:
             sys.stdout.write(f"\x1b[{cursor_col}C")
         sys.stdout.flush()
+        self._rendered_rows = rendered_rows
+        self._cursor_row = cursor_row
+
+    def _clear_previous_render(self) -> None:
+        if self._rendered_rows == 0:
+            return
+        self._move_to_start()
+        for row in range(self._rendered_rows):
+            sys.stdout.write("\x1b[2K")
+            if row < self._rendered_rows - 1:
+                sys.stdout.write("\x1b[1B")
+        sys.stdout.write("\r")
+        if self._rendered_rows > 1:
+            sys.stdout.write(f"\x1b[{self._rendered_rows - 1}A")
+
+    def _move_to_start(self) -> None:
+        sys.stdout.write("\r")
+        if self._cursor_row:
+            sys.stdout.write(f"\x1b[{self._cursor_row}A")
 
 
 def _display_width(text: str) -> int:
