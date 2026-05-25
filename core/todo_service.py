@@ -5,13 +5,10 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from core import db, tool_config_service
 from core.llm import todo_router
-
-if TYPE_CHECKING:
-    from openai import OpenAI
+from core.llm.types import LLMClient
 
 
 @dataclass(frozen=True)
@@ -41,7 +38,7 @@ def list_active_todos() -> list[dict]:
     return [todo for todo in load_todos() if todo.get("status") != "已完成"]
 
 
-def run_for_post(post_id: str, client: "OpenAI", model: str) -> TodoToolResult:
+def run_for_post(post_id: str, client: LLMClient, model: str) -> TodoToolResult:
     """Run TodoTool for one public post when the todo tool is enabled."""
     if not tool_config_service.is_tool_enabled("todo"):
         return TodoToolResult(post_id=post_id, applied=False, upserted=0, deleted=0, skipped=True)
@@ -80,7 +77,7 @@ def run_for_post(post_id: str, client: "OpenAI", model: str) -> TodoToolResult:
     )
 
 
-def run_for_post_safely(post_id: str, client: "OpenAI", model: str) -> TodoToolResult:
+def run_for_post_safely(post_id: str, client: LLMClient, model: str) -> TodoToolResult:
     """Run TodoTool without interrupting the post/reply/reflection flow."""
     try:
         return run_for_post(post_id, client, model)

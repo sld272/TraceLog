@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from core import chat_service, comment_service, soul_service, tool_config_service
 from core.cli import sessions
-
-if TYPE_CHECKING:
-    from openai import OpenAI
+from core.llm.types import LLMClient
 
 
 def handle_chat_command(
     user_input: str,
-    client: "OpenAI",
+    client: LLMClient | None,
     model: str,
     todos: list,
 ) -> tuple[bool, list, bool]:
@@ -40,13 +36,15 @@ def handle_chat_command(
         print(f"[私聊] {exc}\n")
         return True, todos, False
 
+    if client is None:
+        raise ValueError("LLM client is required for chat commands")
     updated_todos, quit_requested = sessions.run_chat_session(thread, client, model, todos)
     return True, updated_todos, quit_requested
 
 
 def handle_comment_command(
     user_input: str,
-    client: "OpenAI",
+    client: LLMClient | None,
     model: str,
     todos: list,
 ) -> tuple[bool, list, bool]:
@@ -71,6 +69,8 @@ def handle_comment_command(
         print(f"[评论] {exc}\n")
         return True, todos, False
 
+    if client is None:
+        raise ValueError("LLM client is required for comment commands")
     updated_todos, quit_requested = sessions.run_comment_session(thread, client, model, todos)
     return True, updated_todos, quit_requested
 

@@ -5,18 +5,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from core import db
 from core import profile_service
 from core.llm import reflection_router
+from core.llm.types import LLMClient
 from core import soul_memory_service
 from core import soul_service
 from core import todo_service
 from core import tool_config_service
-
-if TYPE_CHECKING:
-    from openai import OpenAI
 
 
 GLOBAL_DEEP_REFLECTION_TYPE = "global_deep"
@@ -58,7 +55,7 @@ class SoulDeepReflectionResult:
 
 def trigger_light_reflection(
     post_id: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
 ) -> LightReflectionResult:
     """Run light reflection for one public post and persist derived memory rows."""
@@ -90,7 +87,7 @@ def trigger_light_reflection(
 
 def run_light_reflection_safely(
     post_id: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
 ) -> LightReflectionResult | None:
     """Run light reflection without interrupting the user-facing post flow."""
@@ -102,7 +99,7 @@ def run_light_reflection_safely(
 
 
 def retry_pending_light_reflections(
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     limit: int | None = None,
 ) -> int:
@@ -130,7 +127,7 @@ def retry_pending_light_reflections(
 
 
 def trigger_global_deep_reflection(
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     *,
     trigger: str = "manual",
@@ -176,7 +173,7 @@ def trigger_global_deep_reflection(
 
 
 def trigger_soul_deep_reflections(
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     *,
     trigger: str = "manual",
@@ -645,7 +642,7 @@ def _upsert_entity(conn, entity: dict, post_ts: str) -> int:
             """,
             (entity["type"], entity["name"], json.dumps(aliases, ensure_ascii=False), post_ts, post_ts, metadata),
         )
-        return int(cur.lastrowid)
+        return db.require_lastrowid(cur, "entity insert")
 
     conn.execute(
         """
@@ -691,7 +688,7 @@ def _upsert_relation(conn, post_id: str, entity_a: int, entity_b: int, relation:
             """,
             (a, b, rel_type, _clamp(0.5 + delta), post_ts, metadata),
         )
-        relation_id = int(cur.lastrowid)
+        relation_id = db.require_lastrowid(cur, "relation insert")
     else:
         relation_id = int(row["id"])
         conn.execute(
@@ -764,7 +761,7 @@ def _insert_reflection(
                 json.dumps(metadata, ensure_ascii=False),
             ),
         )
-        return int(cur.lastrowid)
+        return db.require_lastrowid(cur, "global reflection insert")
 
 
 def _insert_soul_reflection(
@@ -801,7 +798,7 @@ def _insert_soul_reflection(
                 json.dumps(metadata, ensure_ascii=False),
             ),
         )
-        return int(cur.lastrowid)
+        return db.require_lastrowid(cur, "soul reflection insert")
 
 
 def _is_valid_reflection(content: str | None) -> bool:

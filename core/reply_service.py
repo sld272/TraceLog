@@ -6,11 +6,10 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from openai import OpenAI
-
 from core import db
 from core.context_builder import BuiltContext
 from core.llm import reply_router
+from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 
@@ -29,7 +28,7 @@ class SoulReplyResult:
 def fanout(
     post_id: str,
     user_input: str,
-    client: OpenAI,
+    client: LLMClient,
     model: str,
     built_context: BuiltContext,
 ) -> list[SoulReplyResult]:
@@ -67,7 +66,7 @@ def fanout(
 def _call_one_soul(
     soul: SoulContext,
     user_input: str,
-    client: OpenAI,
+    client: LLMClient,
     model: str,
     shared_context: str,
 ) -> SoulReplyResult:

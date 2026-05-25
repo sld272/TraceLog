@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core import chat_service, db, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
+from tests.helpers import require_not_none
 
 
 class FakeClient:
@@ -161,7 +162,7 @@ class ChatServiceTest(unittest.TestCase):
 
         chat_service.append_user_message(thread.id, "这是一条私聊")
 
-        row = db.query_one("SELECT COUNT(*) AS count FROM posts")
+        row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM posts"))
         self.assertEqual(0, row["count"])
 
     def test_private_chat_reply_does_not_write_reflection_or_profile_revisions(self) -> None:
@@ -169,11 +170,11 @@ class ChatServiceTest(unittest.TestCase):
 
         chat_service.call_chat_reply(thread.id, "这是一条私聊回复", FakeClient(), "fake-model")
 
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM entities")["count"])
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM emotions")["count"])
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM events")["count"])
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM relations")["count"])
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions")["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM entities"))["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM emotions"))["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM events"))["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM relations"))["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions"))["count"])
         rows = db.query_all("SELECT source FROM soul_memory_revisions WHERE source != 'system'")
         self.assertEqual([], rows)
 
@@ -197,7 +198,7 @@ class ChatServiceTest(unittest.TestCase):
         )
 
         result = chat_service.call_chat_reply(thread.id, "提醒我明天交作业", client, "fake-model")
-        row = db.query_one("SELECT COUNT(*) AS count FROM todos")
+        row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM todos"))
 
         self.assertTrue(result.ok)
         self.assertIsNotNone(result.assistant_message_id)

@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
 
 from core.llm.common import clean_json_content, now_str
+from core.llm.types import LLMClient
 from core.soul_service import SoulContext
-
-if TYPE_CHECKING:
-    from openai import OpenAI
 
 
 # 引擎 1：Post Reply
@@ -80,7 +77,7 @@ COMMENT_REPLY_TASK_PROMPT = """\
 """
 
 
-def call_post_reply(user_input: str, client: "OpenAI", model: str, context: str) -> dict | None:
+def call_post_reply(user_input: str, client: LLMClient, model: str, context: str) -> dict | None:
     """Post Reply: generate one empathetic reply."""
     system_msg = POST_REPLY_PROMPT.format(
         task_prompt=_post_reply_task_prompt(),
@@ -90,7 +87,7 @@ def call_post_reply(user_input: str, client: "OpenAI", model: str, context: str)
 
 def call_soul_post_reply(
     user_input: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     shared_context: str,
     soul: SoulContext,
@@ -107,7 +104,7 @@ def call_soul_post_reply(
 
 def call_soul_chat_reply(
     user_message: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     chat_context,
     soul: SoulContext,
@@ -124,7 +121,7 @@ def call_soul_chat_reply(
 
 def call_soul_comment_reply(
     user_message: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     comment_context,
     soul: SoulContext,
@@ -153,7 +150,7 @@ def _comment_reply_task_prompt() -> str:
 
 def _call_post_reply_json(
     user_input: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     context: str,
     system_msg: str,
@@ -178,7 +175,7 @@ def _call_post_reply_json(
 
 def _call_chat_reply_json(
     user_message: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     context: str,
     system_msg: str,
@@ -203,7 +200,7 @@ def _call_chat_reply_json(
 
 def _call_comment_reply_json(
     user_message: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     context: str,
     system_msg: str,
@@ -254,4 +251,3 @@ def _parse_post_reply_content(content: str | None) -> dict | None:
 
     reply = data.get("reply")
     return {"reply": reply}
-

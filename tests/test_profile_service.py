@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from core import db, profile_service
+from tests.helpers import require_not_none
 
 
 USER_MD = """---
@@ -72,7 +73,7 @@ class ProfileServiceTest(unittest.TestCase):
 
         self.assertEqual("applied", result["status"])
         self.assertIn("熟悉 ChromaDB <!-- id: sk-", content)
-        self.assertIsNotNone(row)
+        row = require_not_none(row)
         self.assertIn("熟悉 ChromaDB", row["patch"])
         self.assertEqual("reflector", row["source"])
 
@@ -96,7 +97,7 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertEqual("applied", result["status"])
         self.assertIn("学校：南京大学 <!-- id: bf-", content)
         self.assertIn("（暂无） <!-- id: bf-empty -->", content)
-        self.assertIsNotNone(row)
+        row = require_not_none(row)
         self.assertIn("学校：南京大学", row["patch"])
         self.assertEqual("reflector", row["source"])
 

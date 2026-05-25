@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core import context_builder, db, profile_service, soul_memory_service, soul_service, todo_service, tool_config_service
+from tests.helpers import require_not_none
 
 
 class FakeClient:
@@ -75,10 +76,10 @@ class TodoServiceTest(unittest.TestCase):
         )
 
         result = todo_service.run_for_post("20260525-001", client, "fake-model")
-        row = db.query_one(
+        row = require_not_none(db.query_one(
             "SELECT task, date, start_time, source_post FROM todos WHERE task = ?",
             ("交项目 PPT",),
-        )
+        ))
 
         self.assertTrue(result.applied)
         self.assertEqual(1, result.upserted)
@@ -134,7 +135,9 @@ class TodoServiceTest(unittest.TestCase):
             ],
             [{"id": "todo-2"}, {"id": "missing"}],
         )
-        updated = db.query_one("SELECT task, status, source_post, completed_at FROM todos WHERE id = ?", ("todo-1",))
+        updated = require_not_none(
+            db.query_one("SELECT task, status, source_post, completed_at FROM todos WHERE id = ?", ("todo-1",))
+        )
         deleted_row = db.query_one("SELECT 1 FROM todos WHERE id = ?", ("todo-2",))
 
         self.assertEqual((1, 1), (upserted, deleted))

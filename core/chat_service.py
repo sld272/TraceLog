@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
 from core import db, profile_service, record_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
+from core.llm.types import LLMClient
 from core.soul_service import SoulContext
-
-if TYPE_CHECKING:
-    from openai import OpenAI
 
 CHAT_HISTORY_LIMIT = 20
 RELATED_POST_LIMIT = 3
@@ -102,7 +98,7 @@ def get_or_create_thread(soul_name: str) -> ChatThread:
             """,
             (soul_name, f"与{soul_name}的私聊", now, now),
         )
-        thread_id = int(cursor.lastrowid)
+        thread_id = db.require_lastrowid(cursor, "chat thread insert")
     return get_thread(thread_id)
 
 
@@ -183,7 +179,7 @@ def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
 def call_chat_reply(
     thread_id: int,
     user_message: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
 ) -> ChatReplyResult:
     """Append user input, call one SOUL, and persist the assistant reply."""
@@ -222,7 +218,7 @@ def _append_message(thread_id: int, role: str, content: str) -> ChatMessage:
             """,
             (thread_id, role, body, now),
         )
-        message_id = int(cursor.lastrowid)
+        message_id = db.require_lastrowid(cursor, "chat message insert")
         conn.execute(
             """
             UPDATE chat_threads

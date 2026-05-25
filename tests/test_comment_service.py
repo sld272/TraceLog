@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core import comment_service, db, profile_service, soul_memory_service, soul_service, tool_config_service
+from tests.helpers import require_not_none
 
 
 class FakeClient:
@@ -111,7 +112,7 @@ class CommentServiceTest(unittest.TestCase):
         )
 
         result = comment_service.call_comment_reply(thread.id, "提醒我今晚整理歌单", client, "fake-model")
-        row = db.query_one("SELECT COUNT(*) AS count FROM todos")
+        row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM todos"))
 
         self.assertTrue(result.ok)
         self.assertIsNotNone(result.assistant_message_id)
@@ -138,11 +139,11 @@ class CommentServiceTest(unittest.TestCase):
 
         comment_service.call_comment_reply(thread.id, "这是一条评论线程回复", FakeClient(), "fake-model")
 
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM entities")["count"])
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM emotions")["count"])
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM events")["count"])
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM relations")["count"])
-        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions")["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM entities"))["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM emotions"))["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM events"))["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM relations"))["count"])
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions"))["count"])
         rows = db.query_all("SELECT source FROM soul_memory_revisions WHERE source != 'system'")
         self.assertEqual([], rows)
 

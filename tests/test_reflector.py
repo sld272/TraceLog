@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core import chat_service, comment_service, db, profile_service, reflector, soul_memory_service, soul_service
+from tests.helpers import require_not_none
 
 
 class FakeClient:
@@ -120,8 +121,8 @@ class ReflectorTest(unittest.TestCase):
         }
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
 
-        result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
-        row = db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,))
+        result = require_not_none(reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit"))
+        row = require_not_none(db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,)))
         metadata = json.loads(row["metadata"])
 
         self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, result.patch_summary)
@@ -136,7 +137,7 @@ class ReflectorTest(unittest.TestCase):
         }
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
 
-        result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
+        result = require_not_none(reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit"))
         rows = db.query_all("SELECT id FROM user_md_revisions")
 
         self.assertEqual({"applied": 0, "skipped": 0, "skipped_details": []}, result.patch_summary)
@@ -170,9 +171,9 @@ class ReflectorTest(unittest.TestCase):
         }
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
 
-        result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
+        result = require_not_none(reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit"))
         content = profile_service.read_profile()
-        row = db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,))
+        row = require_not_none(db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,)))
         metadata = json.loads(row["metadata"])
 
         self.assertEqual(2, result.patch_summary["applied"])
@@ -201,7 +202,7 @@ class ReflectorTest(unittest.TestCase):
         result = reflector.trigger_light_reflection("20260525-001", client, "fake-model")
 
         self.assertEqual("20260525-001", result.post_id)
-        post = db.query_one("SELECT importance FROM posts WHERE id = ?", ("20260525-001",))
+        post = require_not_none(db.query_one("SELECT importance FROM posts WHERE id = ?", ("20260525-001",)))
         self.assertEqual(0.8, post["importance"])
         entity = db.query_one("SELECT type, name, aliases, mention_count FROM entities WHERE name = ?", ("小李",))
         self.assertIsNotNone(entity)
@@ -209,9 +210,9 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual("person", entity["type"])
         self.assertEqual(1, entity["mention_count"])
         self.assertIn("李同学", entity["aliases"])
-        emotion = db.query_one("SELECT label, intensity FROM emotions WHERE post_id = ?", ("20260525-001",))
+        emotion = require_not_none(db.query_one("SELECT label, intensity FROM emotions WHERE post_id = ?", ("20260525-001",)))
         self.assertEqual(("焦虑", 0.7), (emotion["label"], emotion["intensity"]))
-        event = db.query_one("SELECT summary, category FROM events WHERE post_id = ?", ("20260525-001",))
+        event = require_not_none(db.query_one("SELECT summary, category FROM events WHERE post_id = ?", ("20260525-001",)))
         self.assertEqual(("和小李完成比赛计划", "project"), (event["summary"], event["category"]))
 
     def test_light_reflection_is_idempotent_on_rerun(self) -> None:
@@ -237,8 +238,8 @@ class ReflectorTest(unittest.TestCase):
         reflector.trigger_light_reflection("20260525-001", client, "fake-model")
         reflector.trigger_light_reflection("20260525-001", client, "fake-model")
 
-        old_entity = db.query_one("SELECT mention_count FROM entities WHERE name = ?", ("小李",))
-        new_entity = db.query_one("SELECT mention_count FROM entities WHERE name = ?", ("比赛计划",))
+        old_entity = require_not_none(db.query_one("SELECT mention_count FROM entities WHERE name = ?", ("小李",)))
+        new_entity = require_not_none(db.query_one("SELECT mention_count FROM entities WHERE name = ?", ("比赛计划",)))
         emotions = db.query_all("SELECT label FROM emotions WHERE post_id = ?", ("20260525-001",))
         events = db.query_all("SELECT id FROM events WHERE post_id = ?", ("20260525-001",))
 
@@ -288,7 +289,7 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, results[0].patch_summary)
         self.assertIn("用户在默认面前更愿意直接表达疲惫", memory_content)
         self.assertEqual([], user_revisions)
-        self.assertIsNotNone(reflection)
+        reflection = require_not_none(reflection)
         metadata = json.loads(reflection["metadata"])
         self.assertEqual("默认", metadata["soul_name"])
         self.assertIn(f"chat_message:{chat_user.id}", reflection["related_posts"])

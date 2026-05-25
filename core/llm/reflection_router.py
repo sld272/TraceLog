@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
 
 from core.llm.common import clean_json_content, now_str
+from core.llm.types import LLMClient
 from core.soul_service import SoulContext
-
-if TYPE_CHECKING:
-    from openai import OpenAI
 
 
 # 引擎 2：Light Reflection
@@ -71,7 +68,7 @@ LIGHT_REFLECTION_PROMPT = """\
 
 
 def call_light_reflection(
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     *,
     post: str,
@@ -293,7 +290,7 @@ GLOBAL_DEEP_REFLECTION_PROMPT = """\
 
 
 def call_global_deep_reflection(
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     profile: str,
     posts: str,
@@ -371,7 +368,7 @@ SOUL_DEEP_REFLECTION_PROMPT = """\
 
 
 def call_soul_deep_reflection(
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     soul: SoulContext,
     interactions: str,

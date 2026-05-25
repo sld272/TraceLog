@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
 from core import db, profile_service, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
+from core.llm.types import LLMClient
 from core.soul_service import SoulContext
-
-if TYPE_CHECKING:
-    from openai import OpenAI
 
 
 COMMENT_HISTORY_LIMIT = 30
@@ -86,7 +82,7 @@ def get_or_create_thread(post_id: str, soul_name: str) -> CommentThread:
             """,
             (post_id, soul_name, root_comment["id"], now, now),
         )
-        thread_id = int(cursor.lastrowid)
+        thread_id = db.require_lastrowid(cursor, "comment thread insert")
     return get_thread(thread_id)
 
 
@@ -176,7 +172,7 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
 def call_comment_reply(
     thread_id: int,
     user_message: str,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
 ) -> CommentReplyResult:
     """Append user input, call one SOUL, and persist the assistant comment reply."""
@@ -230,7 +226,7 @@ def _append_message(thread_id: int, role: str, content: str) -> CommentMessage:
             """,
             (thread_id, role, body, now),
         )
-        message_id = int(cursor.lastrowid)
+        message_id = db.require_lastrowid(cursor, "comment message insert")
         conn.execute(
             """
             UPDATE comment_threads

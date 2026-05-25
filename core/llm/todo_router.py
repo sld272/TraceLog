@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
 
 from core.llm.common import clean_json_content, now_str
-
-if TYPE_CHECKING:
-    from openai import OpenAI
+from core.llm.types import LLMClient
 
 
 # 引擎 1.5：Todo Tool
@@ -53,7 +50,7 @@ TODO_TOOL_PROMPT = """\
 
 
 def call_todo_tool(
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     *,
     post: str,
@@ -133,5 +130,4 @@ def _normalize_todo_deletes(value) -> list[dict]:
         if isinstance(item, dict) and item.get("id"):
             normalized.append({"id": item.get("id")})
     return normalized
-
 

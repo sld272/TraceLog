@@ -130,3 +130,10 @@ def query_all(sql: str, params: Sequence[Any] = ()) -> list[sqlite3.Row]:
 
 def now_ts() -> float:
     return time.time()
+
+
+def require_lastrowid(cursor: sqlite3.Cursor, context: str) -> int:
+    """Return cursor.lastrowid or raise if SQLite did not provide one."""
+    if cursor.lastrowid is None:
+        raise RuntimeError(f"SQLite did not return lastrowid for {context}")
+    return cursor.lastrowid

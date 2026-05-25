@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from core import chat_service, comment_service, reflector, todo_service, tool_config_service
 from core.cli_input import read_cli_input
-
-if TYPE_CHECKING:
-    from openai import OpenAI
+from core.llm.types import LLMClient
 
 
-def run_deep_reflection_on_exit(client: "OpenAI", model: str) -> None:
+def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
     print("\n\n[反思] 正在触发一次深反思，请稍候（请勿再次终止）...")
     try:
         result = reflector.trigger_global_deep_reflection(client, model, trigger="cli_exit")
@@ -43,7 +39,7 @@ def run_deep_reflection_on_exit(client: "OpenAI", model: str) -> None:
     print("再见！\n")
 
 
-def run_light_reflection_for_post(post_id: str, client: "OpenAI", model: str) -> None:
+def run_light_reflection_for_post(post_id: str, client: LLMClient, model: str) -> None:
     light_result = reflector.run_light_reflection_safely(post_id, client, model)
     if light_result is None:
         print("[反思] 轻反思暂时失败，已加入待重试队列。\n")
@@ -56,7 +52,7 @@ def run_light_reflection_for_post(post_id: str, client: "OpenAI", model: str) ->
         )
 
 
-def run_todo_tool_for_post(post_id: str, client: "OpenAI", model: str) -> None:
+def run_todo_tool_for_post(post_id: str, client: LLMClient, model: str) -> None:
     if not tool_config_service.is_tool_enabled("todo"):
         return
     result = todo_service.run_for_post_safely(post_id, client, model)
@@ -68,7 +64,7 @@ def run_todo_tool_for_post(post_id: str, client: "OpenAI", model: str) -> None:
 
 def run_comment_session(
     thread: comment_service.CommentThread,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     todos: list,
 ) -> tuple[list, bool]:
@@ -106,7 +102,7 @@ def run_comment_session(
 
 def run_chat_session(
     thread: chat_service.ChatThread,
-    client: "OpenAI",
+    client: LLMClient,
     model: str,
     todos: list,
 ) -> tuple[list, bool]:

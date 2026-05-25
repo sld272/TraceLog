@@ -137,8 +137,11 @@ def _normalize_patch(patch: dict) -> dict | None:
             item["anchor"] = anchor.strip()
         normalized_ops.append(item)
 
+    raw_confidence = patch.get("confidence")
+    if not isinstance(raw_confidence, (int, float, str)):
+        return None
     try:
-        confidence = float(patch.get("confidence"))
+        confidence = float(raw_confidence)
     except (TypeError, ValueError):
         return None
 
