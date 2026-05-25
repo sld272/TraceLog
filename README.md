@@ -100,12 +100,11 @@ workspace/
 ## 项目结构
 
 - `main.py`：CLI 入口
+- `core/cli/`：CLI 启动、配置、命令解析和交互会话
 - `core/workspace_service.py`：workspace、数据库、默认画像与 SOUL 初始化编排
 - `core/profile_service.py`：`user.md` 读写、patch、阈值校验与内部写入留痕
 - `core/record_service.py`：post 写入、格式化与近期历史读取
 - `core/todo_service.py`：可选 TodoTool 抽取、待办读写与 prompt 上下文
-- `core/memory.py`：临时兼容 facade，新代码应依赖上面的明确 service
-- `core/router.py`：LLM router 兼容 facade
 - `core/llm/`：回复、TodoTool、轻/深反思 prompt 与 JSON 解析
 - `core/reflector.py`：轻反思、深反思触发与落库服务
 - `core/vectorstore.py`：ChromaDB 向量索引 provider

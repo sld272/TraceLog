@@ -1,0 +1,139 @@
+"""Interactive CLI sessions and post-processing display helpers."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from core import chat_service, comment_service, reflector, todo_service, tool_config_service
+from core.cli_input import read_cli_input
+
+if TYPE_CHECKING:
+    from openai import OpenAI
+
+
+def run_deep_reflection_on_exit(client: "OpenAI", model: str) -> None:
+    print("\n\n[反思] 正在触发一次深反思，请稍候（请勿再次终止）...")
+    try:
+        result = reflector.trigger_global_deep_reflection(client, model, trigger="cli_exit")
+        if result is None:
+            print("[反思] 没有新的公开记录，已跳过本次深反思。")
+        else:
+            print(
+                f"[反思] 深反思已保存（id={result.id}，覆盖 {len(result.related_post_ids)} 条记录，"
+                f"画像更新 applied={result.patch_summary.get('applied', 0)} "
+                f"skipped={result.patch_summary.get('skipped', 0)}）。"
+            )
+    except KeyboardInterrupt:
+        print("\n[警告] 深反思被强制中断，已有数据保持不变。")
+    except Exception as e:
+        print(f"[反思] 深反思失败：{e}，已有数据保持不变。")
+    try:
+        soul_results = reflector.trigger_soul_deep_reflections(client, model, trigger="cli_exit")
+        if soul_results:
+            applied = sum(item.patch_summary.get("applied", 0) for item in soul_results)
+            skipped = sum(item.patch_summary.get("skipped", 0) for item in soul_results)
+            print(
+                f"[反思] SOUL 深反思已保存 {len(soul_results)} 份，"
+                f"独立画像更新 applied={applied} skipped={skipped}。"
+            )
+        else:
+            print("[反思] 没有新的 SOUL 互动，已跳过 SOUL 深反思。")
+    except Exception as e:
+        print(f"[反思] SOUL 深反思失败：{e}，已有数据保持不变。")
+    print("再见！\n")
+
+
+def run_light_reflection_for_post(post_id: str, client: "OpenAI", model: str) -> None:
+    light_result = reflector.run_light_reflection_safely(post_id, client, model)
+    if light_result is None:
+        print("[反思] 轻反思暂时失败，已加入待重试队列。\n")
+    else:
+        print(
+            "[反思] 轻反思已完成："
+            f"{len(light_result.entities)} 个实体，"
+            f"{len(light_result.emotions)} 个情绪，"
+            f"{len(light_result.events)} 个事件。\n"
+        )
+
+
+def run_todo_tool_for_post(post_id: str, client: "OpenAI", model: str) -> None:
+    if not tool_config_service.is_tool_enabled("todo"):
+        return
+    result = todo_service.run_for_post_safely(post_id, client, model)
+    if result.error:
+        print(f"[TodoTool] 待办抽取暂时失败：{result.error}\n")
+    elif result.applied:
+        print(f"[TodoTool] 待办已更新：新增/更新 {result.upserted} 条，删除 {result.deleted} 条。\n")
+
+
+def run_comment_session(
+    thread: comment_service.CommentThread,
+    client: "OpenAI",
+    model: str,
+    todos: list,
+) -> tuple[list, bool]:
+    print(
+        f"\n[评论] 已进入 post {thread.post_id} 下与 {thread.soul_name} 的评论线程。"
+        "输入 /back 返回发帖模式，/quit 退出。\n"
+    )
+    current_todos = todos
+    while True:
+        try:
+            raw_input = read_cli_input(f"[{thread.soul_name} 评论] 你: ")
+        except EOFError:
+            return current_todos, True
+        user_message = raw_input.strip()
+        if not user_message:
+            continue
+        if user_message == "/back":
+            print("[评论] 已返回发帖模式。\n")
+            return current_todos, False
+        if user_message == "/quit":
+            return current_todos, True
+
+        print(f"\n[{thread.soul_name} 正在回复评论...]\n")
+        try:
+            result = comment_service.call_comment_reply(thread.id, user_message, client, model)
+        except ValueError as exc:
+            print(f"[评论] {exc}\n")
+            return current_todos, False
+
+        if result.ok:
+            print(f"[{result.soul_name}] {result.reply}\n")
+        else:
+            print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
+
+
+def run_chat_session(
+    thread: chat_service.ChatThread,
+    client: "OpenAI",
+    model: str,
+    todos: list,
+) -> tuple[list, bool]:
+    print(f"\n[私聊] 已进入与 {thread.soul_name} 的私聊。输入 /back 返回发帖模式，/quit 退出。\n")
+    current_todos = todos
+    while True:
+        try:
+            raw_input = read_cli_input(f"[{thread.soul_name}] 你: ")
+        except EOFError:
+            return current_todos, True
+        user_message = raw_input.strip()
+        if not user_message:
+            continue
+        if user_message == "/back":
+            print("[私聊] 已返回发帖模式。\n")
+            return current_todos, False
+        if user_message == "/quit":
+            return current_todos, True
+
+        print(f"\n[{thread.soul_name} 正在回复...]\n")
+        try:
+            result = chat_service.call_chat_reply(thread.id, user_message, client, model)
+        except ValueError as exc:
+            print(f"[私聊] {exc}\n")
+            return current_todos, False
+
+        if result.ok:
+            print(f"[{result.soul_name}] {result.reply}\n")
+        else:
+            print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
