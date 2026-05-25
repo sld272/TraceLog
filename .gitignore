@@ -212,12 +212,5 @@ workspace/
 *.db
 *.db-shm
 *.db-wal
-AGENTS.md
-APP_FLOW.md
-BACKEND_STRUCTURE.md
-FRONTEND_GUIDELINES.md
-IMPLEMENTATION_PLAN.md
-PRD.md
-progress.txt
-TECH_STACK.md
 .DS_Store
+pyrightconfig.json
