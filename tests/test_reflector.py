@@ -119,11 +119,11 @@ class ReflectorTest(unittest.TestCase):
         row = db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,))
         metadata = json.loads(row["metadata"])
 
-        self.assertEqual({"applied": 1, "pending": 0, "skipped": 0}, result.patch_summary)
+        self.assertEqual({"applied": 1, "skipped": 0}, result.patch_summary)
         self.assertIn("正在准备比赛 <!-- id: status-", memory.read_profile())
-        self.assertEqual({"applied": 1, "pending": 0, "skipped": 0}, metadata["profile_patch_summary"])
+        self.assertEqual({"applied": 1, "skipped": 0}, metadata["profile_patch_summary"])
 
-    def test_self_intro_name_fallback_goes_to_pending_when_model_returns_no_patch(self) -> None:
+    def test_self_intro_name_fallback_applies_high_section_when_model_returns_no_patch(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我叫喜多郁代，是高一生。")
         payload = {
             "reflection_md": "## 深反思\n\n你做了一次清晰的自我介绍。",
@@ -132,12 +132,44 @@ class ReflectorTest(unittest.TestCase):
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
 
         result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
-        pending = db.query_one("SELECT section, patch FROM pending_user_md_changes ORDER BY id DESC LIMIT 1")
 
-        self.assertEqual({"applied": 0, "pending": 1, "skipped": 0}, result.patch_summary)
-        self.assertIsNotNone(pending)
-        self.assertEqual("基本信息", pending["section"])
-        self.assertIn("姓名：喜多郁代", pending["patch"])
+        self.assertEqual({"applied": 1, "skipped": 0}, result.patch_summary)
+        self.assertIn("姓名：喜多郁代 <!-- id: bf-", memory.read_profile())
+
+    def test_global_deep_reflection_applies_update_remove_and_skips_placeholder_patch(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我不再用测试用户这个说法，改为比赛项目参与者。")
+        payload = {
+            "reflection_md": "## 深反思\n\n你在修正对自己当前身份的描述。",
+            "patches": [
+                {
+                    "section": "身份与现状",
+                    "ops": [{"op": "update", "anchor": "status-user", "value": "比赛项目参与者"}],
+                    "evidence": ["20260525-001"],
+                    "confidence": 0.7,
+                },
+                {
+                    "section": "基本信息",
+                    "ops": [{"op": "remove", "anchor": "bf-empty"}],
+                    "evidence": ["20260525-001"],
+                    "confidence": 0.95,
+                },
+                {
+                    "section": "身份与现状",
+                    "ops": [{"op": "add", "value": "暂无"}],
+                    "evidence": ["20260525-001"],
+                    "confidence": 0.9,
+                },
+            ],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
+        content = memory.read_profile()
+
+        self.assertEqual({"applied": 2, "skipped": 1}, result.patch_summary)
+        self.assertIn("比赛项目参与者 <!-- id: status-user -->", content)
+        self.assertNotIn("bf-empty", content)
+        self.assertNotIn("- 暂无", content)
 
     def test_trigger_light_reflection_writes_derived_memory(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天和小李完成了比赛计划，但有点焦虑。")

@@ -9,7 +9,6 @@ from openai import OpenAI
 from core import chat_service
 from core.cli_input import read_cli_input
 from core import context_builder
-from core import profile_service
 from core import reflector
 from core import record_service
 from core import reply_service
@@ -29,7 +28,11 @@ def _run_deep_reflection_on_exit(client: OpenAI, model: str) -> None:
         if result is None:
             print("[反思] 没有新的公开记录，已跳过本次深反思。")
         else:
-            print(f"[反思] 深反思已保存（id={result.id}，覆盖 {len(result.related_post_ids)} 条记录）。")
+            print(
+                f"[反思] 深反思已保存（id={result.id}，覆盖 {len(result.related_post_ids)} 条记录，"
+                f"画像更新 applied={result.patch_summary.get('applied', 0)} "
+                f"skipped={result.patch_summary.get('skipped', 0)}）。"
+            )
     except KeyboardInterrupt:
         print("\n[警告] 深反思被强制中断，已有数据保持不变。")
     except Exception as e:
@@ -150,43 +153,8 @@ def _handle_profile_command(user_input: str) -> bool:
     if user_input != "/profile" and not user_input.startswith("/profile "):
         return False
 
-    parts = user_input.split(maxsplit=1)
-    if len(parts) == 2 and parts[1].strip() == "pending":
-        _print_pending_profile_changes()
-    else:
-        print("[画像] 可用命令：\n  /profile pending\n")
+    print("[画像] 高敏信息已改为由反思器谨慎判断后直接写入，待审核队列已废弃。\n")
     return True
-
-
-def _print_pending_profile_changes() -> None:
-    changes = [change for change in profile_service.list_pending_changes() if change["status"] == "pending"]
-    if not changes:
-        print("[画像] 当前没有待审核变更。\n")
-        return
-
-    print("\n[画像待审核变更]")
-    for change in changes:
-        patch = change["patch"]
-        ops = patch.get("ops", []) if isinstance(patch, dict) else []
-        op_text = ", ".join(_format_profile_op(op) for op in ops if isinstance(op, dict)) or "无操作"
-        evidence = change["evidence"] or []
-        print(
-            f"{change['id']}. {change['section']} "
-            f"(confidence={change['confidence']:.2f}, evidence={', '.join(evidence) or '无'})\n"
-            f"   {op_text}"
-        )
-    print()
-
-
-def _format_profile_op(op: dict) -> str:
-    kind = op.get("op")
-    if kind == "add":
-        return f"add: {op.get('value', '')}"
-    if kind == "update":
-        return f"update {op.get('anchor', '')}: {op.get('value', '')}"
-    if kind == "remove":
-        return f"remove {op.get('anchor', '')}"
-    return str(kind or "unknown")
 
 
 def _handle_soul_command(user_input: str) -> bool:

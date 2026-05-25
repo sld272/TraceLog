@@ -26,11 +26,16 @@ SECTION_PREFIXES = {
     "长期目标与当前痛点": "gl",
 }
 
-NORMAL_THRESHOLDS = {
+THRESHOLDS = {
     ("normal", "add"): (1, 0.60),
-    ("normal", "update"): (1, 0.60),
+    ("normal", "update"): (1, 0.65),
     ("normal", "remove"): (1, 0.85),
+    ("high", "add"): (1, 0.85),
+    ("high", "update"): (1, 0.88),
+    ("high", "remove"): (1, 0.95),
 }
+
+PENDING_DISCARD_META_KEY = "migration.profile_pending_discarded.v1"
 
 
 @dataclass(frozen=True)
@@ -54,13 +59,6 @@ def apply_patch(patch: dict, source: str = "reflector") -> dict:
 
     text = memory.read_profile()
     doc = _parse_user_md(text)
-    section = parsed["section"]
-    sensitivity = doc.sensitivity.get(section, "normal")
-
-    if sensitivity == "high":
-        _insert_pending_change(parsed)
-        return PatchResult("pending").to_dict()
-
     updated = _apply_ops_to_doc(doc, parsed)
     if updated is None:
         return PatchResult("skipped", "invalid_anchor").to_dict()
@@ -92,6 +90,31 @@ def list_pending_changes() -> list[dict]:
     ]
 
 
+def discard_pending_changes_once() -> int:
+    """Discard legacy high-sensitivity pending changes after removing review flow."""
+    if db.query_one("SELECT value FROM meta WHERE key = ?", (PENDING_DISCARD_META_KEY,)) is not None:
+        return 0
+
+    now = db.now_ts()
+    with db.transaction() as conn:
+        cur = conn.execute(
+            """
+            UPDATE pending_user_md_changes
+            SET status = 'rejected', resolved_at = ?
+            WHERE status = 'pending'
+            """,
+            (now,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            (
+                PENDING_DISCARD_META_KEY,
+                json.dumps({"op": "discard_legacy_pending_profile_changes", "created_at": now}, ensure_ascii=False),
+            ),
+        )
+        return int(cur.rowcount or 0)
+
+
 @dataclass
 class UserMdDoc:
     lines: list[str]
@@ -121,7 +144,7 @@ def _normalize_patch(patch: dict) -> dict | None:
         item: dict[str, Any] = {"op": kind}
         if kind in ("add", "update"):
             value = op.get("value")
-            if not isinstance(value, str) or not value.strip():
+            if not isinstance(value, str):
                 return None
             item["value"] = value.strip()
         if kind in ("update", "remove"):
@@ -160,9 +183,12 @@ def _validate_patch_gate(patch: dict) -> str | None:
     doc = _parse_user_md(text)
     sensitivity = doc.sensitivity.get(patch["section"], "normal")
     for op in patch["ops"]:
-        if sensitivity == "high":
-            continue
-        min_evidence, min_confidence = NORMAL_THRESHOLDS[("normal", op["op"])]
+        if op["op"] in ("add", "update") and not _is_meaningful_value(op["value"]):
+            return "invalid_value"
+        min_evidence, min_confidence = THRESHOLDS.get(
+            (sensitivity, op["op"]),
+            THRESHOLDS[("normal", op["op"])],
+        )
         if len(patch["evidence"]) < min_evidence:
             return "insufficient_evidence"
         if patch["confidence"] < min_confidence:
@@ -176,6 +202,11 @@ def _validate_patch_gate(patch: dict) -> str | None:
         if op["op"] in ("update", "remove") and _find_anchor_line(doc.lines, start, end, op["anchor"]) is None:
             return "invalid_anchor"
     return None
+
+
+def _is_meaningful_value(value: str) -> bool:
+    normalized = re.sub(r"[\s\-_*`~。．.，,；;：:（）()【】\[\]]+", "", value)
+    return normalized not in {"", "暂无", "待补充", "未知", "无", "没有", "不详", "暂无可补充", "暂未补充"}
 
 
 def _evidence_exists(evidence: list[str]) -> bool:
@@ -286,22 +317,6 @@ def _write_user_md_revision(content: str, patch: dict, source: str) -> None:
         VALUES (?, ?, ?, ?)
         """,
         (content, json.dumps(patch, ensure_ascii=False), source, db.now_ts()),
-    )
-
-
-def _insert_pending_change(patch: dict) -> None:
-    db.execute(
-        """
-        INSERT INTO pending_user_md_changes(section, patch, evidence, confidence, status, created_at)
-        VALUES (?, ?, ?, ?, 'pending', ?)
-        """,
-        (
-            patch["section"],
-            json.dumps(patch, ensure_ascii=False),
-            json.dumps(patch["evidence"], ensure_ascii=False),
-            patch["confidence"],
-            db.now_ts(),
-        ),
     )
 
 

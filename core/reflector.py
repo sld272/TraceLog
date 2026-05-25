@@ -549,7 +549,7 @@ def _is_valid_reflection(content: str | None) -> bool:
 
 
 def _apply_profile_patches(patches: list) -> dict:
-    summary = {"applied": 0, "pending": 0, "skipped": 0}
+    summary = {"applied": 0, "skipped": 0}
     if not isinstance(patches, list):
         return summary
 

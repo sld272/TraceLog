@@ -12,6 +12,7 @@ USER_MD = """---
 schema: tracelog/user.md@v1
 sensitivity:
   基本信息: high
+  关键身份: high
   技能与专长: normal
   性格与情绪倾向: normal
 ---
@@ -20,6 +21,9 @@ sensitivity:
 
 ## 基本信息
 - （暂无） <!-- id: bf-empty -->
+
+## 关键身份
+- 高一学生 <!-- id: ki-student -->
 
 ## 技能与专长
 - Python 后端 <!-- id: sk-py -->
@@ -76,9 +80,11 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertIn("熟悉 ChromaDB", row["patch"])
         self.assertEqual("reflector", row["source"])
 
-    def test_high_add_with_one_evidence_goes_to_pending_without_changing_user_md(self) -> None:
-        before = memory.read_profile()
+    def test_default_user_md_has_empty_sections_without_placeholders(self) -> None:
+        self.assertNotIn("暂无", memory.DEFAULT_USER_MD)
+        self.assertIn("## 基本信息\n\n## 关键身份", memory.DEFAULT_USER_MD)
 
+    def test_high_add_with_one_evidence_writes_user_md_and_leaves_legacy_placeholder(self) -> None:
         result = profile_service.apply_patch(
             {
                 "section": "基本信息",
@@ -88,15 +94,17 @@ class ProfileServiceTest(unittest.TestCase):
             }
         )
 
-        pending = profile_service.list_pending_changes()
+        content = memory.read_profile()
+        row = db.query_one("SELECT patch, source FROM user_md_revisions ORDER BY id DESC LIMIT 1")
 
-        self.assertEqual("pending", result["status"])
-        self.assertEqual(before, memory.read_profile())
-        self.assertEqual(1, len(pending))
-        self.assertEqual("基本信息", pending[0]["section"])
-        self.assertEqual("学校：南京大学", pending[0]["patch"]["ops"][0]["value"])
+        self.assertEqual("applied", result["status"])
+        self.assertIn("学校：南京大学 <!-- id: bf-", content)
+        self.assertIn("（暂无） <!-- id: bf-empty -->", content)
+        self.assertIsNotNone(row)
+        self.assertIn("学校：南京大学", row["patch"])
+        self.assertEqual("reflector", row["source"])
 
-    def test_high_low_confidence_still_goes_to_pending(self) -> None:
+    def test_high_add_low_confidence_is_skipped(self) -> None:
         result = profile_service.apply_patch(
             {
                 "section": "基本信息",
@@ -106,11 +114,53 @@ class ProfileServiceTest(unittest.TestCase):
             }
         )
 
-        pending = profile_service.list_pending_changes()
+        self.assertEqual("skipped", result["status"])
+        self.assertEqual("low_confidence", result["reason"])
+        self.assertNotIn("姓名：张三 <!-- id: bf-", memory.read_profile())
 
-        self.assertEqual("pending", result["status"])
-        self.assertEqual(1, len(pending))
-        self.assertEqual(0.3, pending[0]["confidence"])
+    def test_high_update_and_remove_thresholds(self) -> None:
+        low_update = profile_service.apply_patch(
+            {
+                "section": "关键身份",
+                "ops": [{"op": "update", "anchor": "ki-student", "value": "高中一年级学生"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.87,
+            }
+        )
+        update = profile_service.apply_patch(
+            {
+                "section": "关键身份",
+                "ops": [{"op": "update", "anchor": "ki-student", "value": "高中一年级学生"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.88,
+            }
+        )
+        low_remove = profile_service.apply_patch(
+            {
+                "section": "关键身份",
+                "ops": [{"op": "remove", "anchor": "ki-student"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.94,
+            }
+        )
+        remove = profile_service.apply_patch(
+            {
+                "section": "关键身份",
+                "ops": [{"op": "remove", "anchor": "ki-student"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.95,
+            }
+        )
+
+        content = memory.read_profile()
+
+        self.assertEqual("skipped", low_update["status"])
+        self.assertEqual("low_confidence", low_update["reason"])
+        self.assertEqual("applied", update["status"])
+        self.assertEqual("skipped", low_remove["status"])
+        self.assertEqual("low_confidence", low_remove["reason"])
+        self.assertEqual("applied", remove["status"])
+        self.assertNotIn("高中一年级学生", content)
 
     def test_invalid_evidence_is_skipped(self) -> None:
         result = profile_service.apply_patch(
@@ -138,6 +188,18 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertEqual("skipped", result["status"])
         self.assertEqual("low_confidence", result["reason"])
 
+    def test_placeholder_like_values_are_skipped(self) -> None:
+        result = profile_service.apply_patch(
+            {
+                "section": "技能与专长",
+                "ops": [{"op": "add", "value": "暂无"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.9,
+            }
+        )
+
+        self.assertEqual({"status": "skipped", "reason": "invalid_value"}, result)
+
     def test_update_remove_missing_anchor_is_skipped(self) -> None:
         result = profile_service.apply_patch(
             {
@@ -156,7 +218,7 @@ class ProfileServiceTest(unittest.TestCase):
                 "section": "技能与专长",
                 "ops": [{"op": "update", "anchor": "sk-py", "value": "Python 后端与 SQLite"}],
                 "evidence": ["20260525-001"],
-                "confidence": 0.9,
+                "confidence": 0.65,
             }
         )
         remove = profile_service.apply_patch(
@@ -176,6 +238,24 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertIn("Python 后端与 SQLite <!-- id: sk-py -->", content)
         self.assertNotIn("容易焦虑", content)
         self.assertEqual(2, len(rows))
+
+    def test_discard_pending_changes_once_marks_legacy_pending_rejected(self) -> None:
+        db.execute(
+            """
+            INSERT INTO pending_user_md_changes(section, patch, evidence, confidence, status, created_at)
+            VALUES (?, ?, ?, ?, 'pending', ?)
+            """,
+            ("基本信息", "{}", "[]", 0.9, 1.0),
+        )
+
+        count = profile_service.discard_pending_changes_once()
+        row = db.query_one("SELECT status, resolved_at FROM pending_user_md_changes")
+        second_count = profile_service.discard_pending_changes_once()
+
+        self.assertEqual(1, count)
+        self.assertEqual("rejected", row["status"])
+        self.assertIsNotNone(row["resolved_at"])
+        self.assertEqual(0, second_count)
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(

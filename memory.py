@@ -35,34 +35,29 @@ sensitivity:
 # 用户档案
 
 ## 基本信息
-- （暂无，可在后续版本补充。） <!-- id: bf-empty -->
 
 ## 关键身份
-- （暂无，可在后续版本补充。） <!-- id: ki-empty -->
 
 ## 身份与现状
-- （暂无） <!-- id: status-empty -->
 
 ## 技能与专长
-- （暂无） <!-- id: sk-empty -->
 
 ## 兴趣与习惯
-- （暂无） <!-- id: hb-empty -->
 
 ## 关注的核心人际关系
-- （暂无） <!-- id: rel-empty -->
 
 ## 性格与情绪倾向
-- （暂无） <!-- id: tr-empty -->
 
 ## 长期目标与当前痛点
-- （暂无） <!-- id: gl-empty -->
 """
 
 def init_workspace():
     """Ensure workspace, state.db, user.md, and default SOUL files exist."""
     os.makedirs(WORKSPACE_DIR, exist_ok=True)
     db.init_db()
+    from core import profile_service
+
+    profile_service.discard_pending_changes_once()
     if not os.path.exists(USER_MD_PATH):
         _write_user_md(DEFAULT_USER_MD)
         _record_user_md_revision(DEFAULT_USER_MD, {"op": "init"}, "user")
