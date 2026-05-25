@@ -110,6 +110,47 @@ CHAT_REPLY_TASK_PROMPT = """\
 请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
 """
 
+COMMENT_REPLY_TASK_PROMPT = """\
+## 核心任务
+1. **回复 (reply)**：你正在 post 下和用户继续一段只属于你们这个 SOUL 的评论线程。结合原 post、你的首条回复和线程上下文，给出自然、真诚、贴近该 SOUL 人格的中文回应，字数控制在 2-5 句话。
+2. **待办提取 (todos_to_upsert & todos_to_delete)**：精准提取用户【明确提出】的新增、状态变更或取消任务。
+
+## JSON 输出格式强制要求
+你必须且只能输出一个标准 JSON 对象，绝对不要包含任何 Markdown 代码块格式，也不要有任何前置或后置说明文字。
+
+{
+  "reply": "你的回复文字",
+  "todos_to_upsert": [
+    {
+      "id": "已有待办的 id（新增待办时必须为 null）",
+      "task": "明确的待办描述",
+      "date": "YYYY-MM-DD 或 null",
+      "start_time": "HH:MM 或 null",
+      "end_time": "HH:MM 或 null",
+      "status": "未完成/已完成"
+    }
+  ],
+  "todos_to_delete": [
+    {
+      "id": "存在于当前待办列表中的确切 id"
+    }
+  ]
+}
+
+## 严格执行规则
+1. **增量原则**：只提取本次评论回复中【新增】或【状态发生变化】的待办。若无变化，相关数组必须输出空数组 []。
+2. **更新与删除校验**：如果要更新状态或删除任务，必须先在「待办事项」列表中找到完全对应的 id。若找不到，绝对禁止臆造 id。
+3. **新增 id 规则**：新增待办必须输出 "id": null。
+4. **不要脑补**：不要把用户情绪、抱怨或你的建议转成待办，除非用户明确表达“我要...”或“提醒我...”。
+5. **时间规则**：start_time 与 end_time 使用 24 小时制，仅在用户明确提及时填写，否则置 null。
+6. **状态枚举**：status 仅允许 "未完成" 或 "已完成"。
+7. **评论线程边界**：这条线程只对你这个 SOUL 可见，不要假装其他 SOUL 看得见后续评论。
+
+## 当前时间
+{current_datetime}
+请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
+"""
+
 
 def _now_str() -> str:
     now = datetime.now().astimezone()
@@ -159,12 +200,33 @@ def call_soul_chat_reply(
     return _call_chat_reply_json(user_message, client, model, chat_context.context, system_msg)
 
 
+def call_soul_comment_reply(
+    user_message: str,
+    client: "OpenAI",
+    model: str,
+    comment_context,
+    soul: SoulContext,
+) -> dict | None:
+    """Call one SOUL for a post comment thread reply."""
+    soul_memory = soul.soul_memory.strip() or "（暂无）"
+    system_msg = (
+        f"## SOUL 人格\n{soul.persona.strip()}\n\n"
+        f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
+        f"---\n\n{_comment_reply_task_prompt()}"
+    )
+    return _call_comment_reply_json(user_message, client, model, comment_context.context, system_msg)
+
+
 def _post_reply_task_prompt() -> str:
     return POST_REPLY_TASK_PROMPT.replace("{current_datetime}", _now_str())
 
 
 def _chat_reply_task_prompt() -> str:
     return CHAT_REPLY_TASK_PROMPT.replace("{current_datetime}", _now_str())
+
+
+def _comment_reply_task_prompt() -> str:
+    return COMMENT_REPLY_TASK_PROMPT.replace("{current_datetime}", _now_str())
 
 
 def _clean_json_content(content: str | None) -> str:
@@ -230,12 +292,42 @@ def _call_chat_reply_json(
     return _parse_post_reply_content(response.choices[0].message.content)
 
 
+def _call_comment_reply_json(
+    user_message: str,
+    client: "OpenAI",
+    model: str,
+    context: str,
+    system_msg: str,
+) -> dict | None:
+    comment_user_msg = _comment_reply_user_message(user_message, context)
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            timeout=30,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": comment_user_msg},
+            ],
+        )
+    except Exception as e:
+        print(f"[Router] 评论回复 API 调用失败：{e}")
+        return None
+
+    return _parse_post_reply_content(response.choices[0].message.content)
+
+
 def _post_reply_user_message(user_input: str, context: str) -> str:
     return f"## 当前上下文\n{context or '（暂无历史数据）'}\n\n---\n\n## 帖子内容\n{user_input}"
 
 
 def _chat_reply_user_message(user_message: str, context: str) -> str:
     return f"## 私聊上下文\n{context or '（暂无历史数据）'}\n\n---\n\n## 用户当前私聊消息\n{user_message}"
+
+
+def _comment_reply_user_message(user_message: str, context: str) -> str:
+    return f"## 评论线程上下文\n{context or '（暂无历史数据）'}\n\n---\n\n## 用户当前评论回复\n{user_message}"
 
 
 def _parse_post_reply_content(content: str | None) -> dict | None:
@@ -610,6 +702,81 @@ def call_global_deep_reflection(
         )
     except Exception as e:
         print(f"[Router] 深反思生成失败：{e}")
+        return None
+
+    return _parse_global_deep_reflection_content(response.choices[0].message.content)
+
+
+SOUL_DEEP_REFLECTION_PROMPT = """\
+你是 TraceLog 拾迹的 SOUL 独立画像深反思引擎。
+
+你会读取某个 SOUL 的人格、当前相处记忆，以及这段时间用户与该 SOUL 相关的原始互动，生成该 SOUL 对用户的独立理解更新。
+
+## JSON 输出格式强制要求
+你必须且只能输出一个标准 JSON 对象，不要包含 Markdown 代码块或解释文字。
+
+{
+  "reflection_md": "Markdown 深反思正文",
+  "patches": [
+    {
+      "section": "对用户的理解",
+      "ops": [
+        {"op": "add", "value": "用户在这个 SOUL 面前更愿意直接表达疲惫和求助"}
+      ],
+      "evidence": ["chat_message:12"],
+      "confidence": 0.82
+    }
+  ]
+}
+
+## reflection_md 要求
+- 使用第三人称或“用户”叙述，写给系统内部调试与未来相处使用。
+- 严禁捏造事实；观点必须能从输入中找到依据。
+- 关注这个 SOUL 与用户之间的互动模式、偏好、边界和可持续的相处线索。
+
+## patches 要求
+- 只在有明确证据时输出 patch；没有可靠画像更新时输出空数组 []。
+- patch 只能修改输入 SOUL 记忆里已存在的 section。
+- add 不带 anchor；update/remove 必须使用当前 SOUL 记忆里原样存在的 anchor。
+- 不得输出“暂无”“待补充”“未知”等无信息条目；空章节保持空白即可。
+- 维护的是这个 SOUL 对用户的独立理解，不要简单复制全局基本信息。
+- 如果已有条目可被修正、合并或细化，应优先 update，而不是 add 一条近似重复的新内容。
+- 如果已有条目被新证据推翻、已经过时、重复，或只是占位内容，应输出 remove。
+- evidence 必须是本次输入中真实存在的 evidence id，例如 post:20260525-001、comment:3、chat_message:12、comment_message:8。
+- confidence 使用 0 到 1。
+
+## 当前时间
+{current_datetime}
+"""
+
+
+def call_soul_deep_reflection(
+    client: "OpenAI",
+    model: str,
+    soul: SoulContext,
+    interactions: str,
+) -> dict | None:
+    """Generate one SOUL-specific deep reflection plus soul memory patches."""
+    user_content = (
+        f"## SOUL 人格\n\n{soul.persona.strip() or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 当前 SOUL 相处记忆\n\n{soul.soul_memory.strip() or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 本次触发范围内的原始互动\n\n{interactions or '（暂无）'}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            timeout=45,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SOUL_DEEP_REFLECTION_PROMPT.replace("{current_datetime}", _now_str())},
+                {"role": "user", "content": user_content},
+            ],
+        )
+    except Exception as e:
+        print(f"[Router] SOUL 深反思生成失败：{e}")
         return None
 
     return _parse_global_deep_reflection_content(response.choices[0].message.content)

@@ -11,6 +11,7 @@ from core import db
 
 if TYPE_CHECKING:
     from core.chat_service import ChatReplyResult
+    from core.comment_service import CommentReplyResult
     from core.reply_service import SoulReplyResult
 
 
@@ -73,6 +74,21 @@ def apply_reply_todos(existing_todos: list, results: list["SoulReplyResult"]) ->
 
 def apply_chat_todos(result: "ChatReplyResult", assistant_message_id: int) -> list[dict]:
     """Apply todo changes from a private chat reply."""
+    return _apply_message_todos(result, "source_chat_message", assistant_message_id)
+
+
+def apply_comment_todos(result: "CommentReplyResult", assistant_message_id: int) -> list[dict]:
+    """Apply todo changes from a post comment thread reply."""
+    return _apply_message_todos(result, "source_comment_message", assistant_message_id)
+
+
+def _apply_message_todos(
+    result: "ChatReplyResult | CommentReplyResult",
+    source_column: str,
+    source_message_id: int,
+) -> list[dict]:
+    if source_column not in {"source_chat_message", "source_comment_message"}:
+        raise ValueError("未知待办消息来源列")
     if not result.ok:
         return memory.load_todos()
 
@@ -117,16 +133,16 @@ def apply_chat_todos(result: "ChatReplyResult", assistant_message_id: int) -> li
                     """
                     UPDATE todos
                     SET task = ?, date = ?, start_time = ?, end_time = ?, status = ?,
-                        source_chat_message = ?, updated_at = ?, completed_at = ?
+                        {source_column} = ?, updated_at = ?, completed_at = ?
                     WHERE id = ?
-                    """,
+                    """.format(source_column=source_column),
                     (
                         normalized["task"],
                         normalized.get("date"),
                         normalized.get("start_time"),
                         normalized.get("end_time"),
                         normalized["status"],
-                        assistant_message_id,
+                        source_message_id,
                         now,
                         completed_at,
                         todo_id,
@@ -144,10 +160,10 @@ def apply_chat_todos(result: "ChatReplyResult", assistant_message_id: int) -> li
                 """
                 INSERT INTO todos(
                     id, task, date, start_time, end_time, status,
-                    source_chat_message, created_at, updated_at, completed_at
+                    {source_column}, created_at, updated_at, completed_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                """.format(source_column=source_column),
                 (
                     new_id,
                     normalized["task"],
@@ -155,7 +171,7 @@ def apply_chat_todos(result: "ChatReplyResult", assistant_message_id: int) -> li
                     normalized.get("start_time"),
                     normalized.get("end_time"),
                     normalized["status"],
-                    assistant_message_id,
+                    source_message_id,
                     now,
                     now,
                     completed_at,

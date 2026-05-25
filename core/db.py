@@ -37,6 +37,7 @@ def init_db() -> None:
     try:
         conn.executescript(sql)
         conn.execute("PRAGMA foreign_keys = ON")
+        _run_lightweight_migrations(conn)
         mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         if str(mode).lower() != "wal":
             raise RuntimeError(f"SQLite WAL mode unavailable: {mode}")
@@ -62,6 +63,21 @@ def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM posts WHERE id = ?", ("__fts5_probe__",))
     except sqlite3.Error as exc:
         raise RuntimeError("SQLite FTS5 trigram support is required but unavailable") from exc
+
+
+def _run_lightweight_migrations(conn: sqlite3.Connection) -> None:
+    """Apply additive migrations for existing local workspaces."""
+    columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(todos)").fetchall()
+    }
+    if "source_comment_message" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE todos
+            ADD COLUMN source_comment_message INTEGER REFERENCES comment_messages(id) ON DELETE SET NULL
+            """
+        )
 
 
 @contextmanager

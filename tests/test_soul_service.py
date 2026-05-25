@@ -44,6 +44,7 @@ class SoulServiceTest(unittest.TestCase):
         self.assertTrue(all(record.enabled for record in records))
         self.assertTrue((self.workspace / "souls" / "默认.md").exists())
         self.assertTrue((self.workspace / "soul_memories" / "默认.md").exists())
+        self.assertNotIn("（暂无）", soul_memory_service.read_soul_memory("默认"))
 
         rows = db.query_all(
             """
@@ -139,6 +140,98 @@ class SoulServiceTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             soul_memory_service.write_soul_memory("不存在", "# 记忆\n")
+
+    def test_apply_soul_memory_patch_add_update_remove_and_skip_placeholder(self) -> None:
+        soul_service.sync_souls()
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("20260525-001", "2026-05-25T10:00:00+08:00", "我最近练歌很认真。", 1.0, 1.0),
+        )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("20260525-001", "默认", "我看见你在认真练歌。", 2.0),
+        )
+
+        add_result = soul_memory_service.apply_patch(
+            "默认",
+            {
+                "section": "对用户的理解",
+                "ops": [{"op": "add", "value": "用户最近在认真练歌"}],
+                "evidence": ["post:20260525-001"],
+                "confidence": 0.8,
+            },
+        )
+        content = soul_memory_service.read_soul_memory("默认")
+        anchor = content.split("<!-- id: ", 1)[1].split(" -->", 1)[0]
+        update_result = soul_memory_service.apply_patch(
+            "默认",
+            {
+                "section": "对用户的理解",
+                "ops": [{"op": "update", "anchor": anchor, "value": "用户最近在稳定练歌"}],
+                "evidence": ["post:20260525-001"],
+                "confidence": 0.8,
+            },
+        )
+        skip_result = soul_memory_service.apply_patch(
+            "默认",
+            {
+                "section": "对用户的理解",
+                "ops": [{"op": "add", "value": "暂无"}],
+                "evidence": ["post:20260525-001"],
+                "confidence": 0.9,
+            },
+        )
+        remove_result = soul_memory_service.apply_patch(
+            "默认",
+            {
+                "section": "对用户的理解",
+                "ops": [{"op": "remove", "anchor": anchor}],
+                "evidence": ["post:20260525-001"],
+                "confidence": 0.8,
+            },
+        )
+        final_content = soul_memory_service.read_soul_memory("默认")
+
+        self.assertEqual("applied", add_result["status"])
+        self.assertEqual("applied", update_result["status"])
+        self.assertEqual({"status": "skipped", "reason": "invalid_value"}, skip_result)
+        self.assertEqual("applied", remove_result["status"])
+        self.assertNotIn("用户最近在稳定练歌", final_content)
+
+    def test_apply_soul_memory_patch_rejects_other_soul_evidence(self) -> None:
+        soul_service.sync_souls()
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("20260525-001", "2026-05-25T10:00:00+08:00", "只和毒舌好友有关。", 1.0, 1.0),
+        )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("20260525-001", "毒舌好友", "这条证据不属于默认。", 2.0),
+        )
+
+        result = soul_memory_service.apply_patch(
+            "默认",
+            {
+                "section": "对用户的理解",
+                "ops": [{"op": "add", "value": "用户只把这件事告诉毒舌好友"}],
+                "evidence": ["post:20260525-001"],
+                "confidence": 0.9,
+            },
+        )
+
+        self.assertEqual({"status": "skipped", "reason": "invalid_evidence"}, result)
 
 
 if __name__ == "__main__":

@@ -1327,6 +1327,7 @@ my-tracelog-backup/
 - [x] 轻反思最简版（同步实现也可以，第一期不强求异步）：每帖抽取 entities + emotions + events + importance
 - [x] 深反思最简版：CLI 退出时触发，生成 reflection 并写入 `reflections`
 - [x] 深反思增强：CLI 退出触发，生成 reflection + user.md patch，normal 自动落盘，high 使用更高阈值自动落盘
+- [ ] 将`memory.py, router.py, vectorstore.py全部完整迁移进core`
 - [ ] `tracelog export --format=markdown` 命令
 - [ ] FastAPI 后端接口暴露
 - [ ] Web 前端最小可用版本：记录、时间线、AI 回复、待办、画像、搜索

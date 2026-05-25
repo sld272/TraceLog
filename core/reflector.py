@@ -11,13 +11,17 @@ import memory
 import router
 from core import db
 from core import profile_service
+from core import soul_memory_service
+from core import soul_service
 
 if TYPE_CHECKING:
     from openai import OpenAI
 
 
 GLOBAL_DEEP_REFLECTION_TYPE = "global_deep"
+SOUL_DEEP_REFLECTION_TYPE = "soul_deep"
 PENDING_LIGHT_REFLECT_PREFIX = "pending_reflect:"
+SOUL_DEEP_CURSOR_PREFIX = "soul_deep_cursor:"
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,17 @@ class LightReflectionResult:
     events: list[dict]
     relations: list[dict]
     importance: float
+
+
+@dataclass(frozen=True)
+class SoulDeepReflectionResult:
+    id: int
+    soul_name: str
+    content: str
+    scope_start: float
+    scope_end: float
+    interaction_count: int
+    patch_summary: dict
 
 
 def trigger_light_reflection(
@@ -159,6 +174,57 @@ def trigger_global_deep_reflection(
     )
 
 
+def trigger_soul_deep_reflections(
+    client: "OpenAI",
+    model: str,
+    *,
+    trigger: str = "manual",
+    limit_per_soul: int = 100,
+) -> list[SoulDeepReflectionResult]:
+    """Generate SOUL-specific deep reflections for raw chat/comment interactions."""
+    results: list[SoulDeepReflectionResult] = []
+    for soul in soul_service.list_enabled_souls():
+        interactions = _load_soul_interactions_since_cursor(soul.name, limit_per_soul)
+        if not interactions:
+            continue
+        formatted = _format_soul_interactions(interactions)
+        reflection_result = router.call_soul_deep_reflection(
+            client=client,
+            model=model,
+            soul=soul,
+            interactions=formatted,
+        )
+        if reflection_result is None or not _is_valid_reflection(reflection_result.get("reflection_md")):
+            continue
+
+        content = reflection_result["reflection_md"].strip()
+        patch_summary = _apply_soul_memory_patches(soul.name, reflection_result.get("patches", []))
+        scope_start = float(interactions[0]["created_at"])
+        scope_end = float(max(item["created_at"] for item in interactions))
+        reflection_id = _insert_soul_reflection(
+            soul_name=soul.name,
+            content=content,
+            scope_start=scope_start,
+            scope_end=scope_end,
+            related_evidence_ids=_interaction_evidence_ids(interactions),
+            trigger=trigger,
+            patch_summary=patch_summary,
+        )
+        _set_soul_deep_cursor(soul.name, scope_end)
+        results.append(
+            SoulDeepReflectionResult(
+                id=reflection_id,
+                soul_name=soul.name,
+                content=content,
+                scope_start=scope_start,
+                scope_end=scope_end,
+                interaction_count=len(interactions),
+                patch_summary=patch_summary,
+            )
+        )
+    return results
+
+
 def _load_posts_since_last_reflection(limit: int) -> list:
     last = db.query_one(
         """
@@ -233,6 +299,167 @@ def _format_posts(rows: list) -> str:
             f"{row['content']}"
         )
     return "\n\n---\n\n".join(parts)
+
+
+def _load_soul_interactions_since_cursor(soul_name: str, limit: int) -> list[dict]:
+    cursor = _get_soul_deep_cursor(soul_name)
+    interactions: list[dict] = []
+
+    root_comments = db.query_all(
+        """
+        SELECT
+            comments.id AS comment_id,
+            comments.created_at AS created_at,
+            posts.id AS post_id,
+            posts.ts AS post_ts,
+            posts.content AS post_content,
+            comments.content AS comment_content
+        FROM comments
+        JOIN posts ON posts.id = comments.post_id
+        WHERE comments.soul_name = ? AND comments.created_at > ?
+        ORDER BY comments.created_at ASC, comments.id ASC
+        LIMIT ?
+        """,
+        (soul_name, cursor, limit),
+    )
+    for row in root_comments:
+        interactions.append(
+            {
+                "type": "root_comment",
+                "created_at": float(row["created_at"]),
+                "post_id": row["post_id"],
+                "post_ts": row["post_ts"],
+                "post_content": row["post_content"],
+                "comment_id": int(row["comment_id"]),
+                "comment_content": row["comment_content"],
+            }
+        )
+
+    chat_messages = db.query_all(
+        """
+        SELECT chat_messages.id, chat_messages.thread_id, chat_messages.role,
+               chat_messages.content, chat_messages.created_at
+        FROM chat_messages
+        JOIN chat_threads ON chat_threads.id = chat_messages.thread_id
+        WHERE chat_threads.soul_name = ? AND chat_messages.created_at > ?
+        ORDER BY chat_messages.created_at ASC, chat_messages.id ASC
+        LIMIT ?
+        """,
+        (soul_name, cursor, limit),
+    )
+    for row in chat_messages:
+        interactions.append(
+            {
+                "type": "chat_message",
+                "created_at": float(row["created_at"]),
+                "message_id": int(row["id"]),
+                "thread_id": int(row["thread_id"]),
+                "role": row["role"],
+                "content": row["content"],
+            }
+        )
+
+    comment_messages = db.query_all(
+        """
+        SELECT comment_messages.id, comment_messages.thread_id, comment_messages.role,
+               comment_messages.content, comment_messages.created_at,
+               comment_threads.post_id
+        FROM comment_messages
+        JOIN comment_threads ON comment_threads.id = comment_messages.thread_id
+        WHERE comment_threads.soul_name = ? AND comment_messages.created_at > ?
+        ORDER BY comment_messages.created_at ASC, comment_messages.id ASC
+        LIMIT ?
+        """,
+        (soul_name, cursor, limit),
+    )
+    for row in comment_messages:
+        interactions.append(
+            {
+                "type": "comment_message",
+                "created_at": float(row["created_at"]),
+                "message_id": int(row["id"]),
+                "thread_id": int(row["thread_id"]),
+                "post_id": row["post_id"],
+                "role": row["role"],
+                "content": row["content"],
+            }
+        )
+
+    return sorted(
+        interactions,
+        key=lambda item: (item["created_at"], item["type"], item.get("message_id", item.get("comment_id", 0))),
+    )[:limit]
+
+
+def _format_soul_interactions(interactions: list[dict]) -> str:
+    parts = []
+    for item in interactions:
+        if item["type"] == "root_comment":
+            parts.append(
+                "---\n"
+                f"evidence: post:{item['post_id']}, comment:{item['comment_id']}\n"
+                f"time: {item['created_at']}\n"
+                "type: public_post_root_reply\n"
+                "---\n\n"
+                f"用户公开 post（{item['post_id']} / {item['post_ts']}）:\n"
+                f"{item['post_content']}\n\n"
+                "SOUL 首条回复:\n"
+                f"{item['comment_content']}"
+            )
+        elif item["type"] == "chat_message":
+            speaker = "用户" if item["role"] == "user" else "SOUL"
+            parts.append(
+                "---\n"
+                f"evidence: chat_message:{item['message_id']}\n"
+                f"time: {item['created_at']}\n"
+                f"type: private_chat_message\n"
+                f"thread_id: {item['thread_id']}\n"
+                "---\n\n"
+                f"{speaker}: {item['content']}"
+            )
+        elif item["type"] == "comment_message":
+            speaker = "用户" if item["role"] == "user" else "SOUL"
+            parts.append(
+                "---\n"
+                f"evidence: comment_message:{item['message_id']}\n"
+                f"time: {item['created_at']}\n"
+                f"type: post_comment_thread_message\n"
+                f"post_id: {item['post_id']}\n"
+                f"thread_id: {item['thread_id']}\n"
+                "---\n\n"
+                f"{speaker}: {item['content']}"
+            )
+    return "\n\n---\n\n".join(parts)
+
+
+def _interaction_evidence_ids(interactions: list[dict]) -> list[str]:
+    evidence: list[str] = []
+    for item in interactions:
+        if item["type"] == "root_comment":
+            evidence.append(f"post:{item['post_id']}")
+            evidence.append(f"comment:{item['comment_id']}")
+        elif item["type"] == "chat_message":
+            evidence.append(f"chat_message:{item['message_id']}")
+        elif item["type"] == "comment_message":
+            evidence.append(f"comment_message:{item['message_id']}")
+    return evidence
+
+
+def _get_soul_deep_cursor(soul_name: str) -> float:
+    row = db.query_one("SELECT value FROM meta WHERE key = ?", (f"{SOUL_DEEP_CURSOR_PREFIX}{soul_name}",))
+    if row is None:
+        return 0.0
+    try:
+        return float(row["value"])
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _set_soul_deep_cursor(soul_name: str, cursor: float) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+        (f"{SOUL_DEEP_CURSOR_PREFIX}{soul_name}", str(cursor)),
+    )
 
 
 def _format_todos(todos: list) -> str:
@@ -539,6 +766,43 @@ def _insert_reflection(
         return int(cur.lastrowid)
 
 
+def _insert_soul_reflection(
+    *,
+    soul_name: str,
+    content: str,
+    scope_start: float,
+    scope_end: float,
+    related_evidence_ids: list[str],
+    trigger: str,
+    patch_summary: dict,
+) -> int:
+    ts = datetime.now().astimezone().isoformat()
+    metadata = {
+        "trigger": trigger,
+        "op": "soul_deep_reflection",
+        "soul_name": soul_name,
+        "soul_memory_patch_applied": patch_summary.get("applied", 0) > 0,
+        "soul_memory_patch_summary": patch_summary,
+    }
+    with db.transaction() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO reflections(ts, type, scope_start, scope_end, content, related_posts, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts,
+                SOUL_DEEP_REFLECTION_TYPE,
+                str(scope_start),
+                str(scope_end),
+                content,
+                json.dumps(related_evidence_ids, ensure_ascii=False),
+                json.dumps(metadata, ensure_ascii=False),
+            ),
+        )
+        return int(cur.lastrowid)
+
+
 def _is_valid_reflection(content: str | None) -> bool:
     if not content:
         return False
@@ -557,6 +821,27 @@ def _apply_profile_patches(patches: list) -> dict:
             summary["skipped_details"].append({"reason": "invalid_patch"})
             continue
         result = profile_service.apply_patch(patch, source="reflector")
+        status = result.get("status")
+        if status in summary:
+            summary[status] += 1
+        else:
+            summary["skipped"] += 1
+        if status != "applied":
+            summary["skipped_details"].append(_profile_patch_skip_detail(patch, result))
+    return summary
+
+
+def _apply_soul_memory_patches(soul_name: str, patches: list) -> dict:
+    summary = {"applied": 0, "skipped": 0, "skipped_details": []}
+    if not isinstance(patches, list):
+        return summary
+
+    for patch in patches:
+        if not isinstance(patch, dict):
+            summary["skipped"] += 1
+            summary["skipped_details"].append({"reason": "invalid_patch"})
+            continue
+        result = soul_memory_service.apply_patch(soul_name, patch, source="soul_deep_reflector")
         status = result.get("status")
         if status in summary:
             summary[status] += 1

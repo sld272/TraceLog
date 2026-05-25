@@ -7,6 +7,7 @@ import os
 import getpass
 from openai import OpenAI
 from core import chat_service
+from core import comment_service
 from core.cli_input import read_cli_input
 from core import context_builder
 from core import reflector
@@ -37,6 +38,19 @@ def _run_deep_reflection_on_exit(client: OpenAI, model: str) -> None:
         print("\n[警告] 深反思被强制中断，已有数据保持不变。")
     except Exception as e:
         print(f"[反思] 深反思失败：{e}，已有数据保持不变。")
+    try:
+        soul_results = reflector.trigger_soul_deep_reflections(client, model, trigger="cli_exit")
+        if soul_results:
+            applied = sum(item.patch_summary.get("applied", 0) for item in soul_results)
+            skipped = sum(item.patch_summary.get("skipped", 0) for item in soul_results)
+            print(
+                f"[反思] SOUL 深反思已保存 {len(soul_results)} 份，"
+                f"独立画像更新 applied={applied} skipped={skipped}。"
+            )
+        else:
+            print("[反思] 没有新的 SOUL 互动，已跳过 SOUL 深反思。")
+    except Exception as e:
+        print(f"[反思] SOUL 深反思失败：{e}，已有数据保持不变。")
     print("再见！\n")
 
 
@@ -84,6 +98,90 @@ def _handle_chat_command(
 
     updated_todos, quit_requested = _run_chat_session(thread, client, model, todos)
     return True, updated_todos, quit_requested
+
+
+def _handle_comment_command(
+    user_input: str,
+    client: OpenAI,
+    model: str,
+    todos: list,
+) -> tuple[bool, list, bool]:
+    """Handle /comment commands. Returns handled, todos, quit_requested."""
+    if user_input != "/comment" and not user_input.startswith("/comment "):
+        return False, todos, False
+
+    parts = user_input.split(maxsplit=2)
+    if len(parts) < 3:
+        _print_comment_help()
+        return True, todos, False
+
+    post_id = parts[1].strip()
+    soul_name = parts[2].strip()
+    if not post_id or not soul_name:
+        _print_comment_help()
+        return True, todos, False
+
+    try:
+        thread = comment_service.get_or_create_thread(post_id, soul_name)
+    except ValueError as exc:
+        print(f"[评论] {exc}\n")
+        return True, todos, False
+
+    updated_todos, quit_requested = _run_comment_session(thread, client, model, todos)
+    return True, updated_todos, quit_requested
+
+
+def _run_comment_session(
+    thread: comment_service.CommentThread,
+    client: OpenAI,
+    model: str,
+    todos: list,
+) -> tuple[list, bool]:
+    print(
+        f"\n[评论] 已进入 post {thread.post_id} 下与 {thread.soul_name} 的评论线程。"
+        "输入 /back 返回发帖模式，/quit 退出。\n"
+    )
+    current_todos = todos
+    while True:
+        try:
+            raw_input = read_cli_input(f"[{thread.soul_name} 评论] 你: ")
+        except EOFError:
+            return current_todos, True
+        user_message = raw_input.strip()
+        if not user_message:
+            continue
+        if user_message == "/back":
+            print("[评论] 已返回发帖模式。\n")
+            return current_todos, False
+        if user_message == "/quit":
+            return current_todos, True
+
+        print(f"\n[{thread.soul_name} 正在回复评论...]\n")
+        try:
+            result = comment_service.call_comment_reply(thread.id, user_message, client, model)
+        except ValueError as exc:
+            print(f"[评论] {exc}\n")
+            return current_todos, False
+
+        if result.ok:
+            print(f"[{result.soul_name}] {result.reply}\n")
+            if result.assistant_message_id is not None:
+                try:
+                    current_todos = todo_service.apply_comment_todos(result, result.assistant_message_id)
+                    if result.todos_to_upsert or result.todos_to_delete:
+                        print(f"[记忆] 待办已更新，当前 {len(current_todos)} 条。\n")
+                except Exception as exc:
+                    print(f"[记忆] 评论待办合流失败：{exc}\n")
+        else:
+            print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
+
+
+def _print_comment_help() -> None:
+    print(
+        "[评论] 可用命令：\n"
+        "  /comment <post_id> <soul>\n"
+        "评论线程中输入 /back 返回发帖模式，/quit 退出。\n"
+    )
 
 
 def _run_chat_session(
@@ -344,6 +442,12 @@ def main():
             _run_deep_reflection_on_exit(client, model)
             break
         if chat_handled:
+            continue
+        comment_handled, todos, quit_requested = _handle_comment_command(user_input, client, model, todos)
+        if quit_requested:
+            _run_deep_reflection_on_exit(client, model)
+            break
+        if comment_handled:
             continue
         if _handle_soul_command(user_input):
             continue

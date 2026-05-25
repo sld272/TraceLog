@@ -81,6 +81,30 @@ CREATE TABLE IF NOT EXISTS comments (
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_soul ON comments(soul_name, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS comment_threads (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id         TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    soul_name       TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
+    root_comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+    created_at      REAL NOT NULL,
+    updated_at      REAL NOT NULL,
+    last_message_at REAL,
+    UNIQUE(post_id, soul_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comment_threads_post ON comment_threads(post_id, soul_name);
+CREATE INDEX IF NOT EXISTS idx_comment_threads_soul ON comment_threads(soul_name, last_message_at DESC);
+
+CREATE TABLE IF NOT EXISTS comment_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id   INTEGER NOT NULL REFERENCES comment_threads(id) ON DELETE CASCADE,
+    role        TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    created_at  REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_comment_messages_thread ON comment_messages(thread_id, created_at);
+
 CREATE TABLE IF NOT EXISTS entities (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     type          TEXT NOT NULL,
@@ -189,6 +213,7 @@ CREATE TABLE IF NOT EXISTS todos (
     status              TEXT NOT NULL DEFAULT '未完成',
     source_post         TEXT REFERENCES posts(id) ON DELETE SET NULL,
     source_chat_message INTEGER REFERENCES chat_messages(id) ON DELETE SET NULL,
+    source_comment_message INTEGER REFERENCES comment_messages(id) ON DELETE SET NULL,
     created_at          REAL NOT NULL,
     updated_at          REAL NOT NULL,
     completed_at        REAL

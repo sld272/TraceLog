@@ -168,6 +168,19 @@ class ChatServiceTest(unittest.TestCase):
         row = db.query_one("SELECT COUNT(*) AS count FROM posts")
         self.assertEqual(0, row["count"])
 
+    def test_private_chat_reply_does_not_write_reflection_or_profile_revisions(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+
+        chat_service.call_chat_reply(thread.id, "这是一条私聊回复", FakeClient(), "fake-model")
+
+        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM entities")["count"])
+        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM emotions")["count"])
+        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM events")["count"])
+        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM relations")["count"])
+        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions")["count"])
+        rows = db.query_all("SELECT source FROM soul_memory_revisions WHERE source != 'system'")
+        self.assertEqual([], rows)
+
     def test_apply_chat_todos_sets_source_chat_message(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
         client = FakeClient(

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import memory
-from core import db, reflector
+from core import chat_service, comment_service, db, reflector, soul_memory_service, soul_service
 
 
 class FakeClient:
@@ -42,11 +42,17 @@ class ReflectorTest(unittest.TestCase):
         self.old_db_path = db.DB_PATH
         self.old_memory_workspace = memory.WORKSPACE_DIR
         self.old_user_md_path = memory.USER_MD_PATH
+        self.old_souls_dir = soul_service.SOULS_DIR
+        self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
+        self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         memory.WORKSPACE_DIR = str(self.workspace)
         memory.USER_MD_PATH = str(self.workspace / "user.md")
+        soul_service.SOULS_DIR = self.workspace / "souls"
+        soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
+        soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
 
         db.init_db()
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -70,6 +76,9 @@ class ReflectorTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         memory.WORKSPACE_DIR = self.old_memory_workspace
         memory.USER_MD_PATH = self.old_user_md_path
+        soul_service.SOULS_DIR = self.old_souls_dir
+        soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
+        soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         self.tmp.cleanup()
 
     def test_trigger_global_deep_reflection_writes_reflection(self) -> None:
@@ -252,6 +261,76 @@ class ReflectorTest(unittest.TestCase):
         row = db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_reflect:20260525-001",))
         self.assertIsNotNone(row)
 
+    def test_soul_deep_reflection_reads_raw_chat_and_comment_messages_and_patches_memory(self) -> None:
+        soul_service.sync_souls()
+        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_user = chat_service.append_user_message(chat_thread.id, "我在默认面前会直接说累")
+        self._append_chat_assistant(chat_thread.id, "我听见了。")
+        self._insert_comment_seed()
+        comment_thread = comment_service.get_or_create_thread("20260525-001", "默认")
+        comment_user = comment_service.append_user_message(comment_thread.id, "这条评论也只给默认看")
+        payload = {
+            "reflection_md": "## SOUL 深反思\n\n用户在这个 SOUL 面前表达了更私人的疲惫与限定可见的评论。",
+            "patches": [
+                {
+                    "section": "对用户的理解",
+                    "ops": [{"op": "add", "value": "用户在默认面前更愿意直接表达疲惫和限定可见的想法"}],
+                    "evidence": [f"chat_message:{chat_user.id}", f"comment_message:{comment_user.id}"],
+                    "confidence": 0.86,
+                }
+            ],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        results = reflector.trigger_soul_deep_reflections(client, "fake-model", trigger="cli_exit")
+        memory_content = soul_memory_service.read_soul_memory("默认")
+        reflection = db.query_one("SELECT type, metadata, related_posts FROM reflections WHERE type = 'soul_deep'")
+        user_revisions = db.query_all("SELECT id FROM user_md_revisions")
+
+        self.assertEqual(1, len(results))
+        self.assertEqual("默认", results[0].soul_name)
+        self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, results[0].patch_summary)
+        self.assertIn("用户在默认面前更愿意直接表达疲惫", memory_content)
+        self.assertEqual([], user_revisions)
+        self.assertIsNotNone(reflection)
+        metadata = json.loads(reflection["metadata"])
+        self.assertEqual("默认", metadata["soul_name"])
+        self.assertIn(f"chat_message:{chat_user.id}", reflection["related_posts"])
+        self.assertIn(f"comment_message:{comment_user.id}", reflection["related_posts"])
+
+    def test_soul_deep_reflection_skips_souls_without_new_interactions(self) -> None:
+        soul_service.sync_souls()
+        client = FakeClient()
+
+        results = reflector.trigger_soul_deep_reflections(client, "fake-model", trigger="cli_exit")
+
+        self.assertEqual([], results)
+        self.assertEqual(0, client.calls)
+
+    def test_soul_deep_reflection_cursor_prevents_rerun(self) -> None:
+        soul_service.sync_souls()
+        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_user = chat_service.append_user_message(chat_thread.id, "这条只处理一次")
+        payload = {
+            "reflection_md": "## SOUL 深反思\n\n用户说了一条只需要处理一次的私聊。",
+            "patches": [
+                {
+                    "section": "对用户的理解",
+                    "ops": [{"op": "add", "value": "用户测试 SOUL 深反思游标"}],
+                    "evidence": [f"chat_message:{chat_user.id}"],
+                    "confidence": 0.8,
+                }
+            ],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        first = reflector.trigger_soul_deep_reflections(client, "fake-model", trigger="cli_exit")
+        second = reflector.trigger_soul_deep_reflections(client, "fake-model", trigger="cli_exit")
+
+        self.assertEqual(1, len(first))
+        self.assertEqual([], second)
+        self.assertEqual(1, client.calls)
+
     def _insert_post(self, post_id: str, ts: str, content: str) -> None:
         db.execute(
             """
@@ -259,6 +338,25 @@ class ReflectorTest(unittest.TestCase):
             VALUES (?, ?, ?, ?, ?)
             """,
             (post_id, ts, content, 1.0, 1.0),
+        )
+
+    def _append_chat_assistant(self, thread_id: int, content: str) -> None:
+        db.execute(
+            """
+            INSERT INTO chat_messages(thread_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (thread_id, "assistant", content, 3.0),
+        )
+
+    def _insert_comment_seed(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天想认真练歌。")
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("20260525-001", "默认", "我陪你继续练。", 2.0),
         )
 
     def _light_payload(self) -> dict:
