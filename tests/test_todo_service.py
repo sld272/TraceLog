@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from core import context_builder, db, memory, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import context_builder, db, profile_service, soul_memory_service, soul_service, todo_service, tool_config_service
 
 
 class FakeClient:
@@ -30,16 +30,14 @@ class TodoServiceTest(unittest.TestCase):
 
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_memory_workspace = memory.WORKSPACE_DIR
-        self.old_user_md_path = memory.USER_MD_PATH
+        self.old_user_md_path = profile_service.USER_MD_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
         self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
         self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
-        memory.WORKSPACE_DIR = str(self.workspace)
-        memory.USER_MD_PATH = str(self.workspace / "user.md")
+        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
         soul_service.SOULS_DIR = self.workspace / "souls"
         soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
@@ -53,8 +51,7 @@ class TodoServiceTest(unittest.TestCase):
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        memory.WORKSPACE_DIR = self.old_memory_workspace
-        memory.USER_MD_PATH = self.old_user_md_path
+        profile_service.USER_MD_PATH = self.old_user_md_path
         soul_service.SOULS_DIR = self.old_souls_dir
         soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
         soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir

@@ -10,7 +10,6 @@ from core import chat_service
 from core import comment_service
 from core.cli_input import read_cli_input
 from core import context_builder
-from core import memory
 from core import reflector
 from core import record_service
 from core import reply_service
@@ -19,6 +18,7 @@ from core import soul_service
 from core import todo_service
 from core import tool_config_service
 from core import vectorstore
+from core import workspace_service
 
 CONFIG_FILE = "config.json"
 
@@ -446,21 +446,25 @@ def main():
     print(f"模型: {model}  |  Base URL: {config.get('base_url')}\n")
 
     try:
-        memory.init_workspace()
-        vectorstore.init_vectorstore(
+        workspace_service.init_workspace()
+        vector_result = vectorstore.init_vectorstore(
             config["api_key"],
             config["base_url"],
             config["embedding_model"],
             config.get("embedding_base_url"),
             config.get("embedding_api_key"),
         )
+        print(f"[向量存储] 初始化成功，已索引 {vector_result.indexed_count} 篇帖子。")
         fixed_embeddings = record_service.retry_pending_embeddings()
         if fixed_embeddings:
             print(f"[向量存储] 已补齐 {fixed_embeddings} 条待索引帖子。")
         fixed_reflections = reflector.retry_pending_light_reflections(client, model)
         if fixed_reflections:
             print(f"[反思] 已补跑 {fixed_reflections} 条轻反思。")
-        todos = memory.load_todos() if tool_config_service.is_tool_enabled("todo") else []
+        todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
+    except vectorstore.VectorStoreInitError as e:
+        print(f"[向量存储] 初始化失败：{e}")
+        return
     except KeyboardInterrupt:
         print("\n[启动] 初始化被中断，已尽量回滚数据库事务。请重新运行。")
         return
@@ -490,7 +494,7 @@ def main():
         if comment_handled:
             continue
         if _handle_tool_command(user_input):
-            todos = memory.load_todos() if tool_config_service.is_tool_enabled("todo") else []
+            todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
             continue
         if _handle_soul_command(user_input):
             continue
@@ -527,7 +531,7 @@ def main():
             continue
 
         if tool_config_service.is_tool_enabled("todo"):
-            todos = memory.load_todos()
+            todos = todo_service.load_todos()
 
 
 if __name__ == "__main__":

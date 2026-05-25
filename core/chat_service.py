@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from core import db, memory, retrieval, router, soul_memory_service, soul_service, tool_config_service
+from core import db, profile_service, record_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
+from core.llm import reply_router
 from core.soul_service import SoulContext
 
 if TYPE_CHECKING:
@@ -149,7 +150,7 @@ def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
     soul = _load_soul_context(thread.soul_name)
     sections: list[str] = []
 
-    profile = memory.read_profile().strip()
+    profile = profile_service.read_profile().strip()
     if profile:
         sections.append(f"# 用户档案\n\n{profile}")
 
@@ -163,7 +164,7 @@ def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
         sections.append(f"# 该 SOUL 对相关帖子的历史评论\n\n{related_comments}")
 
     if tool_config_service.is_tool_enabled("todo"):
-        pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
+        pending = todo_service.list_active_todos()
         if pending:
             sections.append("# 待办事项\n\n" + "\n".join(_format_todo(todo) for todo in pending))
 
@@ -188,7 +189,7 @@ def call_chat_reply(
     """Append user input, call one SOUL, and persist the assistant reply."""
     user_message_row = append_user_message(thread_id, user_message)
     chat_context = build_chat_context(thread_id, user_message)
-    data = router.call_soul_chat_reply(user_message, client, model, chat_context, chat_context.soul)
+    data = reply_router.call_soul_chat_reply(user_message, client, model, chat_context, chat_context.soul)
     if data is None:
         return _failed_result(chat_context.thread, user_message_row.id, "LLM call failed or returned invalid JSON")
 
@@ -276,7 +277,7 @@ def _read_posts_by_ids(post_ids: list[str]) -> str:
             (post_id,),
         )
         if row is not None:
-            parts.append(memory.format_post(row).strip())
+            parts.append(record_service.format_post(row).strip())
     return "\n\n---\n\n".join(parts)
 
 

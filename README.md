@@ -94,17 +94,21 @@ workspace/
 
 - 目前还是 CLI 原型，没有 Web 界面。
 - 多 SOUL 管理、并发评论与私聊已接入 CLI，但还没有 Web 管理页。
-- 私聊摘要还不会自动沉淀到 `soul_memories/<name>.md`。
+- SOUL 独立画像只在深反思时更新，不会在每次私聊或评论后即时改写。
 - ChromaDB 初始化需要可用的 embedding 服务。
 
 ## 项目结构
 
 - `main.py`：CLI 入口
-- `core/memory.py`：当前存储与上下文组装层
-- `core/router.py`：LLM 回复与深反思 prompt
+- `core/workspace_service.py`：workspace、数据库、默认画像与 SOUL 初始化编排
+- `core/profile_service.py`：`user.md` 读写、patch、阈值校验与内部写入留痕
+- `core/record_service.py`：post 写入、格式化与近期历史读取
+- `core/todo_service.py`：可选 TodoTool 抽取、待办读写与 prompt 上下文
+- `core/memory.py`：临时兼容 facade，新代码应依赖上面的明确 service
+- `core/router.py`：LLM router 兼容 facade
+- `core/llm/`：回复、TodoTool、轻/深反思 prompt 与 JSON 解析
 - `core/reflector.py`：轻反思、深反思触发与落库服务
-- `core/profile_service.py`：`user.md` patch、阈值校验与内部写入留痕
-- `core/vectorstore.py`：ChromaDB 向量索引
+- `core/vectorstore.py`：ChromaDB 向量索引 provider
 - `schema.sql`：SQLite 初始化 schema
 - `core/db.py`：SQLite 连接、初始化与查询 helper
 - `docs/architecture.md`：项目架构设计

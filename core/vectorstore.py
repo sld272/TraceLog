@@ -3,7 +3,7 @@ TraceLog 拾迹 — Vector Store Layer
 ChromaDB + OpenAIEmbeddingFunction 封装
 """
 
-import sys
+from dataclasses import dataclass
 from typing import cast
 
 from core import db
@@ -11,6 +11,17 @@ from core import db
 _collection = None
 BASE_DIR = str(db.BASE_DIR)
 CHROMA_DB_DIR = str(db.WORKSPACE_DIR / "chroma_db")
+
+
+@dataclass(frozen=True)
+class VectorStoreInitResult:
+    collection_name: str
+    indexed_count: int
+    path: str
+
+
+class VectorStoreInitError(RuntimeError):
+    """Raised when the vector store cannot be initialized."""
 
 
 def is_initialized() -> bool:
@@ -23,8 +34,8 @@ def init_vectorstore(
     embedding_model: str,
     embedding_base_url: str | None = None,
     embedding_api_key: str | None = None,
-):
-    """初始化 ChromaDB 向量存储。失败时报错退出，不允许静默降级。"""
+) -> VectorStoreInitResult:
+    """初始化 ChromaDB 向量存储。失败时抛异常，由调用层决定如何处理。"""
     global _collection
     try:
         import chromadb
@@ -44,10 +55,14 @@ def init_vectorstore(
             name="posts",
             embedding_function=cast(EmbeddingFunction[Embeddable], embed_fn),
         )
-        print(f"[向量存储] 初始化成功，已索引 {_collection.count()} 篇帖子。")
     except Exception as e:
-        print(f"[向量存储] 初始化失败：{e}")
-        sys.exit(1)
+        _collection = None
+        raise VectorStoreInitError(str(e)) from e
+    return VectorStoreInitResult(
+        collection_name="posts",
+        indexed_count=int(_collection.count()),
+        path=CHROMA_DB_DIR,
+    )
 
 
 def index_post(post_id: str, content: str):

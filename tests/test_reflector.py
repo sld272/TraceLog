@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from core import chat_service, comment_service, db, memory, reflector, soul_memory_service, soul_service
+from core import chat_service, comment_service, db, profile_service, reflector, soul_memory_service, soul_service
 
 
 class FakeClient:
@@ -39,16 +39,14 @@ class ReflectorTest(unittest.TestCase):
 
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_memory_workspace = memory.WORKSPACE_DIR
-        self.old_user_md_path = memory.USER_MD_PATH
+        self.old_user_md_path = profile_service.USER_MD_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
         self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
         self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
-        memory.WORKSPACE_DIR = str(self.workspace)
-        memory.USER_MD_PATH = str(self.workspace / "user.md")
+        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
         soul_service.SOULS_DIR = self.workspace / "souls"
         soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
@@ -73,8 +71,7 @@ class ReflectorTest(unittest.TestCase):
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        memory.WORKSPACE_DIR = self.old_memory_workspace
-        memory.USER_MD_PATH = self.old_user_md_path
+        profile_service.USER_MD_PATH = self.old_user_md_path
         soul_service.SOULS_DIR = self.old_souls_dir
         soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
         soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
@@ -128,7 +125,7 @@ class ReflectorTest(unittest.TestCase):
         metadata = json.loads(row["metadata"])
 
         self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, result.patch_summary)
-        self.assertIn("正在准备比赛 <!-- id: status-", memory.read_profile())
+        self.assertIn("正在准备比赛 <!-- id: status-", profile_service.read_profile())
         self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, metadata["profile_patch_summary"])
 
     def test_empty_patches_do_not_write_profile_revision(self) -> None:
@@ -144,7 +141,7 @@ class ReflectorTest(unittest.TestCase):
 
         self.assertEqual({"applied": 0, "skipped": 0, "skipped_details": []}, result.patch_summary)
         self.assertEqual([], rows)
-        self.assertNotIn("姓名：喜多郁代 <!-- id: bf-", memory.read_profile())
+        self.assertNotIn("姓名：喜多郁代 <!-- id: bf-", profile_service.read_profile())
 
     def test_global_deep_reflection_applies_update_remove_and_skips_placeholder_patch(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我不再用测试用户这个说法，改为比赛项目参与者。")
@@ -174,7 +171,7 @@ class ReflectorTest(unittest.TestCase):
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
 
         result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
-        content = memory.read_profile()
+        content = profile_service.read_profile()
         row = db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,))
         metadata = json.loads(row["metadata"])
 

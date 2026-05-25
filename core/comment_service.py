@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from core import db, memory, router, soul_memory_service, soul_service, tool_config_service
+from core import db, profile_service, soul_memory_service, soul_service, todo_service, tool_config_service
+from core.llm import reply_router
 from core.soul_service import SoulContext
 
 if TYPE_CHECKING:
@@ -144,7 +145,7 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
     soul = _load_soul_context(thread.soul_name)
     sections: list[str] = []
 
-    profile = memory.read_profile().strip()
+    profile = profile_service.read_profile().strip()
     if profile:
         sections.append(f"# 用户档案\n\n{profile}")
 
@@ -157,7 +158,7 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
         sections.append(f"# {thread.soul_name} 的首条回复\n\n{root_comment['content']}")
 
     if tool_config_service.is_tool_enabled("todo"):
-        pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
+        pending = todo_service.list_active_todos()
         if pending:
             sections.append("# 待办事项\n\n" + "\n".join(_format_todo(todo) for todo in pending))
 
@@ -181,7 +182,7 @@ def call_comment_reply(
     """Append user input, call one SOUL, and persist the assistant comment reply."""
     user_message_row = append_user_message(thread_id, user_message)
     comment_context = build_comment_context(thread_id, user_message)
-    data = router.call_soul_comment_reply(user_message, client, model, comment_context, comment_context.soul)
+    data = reply_router.call_soul_comment_reply(user_message, client, model, comment_context, comment_context.soul)
     if data is None:
         return _failed_result(comment_context.thread, user_message_row.id, "LLM call failed or returned invalid JSON")
 

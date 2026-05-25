@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import comment_service, db, memory, soul_memory_service, soul_service, tool_config_service
+from core import comment_service, db, profile_service, soul_memory_service, soul_service, tool_config_service
 
 
 class FakeClient:
@@ -29,16 +29,14 @@ class CommentServiceTest(unittest.TestCase):
 
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_memory_workspace = memory.WORKSPACE_DIR
-        self.old_user_md_path = memory.USER_MD_PATH
+        self.old_user_md_path = profile_service.USER_MD_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
         self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
         self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
-        memory.WORKSPACE_DIR = str(self.workspace)
-        memory.USER_MD_PATH = str(self.workspace / "user.md")
+        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
         soul_service.SOULS_DIR = self.workspace / "souls"
         soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
@@ -53,8 +51,7 @@ class CommentServiceTest(unittest.TestCase):
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        memory.WORKSPACE_DIR = self.old_memory_workspace
-        memory.USER_MD_PATH = self.old_user_md_path
+        profile_service.USER_MD_PATH = self.old_user_md_path
         soul_service.SOULS_DIR = self.old_souls_dir
         soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
         soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
@@ -86,7 +83,7 @@ class CommentServiceTest(unittest.TestCase):
     def test_comment_reply_failure_preserves_user_message_only(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
 
-        with patch("core.comment_service.router.call_soul_comment_reply", return_value=None):
+        with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
             result = comment_service.call_comment_reply(thread.id, "这句先记下", FakeClient(), "fake-model")
 
         messages = comment_service.list_thread_messages(thread.id)

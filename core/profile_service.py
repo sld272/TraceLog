@@ -9,7 +9,41 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from core import db, memory
+from core import db
+
+USER_MD_PATH = str(db.WORKSPACE_DIR / "user.md")
+
+DEFAULT_USER_MD = """---
+schema: tracelog/user.md@v1
+sensitivity:
+  基本信息: high
+  关键身份: high
+  身份与现状: normal
+  技能与专长: normal
+  兴趣与习惯: normal
+  关注的核心人际关系: normal
+  性格与情绪倾向: normal
+  长期目标与当前痛点: normal
+---
+
+# 用户档案
+
+## 基本信息
+
+## 关键身份
+
+## 身份与现状
+
+## 技能与专长
+
+## 兴趣与习惯
+
+## 关注的核心人际关系
+
+## 性格与情绪倾向
+
+## 长期目标与当前痛点
+"""
 
 ANCHOR_RE = re.compile(r"<!--\s*id:\s*([A-Za-z0-9_-]+)\s*-->")
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
@@ -54,7 +88,7 @@ def apply_patch(patch: dict, source: str = "reflector") -> dict:
     if reason is not None:
         return PatchResult("skipped", reason).to_dict()
 
-    text = memory.read_profile()
+    text = read_profile()
     doc = _parse_user_md(text)
     updated = _apply_ops_to_doc(doc, parsed)
     if updated is None:
@@ -128,7 +162,7 @@ def _validate_patch_gate(patch: dict) -> str | None:
     if not _evidence_exists(patch["evidence"]):
         return "invalid_evidence"
 
-    text = memory.read_profile()
+    text = read_profile()
     doc = _parse_user_md(text)
     sensitivity = doc.sensitivity.get(patch["section"], "normal")
     for op in patch["ops"]:
@@ -259,7 +293,7 @@ def _new_anchor(section: str) -> str:
 
 
 def _write_user_md_revision(content: str, patch: dict, source: str) -> None:
-    _write_text_atomic(memory.USER_MD_PATH, content)
+    _write_text_atomic(USER_MD_PATH, content)
     db.execute(
         """
         INSERT INTO user_md_revisions(snapshot, patch, source, created_at)
@@ -274,3 +308,35 @@ def _write_text_atomic(path: str, content: str) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp, path)
+
+
+def init_default_profile() -> None:
+    """Create user.md when missing and record an init revision."""
+    if os.path.exists(USER_MD_PATH):
+        return
+    _write_text_atomic(USER_MD_PATH, DEFAULT_USER_MD)
+    _record_user_md_revision(DEFAULT_USER_MD, {"op": "init"}, "user")
+
+
+def read_profile() -> str:
+    """Read the current user.md profile."""
+    if not os.path.exists(USER_MD_PATH):
+        return ""
+    with open(USER_MD_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def write_profile(content: str) -> None:
+    """Overwrite user.md and record a revision snapshot."""
+    _write_text_atomic(USER_MD_PATH, content)
+    _record_user_md_revision(content, {"op": "overwrite_profile"}, "reflector")
+
+
+def _record_user_md_revision(snapshot: str, patch: dict, source: str) -> None:
+    db.execute(
+        """
+        INSERT INTO user_md_revisions(snapshot, patch, source, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (snapshot, json.dumps(patch, ensure_ascii=False), source, db.now_ts()),
+    )

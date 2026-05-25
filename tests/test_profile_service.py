@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db, memory, profile_service
+from core import db, profile_service
 
 
 USER_MD = """---
@@ -39,13 +39,11 @@ class ProfileServiceTest(unittest.TestCase):
 
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_memory_workspace = memory.WORKSPACE_DIR
-        self.old_user_md_path = memory.USER_MD_PATH
+        self.old_user_md_path = profile_service.USER_MD_PATH
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
-        memory.WORKSPACE_DIR = str(self.workspace)
-        memory.USER_MD_PATH = str(self.workspace / "user.md")
+        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
 
         db.init_db()
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -56,8 +54,7 @@ class ProfileServiceTest(unittest.TestCase):
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        memory.WORKSPACE_DIR = self.old_memory_workspace
-        memory.USER_MD_PATH = self.old_user_md_path
+        profile_service.USER_MD_PATH = self.old_user_md_path
         self.tmp.cleanup()
 
     def test_normal_add_writes_user_md_and_revision(self) -> None:
@@ -70,7 +67,7 @@ class ProfileServiceTest(unittest.TestCase):
             }
         )
 
-        content = memory.read_profile()
+        content = profile_service.read_profile()
         row = db.query_one("SELECT patch, source FROM user_md_revisions ORDER BY id DESC LIMIT 1")
 
         self.assertEqual("applied", result["status"])
@@ -80,8 +77,8 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertEqual("reflector", row["source"])
 
     def test_default_user_md_has_empty_sections_without_placeholders(self) -> None:
-        self.assertNotIn("暂无", memory.DEFAULT_USER_MD)
-        self.assertIn("## 基本信息\n\n## 关键身份", memory.DEFAULT_USER_MD)
+        self.assertNotIn("暂无", profile_service.DEFAULT_USER_MD)
+        self.assertIn("## 基本信息\n\n## 关键身份", profile_service.DEFAULT_USER_MD)
 
     def test_high_add_with_one_evidence_writes_user_md_and_leaves_legacy_placeholder(self) -> None:
         result = profile_service.apply_patch(
@@ -93,7 +90,7 @@ class ProfileServiceTest(unittest.TestCase):
             }
         )
 
-        content = memory.read_profile()
+        content = profile_service.read_profile()
         row = db.query_one("SELECT patch, source FROM user_md_revisions ORDER BY id DESC LIMIT 1")
 
         self.assertEqual("applied", result["status"])
@@ -115,7 +112,7 @@ class ProfileServiceTest(unittest.TestCase):
 
         self.assertEqual("skipped", result["status"])
         self.assertEqual("low_confidence", result["reason"])
-        self.assertNotIn("姓名：张三 <!-- id: bf-", memory.read_profile())
+        self.assertNotIn("姓名：张三 <!-- id: bf-", profile_service.read_profile())
 
     def test_high_update_and_remove_thresholds(self) -> None:
         low_update = profile_service.apply_patch(
@@ -151,7 +148,7 @@ class ProfileServiceTest(unittest.TestCase):
             }
         )
 
-        content = memory.read_profile()
+        content = profile_service.read_profile()
 
         self.assertEqual("skipped", low_update["status"])
         self.assertEqual("low_confidence", low_update["reason"])
@@ -172,7 +169,7 @@ class ProfileServiceTest(unittest.TestCase):
         )
 
         self.assertEqual({"status": "skipped", "reason": "invalid_evidence"}, result)
-        self.assertNotIn("熟悉 FTS5", memory.read_profile())
+        self.assertNotIn("熟悉 FTS5", profile_service.read_profile())
 
     def test_low_confidence_is_skipped(self) -> None:
         result = profile_service.apply_patch(
@@ -229,7 +226,7 @@ class ProfileServiceTest(unittest.TestCase):
             }
         )
 
-        content = memory.read_profile()
+        content = profile_service.read_profile()
         rows = db.query_all("SELECT id FROM user_md_revisions")
 
         self.assertEqual("applied", update["status"])

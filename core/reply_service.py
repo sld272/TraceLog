@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 from core import db
-from core import router
 from core.context_builder import BuiltContext
+from core.llm import reply_router
 from core.soul_service import SoulContext
 
 
@@ -71,7 +71,7 @@ def _call_one_soul(
     model: str,
     shared_context: str,
 ) -> SoulReplyResult:
-    data = router.call_soul_post_reply(user_input, client, model, shared_context, soul)
+    data = reply_router.call_soul_post_reply(user_input, client, model, shared_context, soul)
     if data is None:
         return _failed_result(soul, "LLM call failed or returned invalid JSON")
 

@@ -15,9 +15,9 @@
 
 ### 当前实现状态（2026-05-25）
 
-当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `core/memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls` 与 `soul_memories` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`；`core/todo_service.py` 已作为可选 TodoTool 只从公开 post 独立抽取待办并写入 `todos.source_post`；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装与 LLM 回复，不触发待办抽取；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表；`core/profile_service.py` 已支持深反思画像 patch，normal 章节自动落盘，high 章节使用更高阈值自动落盘。
+当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；`core/workspace_service.py` 负责初始化 workspace、`user.md` 与默认 SOUL；`core/memory.py` 已降级为临时兼容 facade，新代码改为依赖 `core/profile_service.py`、`core/record_service.py`、`core/todo_service.py` 等明确 service。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/router.py` 已降级为 LLM facade，实际 prompt 与 JSON 解析按能力拆到 `core/llm/reply_router.py`、`core/llm/todo_router.py`、`core/llm/reflection_router.py`；`core/vectorstore.py` 已成为 API 友好的向量 provider，初始化失败抛异常，由 CLI 或未来 API 层决定如何处理。`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`；`core/todo_service.py` 已作为可选 TodoTool 只从公开 post 独立抽取待办并写入 `todos.source_post`；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装与 LLM 回复，不触发待办抽取；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表；`core/profile_service.py` 已支持深反思画像 patch，normal 章节自动落盘，high 章节使用更高阈值自动落盘。
 
-尚未完成：私聊摘要沉淀、导出和 Web/API 层。
+尚未完成：导出、Web/API 层，以及发帖后的后台异步处理队列。
 
 ---
 
@@ -123,7 +123,7 @@ workspace/
 | 数据 | 存储位置 | 进 system prompt | 由谁维护 |
 | --- | --- | --- | --- |
 | SOUL 人格正文 | `souls/<name>.md` | ✓ 每个启用的 SOUL 各注入一次 | 用户编辑 / 默认库分发 |
-| SOUL 相处记忆 | `soul_memories/<name>.md` | ✓ 仅该 SOUL 被调用时注入 | SoulMemoryService + 用户可编辑；由该 SOUL 的评论、私聊摘要和用户反馈更新 |
+| SOUL 相处记忆 | `soul_memories/<name>.md` | ✓ 仅该 SOUL 被调用时注入 | SoulMemoryService + 用户可编辑；由该 SOUL 的评论线程、私聊互动和用户反馈更新 |
 | SOUL 启用与排序状态 | `state.db` souls 表 | ✗ | 用户在前端启用/禁用 |
 | 主 SOUL（仅 Agent 项目使用） | `state.db.meta.main_soul` | ✓ 由 Agent 决定何时使用 | 用户/Agent 设置 |
 | 用户档案（基本信息 + 成长画像） | `user.md`（章节带 sensitivity 元数据） | ✓ 整体 | 用户与反思器共同维护：normal 章节直接落盘；high 章节由更高阈值约束后直接落盘（详见 §5） |
@@ -318,7 +318,7 @@ CREATE TABLE IF NOT EXISTS relations_log (
 CREATE TABLE IF NOT EXISTS reflections (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ts          TEXT NOT NULL,
-    type        TEXT NOT NULL,               -- per_post / daily / weekly / monthly / event / soul_chat_digest
+    type        TEXT NOT NULL,               -- global_deep / soul_deep / per_post / daily / weekly / monthly / event
     scope_start TEXT,                        -- 反思覆盖的起始时间（per_post 留空）
     scope_end   TEXT,
     content     TEXT NOT NULL,               -- 反思正文（Markdown）
@@ -1000,14 +1000,14 @@ def rerank(post_ids: list[str], now_ts: float) -> list[tuple[str, float]]:
 | --- | --- | --- | --- | --- |
 | 轻反思 | 每条 post 写入后 | 当前 post + 最近 5 条 post + user.md「关键身份/关注的核心人际关系」两节作为已知实体词典 | entities / post_entities / emotions / events / posts.importance / relations 增量 | 每帖 |
 | 全局深反思 | 可配置触发条件 + 用户手动触发 | 触发范围内所有 post 的轻反思聚合（不读 raw posts 原文） + 当前 user.md | reflection 文档 + user.md 条目级 patch（按章节 sensitivity 选择阈值后直落） + relations 衰减/归一化 | 可配置 |
-| SOUL 记忆反思 | 每个 SOUL 的私聊/评论达到阈值 + 用户手动触发 | 该 SOUL 的最近私聊摘要 + 该 SOUL 的历史评论 + 当前 soul_memories/<name>.md + 必要的 user.md 硬事实 | soul_memories/<name>.md 条目级 patch + soul_memory_revisions | 按 SOUL 独立触发 |
+| SOUL 记忆反思 | 全局深反思触发时，同步检查每个有新增互动的 SOUL | 该 SOUL 的原始私聊消息 + 评论线程消息 + 首条公开评论 + 当前 soul_memories/<name>.md | soul_memories/<name>.md 条目级 patch + soul_memory_revisions | 按 SOUL 独立触发 |
 
 私聊与反思器的关系：
 
 - **轻反思不读私聊**。每次私聊消息发送时不触发全局轻反思，避免噪声进派生表。
 - **全局深反思不读私聊**。全局 `user.md` 主要由 post 证据更新，避免私聊里的玩笑、附和或情绪化表达污染共享画像。
-- **SOUL 记忆反思读私聊摘要而非原文**。每个 SOUL 独立把自己的私聊压缩成 ≤ 500 字摘要，再更新对应 `soul_memories/<name>.md`。原始私聊不进 FTS5 / ChromaDB，也不被其他 SOUL 读取。
-- **私聊摘要写到 reflections 表**（type='soul_chat_digest'，metadata 带 `soul_name`），便于追溯哪份摘要影响了哪份 SOUL 记忆。
+- **SOUL 记忆反思直接读该 SOUL 的原始互动**。每个 SOUL 只读取自己的私聊消息、评论线程消息和首条公开评论，再更新对应 `soul_memories/<name>.md`。原始私聊不进 FTS5 / ChromaDB，也不被其他 SOUL 读取。
+- **SOUL 深反思写到 reflections 表**（type='soul_deep'，metadata 带 `soul_name`），便于追溯哪次独立反思影响了哪份 SOUL 记忆。
 
 ### 8.2 实现思路（参考 Hermes background_review）
 
@@ -1229,8 +1229,9 @@ CREATE TABLE IF NOT EXISTS relations_log (
 - soul_name: 当前 SOUL 名称
 - soul_style: souls/<name>.md 的人格摘要
 - current_soul_memory: soul_memories/<name>.md
-- recent_private_chat_summary: 该 SOUL 最近私聊摘要
-- recent_public_comments: 该 SOUL 对用户 posts 的最近评论
+- recent_private_chat_messages: 该 SOUL 最近私聊原始消息
+- recent_comment_thread_messages: 该 SOUL 评论线程原始消息
+- recent_public_comments: 该 SOUL 对用户 posts 的首条公开评论
 - user_hard_facts: user.md 中的基本信息/关键身份，用于避免误认用户
 
 ## 写入原则
@@ -1317,7 +1318,7 @@ my-tracelog-backup/
 - [x] `chat_threads` / `chat_messages` 表 + `ChatService`：与单个 SOUL 私聊、按 thread 加载历史
 - [x] CLI 私聊命令：`/chat <soul>` 进入线程，`/chat list` 看线程列表
 - [x] 私聊检索：用 thread 最近若干轮做 query 对 posts 走 RRF + 拉取该 SOUL 历史评论
-- [ ] 私聊摘要进入对应 `soul_memories/<name>.md`，不进入全局 `user.md`
+- [x] SOUL 深反思读取对应 SOUL 的私聊/评论原始互动，写入对应 `soul_memories/<name>.md`，不进入全局 `user.md`
 - [x] 私聊不触发 TodoTool；待办工具作为可选工具只处理公开 post
 - [x] `ProfileService.apply_patch`：解析 sensitivity 阈值 → 直落或丢弃；写 `user_md_revisions`
 - [x] 轻反思最简版（同步实现也可以，第一期不强求异步）：每帖抽取 entities + emotions + events + importance
@@ -1357,7 +1358,7 @@ my-tracelog-backup/
 - [ ] 多 SOUL 评论流式渲染：评论按返回顺序 / sort_order 渐次出现
 - [ ] 私聊页增强：左栏线程列表（按 SOUL 分组，未读数与最近一条预览）+ 引用 post 卡片
 - [ ] 私聊新建线程的 UX：在 SOUL 管理页 / 评论卡片右上角"私聊"入口直达
-- [ ] SOUL 记忆反思：周期内私聊摘要 → reflections 表（type='soul_chat_digest'）→ 进对应 `soul_memories/<name>.md`
+- [ ] SOUL 记忆反思前端化：展示/手动触发对应 SOUL 的深反思结果，默认仍只展示当前 `soul_memories/<name>.md`
 - [ ] 异步轻反思 + 失败重试队列
 - [ ] 三因子重排上线
 - [ ] 情绪曲线、实体提及频次、关系图可视化
@@ -1416,7 +1417,7 @@ my-tracelog-backup/
 | ChromaDB 与 SQLite 不一致 | 检索结果偏 | 启动时校验 chroma 计数 vs posts 计数，差异时重建 |
 | 用户改 souls/*.md 后状态混乱 | 启用集合与文件不一致 | 启动时扫描 `souls/` 与 `souls` 表对账，缺文件的 SOUL 自动 `enabled=0` |
 | 多 SOUL 全启用导致延迟与成本上升 | 单帖触发 N 倍 token | 第一期内置 SOUL 控制在 2—3 个；并发执行；前端流式渲染先到先显示；`enabled` 默认值由用户自行调整 |
-| SOUL 记忆被私聊噪声带偏 | 某个 SOUL 对用户的理解变得片面 | 私聊摘要 prompt 强调"短期情绪 vs 稳定偏好"；SOUL 记忆写入保留内部留痕；全局 user.md 不读私聊摘要 |
+| SOUL 记忆被私聊噪声带偏 | 某个 SOUL 对用户的理解变得片面 | SOUL 深反思 prompt 强调"短期情绪 vs 稳定偏好"；SOUL 记忆写入保留内部留痕；全局 user.md 不读私聊/评论线程 |
 | 用户与 AI 对同一条目同时编辑 | 后写覆盖前写 | 内部留痕保留写入快照；前端以当前画像为准，用户可直接再次编辑 |
 | post 待办重复 | 同一 deadline 被记两次 | TodoTool 只从公开 post 抽取；合并键统一为 (task, date, start_time)，前端展示时显示 `source_post` |
 

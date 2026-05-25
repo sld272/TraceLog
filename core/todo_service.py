@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from core import db, memory, router, tool_config_service
+from core import db, tool_config_service
+from core.llm import todo_router
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -23,6 +24,23 @@ class TodoToolResult:
     error: str | None = None
 
 
+def load_todos() -> list[dict]:
+    """List all todos ordered for display and prompt context."""
+    rows = db.query_all(
+        """
+        SELECT id, task, date, start_time, end_time, status
+        FROM todos
+        ORDER BY COALESCE(date, '9999-99-99'), created_at, id
+        """
+    )
+    return [_todo_row_to_dict(row) for row in rows]
+
+
+def list_active_todos() -> list[dict]:
+    """List unfinished todos."""
+    return [todo for todo in load_todos() if todo.get("status") != "已完成"]
+
+
 def run_for_post(post_id: str, client: "OpenAI", model: str) -> TodoToolResult:
     """Run TodoTool for one public post when the todo tool is enabled."""
     if not tool_config_service.is_tool_enabled("todo"):
@@ -32,7 +50,7 @@ def run_for_post(post_id: str, client: "OpenAI", model: str) -> TodoToolResult:
     if post is None:
         raise ValueError(f"post 不存在：{post_id}")
 
-    data = router.call_todo_tool(
+    data = todo_router.call_todo_tool(
         client=client,
         model=model,
         post=_format_post_for_tool(post),
@@ -200,7 +218,7 @@ def _format_post_for_tool(row) -> str:
 
 
 def _format_active_todos() -> str:
-    pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
+    pending = list_active_todos()
     if not pending:
         return "（暂无）"
     lines = []
@@ -239,7 +257,7 @@ def _merge_upserts(items: list) -> list[dict]:
 
 
 def _merge_deletes(items: list) -> list[dict]:
-    existing_ids = {todo["id"] for todo in memory.load_todos()}
+    existing_ids = {todo["id"] for todo in load_todos()}
     deletes: list[dict] = []
     seen_ids: set[str] = set()
     for item in items:
@@ -277,3 +295,14 @@ def _next_todo_id() -> str:
     today = datetime.now().astimezone().strftime("%Y%m%d")
     short_uuid = uuid.uuid4().hex[:6]
     return f"{today}-{short_uuid}"
+
+
+def _todo_row_to_dict(row) -> dict:
+    return {
+        "id": row["id"],
+        "task": row["task"],
+        "date": row["date"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+        "status": row["status"],
+    }

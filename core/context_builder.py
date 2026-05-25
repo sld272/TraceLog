@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, memory, tool_config_service
+from core import db, profile_service, record_service, todo_service, tool_config_service
 from core.soul_service import SoulContext, list_enabled_souls
 
 CONTEXT_POST_COUNT = 3
@@ -24,11 +24,11 @@ def build_context(relevant_post_ids: list[str] | None = None) -> BuiltContext:
     recent_ids = _recent_post_ids()
     sections: list[str] = []
 
-    profile = memory.read_profile().strip()
-    if profile and profile != memory.DEFAULT_USER_MD.strip():
+    profile = profile_service.read_profile().strip()
+    if profile and profile != profile_service.DEFAULT_USER_MD.strip():
         sections.append(profile)
 
-    recent_posts = memory.read_recent_posts()
+    recent_posts = record_service.read_recent_posts()
     if recent_posts:
         sections.append(f"# 近期帖子\n\n{recent_posts}")
 
@@ -40,7 +40,7 @@ def build_context(relevant_post_ids: list[str] | None = None) -> BuiltContext:
             sections.append(f"# 相关帖子\n\n{relevant_posts}")
 
     if tool_config_service.is_tool_enabled("todo"):
-        pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
+        pending = todo_service.list_active_todos()
         if pending:
             lines = [_format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
@@ -87,7 +87,7 @@ def _read_posts_by_ids(post_ids: list[str]) -> tuple[str, list[str]]:
         )
         if row is not None:
             found_ids.append(post_id)
-            parts.append(memory.format_post(row).strip())
+            parts.append(record_service.format_post(row).strip())
     return "\n\n---\n\n".join(parts), found_ids
 
 

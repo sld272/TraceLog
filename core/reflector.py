@@ -8,11 +8,11 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from core import db
-from core import memory
 from core import profile_service
-from core import router
+from core.llm import reflection_router
 from core import soul_memory_service
 from core import soul_service
+from core import todo_service
 from core import tool_config_service
 
 if TYPE_CHECKING:
@@ -66,12 +66,12 @@ def trigger_light_reflection(
     if post is None:
         raise ValueError(f"post 不存在：{post_id}")
 
-    data = router.call_light_reflection(
+    data = reflection_router.call_light_reflection(
         client=client,
         model=model,
         post=_format_posts([post]),
         recent_posts=_format_posts(_load_recent_posts_before(post_id, limit=5)),
-        profile=memory.read_profile(),
+        profile=profile_service.read_profile(),
     )
     if data is None:
         raise ValueError("轻反思没有返回有效 JSON")
@@ -141,10 +141,10 @@ def trigger_global_deep_reflection(
     if not posts:
         return None
 
-    profile = memory.read_profile()
-    todos = memory.load_todos() if tool_config_service.is_tool_enabled("todo") else []
+    profile = profile_service.read_profile()
+    todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     related_post_ids = [row["id"] for row in posts]
-    reflection_result = router.call_global_deep_reflection(
+    reflection_result = reflection_router.call_global_deep_reflection(
         client=client,
         model=model,
         profile=profile,
@@ -189,7 +189,7 @@ def trigger_soul_deep_reflections(
         if not interactions:
             continue
         formatted = _format_soul_interactions(interactions)
-        reflection_result = router.call_soul_deep_reflection(
+        reflection_result = reflection_router.call_soul_deep_reflection(
             client=client,
             model=model,
             soul=soul,

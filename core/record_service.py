@@ -7,6 +7,8 @@ from datetime import datetime
 
 from core import db
 
+CONTEXT_POST_COUNT = 3
+
 
 def save_post(content: str) -> str:
     """Save a post to SQLite, then try to index it in ChromaDB."""
@@ -32,6 +34,33 @@ def save_post(content: str) -> str:
         _mark_pending_embedding(post_id, body, str(exc))
 
     return post_id
+
+
+def format_post(row) -> str:
+    """Format one SQLite post row as markdown with frontmatter."""
+    frontmatter = (
+        "---\n"
+        f"id: \"{row['id']}\"\n"
+        f"date: \"{row['ts']}\"\n"
+        "type: \"post\"\n"
+        "---\n\n"
+    )
+    return frontmatter + f"\n{row['content']}\n"
+
+
+def read_recent_posts(count: int = CONTEXT_POST_COUNT) -> str:
+    """Read recent posts from SQLite and join them in chronological order."""
+    rows = db.query_all(
+        """
+        SELECT id, ts, content
+        FROM posts
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (count,),
+    )
+    parts = [format_post(row).strip() for row in reversed(rows)]
+    return "\n\n---\n\n".join(parts)
 
 
 def retry_pending_embeddings(limit: int | None = None) -> int:
