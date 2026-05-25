@@ -54,9 +54,12 @@ class ReflectorTest(unittest.TestCase):
             "---\n"
             "schema: tracelog/user.md@v1\n"
             "sensitivity:\n"
+            "  基本信息: high\n"
             "  身份与现状: normal\n"
             "---\n\n"
             "# 用户档案\n\n"
+            "## 基本信息\n"
+            "- （暂无） <!-- id: bf-empty -->\n\n"
             "## 身份与现状\n"
             "- 测试用户 <!-- id: status-user -->\n",
             encoding="utf-8",
@@ -119,6 +122,22 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual({"applied": 1, "pending": 0, "skipped": 0}, result.patch_summary)
         self.assertIn("正在准备比赛 <!-- id: status-", memory.read_profile())
         self.assertEqual({"applied": 1, "pending": 0, "skipped": 0}, metadata["profile_patch_summary"])
+
+    def test_self_intro_name_fallback_goes_to_pending_when_model_returns_no_patch(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我叫喜多郁代，是高一生。")
+        payload = {
+            "reflection_md": "## 深反思\n\n你做了一次清晰的自我介绍。",
+            "patches": [],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
+        pending = db.query_one("SELECT section, patch FROM pending_user_md_changes ORDER BY id DESC LIMIT 1")
+
+        self.assertEqual({"applied": 0, "pending": 1, "skipped": 0}, result.patch_summary)
+        self.assertIsNotNone(pending)
+        self.assertEqual("基本信息", pending["section"])
+        self.assertIn("姓名：喜多郁代", pending["patch"])
 
     def test_trigger_light_reflection_writes_derived_memory(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天和小李完成了比赛计划，但有点焦虑。")

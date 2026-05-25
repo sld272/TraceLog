@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -140,7 +141,8 @@ def trigger_global_deep_reflection(
         raise ValueError("深反思内容无效或过短")
 
     content = reflection_result["reflection_md"].strip()
-    patch_summary = _apply_profile_patches(reflection_result.get("patches", []))
+    patches = _with_self_intro_fallback_patches(reflection_result.get("patches", []), posts)
+    patch_summary = _apply_profile_patches(patches)
     reflection_id = _insert_reflection(
         content=content,
         scope_start=posts[0]["ts"],
@@ -562,3 +564,41 @@ def _apply_profile_patches(patches: list) -> dict:
         else:
             summary["skipped"] += 1
     return summary
+
+
+def _with_self_intro_fallback_patches(patches: list, posts: list) -> list:
+    normalized = [patch for patch in patches if isinstance(patch, dict)]
+    existing_values = {
+        op.get("value")
+        for patch in normalized
+        if isinstance(patch.get("ops"), list)
+        for op in patch["ops"]
+        if isinstance(op, dict) and isinstance(op.get("value"), str)
+    }
+    for post in posts:
+        name = _extract_self_intro_name(post["content"])
+        if name is None:
+            continue
+        value = f"姓名：{name}"
+        if value in existing_values:
+            continue
+        normalized.append(
+            {
+                "section": "基本信息",
+                "ops": [{"op": "add", "value": value}],
+                "evidence": [post["id"]],
+                "confidence": 0.95,
+            }
+        )
+        existing_values.add(value)
+    return normalized
+
+
+def _extract_self_intro_name(content: str) -> str | None:
+    match = re.search(r"(?:我叫|我的名字(?:是|叫))\s*([^,，。；;！!\s]+)", content)
+    if not match:
+        return None
+    name = match.group(1).strip()
+    if len(name) > 20:
+        return None
+    return name or None

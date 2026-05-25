@@ -565,7 +565,8 @@ GLOBAL_DEEP_REFLECTION_PROMPT = """\
 - 只在有明确证据时输出 patch；没有可靠画像更新时输出空数组 []。
 - patch 只能修改输入 user.md 已存在的 section。
 - add 不带 anchor；update/remove 必须使用 user.md 里原样存在的 anchor。
-- high sensitivity 章节必须极度保守，只在用户明确陈述事实时输出。
+- high sensitivity 章节必须极度保守，但“极度保守”表示交给后端进入待审核区，不表示不输出。
+- 当用户明确自我介绍时，必须输出对应 patch。例如“我叫 X”输出到“基本信息”，“我是高一生/大学生/主唱”等稳定身份输出到“关键身份”或“身份与现状”。
 - evidence 必须是本次输入中真实存在的 post id。
 - confidence 使用 0 到 1。
 
