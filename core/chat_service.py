@@ -5,9 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import memory
-import router
-from core import db, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import db, memory, retrieval, router, soul_memory_service, soul_service, tool_config_service
 from core.soul_service import SoulContext
 
 if TYPE_CHECKING:

@@ -10,6 +10,7 @@ from core import chat_service
 from core import comment_service
 from core.cli_input import read_cli_input
 from core import context_builder
+from core import memory
 from core import reflector
 from core import record_service
 from core import reply_service
@@ -17,8 +18,7 @@ from core import retrieval
 from core import soul_service
 from core import todo_service
 from core import tool_config_service
-import memory
-import vectorstore
+from core import vectorstore
 
 CONFIG_FILE = "config.json"
 

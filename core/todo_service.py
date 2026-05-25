@@ -7,9 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-import memory
-import router
-from core import db, tool_config_service
+from core import db, memory, router, tool_config_service
 
 if TYPE_CHECKING:
     from openai import OpenAI

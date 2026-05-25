@@ -9,8 +9,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-import memory
-from core import db
+from core import db, memory
 
 ANCHOR_RE = re.compile(r"<!--\s*id:\s*([A-Za-z0-9_-]+)\s*-->")
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")

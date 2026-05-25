@@ -6,8 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import memory
-from core import context_builder, db, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import context_builder, db, memory, soul_memory_service, soul_service, todo_service, tool_config_service
 
 
 class FakeClient:

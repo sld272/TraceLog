@@ -15,7 +15,7 @@
 
 ### 当前实现状态（2026-05-25）
 
-当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls` 与 `soul_memories` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`；`core/todo_service.py` 已作为可选 TodoTool 只从公开 post 独立抽取待办并写入 `todos.source_post`；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装与 LLM 回复，不触发待办抽取；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表；`core/profile_service.py` 已支持深反思画像 patch，normal 章节自动落盘，high 章节使用更高阈值自动落盘。
+当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `core/memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls` 与 `soul_memories` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`；`core/todo_service.py` 已作为可选 TodoTool 只从公开 post 独立抽取待办并写入 `todos.source_post`；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装与 LLM 回复，不触发待办抽取；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表；`core/profile_service.py` 已支持深反思画像 patch，normal 章节自动落盘，high 章节使用更高阈值自动落盘。
 
 尚未完成：私聊摘要沉淀、导出和 Web/API 层。
 
@@ -1323,7 +1323,7 @@ my-tracelog-backup/
 - [x] 轻反思最简版（同步实现也可以，第一期不强求异步）：每帖抽取 entities + emotions + events + importance
 - [x] 深反思最简版：CLI 退出时触发，生成 reflection 并写入 `reflections`
 - [x] 深反思增强：CLI 退出触发，生成 reflection + user.md patch，normal 自动落盘，high 使用更高阈值自动落盘
-- [ ] 将`memory.py, router.py, vectorstore.py全部完整迁移进core`
+- [x] 将核心记忆、LLM 路由与向量索引模块完整迁移进 `core/`
 - [ ] `tracelog export --format=markdown` 命令
 - [ ] FastAPI 后端接口暴露
 - [ ] Web 前端最小可用版本：记录、时间线、AI 回复、待办、画像、搜索

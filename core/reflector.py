@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-import memory
-import router
 from core import db
+from core import memory
 from core import profile_service
+from core import router
 from core import soul_memory_service
 from core import soul_service
 from core import tool_config_service

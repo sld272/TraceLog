@@ -3,17 +3,14 @@ TraceLog 拾迹 — Vector Store Layer
 ChromaDB + OpenAIEmbeddingFunction 封装
 """
 
-import os
 import sys
 from typing import cast
 
-import chromadb
-from chromadb.api.types import Embeddable, EmbeddingFunction
-from chromadb.utils.embedding_functions.openai_embedding_function import OpenAIEmbeddingFunction
+from core import db
 
 _collection = None
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DB_DIR = os.path.join(BASE_DIR, "workspace", "chroma_db")
+BASE_DIR = str(db.BASE_DIR)
+CHROMA_DB_DIR = str(db.WORKSPACE_DIR / "chroma_db")
 
 
 def is_initialized() -> bool:
@@ -30,6 +27,10 @@ def init_vectorstore(
     """初始化 ChromaDB 向量存储。失败时报错退出，不允许静默降级。"""
     global _collection
     try:
+        import chromadb
+        from chromadb.api.types import Embeddable, EmbeddingFunction
+        from chromadb.utils.embedding_functions.openai_embedding_function import OpenAIEmbeddingFunction
+
         actual_api_key = embedding_api_key or api_key
         actual_base_url = embedding_base_url or base_url
 

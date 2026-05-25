@@ -103,6 +103,5 @@ def _clear_pending_embedding(post_id: str) -> None:
 
 
 def _vectorstore():
-    import vectorstore
-
+    from core import vectorstore
     return vectorstore

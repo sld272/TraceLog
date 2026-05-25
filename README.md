@@ -100,11 +100,11 @@ workspace/
 ## 项目结构
 
 - `main.py`：CLI 入口
-- `memory.py`：当前存储与上下文组装层
-- `router.py`：LLM 回复与深反思 prompt
+- `core/memory.py`：当前存储与上下文组装层
+- `core/router.py`：LLM 回复与深反思 prompt
 - `core/reflector.py`：轻反思、深反思触发与落库服务
 - `core/profile_service.py`：`user.md` patch、阈值校验与内部写入留痕
-- `vectorstore.py`：ChromaDB 向量索引
+- `core/vectorstore.py`：ChromaDB 向量索引
 - `schema.sql`：SQLite 初始化 schema
 - `core/db.py`：SQLite 连接、初始化与查询 helper
 - `docs/architecture.md`：项目架构设计

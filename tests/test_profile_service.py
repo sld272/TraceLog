@@ -4,8 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import memory
-from core import db, profile_service
+from core import db, memory, profile_service
 
 
 USER_MD = """---

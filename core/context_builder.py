@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import memory
-from core import db, tool_config_service
+from core import db, memory, tool_config_service
 from core.soul_service import SoulContext, list_enabled_souls
 
 CONTEXT_POST_COUNT = 3

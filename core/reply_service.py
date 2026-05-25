@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from openai import OpenAI
 
-import router
 from core import db
+from core import router
 from core.context_builder import BuiltContext
 from core.soul_service import SoulContext
 

@@ -7,8 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import memory
-from core import chat_service, db, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import chat_service, db, memory, retrieval, soul_memory_service, soul_service, tool_config_service
 
 
 class FakeClient:

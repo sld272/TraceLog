@@ -10,12 +10,12 @@ import os
 import uuid
 from datetime import datetime
 
-from core import record_service
 from core import db
+from core import record_service
 from core import soul_service
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WORKSPACE_DIR = os.path.join(BASE_DIR, "workspace")
+BASE_DIR = str(db.BASE_DIR)
+WORKSPACE_DIR = str(db.WORKSPACE_DIR)
 USER_MD_PATH = os.path.join(WORKSPACE_DIR, "user.md")
 CONTEXT_POST_COUNT = 3
 
