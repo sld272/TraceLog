@@ -26,13 +26,10 @@ SECTION_PREFIXES = {
     "长期目标与当前痛点": "gl",
 }
 
-THRESHOLDS = {
+NORMAL_THRESHOLDS = {
     ("normal", "add"): (1, 0.60),
     ("normal", "update"): (1, 0.60),
     ("normal", "remove"): (1, 0.85),
-    ("high", "add"): (2, 0.80),
-    ("high", "update"): (2, 0.80),
-    ("high", "remove"): (2, 0.90),
 }
 
 
@@ -163,10 +160,9 @@ def _validate_patch_gate(patch: dict) -> str | None:
     doc = _parse_user_md(text)
     sensitivity = doc.sensitivity.get(patch["section"], "normal")
     for op in patch["ops"]:
-        min_evidence, min_confidence = THRESHOLDS.get(
-            (sensitivity, op["op"]),
-            THRESHOLDS[("normal", op["op"])],
-        )
+        if sensitivity == "high":
+            continue
+        min_evidence, min_confidence = NORMAL_THRESHOLDS[("normal", op["op"])]
         if len(patch["evidence"]) < min_evidence:
             return "insufficient_evidence"
         if patch["confidence"] < min_confidence:

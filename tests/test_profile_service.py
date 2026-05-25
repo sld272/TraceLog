@@ -76,14 +76,14 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertIn("熟悉 ChromaDB", row["patch"])
         self.assertEqual("reflector", row["source"])
 
-    def test_high_add_goes_to_pending_without_changing_user_md(self) -> None:
+    def test_high_add_with_one_evidence_goes_to_pending_without_changing_user_md(self) -> None:
         before = memory.read_profile()
 
         result = profile_service.apply_patch(
             {
                 "section": "基本信息",
                 "ops": [{"op": "add", "value": "学校：南京大学"}],
-                "evidence": ["20260525-001", "20260525-002"],
+                "evidence": ["20260525-001"],
                 "confidence": 0.85,
             }
         )
@@ -95,6 +95,22 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertEqual(1, len(pending))
         self.assertEqual("基本信息", pending[0]["section"])
         self.assertEqual("学校：南京大学", pending[0]["patch"]["ops"][0]["value"])
+
+    def test_high_low_confidence_still_goes_to_pending(self) -> None:
+        result = profile_service.apply_patch(
+            {
+                "section": "基本信息",
+                "ops": [{"op": "add", "value": "姓名：张三"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.3,
+            }
+        )
+
+        pending = profile_service.list_pending_changes()
+
+        self.assertEqual("pending", result["status"])
+        self.assertEqual(1, len(pending))
+        self.assertEqual(0.3, pending[0]["confidence"])
 
     def test_invalid_evidence_is_skipped(self) -> None:
         result = profile_service.apply_patch(

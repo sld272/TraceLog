@@ -641,18 +641,18 @@ sensitivity:
 | high | 进 `pending_user_md_changes`，不直接落盘；前端审核条展示 diff，用户点"采纳"才合并；默认 7 天未处理自动丢弃 | 直接落盘；写入需用户在前端经过二次确认（避免误改基本事实） |
 | normal | 直接落盘，记录 revision；前端审核条展示"已被反思器更新"，可一键回滚 | 直接落盘 |
 
-阈值默认值（可在 `meta` 表以 key=`profile.thresholds.<level>` override）：
+normal 章节自动落盘阈值：
 
 | 章节 sensitivity | op 类型 | 最少 evidence 条数 | 最少 confidence | 不达阈值的处理 |
 | --- | --- | --- | --- | --- |
 | normal | add / update | 1 | 0.60 | 丢弃，记 reflect_logs |
 | normal | remove | 1 | 0.85 | 丢弃，记 reflect_logs |
-| high | add / update | 2 | 0.80 | 不进 pending，丢弃 + reflect_logs |
-| high | remove | 2 | 0.90 | 不进 pending，丢弃 + reflect_logs |
+
+high 章节的规则不同：**不自动落盘，也不因 evidence 数量或 confidence 被静默丢弃**。只要 evidence 是真实 post，section 存在，update/remove 的 anchor 合法，就进入 `pending_user_md_changes` 等用户审核；confidence 只作为审核时的风险提示。
 
 补充规则：
 
-- 删除条目（remove）一律比 add/update 严格：normal 章节虽然直落但 confidence 阈值升到 0.85；high 章节升到 0.90，且必须走 pending。
+- 删除条目（remove）一律比 add/update 严格：normal 章节虽然直落但 confidence 阈值升到 0.85；high 章节必须走 pending。
 - 用户前端的写入不受上述阈值约束；用户改 high 章节时只多一道二次确认。
 - evidence 必须是真实存在的 post_id（深反思跑前先 SELECT 校验），伪造的 evidence 整条 patch 拒绝。
 
