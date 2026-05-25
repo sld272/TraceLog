@@ -43,7 +43,7 @@ TraceLog 与 Claude Code、Cursor、OpenHands 等专业型 Agent 不在同一赛
 
 - **CLI 交互入口**：用户通过命令行输入日常记录，系统返回温暖、有洞察力的中文回应。
 - **本地 Markdown 记忆存储**：每条用户输入会保存为独立 Markdown 帖子，带有 YAML frontmatter。
-- **深反思沉淀**：退出 CLI 时会对新增公开记录触发一次全局深反思，并写入 `reflections` 表；后续再接 `user.md` patch 审核。
+- **反思沉淀**：每条公开记录会抽取实体、情绪、事件和重要性；退出 CLI 时会结合这些轻反思摘要触发一次全局深反思，并写入 `reflections` 表；后续再接 `user.md` patch 审核。
 - **待办提取与管理**：LLM 从用户明确表达的任务中提取待办，写入 `todos.json`。
 - **语义检索记忆**：使用 ChromaDB 和 OpenAI embedding，对历史帖子建立向量索引，并在新输入时检索相关历史。
 - **Markdown + JSON 双引擎数据结构**：Markdown 负责人类可读与长期保存，JSON 负责结构化任务管理。

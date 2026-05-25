@@ -1,6 +1,7 @@
 ﻿"""
 TraceLog 拾迹 — LLM Router
 Post Reply: 共情回复 + 待办提取
+Light Reflection: 抽取实体、情绪、事件与重要性
 Deep Reflection: 生成全局深反思
 """
 
@@ -166,6 +167,17 @@ def _chat_reply_task_prompt() -> str:
     return CHAT_REPLY_TASK_PROMPT.replace("{current_datetime}", _now_str())
 
 
+def _clean_json_content(content: str | None) -> str:
+    text = (content or "").strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+
 def _call_post_reply_json(
     user_input: str,
     client: "OpenAI",
@@ -227,14 +239,7 @@ def _chat_reply_user_message(user_message: str, context: str) -> str:
 
 
 def _parse_post_reply_content(content: str | None) -> dict | None:
-    content = (content or "").strip()
-    if content.startswith("```json"):
-        content = content[7:]
-    if content.startswith("```"):
-        content = content[3:]
-    if content.endswith("```"):
-        content = content[:-3]
-    content = content.strip()
+    content = _clean_json_content(content)
 
     try:
         data = json.loads(content)
@@ -290,12 +295,244 @@ def _parse_post_reply_content(content: str | None) -> dict | None:
     return data
 
 
-# 引擎 2：Global Deep Reflection
+# 引擎 2：Light Reflection
+
+LIGHT_REFLECTION_PROMPT = """\
+你是 TraceLog 拾迹的轻反思引擎。你的任务是读取一条公开 post，并抽取可被长期查询、聚合和复盘使用的结构化记忆。
+
+## 输入说明
+- 目标 post：本次唯一需要抽取的记录。
+- 近期 posts：只用于理解上下文，不要把近期 posts 中没有出现在目标 post 的新事实写入结果。
+- 用户档案：用于消歧已知人物、课程、项目和长期目标。
+
+## JSON 输出格式强制要求
+你必须且只能输出一个标准 JSON 对象，不要包含 Markdown 代码块或解释文字。
+
+{
+  "entities": [
+    {
+      "type": "person|course|project|place|org|event_topic",
+      "name": "规范名",
+      "aliases": ["本帖中实际出现的称呼"],
+      "role": "subject|object|mentioned"
+    }
+  ],
+  "emotions": [
+    {
+      "label": "焦虑|喜悦|疲惫|兴奋|平静|失落|愤怒|期待|羞愧|无感",
+      "intensity": 0.0
+    }
+  ],
+  "events": [
+    {
+      "ts": "事件发生时间 ISO8601；不明则用 post.ts",
+      "summary": "一句话事实描述，最多 30 字",
+      "category": "study|social|health|project|life"
+    }
+  ],
+  "relations": [
+    {
+      "a": "实体名，必须出现在 entities[].name 中",
+      "b": "实体名，必须出现在 entities[].name 中",
+      "rel_type": "friend|classmate|teammate|mentor|family|colleague",
+      "strength_delta": 0.0
+    }
+  ],
+  "importance": 0.0
+}
+
+## 严格规则
+1. 只抽取目标 post 直接表达或强证据支持的内容，禁止从近期 posts 脑补。
+2. 重要性 importance 按 0 到 1 打分：明确决策 +0.30，deadline/具体时间承诺 +0.25，重要人际 +0.20，强情绪 +0.15，转折事件 +0.20，普通日常基线 0.10，封顶 1.0。
+3. emotions 最多输出 3 个；没有明显情绪时输出 [{"label":"无感","intensity":0.1}]。
+4. events 最多输出 3 个；没有可总结事件时输出 []。
+5. relations 只有在目标 post 明确提供互动证据时才输出；strength_delta 限制在 -0.2 到 0.2。
+
+## 当前时间
+{current_datetime}
+"""
+
+
+def call_light_reflection(
+    client: "OpenAI",
+    model: str,
+    *,
+    post: str,
+    recent_posts: str,
+    profile: str,
+) -> dict | None:
+    """Extract structured memory from one post."""
+    user_content = (
+        f"## 用户档案\n\n{profile or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 近期 posts（上下文，不是抽取目标）\n\n{recent_posts or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 目标 post\n\n{post}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            timeout=30,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": LIGHT_REFLECTION_PROMPT.replace("{current_datetime}", _now_str())},
+                {"role": "user", "content": user_content},
+            ],
+        )
+    except Exception as e:
+        print(f"[Router] 轻反思生成失败：{e}")
+        return None
+
+    return _parse_light_reflection_content(response.choices[0].message.content)
+
+
+def _parse_light_reflection_content(content: str | None) -> dict | None:
+    content = _clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"[Router] 轻反思 JSON 解析失败：{e}")
+        print(f"[Router] 原始输出片段：{content[:200]}")
+        return None
+
+    if not isinstance(data, dict):
+        print("[Router] 轻反思响应不是 JSON 对象")
+        return None
+
+    return {
+        "entities": _normalize_reflection_entities(data.get("entities")),
+        "emotions": _normalize_reflection_emotions(data.get("emotions")),
+        "events": _normalize_reflection_events(data.get("events")),
+        "relations": _normalize_reflection_relations(data.get("relations")),
+        "importance": _clamp_float(data.get("importance"), 0.5, 0.0, 1.0),
+    }
+
+
+def _normalize_reflection_entities(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    allowed_types = {"person", "course", "project", "place", "org", "event_topic"}
+    allowed_roles = {"subject", "object", "mentioned"}
+    entities = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        entity_type = item.get("type")
+        if entity_type not in allowed_types:
+            entity_type = "event_topic"
+        role = item.get("role")
+        if role not in allowed_roles:
+            role = "mentioned"
+        aliases = item.get("aliases")
+        if not isinstance(aliases, list):
+            aliases = []
+        normalized_aliases = [a.strip() for a in aliases if isinstance(a, str) and a.strip()]
+        key = (entity_type, name.strip(), role)
+        if key in seen:
+            continue
+        seen.add(key)
+        entities.append(
+            {
+                "type": entity_type,
+                "name": name.strip(),
+                "aliases": normalized_aliases,
+                "role": role,
+            }
+        )
+    return entities
+
+
+def _normalize_reflection_emotions(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    allowed = {"焦虑", "喜悦", "疲惫", "兴奋", "平静", "失落", "愤怒", "期待", "羞愧", "无感"}
+    emotions_by_label = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label")
+        if label not in allowed:
+            continue
+        intensity = _clamp_float(item.get("intensity"), 0.1, 0.0, 1.0)
+        emotions_by_label[label] = max(intensity, emotions_by_label.get(label, 0.0))
+    return [
+        {"label": label, "intensity": intensity}
+        for label, intensity in sorted(emotions_by_label.items())
+    ]
+
+
+def _normalize_reflection_events(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    allowed_categories = {"study", "social", "health", "project", "life"}
+    events = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        summary = item.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            continue
+        category = item.get("category")
+        if category not in allowed_categories:
+            category = "life"
+        ts = item.get("ts")
+        if not isinstance(ts, str) or not ts.strip():
+            ts = None
+        events.append(
+            {
+                "ts": ts,
+                "summary": summary.strip()[:80],
+                "category": category,
+            }
+        )
+    return events
+
+
+def _normalize_reflection_relations(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    allowed_types = {"friend", "classmate", "teammate", "mentor", "family", "colleague"}
+    relations = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        a = item.get("a")
+        b = item.get("b")
+        if not isinstance(a, str) or not a.strip() or not isinstance(b, str) or not b.strip():
+            continue
+        rel_type = item.get("rel_type")
+        if rel_type not in allowed_types:
+            rel_type = "friend"
+        relations.append(
+            {
+                "a": a.strip(),
+                "b": b.strip(),
+                "rel_type": rel_type,
+                "strength_delta": _clamp_float(item.get("strength_delta"), 0.0, -0.2, 0.2),
+            }
+        )
+    return relations
+
+
+def _clamp_float(value, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
+# 引擎 3：Global Deep Reflection
 
 GLOBAL_DEEP_REFLECTION_PROMPT = """\
 你是 TraceLog 拾迹的全局深反思引擎。
 
-你会读取用户档案、当前待办和本次触发范围内的帖子，生成一份适合用户回看和行动的深反思。
+你会读取用户档案、当前待办、本次触发范围内的帖子，以及轻反思已经抽取出的实体、情绪、事件和重要性摘要，生成一份适合用户回看和行动的深反思。
 
 ## 输出要求
 - 仅输出 Markdown 纯文本，不要输出代码块标记。
@@ -319,6 +556,7 @@ def call_global_deep_reflection(
     model: str,
     profile: str,
     posts: str,
+    light_summary: str,
     todos: str,
 ) -> str | None:
     """Generate one global deep reflection in Markdown."""
@@ -326,6 +564,8 @@ def call_global_deep_reflection(
         f"## 用户档案\n\n{profile or '（暂无）'}\n\n"
         "---\n\n"
         f"## 当前待办\n\n{todos or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 轻反思摘要\n\n{light_summary or '（暂无）'}\n\n"
         "---\n\n"
         f"## 本次触发范围内的帖子\n\n{posts or '（暂无）'}"
     )

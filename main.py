@@ -36,6 +36,19 @@ def _run_deep_reflection_on_exit(client: OpenAI, model: str) -> None:
     print("再见！\n")
 
 
+def _run_light_reflection_for_post(post_id: str, client: OpenAI, model: str) -> None:
+    light_result = reflector.run_light_reflection_safely(post_id, client, model)
+    if light_result is None:
+        print("[反思] 轻反思暂时失败，已加入待重试队列。\n")
+    else:
+        print(
+            "[反思] 轻反思已完成："
+            f"{len(light_result.entities)} 个实体，"
+            f"{len(light_result.emotions)} 个情绪，"
+            f"{len(light_result.events)} 个事件。\n"
+        )
+
+
 def _handle_chat_command(
     user_input: str,
     client: OpenAI,
@@ -302,6 +315,9 @@ def main():
         fixed_embeddings = record_service.retry_pending_embeddings()
         if fixed_embeddings:
             print(f"[向量存储] 已补齐 {fixed_embeddings} 条待索引帖子。")
+        fixed_reflections = reflector.retry_pending_light_reflections(client, model)
+        if fixed_reflections:
+            print(f"[反思] 已补跑 {fixed_reflections} 条轻反思。")
         todos = memory.load_todos()
     except KeyboardInterrupt:
         print("\n[启动] 初始化被中断，已尽量回滚数据库事务。请重新运行。")
@@ -342,6 +358,7 @@ def main():
         results = reply_service.fanout(post_id, user_input, client, model, built_context)
         if not results:
             print("[TraceLog] 当前没有启用 SOUL，未生成评论。\n")
+            _run_light_reflection_for_post(post_id, client, model)
             continue
 
         # 5. 打印多 SOUL 评论
@@ -350,6 +367,8 @@ def main():
                 print(f"[{result.soul_name}] {result.reply}\n")
             else:
                 print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
+
+        _run_light_reflection_for_post(post_id, client, model)
 
         if not any(result.ok for result in results):
             print("[TraceLog] 所有 SOUL 本次都回复失败，post 已保存，可稍后重试。\n")
