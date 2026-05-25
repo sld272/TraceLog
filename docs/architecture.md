@@ -27,48 +27,46 @@
 
 TraceLog 的记忆系统分为四层，每一层的职责、存储介质、加载时机都独立：
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  L1：人格与 SOUL 记忆层 (Persona & Soul Memory Layer)          │
-│  souls/*.md + soul_memories/*.md + state.db.souls 表           │
-│  → 定义 AI 用什么语气、以哪些"AI 好友"身份和用户互动            │
-│  → 每个 SOUL 有独立的相处记忆，只在该 SOUL 被调用时注入         │
-│  → 交互项目（社交媒体形态）：所有 enabled=1 的 SOUL 都会对每帖   │
-│    各自生成一条评论，不存在唯一的"主 SOUL"                     │
-│  → Agent 项目（第三期）：可在启用集合内指定一个主 SOUL 担当主    │
-│    回复 / 工具调用入口，其他 SOUL 仍可作为旁观评论者             │
-│  → 每个被调用的 SOUL 各自走一次 system prompt（人格 + 记忆独立）│
-└─────────────────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────────┐
-│  L2：身份与画像层 (User & Profile Layer)                       │
-│  user.md（用户档案：基本信息 + 成长画像，AI 与用户共同编辑）   │
-│  → 上半部分：用户主动填写的硬事实                                │
-│  → 下半部分：反思器维护的软画像                                 │
-│  → 每会话整体注入 system prompt                                │
-└─────────────────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────────┐
-│  L3：结构化记忆层 (Structured Memory)                          │
-│  state.db (SQLite)                                            │
-│    posts / posts_fts / posts_fts_trigram                      │
-│    entities / post_entities / emotions / events / relations   │
-│    reflections / todos / meta / souls / comments              │
-│    user_md_revisions / soul_memory_revisions / pending changes│
-│    chat_threads / chat_messages（私聊，独立通道）              │
-│  + chroma_db/ (向量索引；仅 posts，不索引私聊)                  │
-│  → 关键词查询走 FTS5 双表（unicode61 + trigram）               │
-│  → 语义查询走 ChromaDB                                         │
-│  → 混合查询走 RRF 融合                                         │
-│  → 通过工具调用按需查询，不进 system prompt                     │
-│  → 私聊只按线程顺序加载历史，不进上述检索池                     │
-└─────────────────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────────┐
-│  反思器 (Reflector) — 后台异步                                 │
-│  每条 post 写入后 spawn 轻量 LLM agent                         │
-│  轻反思：读最近内容 → 抽取实体/情绪/事件/关系 → 写派生表        │
-│  深反思：每周/每月聚合 → 生成 reflection + user.md 条目级 patch │
-│    （normal 章节直落，high 章节进 pending 等用户审核）          │
-└─────────────────────────────────────────────────────────────┘
-```
+**L1：人格与 SOUL 记忆层 (Persona & Soul Memory Layer)**
+
+存储：`souls/*.md` + `soul_memories/*.md` + `state.db.souls` 表。
+
+- 定义 AI 用什么语气、以哪些"AI 好友"身份和用户互动。
+- 每个 SOUL 有独立的相处记忆，只在该 SOUL 被调用时注入。
+- 交互项目（社交媒体形态）：所有 `enabled=1` 的 SOUL 都会对每帖各自生成一条评论，不存在唯一的"主 SOUL"。
+- Agent 项目（第三期）：可在启用集合内指定一个主 SOUL 担当主回复 / 工具调用入口，其他 SOUL 仍可作为旁观评论者。
+- 每个被调用的 SOUL 各自走一次 system prompt（人格 + 记忆独立）。
+
+**L2：身份与画像层 (User & Profile Layer)**
+
+存储：`user.md`（用户档案：基本信息 + 成长画像，AI 与用户共同编辑）。
+
+- 上半部分：用户主动填写的硬事实。
+- 下半部分：反思器维护的软画像。
+- 每会话整体注入 system prompt。
+
+**L3：结构化记忆层 (Structured Memory)**
+
+存储：`state.db` (SQLite) + `chroma_db/`（向量索引；仅 posts，不索引私聊）。
+
+- SQLite 表：`posts` / `posts_fts` / `posts_fts_trigram`。
+- SQLite 表：`entities` / `post_entities` / `emotions` / `events` / `relations`。
+- SQLite 表：`reflections` / `todos` / `meta` / `souls` / `comments`。
+- SQLite 表：`user_md_revisions` / `soul_memory_revisions` / `pending changes`。
+- SQLite 表：`chat_threads` / `chat_messages`（私聊，独立通道）。
+- 关键词查询走 FTS5 双表（unicode61 + trigram）。
+- 语义查询走 ChromaDB。
+- 混合查询走 RRF 融合。
+- 通过工具调用按需查询，不进 system prompt。
+- 私聊只按线程顺序加载历史，不进上述检索池。
+
+**反思器 (Reflector)**
+
+运行方式：后台异步，每条 post 写入后 spawn 轻量 LLM agent。
+
+- 轻反思：读最近内容 → 抽取实体/情绪/事件/关系 → 写派生表。
+- 深反思：每周/每月聚合 → 生成 reflection + `user.md` 条目级 patch。
+- `normal` 章节直落，`high` 章节进 pending 等用户审核。
 
 ### 1.2 设计原则
 
@@ -903,22 +901,13 @@ CREATE INDEX IF NOT EXISTS idx_pending_user_md_status ON pending_user_md_changes
 
 接到查询时，先决定走哪条路或两条都走：
 
-```
-用户/Agent 查询 query
-        │
-        ▼
-   ┌────────────────────┐
-   │  Query Router      │
-   └────────────────────┘
-        │
-        ├── 含具体名词、日期、人名 → FTS5 优先
-        │   触发条件：query 中含 entities 表里的名字 / 含 ISO 日期 / 长度 ≤ 6 字
-        │
-        ├── 抽象、情绪、状态描述 → ChromaDB 优先
-        │   触发条件：包含"感觉""觉得""为什么""最近""那种"等模糊词
-        │
-        └── 其他/默认 → 双轨 + RRF 融合
-```
+用户 / Agent 发起 `query` 后，`Query Router` 按以下规则选择检索路径：
+
+- 含具体名词、日期、人名：FTS5 优先。
+- FTS5 优先触发条件：`query` 中含 `entities` 表里的名字 / 含 ISO 日期 / 长度 ≤ 6 字。
+- 抽象、情绪、状态描述：ChromaDB 优先。
+- ChromaDB 优先触发条件：包含"感觉""觉得""为什么""最近""那种"等模糊词。
+- 其他 / 默认：双轨 + RRF 融合。
 
 第一期可以简化成"全部走双轨 + RRF"，省去 router 实现。
 
