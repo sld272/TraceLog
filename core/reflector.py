@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import memory
 import router
 from core import db
+from core import profile_service
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -26,6 +27,7 @@ class DeepReflectionResult:
     scope_start: str
     scope_end: str
     related_post_ids: list[str]
+    patch_summary: dict
 
 
 @dataclass(frozen=True)
@@ -126,7 +128,7 @@ def trigger_global_deep_reflection(
     profile = memory.read_profile()
     todos = memory.load_todos()
     related_post_ids = [row["id"] for row in posts]
-    reflection = router.call_global_deep_reflection(
+    reflection_result = router.call_global_deep_reflection(
         client=client,
         model=model,
         profile=profile,
@@ -134,16 +136,18 @@ def trigger_global_deep_reflection(
         light_summary=_format_light_summary(related_post_ids),
         todos=_format_todos(todos),
     )
-    if not _is_valid_reflection(reflection):
+    if reflection_result is None or not _is_valid_reflection(reflection_result.get("reflection_md")):
         raise ValueError("深反思内容无效或过短")
 
-    content = reflection.strip()
+    content = reflection_result["reflection_md"].strip()
+    patch_summary = _apply_profile_patches(reflection_result.get("patches", []))
     reflection_id = _insert_reflection(
         content=content,
         scope_start=posts[0]["ts"],
         scope_end=posts[-1]["ts"],
         related_post_ids=related_post_ids,
         trigger=trigger,
+        patch_summary=patch_summary,
     )
     return DeepReflectionResult(
         id=reflection_id,
@@ -151,6 +155,7 @@ def trigger_global_deep_reflection(
         scope_start=posts[0]["ts"],
         scope_end=posts[-1]["ts"],
         related_post_ids=related_post_ids,
+        patch_summary=patch_summary,
     )
 
 
@@ -506,12 +511,14 @@ def _insert_reflection(
     scope_end: str,
     related_post_ids: list[str],
     trigger: str,
+    patch_summary: dict,
 ) -> int:
     ts = datetime.now().astimezone().isoformat()
     metadata = {
         "trigger": trigger,
         "op": "global_deep_reflection",
-        "profile_patch_applied": False,
+        "profile_patch_applied": patch_summary.get("applied", 0) > 0,
+        "profile_patch_summary": patch_summary,
     }
     with db.transaction() as conn:
         cur = conn.execute(
@@ -537,3 +544,21 @@ def _is_valid_reflection(content: str | None) -> bool:
         return False
     text = content.strip()
     return len(text) >= 20 and ("##" in text or "- " in text or "\n" in text)
+
+
+def _apply_profile_patches(patches: list) -> dict:
+    summary = {"applied": 0, "pending": 0, "skipped": 0}
+    if not isinstance(patches, list):
+        return summary
+
+    for patch in patches:
+        if not isinstance(patch, dict):
+            summary["skipped"] += 1
+            continue
+        result = profile_service.apply_patch(patch, source="reflector")
+        status = result.get("status")
+        if status in summary:
+            summary[status] += 1
+        else:
+            summary["skipped"] += 1
+    return summary

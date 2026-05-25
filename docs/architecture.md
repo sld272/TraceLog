@@ -15,9 +15,9 @@
 
 ### 当前实现状态（2026-05-25）
 
-当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`，多 SOUL 待办结果由 `core/todo_service.py` 合并落库；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装、LLM 回复与待办合流；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表。
+当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`，多 SOUL 待办结果由 `core/todo_service.py` 合并落库；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装、LLM 回复与待办合流；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表；`core/profile_service.py` 已支持深反思画像 patch，normal 章节自动落盘，high 章节进入 `pending_user_md_changes`。
 
-尚未完成：私聊摘要沉淀、深反思到 `user.md` patch、导出和 Web/API 层。
+尚未完成：私聊摘要沉淀、pending 采纳/拒绝、导出和 Web/API 层。
 
 ---
 
@@ -1185,7 +1185,7 @@ CREATE TABLE IF NOT EXISTS relations_log (
 
 ### 8.3 深反思触发策略
 
-第一期采用最简单的手动触发：用户在前端点击"生成深反思"。
+第一期采用最简单的触发：CLI 退出时对上次深反思后的公开记录生成一次深反思；后续前端再提供手动点击"生成深反思"。
 
 后续再把触发策略做成可配置项，例如按记录数量、时间间隔、用户主动请求或后台任务触发。具体频率不写死为固定周期，由产品形态和成本预算决定。
 
@@ -1345,10 +1345,10 @@ my-tracelog-backup/
 - [x] 私聊检索：用 thread 最近若干轮做 query 对 posts 走 RRF + 拉取该 SOUL 历史评论
 - [ ] 私聊摘要进入对应 `soul_memories/<name>.md`，不进入全局 `user.md`
 - [x] 私聊待办合流到 `todos` 表（共用合并逻辑，`source_chat_message` 记溯源）
-- [ ] `ProfileService.apply_patch`：解析 sensitivity → 走直落 / pending；写 `user_md_revisions`
+- [x] `ProfileService.apply_patch`：解析 sensitivity → 走直落 / pending；写 `user_md_revisions`
 - [x] 轻反思最简版（同步实现也可以，第一期不强求异步）：每帖抽取 entities + emotions + events + importance
 - [x] 深反思最简版：CLI 退出时触发，生成 reflection 并写入 `reflections`
-- [ ] 深反思增强：前端手动触发，生成 reflection + user.md patch
+- [x] 深反思增强：CLI 退出触发，生成 reflection + user.md patch，normal 自动落盘，high 进入 pending
 - [ ] `tracelog export --format=markdown` 命令
 - [ ] FastAPI 后端接口暴露
 - [ ] Web 前端最小可用版本：记录、时间线、AI 回复、待办、画像、搜索
@@ -1362,7 +1362,7 @@ my-tracelog-backup/
 
 - [ ] 异步轻反思（用 threading）
 - [ ] 三因子重排
-- [ ] 深反思输出多 patch（如果第一期只做了全文反思文档，后续再接入 ProfileService.apply_patch）
+- [x] 深反思输出多 patch，并接入 ProfileService.apply_patch
 - [ ] 前端可视化：情绪曲线、关系图、实体提及频次
 
 不做：

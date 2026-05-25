@@ -534,10 +534,25 @@ GLOBAL_DEEP_REFLECTION_PROMPT = """\
 
 你会读取用户档案、当前待办、本次触发范围内的帖子，以及轻反思已经抽取出的实体、情绪、事件和重要性摘要，生成一份适合用户回看和行动的深反思。
 
-## 输出要求
-- 仅输出 Markdown 纯文本，不要输出代码块标记。
+## JSON 输出格式强制要求
+你必须且只能输出一个标准 JSON 对象，不要包含 Markdown 代码块或解释文字。
+
+{
+  "reflection_md": "Markdown 深反思正文",
+  "patches": [
+    {
+      "section": "技能与专长",
+      "ops": [
+        {"op": "add", "value": "熟悉 ChromaDB 与 FTS5 双轨检索"}
+      ],
+      "evidence": ["20260520-003"],
+      "confidence": 0.86
+    }
+  ]
+}
+
+## reflection_md 要求
 - 使用第二人称“你”叙述，语气真诚、具体、克制。
-- 不要重写用户档案，不要输出 JSON，不要输出 profile patch。
 - 严禁捏造事实；观点必须能从输入中找到依据。
 - 建议包含这些部分：
   - 主线事件回顾
@@ -545,6 +560,14 @@ GLOBAL_DEEP_REFLECTION_PROMPT = """\
   - 反复出现的压力源或能量来源
   - 待办与行动线索
   - 下一步建议
+
+## patches 要求
+- 只在有明确证据时输出 patch；没有可靠画像更新时输出空数组 []。
+- patch 只能修改输入 user.md 已存在的 section。
+- add 不带 anchor；update/remove 必须使用 user.md 里原样存在的 anchor。
+- high sensitivity 章节必须极度保守，只在用户明确陈述事实时输出。
+- evidence 必须是本次输入中真实存在的 post id。
+- confidence 使用 0 到 1。
 
 ## 当前时间
 {current_datetime}
@@ -558,8 +581,8 @@ def call_global_deep_reflection(
     posts: str,
     light_summary: str,
     todos: str,
-) -> str | None:
-    """Generate one global deep reflection in Markdown."""
+) -> dict | None:
+    """Generate one global deep reflection plus profile patches."""
     user_content = (
         f"## 用户档案\n\n{profile or '（暂无）'}\n\n"
         "---\n\n"
@@ -574,12 +597,43 @@ def call_global_deep_reflection(
         response = client.chat.completions.create(
             model=model,
             timeout=45,
+            response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": GLOBAL_DEEP_REFLECTION_PROMPT.format(current_datetime=_now_str())},
+                {"role": "system", "content": GLOBAL_DEEP_REFLECTION_PROMPT.replace("{current_datetime}", _now_str())},
                 {"role": "user", "content": user_content},
             ],
         )
-        return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"[Router] 深反思生成失败：{e}")
         return None
+
+    return _parse_global_deep_reflection_content(response.choices[0].message.content)
+
+
+def _parse_global_deep_reflection_content(content: str | None) -> dict | None:
+    content = _clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"[Router] 深反思 JSON 解析失败：{e}")
+        print(f"[Router] 原始输出片段：{content[:200]}")
+        return None
+
+    if not isinstance(data, dict):
+        print("[Router] 深反思响应不是 JSON 对象")
+        return None
+
+    reflection_md = data.get("reflection_md")
+    if not isinstance(reflection_md, str) or not reflection_md.strip():
+        print("[Router] 深反思缺少 reflection_md")
+        return None
+
+    patches = data.get("patches")
+    if not isinstance(patches, list):
+        patches = []
+
+    normalized_patches = [patch for patch in patches if isinstance(patch, dict)]
+    return {
+        "reflection_md": reflection_md.strip(),
+        "patches": normalized_patches,
+    }

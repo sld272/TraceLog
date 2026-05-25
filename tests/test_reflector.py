@@ -11,7 +11,11 @@ from core import db, reflector
 
 
 class FakeClient:
-    def __init__(self, content: str | None = "## 深反思\n\n你这段时间有明确的行动线索。", contents: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        content: str | None = '{"reflection_md":"## 深反思\\n\\n你这段时间有明确的行动线索。","patches":[]}',
+        contents: list[str] | None = None,
+    ) -> None:
         self.content = content
         self.contents = list(contents or [])
         self.calls = 0
@@ -46,7 +50,17 @@ class ReflectorTest(unittest.TestCase):
 
         db.init_db()
         self.workspace.mkdir(parents=True, exist_ok=True)
-        (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与现状\n测试用户\n", encoding="utf-8")
+        (self.workspace / "user.md").write_text(
+            "---\n"
+            "schema: tracelog/user.md@v1\n"
+            "sensitivity:\n"
+            "  身份与现状: normal\n"
+            "---\n\n"
+            "# 用户档案\n\n"
+            "## 身份与现状\n"
+            "- 测试用户 <!-- id: status-user -->\n",
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
@@ -82,6 +96,29 @@ class ReflectorTest(unittest.TestCase):
         self.assertIsNotNone(first)
         self.assertIsNone(second)
         self.assertEqual(1, client.calls)
+
+    def test_trigger_global_deep_reflection_applies_profile_patches_and_metadata(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天开始准备比赛。")
+        payload = {
+            "reflection_md": "## 深反思\n\n你开始把比赛准备推进成具体行动。",
+            "patches": [
+                {
+                    "section": "身份与现状",
+                    "ops": [{"op": "add", "value": "正在准备比赛"}],
+                    "evidence": ["20260525-001"],
+                    "confidence": 0.8,
+                }
+            ],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        result = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
+        row = db.query_one("SELECT metadata FROM reflections WHERE id = ?", (result.id,))
+        metadata = json.loads(row["metadata"])
+
+        self.assertEqual({"applied": 1, "pending": 0, "skipped": 0}, result.patch_summary)
+        self.assertIn("正在准备比赛 <!-- id: status-", memory.read_profile())
+        self.assertEqual({"applied": 1, "pending": 0, "skipped": 0}, metadata["profile_patch_summary"])
 
     def test_trigger_light_reflection_writes_derived_memory(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天和小李完成了比赛计划，但有点焦虑。")

@@ -9,6 +9,7 @@ from typing import cast
 from openai import OpenAI
 from core import chat_service
 from core import context_builder
+from core import profile_service
 from core import reflector
 from core import record_service
 from core import reply_service
@@ -143,6 +144,49 @@ def _print_chat_help() -> None:
         "  /chat <soul>\n"
         "私聊中输入 /back 返回发帖模式，/quit 退出。\n"
     )
+
+
+def _handle_profile_command(user_input: str) -> bool:
+    if user_input != "/profile" and not user_input.startswith("/profile "):
+        return False
+
+    parts = user_input.split(maxsplit=1)
+    if len(parts) == 2 and parts[1].strip() == "pending":
+        _print_pending_profile_changes()
+    else:
+        print("[画像] 可用命令：\n  /profile pending\n")
+    return True
+
+
+def _print_pending_profile_changes() -> None:
+    changes = [change for change in profile_service.list_pending_changes() if change["status"] == "pending"]
+    if not changes:
+        print("[画像] 当前没有待审核变更。\n")
+        return
+
+    print("\n[画像待审核变更]")
+    for change in changes:
+        patch = change["patch"]
+        ops = patch.get("ops", []) if isinstance(patch, dict) else []
+        op_text = ", ".join(_format_profile_op(op) for op in ops if isinstance(op, dict)) or "无操作"
+        evidence = change["evidence"] or []
+        print(
+            f"{change['id']}. {change['section']} "
+            f"(confidence={change['confidence']:.2f}, evidence={', '.join(evidence) or '无'})\n"
+            f"   {op_text}"
+        )
+    print()
+
+
+def _format_profile_op(op: dict) -> str:
+    kind = op.get("op")
+    if kind == "add":
+        return f"add: {op.get('value', '')}"
+    if kind == "update":
+        return f"update {op.get('anchor', '')}: {op.get('value', '')}"
+    if kind == "remove":
+        return f"remove {op.get('anchor', '')}"
+    return str(kind or "unknown")
 
 
 def _handle_soul_command(user_input: str) -> bool:
@@ -340,6 +384,8 @@ def main():
             _run_deep_reflection_on_exit(client, model)
             break
         if chat_handled:
+            continue
+        if _handle_profile_command(user_input):
             continue
         if _handle_soul_command(user_input):
             continue
