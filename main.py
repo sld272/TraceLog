@@ -5,9 +5,9 @@ TraceLog 拾迹 — 个人成长 AI 伴侣
 import json
 import os
 import getpass
-from typing import cast
 from openai import OpenAI
 from core import chat_service
+from core.cli_input import read_cli_input
 from core import context_builder
 from core import profile_service
 from core import reflector
@@ -93,7 +93,7 @@ def _run_chat_session(
     current_todos = todos
     while True:
         try:
-            raw_input = cast(str, input(f"[{thread.soul_name}] 你: "))
+            raw_input = read_cli_input(f"[{thread.soul_name}] 你: ")
         except EOFError:
             return current_todos, True
         user_message = raw_input.strip()
@@ -291,25 +291,25 @@ def load_config() -> dict:
     if not api_key:
         raise ValueError("API Key 不能为空，请重新运行程序并输入有效的 API Key。")
 
-    base_url = input("请输入 API Base URL（直接回车使用 OpenAI 官方地址）: ").strip()
+    base_url = read_cli_input("请输入 API Base URL（直接回车使用 OpenAI 官方地址）: ").strip()
     if not base_url:
         base_url = "https://api.openai.com/v1"
 
-    model = input("请输入模型名称（直接回车使用默认 gpt-4o-mini）: ").strip()
+    model = read_cli_input("请输入模型名称（直接回车使用默认 gpt-4o-mini）: ").strip()
     if not model:
         model = "gpt-4o-mini"
 
     print("\n接下来配置向量 Embedding（用于语义记忆检索）：")
-    emb_model = input("请输入 Embedding 模型名称（直接回车使用 text-embedding-3-small）: ").strip()
+    emb_model = read_cli_input("请输入 Embedding 模型名称（直接回车使用 text-embedding-3-small）: ").strip()
     embedding_model = emb_model or "text-embedding-3-small"
 
-    use_sep = input("是否为 Embedding 单独配置 API Key 和 Base URL？[y/n]（回车跳过复用主配置）: ").strip().lower()
+    use_sep = read_cli_input("是否为 Embedding 单独配置 API Key 和 Base URL？[y/n]（回车跳过复用主配置）: ").strip().lower()
     embedding_api_key = None
     embedding_base_url = None
     if use_sep and use_sep[0] == "y":
         emb_key = getpass.getpass("请输入 Embedding API Key（回车跳过复用主 Key）: ").strip()
         embedding_api_key = emb_key or None
-        emb_url = input("请输入 Embedding Base URL（回车跳过复用主 URL）: ").strip()
+        emb_url = read_cli_input("请输入 Embedding Base URL（回车跳过复用主 URL）: ").strip()
         embedding_base_url = emb_url or None
 
     config = {
@@ -369,7 +369,7 @@ def main():
 
     while True:
         try:
-            raw_input = cast(str, input("你: "))
+            raw_input = read_cli_input("你: ")
             user_input = raw_input.strip()
             if user_input.lower() == "/quit":
                 raise KeyboardInterrupt
