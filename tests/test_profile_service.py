@@ -239,24 +239,6 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertNotIn("容易焦虑", content)
         self.assertEqual(2, len(rows))
 
-    def test_discard_pending_changes_once_marks_legacy_pending_rejected(self) -> None:
-        db.execute(
-            """
-            INSERT INTO pending_user_md_changes(section, patch, evidence, confidence, status, created_at)
-            VALUES (?, ?, ?, ?, 'pending', ?)
-            """,
-            ("基本信息", "{}", "[]", 0.9, 1.0),
-        )
-
-        count = profile_service.discard_pending_changes_once()
-        row = db.query_one("SELECT status, resolved_at FROM pending_user_md_changes")
-        second_count = profile_service.discard_pending_changes_once()
-
-        self.assertEqual(1, count)
-        self.assertEqual("rejected", row["status"])
-        self.assertIsNotNone(row["resolved_at"])
-        self.assertEqual(0, second_count)
-
     def _insert_post(self, post_id: str) -> None:
         db.execute(
             """

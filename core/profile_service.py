@@ -35,8 +35,6 @@ THRESHOLDS = {
     ("high", "remove"): (1, 0.95),
 }
 
-PENDING_DISCARD_META_KEY = "migration.profile_pending_discarded.v1"
-
 
 @dataclass(frozen=True)
 class PatchResult:
@@ -65,54 +63,6 @@ def apply_patch(patch: dict, source: str = "reflector") -> dict:
 
     _write_user_md_revision(updated, parsed, source)
     return PatchResult("applied").to_dict()
-
-
-def list_pending_changes() -> list[dict]:
-    rows = db.query_all(
-        """
-        SELECT id, section, patch, evidence, confidence, status, created_at, resolved_at
-        FROM pending_user_md_changes
-        ORDER BY created_at DESC, id DESC
-        """
-    )
-    return [
-        {
-            "id": row["id"],
-            "section": row["section"],
-            "patch": _loads_json(row["patch"], {}),
-            "evidence": _loads_json(row["evidence"], []),
-            "confidence": row["confidence"],
-            "status": row["status"],
-            "created_at": row["created_at"],
-            "resolved_at": row["resolved_at"],
-        }
-        for row in rows
-    ]
-
-
-def discard_pending_changes_once() -> int:
-    """Discard legacy high-sensitivity pending changes after removing review flow."""
-    if db.query_one("SELECT value FROM meta WHERE key = ?", (PENDING_DISCARD_META_KEY,)) is not None:
-        return 0
-
-    now = db.now_ts()
-    with db.transaction() as conn:
-        cur = conn.execute(
-            """
-            UPDATE pending_user_md_changes
-            SET status = 'rejected', resolved_at = ?
-            WHERE status = 'pending'
-            """,
-            (now,),
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            (
-                PENDING_DISCARD_META_KEY,
-                json.dumps({"op": "discard_legacy_pending_profile_changes", "created_at": now}, ensure_ascii=False),
-            ),
-        )
-        return int(cur.rowcount or 0)
 
 
 @dataclass
@@ -325,10 +275,3 @@ def _write_text_atomic(path: str, content: str) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(content)
     os.replace(tmp, path)
-
-
-def _loads_json(value: str | None, default):
-    try:
-        return json.loads(value or "")
-    except json.JSONDecodeError:
-        return default

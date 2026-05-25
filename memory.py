@@ -55,9 +55,6 @@ def init_workspace():
     """Ensure workspace, state.db, user.md, and default SOUL files exist."""
     os.makedirs(WORKSPACE_DIR, exist_ok=True)
     db.init_db()
-    from core import profile_service
-
-    profile_service.discard_pending_changes_once()
     if not os.path.exists(USER_MD_PATH):
         _write_user_md(DEFAULT_USER_MD)
         _record_user_md_revision(DEFAULT_USER_MD, {"op": "init"}, "user")

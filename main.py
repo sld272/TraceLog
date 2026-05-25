@@ -149,14 +149,6 @@ def _print_chat_help() -> None:
     )
 
 
-def _handle_profile_command(user_input: str) -> bool:
-    if user_input != "/profile" and not user_input.startswith("/profile "):
-        return False
-
-    print("[画像] 高敏信息已改为由反思器谨慎判断后直接写入，待审核队列已废弃。\n")
-    return True
-
-
 def _handle_soul_command(user_input: str) -> bool:
     """Handle SOUL management commands. Returns True if input was a command."""
     if user_input == "/souls":
@@ -352,8 +344,6 @@ def main():
             _run_deep_reflection_on_exit(client, model)
             break
         if chat_handled:
-            continue
-        if _handle_profile_command(user_input):
             continue
         if _handle_soul_command(user_input):
             continue

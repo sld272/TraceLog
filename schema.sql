@@ -218,17 +218,3 @@ CREATE TABLE IF NOT EXISTS soul_memory_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
     ON soul_memory_revisions(soul_name, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS pending_user_md_changes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    section     TEXT NOT NULL,
-    patch       TEXT NOT NULL,
-    evidence    TEXT,
-    confidence  REAL,
-    status      TEXT NOT NULL DEFAULT 'pending',
-    created_at  REAL NOT NULL,
-    resolved_at REAL
-);
-
-CREATE INDEX IF NOT EXISTS idx_pending_user_md_status
-    ON pending_user_md_changes(status, created_at DESC);
