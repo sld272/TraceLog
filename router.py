@@ -6,9 +6,12 @@ Memory Flush: 重写 profile.md 画像
 
 import json
 from datetime import datetime
-from openai import OpenAI
+from typing import TYPE_CHECKING
 
 from core.soul_service import SoulContext
+
+if TYPE_CHECKING:
+    from openai import OpenAI
 
 
 # 引擎 1：Post Reply
@@ -65,6 +68,47 @@ POST_REPLY_PROMPT = """\
 {task_prompt}
 """
 
+CHAT_REPLY_TASK_PROMPT = """\
+## 核心任务
+1. **回复 (reply)**：你正在和用户进行一对一私聊。结合上下文给出自然、真诚、贴近该 SOUL 人格的中文回应，字数控制在 2-5 句话。
+2. **待办提取 (todos_to_upsert & todos_to_delete)**：精准提取用户【明确提出】的新增、状态变更或取消任务。
+
+## JSON 输出格式强制要求
+你必须且只能输出一个标准 JSON 对象，绝对不要包含任何 Markdown 代码块格式，也不要有任何前置或后置说明文字。
+
+{
+  "reply": "你的回复文字",
+  "todos_to_upsert": [
+    {
+      "id": "已有待办的 id（新增待办时必须为 null）",
+      "task": "明确的待办描述",
+      "date": "YYYY-MM-DD 或 null",
+      "start_time": "HH:MM 或 null",
+      "end_time": "HH:MM 或 null",
+      "status": "未完成/已完成"
+    }
+  ],
+  "todos_to_delete": [
+    {
+      "id": "存在于当前待办列表中的确切 id"
+    }
+  ]
+}
+
+## 严格执行规则
+1. **增量原则**：只提取本次私聊消息中【新增】或【状态发生变化】的待办。若无变化，相关数组必须输出空数组 []。
+2. **更新与删除校验**：如果要更新状态或删除任务，必须先在「待办事项」列表中找到完全对应的 id。若找不到，绝对禁止臆造 id。
+3. **新增 id 规则**：新增待办必须输出 "id": null。
+4. **不要脑补**：不要把用户情绪、抱怨或你的建议转成待办，除非用户明确表达“我要...”或“提醒我...”。
+5. **时间规则**：start_time 与 end_time 使用 24 小时制，仅在用户明确提及时填写，否则置 null。
+6. **状态枚举**：status 仅允许 "未完成" 或 "已完成"。
+7. **私聊边界**：私聊是你和用户的单独频道，不要假装其他 SOUL 看得见这段对话。
+
+## 当前时间
+{current_datetime}
+请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
+"""
+
 
 def _now_str() -> str:
     now = datetime.now().astimezone()
@@ -72,7 +116,7 @@ def _now_str() -> str:
     return now.strftime(f"%Y 年 %m 月 %d 日（周{weekday[now.weekday()]}）%H:%M")
 
 
-def call_post_reply(user_input: str, client: OpenAI, model: str, context: str) -> dict | None:
+def call_post_reply(user_input: str, client: "OpenAI", model: str, context: str) -> dict | None:
     """Post Reply：共情回复 + 待办增量提取。"""
     system_msg = POST_REPLY_PROMPT.format(
         task_prompt=_post_reply_task_prompt(),
@@ -82,7 +126,7 @@ def call_post_reply(user_input: str, client: OpenAI, model: str, context: str) -
 
 def call_soul_post_reply(
     user_input: str,
-    client: OpenAI,
+    client: "OpenAI",
     model: str,
     shared_context: str,
     soul: SoulContext,
@@ -97,13 +141,34 @@ def call_soul_post_reply(
     return _call_post_reply_json(user_input, client, model, shared_context, system_msg)
 
 
+def call_soul_chat_reply(
+    user_message: str,
+    client: "OpenAI",
+    model: str,
+    chat_context,
+    soul: SoulContext,
+) -> dict | None:
+    """Call one SOUL for a private chat reply."""
+    soul_memory = soul.soul_memory.strip() or "（暂无）"
+    system_msg = (
+        f"## SOUL 人格\n{soul.persona.strip()}\n\n"
+        f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
+        f"---\n\n{_chat_reply_task_prompt()}"
+    )
+    return _call_chat_reply_json(user_message, client, model, chat_context.context, system_msg)
+
+
 def _post_reply_task_prompt() -> str:
     return POST_REPLY_TASK_PROMPT.replace("{current_datetime}", _now_str())
 
 
+def _chat_reply_task_prompt() -> str:
+    return CHAT_REPLY_TASK_PROMPT.replace("{current_datetime}", _now_str())
+
+
 def _call_post_reply_json(
     user_input: str,
-    client: OpenAI,
+    client: "OpenAI",
     model: str,
     context: str,
     system_msg: str,
@@ -127,8 +192,38 @@ def _call_post_reply_json(
     return _parse_post_reply_content(response.choices[0].message.content)
 
 
+def _call_chat_reply_json(
+    user_message: str,
+    client: "OpenAI",
+    model: str,
+    context: str,
+    system_msg: str,
+) -> dict | None:
+    chat_user_msg = _chat_reply_user_message(user_message, context)
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            timeout=30,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": chat_user_msg},
+            ],
+        )
+    except Exception as e:
+        print(f"[Router] 私聊 API 调用失败：{e}")
+        return None
+
+    return _parse_post_reply_content(response.choices[0].message.content)
+
+
 def _post_reply_user_message(user_input: str, context: str) -> str:
     return f"## 当前上下文\n{context or '（暂无历史数据）'}\n\n---\n\n## 帖子内容\n{user_input}"
+
+
+def _chat_reply_user_message(user_message: str, context: str) -> str:
+    return f"## 私聊上下文\n{context or '（暂无历史数据）'}\n\n---\n\n## 用户当前私聊消息\n{user_message}"
 
 
 def _parse_post_reply_content(content: str | None) -> dict | None:
@@ -222,7 +317,7 @@ FLUSH_PROMPT = """\
 """
 
 
-def flush_profile(client: OpenAI, model: str, old_profile: str, recent_posts: str) -> str | None:
+def flush_profile(client: "OpenAI", model: str, old_profile: str, recent_posts: str) -> str | None:
     """Memory Flush：读取旧画像 + 近期帖子，让 LLM 重写 profile.md。"""
     user_content = f"## 旧画像\n\n{old_profile or '（无）'}\n\n---\n\n## 近期帖子\n\n{recent_posts or '（无）'}"
 
@@ -239,4 +334,3 @@ def flush_profile(client: OpenAI, model: str, old_profile: str, recent_posts: st
     except Exception as e:
         print(f"[Router] 画像刷新失败：{e}")
         return None
-

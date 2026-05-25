@@ -15,9 +15,9 @@
 
 ### 当前实现状态（2026-05-25）
 
-当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`，多 SOUL 待办结果由 `core/todo_service.py` 合并落库。
+当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls/` 与 `soul_memories/` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`，多 SOUL 待办结果由 `core/todo_service.py` 合并落库；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装、LLM 回复与待办合流。
 
-尚未完成：私聊服务、轻反思/深反思、导出/迁移脚本和 Web/API 层。
+尚未完成：私聊摘要沉淀、轻反思/深反思、导出/迁移脚本和 Web/API 层。
 
 ---
 
@@ -1345,11 +1345,11 @@ my-tracelog-backup/
 - [x] `SoulMemoryService`：加载/保存 `soul_memories/<name>.md`，写 `soul_memory_revisions`
 - [x] CLI 至少能展示多个 SOUL 的评论流（前端在第二期）
 - [x] 多 SOUL 待办抽取的合并与去重（§6.1 [4]）
-- [ ] `chat_threads` / `chat_messages` 表 + `ChatService`：与单个 SOUL 私聊、按 thread 加载历史
-- [ ] CLI 私聊命令：`/chat <soul>` 进入线程，`/chat list` 看线程列表
-- [ ] 私聊检索：用 thread 最近若干轮做 query 对 posts 走 RRF + 拉取该 SOUL 历史评论
+- [x] `chat_threads` / `chat_messages` 表 + `ChatService`：与单个 SOUL 私聊、按 thread 加载历史
+- [x] CLI 私聊命令：`/chat <soul>` 进入线程，`/chat list` 看线程列表
+- [x] 私聊检索：用 thread 最近若干轮做 query 对 posts 走 RRF + 拉取该 SOUL 历史评论
 - [ ] 私聊摘要进入对应 `soul_memories/<name>.md`，不进入全局 `user.md`
-- [ ] 私聊待办合流到 `todos` 表（共用合并逻辑，`source_chat_message` 记溯源）
+- [x] 私聊待办合流到 `todos` 表（共用合并逻辑，`source_chat_message` 记溯源）
 - [ ] 把 `todos.json` 一次性迁移到 `todos` 表
 - [ ] `ProfileService.apply_patch`：解析 sensitivity → 走直落 / pending；写 `user_md_revisions`
 - [ ] 迁移时把 `profile.md` 切成新版 user.md（frontmatter + sensitivity 默认值）

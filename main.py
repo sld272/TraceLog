@@ -7,6 +7,7 @@ import os
 import getpass
 from typing import cast
 from openai import OpenAI
+from core import chat_service
 from core import context_builder
 from core import record_service
 from core import reply_service
@@ -29,6 +30,123 @@ def _is_valid_profile(content: str | None) -> bool:
         return False
     has_markdown_structure = ("##" in text) or ("- " in text)
     return has_markdown_structure
+
+
+def _flush_profile_on_exit(client: OpenAI, model: str) -> None:
+    print("\n\n[记忆] 正在静默整理今日记忆，请稍候（请勿再次终止）...")
+    try:
+        new_profile = router.flush_profile(
+            client, model,
+            old_profile=memory.read_profile(),
+            recent_posts=memory.read_recent_posts(),
+        )
+        if _is_valid_profile(new_profile):
+            profile_text = cast(str, new_profile)
+            memory.write_profile(profile_text.strip())
+            print("[记忆] 画像已更新。")
+        else:
+            print("[记忆] 画像内容无效或过短，已放弃本次覆盖，保护旧数据。")
+    except KeyboardInterrupt:
+        print("\n[警告] 记忆整理被强制中断，已保留旧画像。")
+    except Exception as e:
+        print(f"[记忆] 画像整理失败：{e}，已保留旧画像。")
+    print("再见！\n")
+
+
+def _handle_chat_command(
+    user_input: str,
+    client: OpenAI,
+    model: str,
+    todos: list,
+) -> tuple[bool, list, bool]:
+    """Handle /chat commands. Returns handled, todos, quit_requested."""
+    if user_input == "/chat list":
+        _print_chat_threads()
+        return True, todos, False
+    if user_input != "/chat" and not user_input.startswith("/chat "):
+        return False, todos, False
+
+    parts = user_input.split(maxsplit=1)
+    if len(parts) == 1 or not parts[1].strip():
+        _print_chat_help()
+        return True, todos, False
+
+    soul_name = parts[1].strip()
+    if soul_name == "list":
+        _print_chat_threads()
+        return True, todos, False
+
+    try:
+        thread = chat_service.get_or_create_thread(soul_name)
+    except ValueError as exc:
+        print(f"[私聊] {exc}\n")
+        return True, todos, False
+
+    updated_todos, quit_requested = _run_chat_session(thread, client, model, todos)
+    return True, updated_todos, quit_requested
+
+
+def _run_chat_session(
+    thread: chat_service.ChatThread,
+    client: OpenAI,
+    model: str,
+    todos: list,
+) -> tuple[list, bool]:
+    print(f"\n[私聊] 已进入与 {thread.soul_name} 的私聊。输入 /back 返回发帖模式，/quit 退出。\n")
+    current_todos = todos
+    while True:
+        try:
+            raw_input = cast(str, input(f"[{thread.soul_name}] 你: "))
+        except EOFError:
+            return current_todos, True
+        user_message = raw_input.strip()
+        if not user_message:
+            continue
+        if user_message == "/back":
+            print("[私聊] 已返回发帖模式。\n")
+            return current_todos, False
+        if user_message == "/quit":
+            return current_todos, True
+
+        print(f"\n[{thread.soul_name} 正在回复...]\n")
+        try:
+            result = chat_service.call_chat_reply(thread.id, user_message, client, model)
+        except ValueError as exc:
+            print(f"[私聊] {exc}\n")
+            return current_todos, False
+
+        if result.ok:
+            print(f"[{result.soul_name}] {result.reply}\n")
+            if result.assistant_message_id is not None:
+                try:
+                    current_todos = todo_service.apply_chat_todos(result, result.assistant_message_id)
+                    if result.todos_to_upsert or result.todos_to_delete:
+                        print(f"[记忆] 待办已更新，当前 {len(current_todos)} 条。\n")
+                except Exception as exc:
+                    print(f"[记忆] 私聊待办合流失败：{exc}\n")
+        else:
+            print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
+
+
+def _print_chat_threads() -> None:
+    threads = chat_service.list_chat_threads()
+    if not threads:
+        print("[私聊] 当前没有私聊线程。可用 /chat <soul> 创建。\n")
+        return
+    print("\n[私聊线程]")
+    for thread in threads:
+        last = thread.last_message_at or thread.updated_at or thread.created_at
+        print(f"{thread.id}. {thread.soul_name} - {thread.title or '未命名'}（last={last:.0f}）")
+    print()
+
+
+def _print_chat_help() -> None:
+    print(
+        "[私聊] 可用命令：\n"
+        "  /chat list\n"
+        "  /chat <soul>\n"
+        "私聊中输入 /back 返回发帖模式，/quit 退出。\n"
+    )
 
 
 def _handle_soul_command(user_input: str) -> bool:
@@ -213,27 +331,16 @@ def main():
             if user_input.lower() == "/quit":
                 raise KeyboardInterrupt
         except (KeyboardInterrupt, EOFError):
-            print("\n\n[记忆] 正在静默整理今日记忆，请稍候（请勿再次终止）...")
-            try:
-                new_profile = router.flush_profile(
-                    client, model,
-                    old_profile=memory.read_profile(),
-                    recent_posts=memory.read_recent_posts(),
-                )
-                if _is_valid_profile(new_profile):
-                    profile_text = cast(str, new_profile)
-                    memory.write_profile(profile_text.strip())
-                    print("[记忆] 画像已更新。")
-                else:
-                    print("[记忆] 画像内容无效或过短，已放弃本次覆盖，保护旧数据。")
-            except KeyboardInterrupt:
-                print("\n[警告] 记忆整理被强制中断，已保留旧画像。")
-            except Exception as e:
-                print(f"[记忆] 画像整理失败：{e}，已保留旧画像。")
-            print("再见！\n")
+            _flush_profile_on_exit(client, model)
             break
 
         if not user_input:
+            continue
+        chat_handled, todos, quit_requested = _handle_chat_command(user_input, client, model, todos)
+        if quit_requested:
+            _flush_profile_on_exit(client, model)
+            break
+        if chat_handled:
             continue
         if _handle_soul_command(user_input):
             continue

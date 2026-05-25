@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import sqlite3
 
-import vectorstore
 from core import db
 
 RRF_K = 60
@@ -42,6 +41,8 @@ def fts_search(query: str, k: int = 20) -> list[str]:
 def vector_search(query: str, k: int = 20) -> list[str]:
     """Return post ids ranked by ChromaDB semantic search."""
     try:
+        import vectorstore
+
         return vectorstore.query_post_ids(query, n_results=k)
     except Exception:
         return []
