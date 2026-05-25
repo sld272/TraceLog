@@ -23,8 +23,6 @@ class SoulReplyResult:
     sort_order: int
     ok: bool
     reply: str
-    todos_to_upsert: list[dict]
-    todos_to_delete: list[dict]
     error: str | None
 
 
@@ -86,8 +84,6 @@ def _call_one_soul(
         sort_order=soul.sort_order,
         ok=True,
         reply=reply.strip(),
-        todos_to_upsert=list(data.get("todos_to_upsert", [])),
-        todos_to_delete=list(data.get("todos_to_delete", [])),
         error=None,
     )
 
@@ -98,8 +94,6 @@ def _failed_result(soul: SoulContext, error: str) -> SoulReplyResult:
         sort_order=soul.sort_order,
         ok=False,
         reply=FAILED_REPLY,
-        todos_to_upsert=[],
-        todos_to_delete=[],
         error=error,
     )
 
@@ -109,8 +103,6 @@ def _save_comment(post_id: str, result: SoulReplyResult, model: str) -> None:
         "status": "ok" if result.ok else "failed",
         "model": model,
         "error": result.error,
-        "todos_to_upsert": result.todos_to_upsert,
-        "todos_to_delete": result.todos_to_delete,
     }
     now = db.now_ts()
     db.execute(

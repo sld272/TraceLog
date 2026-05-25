@@ -16,6 +16,7 @@ from core import reply_service
 from core import retrieval
 from core import soul_service
 from core import todo_service
+from core import tool_config_service
 import memory
 import vectorstore
 
@@ -65,6 +66,16 @@ def _run_light_reflection_for_post(post_id: str, client: OpenAI, model: str) -> 
             f"{len(light_result.emotions)} 个情绪，"
             f"{len(light_result.events)} 个事件。\n"
         )
+
+
+def _run_todo_tool_for_post(post_id: str, client: OpenAI, model: str) -> None:
+    if not tool_config_service.is_tool_enabled("todo"):
+        return
+    result = todo_service.run_for_post_safely(post_id, client, model)
+    if result.error:
+        print(f"[TodoTool] 待办抽取暂时失败：{result.error}\n")
+    elif result.applied:
+        print(f"[TodoTool] 待办已更新：新增/更新 {result.upserted} 条，删除 {result.deleted} 条。\n")
 
 
 def _handle_chat_command(
@@ -165,13 +176,6 @@ def _run_comment_session(
 
         if result.ok:
             print(f"[{result.soul_name}] {result.reply}\n")
-            if result.assistant_message_id is not None:
-                try:
-                    current_todos = todo_service.apply_comment_todos(result, result.assistant_message_id)
-                    if result.todos_to_upsert or result.todos_to_delete:
-                        print(f"[记忆] 待办已更新，当前 {len(current_todos)} 条。\n")
-                except Exception as exc:
-                    print(f"[记忆] 评论待办合流失败：{exc}\n")
         else:
             print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
 
@@ -215,13 +219,6 @@ def _run_chat_session(
 
         if result.ok:
             print(f"[{result.soul_name}] {result.reply}\n")
-            if result.assistant_message_id is not None:
-                try:
-                    current_todos = todo_service.apply_chat_todos(result, result.assistant_message_id)
-                    if result.todos_to_upsert or result.todos_to_delete:
-                        print(f"[记忆] 待办已更新，当前 {len(current_todos)} 条。\n")
-                except Exception as exc:
-                    print(f"[记忆] 私聊待办合流失败：{exc}\n")
         else:
             print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
 
@@ -291,6 +288,49 @@ def _handle_soul_command(user_input: str) -> bool:
     except OSError as exc:
         print(f"[SOUL] 文件操作失败：{exc}\n")
     return True
+
+
+def _handle_tool_command(user_input: str) -> bool:
+    """Handle optional tool commands. Returns True if input was a command."""
+    if user_input == "/tools":
+        _print_tools()
+        return True
+    if user_input != "/tool" and not user_input.startswith("/tool "):
+        return False
+
+    parts = user_input.split(maxsplit=2)
+    if len(parts) < 3:
+        _print_tool_help()
+        return True
+
+    name = parts[1].strip()
+    action = parts[2].strip().lower()
+    try:
+        if action in {"on", "enable", "enabled", "开启"}:
+            tool_config_service.set_tool_enabled(name, True)
+            print(f"[工具] 已开启：{name}\n")
+        elif action in {"off", "disable", "disabled", "关闭"}:
+            tool_config_service.set_tool_enabled(name, False)
+            print(f"[工具] 已关闭：{name}\n")
+        else:
+            _print_tool_help()
+    except ValueError as exc:
+        print(f"[工具] {exc}\n")
+    return True
+
+
+def _print_tools() -> None:
+    status = "开启" if tool_config_service.is_tool_enabled("todo") else "关闭"
+    print(f"\n[工具]\n  todo: {status}\n")
+
+
+def _print_tool_help() -> None:
+    print(
+        "[工具] 可用命令：\n"
+        "  /tools\n"
+        "  /tool todo on\n"
+        "  /tool todo off\n"
+    )
 
 
 def _print_souls() -> None:
@@ -420,7 +460,7 @@ def main():
         fixed_reflections = reflector.retry_pending_light_reflections(client, model)
         if fixed_reflections:
             print(f"[反思] 已补跑 {fixed_reflections} 条轻反思。")
-        todos = memory.load_todos()
+        todos = memory.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     except KeyboardInterrupt:
         print("\n[启动] 初始化被中断，已尽量回滚数据库事务。请重新运行。")
         return
@@ -449,6 +489,9 @@ def main():
             break
         if comment_handled:
             continue
+        if _handle_tool_command(user_input):
+            todos = memory.load_todos() if tool_config_service.is_tool_enabled("todo") else []
+            continue
         if _handle_soul_command(user_input):
             continue
 
@@ -461,6 +504,7 @@ def main():
 
         # 3. 落盘与索引当前输入，确保即使后续 LLM 失败也不丢用户数据
         post_id = record_service.save_post(user_input)
+        _run_todo_tool_for_post(post_id, client, model)
 
         # 4. 并发调用启用 SOUL，写入 comments
         results = reply_service.fanout(post_id, user_input, client, model, built_context)
@@ -482,22 +526,8 @@ def main():
             print("[TraceLog] 所有 SOUL 本次都回复失败，post 已保存，可稍后重试。\n")
             continue
 
-        # 6. 合并成功 SOUL 抽取的待办
-        to_upsert, to_delete = todo_service.merge_reply_todos(results)
-        if to_upsert or to_delete:
-            todos = todo_service.apply_reply_todos(todos, results)
-            print(f"[记忆] 待办已更新，当前 {len(todos)} 条。\n")
-
-        # 调试输出
-        if to_upsert or to_delete:
-            print("-" * 40)
-            if to_upsert:
-                print("[调试] todos_to_upsert:")
-                print(json.dumps(to_upsert, ensure_ascii=False, indent=2))
-            if to_delete:
-                print("[调试] todos_to_delete:")
-                print(json.dumps(to_delete, ensure_ascii=False, indent=2))
-            print("-" * 40 + "\n")
+        if tool_config_service.is_tool_enabled("todo"):
+            todos = memory.load_todos()
 
 
 if __name__ == "__main__":

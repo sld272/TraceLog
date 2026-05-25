@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import memory
-from core import chat_service, db, retrieval, soul_memory_service, soul_service, todo_service
+from core import chat_service, db, retrieval, soul_memory_service, soul_service, tool_config_service
 
 
 class FakeClient:
@@ -181,7 +181,7 @@ class ChatServiceTest(unittest.TestCase):
         rows = db.query_all("SELECT source FROM soul_memory_revisions WHERE source != 'system'")
         self.assertEqual([], rows)
 
-    def test_apply_chat_todos_sets_source_chat_message(self) -> None:
+    def test_private_chat_reply_ignores_todo_fields(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
         client = FakeClient(
             {
@@ -199,17 +199,29 @@ class ChatServiceTest(unittest.TestCase):
                 "todos_to_delete": [],
             }
         )
-        result = chat_service.call_chat_reply(thread.id, "提醒我明天交作业", client, "fake-model")
 
-        todos = todo_service.apply_chat_todos(result, result.assistant_message_id)
-        row = db.query_one(
-            "SELECT task, source_chat_message FROM todos WHERE task = ?",
-            ("明天交作业",),
+        result = chat_service.call_chat_reply(thread.id, "提醒我明天交作业", client, "fake-model")
+        row = db.query_one("SELECT COUNT(*) AS count FROM todos")
+
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(result.assistant_message_id)
+        self.assertEqual(0, row["count"])
+
+    def test_build_chat_context_omits_todos_when_tool_disabled(self) -> None:
+        tool_config_service.set_tool_enabled("todo", False)
+        thread = chat_service.get_or_create_thread("默认")
+        db.execute(
+            """
+            INSERT INTO todos(id, task, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("todo-1", "复习数学", "未完成", 1.0, 1.0),
         )
 
-        self.assertEqual(1, len(todos))
-        self.assertIsNotNone(result.assistant_message_id)
-        self.assertEqual(result.assistant_message_id, row["source_chat_message"])
+        context = chat_service.build_chat_context(thread.id, "考试怎么办")
+
+        self.assertNotIn("复习数学", context.context)
+        self.assertNotIn("# 待办事项", context.context)
 
 
 if __name__ == "__main__":

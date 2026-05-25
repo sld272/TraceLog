@@ -1,6 +1,6 @@
 ﻿"""
 TraceLog 拾迹 — LLM Router
-Post Reply: 共情回复 + 待办提取
+Post Reply: 共情回复
 Light Reflection: 抽取实体、情绪、事件与重要性
 Deep Reflection: 生成全局深反思
 """
@@ -19,38 +19,14 @@ if TYPE_CHECKING:
 
 POST_REPLY_TASK_PROMPT = """\
 ## 核心任务
-1. **回复 (reply)**：结合上下文给出真诚、有温度的中文回应，字数控制在 2-4 句话。
-2. **待办提取 (todos_to_upsert & todos_to_delete)**：精准提取用户【明确提出】的新增、状态变更或取消任务。
+**回复 (reply)**：结合上下文给出真诚、有温度的中文回应，字数控制在 2-4 句话。
 
 ## JSON 输出格式强制要求
 你必须且只能输出一个标准 JSON 对象，绝对不要包含任何 Markdown 代码块格式（如 ```json），也不要有任何前置或后置说明文字。
 
 {
-    "reply": "你的回复文字",
-  "todos_to_upsert": [
-        {
-            "id": "已有待办的 id（新增待办时必须为 null）",
-            "task": "明确的待办描述",
-            "date": "YYYY-MM-DD 或 null",
-            "start_time": "HH:MM 或 null",
-            "end_time": "HH:MM 或 null",
-            "status": "未完成/已完成"
-        }
-  ],
-  "todos_to_delete": [
-        {
-            "id": "存在于当前待办列表中的确切 id"
-        }
-  ]
+  "reply": "你的回复文字"
 }
-
-## 严格执行规则
-1. **增量原则**：只提取本次对话中【新增】或【状态发生变化】的待办。若无变化，相关数组必须输出空数组 []。
-2. **更新与删除校验**：如果要更新状态或删除任务，必须先在「待办事项」列表中找到完全对应的 id。若找不到，绝对禁止臆造 id。
-3. **新增 id 规则**：新增待办必须输出 "id": null。
-4. **不要脑补**：不要把用户情绪、抱怨或你的建议转成待办，除非用户明确表达“我要...”或“提醒我...”。
-5. **时间规则**：start_time 与 end_time 使用 24 小时制，仅在用户明确提及时填写，否则置 null。
-6. **状态枚举**：status 仅允许 "未完成" 或 "已完成"。
 
 ## 上下文结构说明
 「当前上下文」可能包含以下区块（部分可能缺席）：
@@ -60,7 +36,6 @@ POST_REPLY_TASK_PROMPT = """\
 
 ## 当前时间
 {current_datetime}
-请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
 """
 
 POST_REPLY_PROMPT = """\
@@ -71,84 +46,40 @@ POST_REPLY_PROMPT = """\
 
 CHAT_REPLY_TASK_PROMPT = """\
 ## 核心任务
-1. **回复 (reply)**：你正在和用户进行一对一私聊。结合上下文给出自然、真诚、贴近该 SOUL 人格的中文回应，字数控制在 2-5 句话。
-2. **待办提取 (todos_to_upsert & todos_to_delete)**：精准提取用户【明确提出】的新增、状态变更或取消任务。
+**回复 (reply)**：你正在和用户进行一对一私聊。结合上下文给出自然、真诚、贴近该 SOUL 人格的中文回应，字数控制在 2-5 句话。
 
 ## JSON 输出格式强制要求
 你必须且只能输出一个标准 JSON 对象，绝对不要包含任何 Markdown 代码块格式，也不要有任何前置或后置说明文字。
 
 {
-  "reply": "你的回复文字",
-  "todos_to_upsert": [
-    {
-      "id": "已有待办的 id（新增待办时必须为 null）",
-      "task": "明确的待办描述",
-      "date": "YYYY-MM-DD 或 null",
-      "start_time": "HH:MM 或 null",
-      "end_time": "HH:MM 或 null",
-      "status": "未完成/已完成"
-    }
-  ],
-  "todos_to_delete": [
-    {
-      "id": "存在于当前待办列表中的确切 id"
-    }
-  ]
+  "reply": "你的回复文字"
 }
 
 ## 严格执行规则
-1. **增量原则**：只提取本次私聊消息中【新增】或【状态发生变化】的待办。若无变化，相关数组必须输出空数组 []。
-2. **更新与删除校验**：如果要更新状态或删除任务，必须先在「待办事项」列表中找到完全对应的 id。若找不到，绝对禁止臆造 id。
-3. **新增 id 规则**：新增待办必须输出 "id": null。
-4. **不要脑补**：不要把用户情绪、抱怨或你的建议转成待办，除非用户明确表达“我要...”或“提醒我...”。
-5. **时间规则**：start_time 与 end_time 使用 24 小时制，仅在用户明确提及时填写，否则置 null。
-6. **状态枚举**：status 仅允许 "未完成" 或 "已完成"。
-7. **私聊边界**：私聊是你和用户的单独频道，不要假装其他 SOUL 看得见这段对话。
+1. **私聊边界**：私聊是你和用户的单独频道，不要假装其他 SOUL 看得见这段对话。
+2. **工具边界**：不要在回复 JSON 中输出待办字段；待办由独立工具处理，且只从公开 post 抽取。
 
 ## 当前时间
 {current_datetime}
-请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
 """
 
 COMMENT_REPLY_TASK_PROMPT = """\
 ## 核心任务
-1. **回复 (reply)**：你正在 post 下和用户继续一段只属于你们这个 SOUL 的评论线程。结合原 post、你的首条回复和线程上下文，给出自然、真诚、贴近该 SOUL 人格的中文回应，字数控制在 2-5 句话。
-2. **待办提取 (todos_to_upsert & todos_to_delete)**：精准提取用户【明确提出】的新增、状态变更或取消任务。
+**回复 (reply)**：你正在 post 下和用户继续一段只属于你们这个 SOUL 的评论线程。结合原 post、你的首条回复和线程上下文，给出自然、真诚、贴近该 SOUL 人格的中文回应，字数控制在 2-5 句话。
 
 ## JSON 输出格式强制要求
 你必须且只能输出一个标准 JSON 对象，绝对不要包含任何 Markdown 代码块格式，也不要有任何前置或后置说明文字。
 
 {
-  "reply": "你的回复文字",
-  "todos_to_upsert": [
-    {
-      "id": "已有待办的 id（新增待办时必须为 null）",
-      "task": "明确的待办描述",
-      "date": "YYYY-MM-DD 或 null",
-      "start_time": "HH:MM 或 null",
-      "end_time": "HH:MM 或 null",
-      "status": "未完成/已完成"
-    }
-  ],
-  "todos_to_delete": [
-    {
-      "id": "存在于当前待办列表中的确切 id"
-    }
-  ]
+  "reply": "你的回复文字"
 }
 
 ## 严格执行规则
-1. **增量原则**：只提取本次评论回复中【新增】或【状态发生变化】的待办。若无变化，相关数组必须输出空数组 []。
-2. **更新与删除校验**：如果要更新状态或删除任务，必须先在「待办事项」列表中找到完全对应的 id。若找不到，绝对禁止臆造 id。
-3. **新增 id 规则**：新增待办必须输出 "id": null。
-4. **不要脑补**：不要把用户情绪、抱怨或你的建议转成待办，除非用户明确表达“我要...”或“提醒我...”。
-5. **时间规则**：start_time 与 end_time 使用 24 小时制，仅在用户明确提及时填写，否则置 null。
-6. **状态枚举**：status 仅允许 "未完成" 或 "已完成"。
-7. **评论线程边界**：这条线程只对你这个 SOUL 可见，不要假装其他 SOUL 看得见后续评论。
+1. **评论线程边界**：这条线程只对你这个 SOUL 可见，不要假装其他 SOUL 看得见后续评论。
+2. **工具边界**：不要在回复 JSON 中输出待办字段；待办由独立工具处理，且只从公开 post 抽取。
 
 ## 当前时间
 {current_datetime}
-请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
 """
 
 
@@ -348,16 +279,107 @@ def _parse_post_reply_content(content: str | None) -> dict | None:
         print("[Router] 响应缺少 'reply' 字段")
         return None
 
-    data.setdefault("todos_to_upsert", [])
-    data.setdefault("todos_to_delete", [])
+    reply = data.get("reply")
+    return {"reply": reply}
 
-    if not isinstance(data["todos_to_upsert"], list):
-        data["todos_to_upsert"] = []
-    if not isinstance(data["todos_to_delete"], list):
-        data["todos_to_delete"] = []
 
-    normalized_upsert = []
-    for item in data["todos_to_upsert"]:
+# 引擎 1.5：Todo Tool
+
+TODO_TOOL_PROMPT = """\
+你是 TraceLog 拾迹的 TodoTool。你的任务是只从一条公开 post 中抽取可执行待办。
+
+## JSON 输出格式强制要求
+你必须且只能输出一个标准 JSON 对象，不要包含 Markdown 代码块或解释文字。
+
+{
+  "todos_to_upsert": [
+    {
+      "id": "已有待办的 id（新增待办时必须为 null）",
+      "task": "明确的待办描述",
+      "date": "YYYY-MM-DD 或 null",
+      "start_time": "HH:MM 或 null",
+      "end_time": "HH:MM 或 null",
+      "status": "未完成/已完成"
+    }
+  ],
+  "todos_to_delete": [
+    {
+      "id": "存在于当前待办列表中的确切 id"
+    }
+  ]
+}
+
+## 严格规则
+1. 只处理目标 post 中用户明确表达的任务、DDL、提醒、取消或完成状态。
+2. 不要把情绪、抱怨、建议、愿望或 SOUL 的回复转成待办。
+3. 如果要更新状态或删除任务，必须引用「当前待办」中真实存在的 id；找不到就不要输出。
+4. 新增待办 id 必须为 null。
+5. date 使用 YYYY-MM-DD；start_time/end_time 使用 24 小时 HH:MM；用户未明确提及时填 null。
+6. status 仅允许 "未完成" 或 "已完成"。
+7. 没有待办变化时，两个数组都输出 []。
+
+## 当前时间
+{current_datetime}
+请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
+"""
+
+
+def call_todo_tool(
+    client: "OpenAI",
+    model: str,
+    *,
+    post: str,
+    active_todos: str,
+) -> dict | None:
+    """Extract todo changes from one public post."""
+    user_content = (
+        f"## 当前待办\n\n{active_todos or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 目标公开 post\n\n{post}"
+    )
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            timeout=30,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": TODO_TOOL_PROMPT.replace("{current_datetime}", _now_str())},
+                {"role": "user", "content": user_content},
+            ],
+        )
+    except Exception as e:
+        print(f"[Router] TodoTool 调用失败：{e}")
+        return None
+
+    return _parse_todo_tool_content(response.choices[0].message.content)
+
+
+def _parse_todo_tool_content(content: str | None) -> dict | None:
+    content = _clean_json_content(content)
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"[Router] TodoTool JSON 解析失败：{e}")
+        print(f"[Router] 原始输出片段：{content[:200]}")
+        return None
+
+    if not isinstance(data, dict):
+        print("[Router] TodoTool 响应不是 JSON 对象")
+        return None
+
+    return {
+        "todos_to_upsert": _normalize_todo_upserts(data.get("todos_to_upsert")),
+        "todos_to_delete": _normalize_todo_deletes(data.get("todos_to_delete")),
+    }
+
+
+def _normalize_todo_upserts(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for item in value:
         if not isinstance(item, dict):
             continue
         task = item.get("task")
@@ -366,7 +388,7 @@ def _parse_post_reply_content(content: str | None) -> dict | None:
         status = item.get("status", "未完成")
         if status not in ("未完成", "已完成"):
             status = "未完成"
-        normalized_upsert.append(
+        normalized.append(
             {
                 "id": item.get("id"),
                 "task": task.strip(),
@@ -376,15 +398,17 @@ def _parse_post_reply_content(content: str | None) -> dict | None:
                 "status": status,
             }
         )
-    data["todos_to_upsert"] = normalized_upsert
+    return normalized
 
-    normalized_delete = []
-    for item in data["todos_to_delete"]:
+
+def _normalize_todo_deletes(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for item in value:
         if isinstance(item, dict) and item.get("id"):
-            normalized_delete.append({"id": item.get("id")})
-    data["todos_to_delete"] = normalized_delete
-
-    return data
+            normalized.append({"id": item.get("id")})
+    return normalized
 
 
 # 引擎 2：Light Reflection

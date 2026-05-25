@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import memory
-from core import db
+from core import db, tool_config_service
 from core.soul_service import SoulContext, list_enabled_souls
 
 CONTEXT_POST_COUNT = 3
@@ -40,10 +40,11 @@ def build_context(relevant_post_ids: list[str] | None = None) -> BuiltContext:
         if relevant_posts:
             sections.append(f"# 相关帖子\n\n{relevant_posts}")
 
-    pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
-    if pending:
-        lines = [_format_todo_for_context(todo) for todo in pending]
-        sections.append("# 待办事项\n\n" + "\n".join(lines))
+    if tool_config_service.is_tool_enabled("todo"):
+        pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
+        if pending:
+            lines = [_format_todo_for_context(todo) for todo in pending]
+            sections.append("# 待办事项\n\n" + "\n".join(lines))
 
     return BuiltContext(
         shared_context="\n\n---\n\n".join(sections),

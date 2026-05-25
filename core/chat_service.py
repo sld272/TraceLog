@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import memory
 import router
-from core import db, retrieval, soul_memory_service, soul_service
+from core import db, retrieval, soul_memory_service, soul_service, tool_config_service
 from core.soul_service import SoulContext
 
 if TYPE_CHECKING:
@@ -50,8 +50,6 @@ class ChatReplyResult:
     soul_name: str
     ok: bool
     reply: str
-    todos_to_upsert: list[dict]
-    todos_to_delete: list[dict]
     user_message_id: int
     assistant_message_id: int | None
     error: str | None
@@ -166,9 +164,10 @@ def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
     if related_comments:
         sections.append(f"# 该 SOUL 对相关帖子的历史评论\n\n{related_comments}")
 
-    pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
-    if pending:
-        sections.append("# 待办事项\n\n" + "\n".join(_format_todo(todo) for todo in pending))
+    if tool_config_service.is_tool_enabled("todo"):
+        pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
+        if pending:
+            sections.append("# 待办事项\n\n" + "\n".join(_format_todo(todo) for todo in pending))
 
     messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT)
     if messages:
@@ -205,8 +204,6 @@ def call_chat_reply(
         soul_name=chat_context.thread.soul_name,
         ok=True,
         reply=reply.strip(),
-        todos_to_upsert=list(data.get("todos_to_upsert", [])),
-        todos_to_delete=list(data.get("todos_to_delete", [])),
         user_message_id=user_message_row.id,
         assistant_message_id=assistant_message.id,
         error=None,
@@ -325,8 +322,6 @@ def _failed_result(thread: ChatThread, user_message_id: int, error: str) -> Chat
         soul_name=thread.soul_name,
         ok=False,
         reply=FAILED_CHAT_REPLY,
-        todos_to_upsert=[],
-        todos_to_delete=[],
         user_message_id=user_message_id,
         assistant_message_id=None,
         error=error,

@@ -1,100 +1,93 @@
-"""Todo merging helpers for multi-SOUL replies."""
+"""Optional TodoTool for extracting tasks from public posts."""
 
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 import memory
-from core import db
+import router
+from core import db, tool_config_service
 
 if TYPE_CHECKING:
-    from core.chat_service import ChatReplyResult
-    from core.comment_service import CommentReplyResult
-    from core.reply_service import SoulReplyResult
+    from openai import OpenAI
 
 
-def merge_reply_todos(results: list["SoulReplyResult"]) -> tuple[list[dict], list[dict]]:
-    """Merge todo changes from successful SOUL replies."""
-    upserts: list[dict] = []
-    seen_upsert_keys: set[tuple] = set()
-    delete_ids: set[str] = set()
-    deletes: list[dict] = []
-
-    for result in sorted(results, key=lambda item: (item.sort_order, item.soul_name)):
-        if not result.ok:
-            continue
-
-        for item in result.todos_to_upsert:
-            if not isinstance(item, dict):
-                continue
-            task = item.get("task")
-            if not isinstance(task, str) or not task.strip():
-                continue
-            key = (task.strip(), item.get("date"), item.get("start_time"))
-            if key in seen_upsert_keys:
-                continue
-            seen_upsert_keys.add(key)
-            upserts.append(
-                {
-                    "id": item.get("id"),
-                    "task": task.strip(),
-                    "date": item.get("date"),
-                    "start_time": item.get("start_time"),
-                    "end_time": item.get("end_time"),
-                    "status": item.get("status", "未完成"),
-                }
-            )
-
-        for item in result.todos_to_delete:
-            if not isinstance(item, dict):
-                continue
-            todo_id = item.get("id")
-            if not todo_id:
-                continue
-            todo_id = str(todo_id)
-            if todo_id in delete_ids:
-                continue
-            delete_ids.add(todo_id)
-            deletes.append({"id": todo_id})
-
-    return upserts, deletes
+@dataclass(frozen=True)
+class TodoToolResult:
+    post_id: str
+    applied: bool
+    upserted: int
+    deleted: int
+    skipped: bool
+    error: str | None = None
 
 
-def apply_reply_todos(existing_todos: list, results: list["SoulReplyResult"]) -> list:
-    """Apply merged todo changes and return the refreshed todo list."""
-    to_upsert, to_delete = merge_reply_todos(results)
-    if not to_upsert and not to_delete:
-        return existing_todos
-    todos = memory.upsert_todos(existing_todos, to_upsert, to_delete)
-    memory.save_todos(todos)
-    return todos
+def run_for_post(post_id: str, client: "OpenAI", model: str) -> TodoToolResult:
+    """Run TodoTool for one public post when the todo tool is enabled."""
+    if not tool_config_service.is_tool_enabled("todo"):
+        return TodoToolResult(post_id=post_id, applied=False, upserted=0, deleted=0, skipped=True)
+
+    post = _get_post(post_id)
+    if post is None:
+        raise ValueError(f"post 不存在：{post_id}")
+
+    data = router.call_todo_tool(
+        client=client,
+        model=model,
+        post=_format_post_for_tool(post),
+        active_todos=_format_active_todos(),
+    )
+    if data is None:
+        return TodoToolResult(
+            post_id=post_id,
+            applied=False,
+            upserted=0,
+            deleted=0,
+            skipped=False,
+            error="TodoTool returned invalid JSON",
+        )
+
+    upserted, deleted = apply_post_todos(
+        post_id,
+        data.get("todos_to_upsert", []),
+        data.get("todos_to_delete", []),
+    )
+    return TodoToolResult(
+        post_id=post_id,
+        applied=bool(upserted or deleted),
+        upserted=upserted,
+        deleted=deleted,
+        skipped=False,
+    )
 
 
-def apply_chat_todos(result: "ChatReplyResult", assistant_message_id: int) -> list[dict]:
-    """Apply todo changes from a private chat reply."""
-    return _apply_message_todos(result, "source_chat_message", assistant_message_id)
+def run_for_post_safely(post_id: str, client: "OpenAI", model: str) -> TodoToolResult:
+    """Run TodoTool without interrupting the post/reply/reflection flow."""
+    try:
+        return run_for_post(post_id, client, model)
+    except Exception as exc:
+        return TodoToolResult(
+            post_id=post_id,
+            applied=False,
+            upserted=0,
+            deleted=0,
+            skipped=False,
+            error=str(exc),
+        )
 
 
-def apply_comment_todos(result: "CommentReplyResult", assistant_message_id: int) -> list[dict]:
-    """Apply todo changes from a post comment thread reply."""
-    return _apply_message_todos(result, "source_comment_message", assistant_message_id)
+def apply_post_todos(post_id: str, to_upsert: list, to_delete: list) -> tuple[int, int]:
+    """Apply TodoTool output to SQLite todos and record source_post."""
+    if _get_post(post_id) is None:
+        raise ValueError(f"post 不存在：{post_id}")
 
-
-def _apply_message_todos(
-    result: "ChatReplyResult | CommentReplyResult",
-    source_column: str,
-    source_message_id: int,
-) -> list[dict]:
-    if source_column not in {"source_chat_message", "source_comment_message"}:
-        raise ValueError("未知待办消息来源列")
-    if not result.ok:
-        return memory.load_todos()
-
-    to_upsert, to_delete = _merge_chat_todos(result)
-    if not to_upsert and not to_delete:
-        return memory.load_todos()
+    upserts = _merge_upserts(to_upsert)
+    deletes = _merge_deletes(to_delete)
+    if not upserts and not deletes:
+        return 0, 0
 
     now = db.now_ts()
     existing_rows = {
@@ -111,14 +104,17 @@ def _apply_message_todos(
         for row in existing_rows.values()
     }
 
+    upserted = 0
+    deleted = 0
     with db.transaction() as conn:
-        for item in to_delete:
+        for item in deletes:
             todo_id = item["id"]
             if todo_id in existing_rows:
                 conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
+                deleted += 1
 
-        for item in to_upsert:
-            normalized = _normalize_chat_todo(item)
+        for item in upserts:
+            normalized = _normalize_todo(item)
             if normalized is None:
                 continue
             todo_id = normalized.get("id")
@@ -133,21 +129,22 @@ def _apply_message_todos(
                     """
                     UPDATE todos
                     SET task = ?, date = ?, start_time = ?, end_time = ?, status = ?,
-                        {source_column} = ?, updated_at = ?, completed_at = ?
+                        source_post = ?, updated_at = ?, completed_at = ?
                     WHERE id = ?
-                    """.format(source_column=source_column),
+                    """,
                     (
                         normalized["task"],
                         normalized.get("date"),
                         normalized.get("start_time"),
                         normalized.get("end_time"),
                         normalized["status"],
-                        source_message_id,
+                        post_id,
                         now,
                         completed_at,
                         todo_id,
                     ),
                 )
+                upserted += 1
                 continue
 
             key = (normalized["task"], normalized.get("date"), normalized.get("start_time"))
@@ -160,10 +157,10 @@ def _apply_message_todos(
                 """
                 INSERT INTO todos(
                     id, task, date, start_time, end_time, status,
-                    {source_column}, created_at, updated_at, completed_at
+                    source_post, created_at, updated_at, completed_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """.format(source_column=source_column),
+                """,
                 (
                     new_id,
                     normalized["task"],
@@ -171,32 +168,65 @@ def _apply_message_todos(
                     normalized.get("start_time"),
                     normalized.get("end_time"),
                     normalized["status"],
-                    source_message_id,
+                    post_id,
                     now,
                     now,
                     completed_at,
                 ),
             )
+            upserted += 1
 
-    return memory.load_todos()
+    return upserted, deleted
 
 
-def _merge_chat_todos(result: "ChatReplyResult") -> tuple[list[dict], list[dict]]:
+def _get_post(post_id: str):
+    return db.query_one(
+        """
+        SELECT id, ts, content
+        FROM posts
+        WHERE id = ?
+        """,
+        (post_id,),
+    )
+
+
+def _format_post_for_tool(row) -> str:
+    return (
+        "---\n"
+        f"id: \"{row['id']}\"\n"
+        f"date: \"{row['ts']}\"\n"
+        "type: \"post\"\n"
+        "---\n\n"
+        f"{row['content']}"
+    )
+
+
+def _format_active_todos() -> str:
+    pending = [todo for todo in memory.load_todos() if todo.get("status") != "已完成"]
+    if not pending:
+        return "（暂无）"
+    lines = []
+    for todo in pending:
+        date = todo.get("date") or "无日期"
+        start_time = todo.get("start_time") or ""
+        time_part = f" {start_time}" if start_time else ""
+        lines.append(f"- [{todo.get('id')}] {todo.get('task')}（{date}{time_part}，{todo.get('status')}）")
+    return "\n".join(lines)
+
+
+def _merge_upserts(items: list) -> list[dict]:
     upserts: list[dict] = []
-    seen_upsert_keys: set[tuple] = set()
-    deletes: list[dict] = []
-    delete_ids: set[str] = set()
-
-    for item in result.todos_to_upsert:
+    seen_keys: set[tuple] = set()
+    for item in items:
         if not isinstance(item, dict):
             continue
         task = item.get("task")
         if not isinstance(task, str) or not task.strip():
             continue
         key = (task.strip(), item.get("date"), item.get("start_time"))
-        if key in seen_upsert_keys:
+        if key in seen_keys:
             continue
-        seen_upsert_keys.add(key)
+        seen_keys.add(key)
         upserts.append(
             {
                 "id": item.get("id"),
@@ -207,23 +237,28 @@ def _merge_chat_todos(result: "ChatReplyResult") -> tuple[list[dict], list[dict]
                 "status": item.get("status", "未完成"),
             }
         )
+    return upserts
 
+
+def _merge_deletes(items: list) -> list[dict]:
     existing_ids = {todo["id"] for todo in memory.load_todos()}
-    for item in result.todos_to_delete:
+    deletes: list[dict] = []
+    seen_ids: set[str] = set()
+    for item in items:
         if not isinstance(item, dict):
             continue
         todo_id = item.get("id")
         if not todo_id:
             continue
         todo_id = str(todo_id)
-        if todo_id in delete_ids or todo_id not in existing_ids:
+        if todo_id in seen_ids or todo_id not in existing_ids:
             continue
-        delete_ids.add(todo_id)
+        seen_ids.add(todo_id)
         deletes.append({"id": todo_id})
-    return upserts, deletes
+    return deletes
 
 
-def _normalize_chat_todo(item: dict) -> dict | None:
+def _normalize_todo(item: dict) -> dict | None:
     task = item.get("task")
     if not isinstance(task, str) or not task.strip():
         return None

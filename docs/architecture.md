@@ -15,7 +15,7 @@
 
 ### 当前实现状态（2026-05-25）
 
-当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls` 与 `soul_memories` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`，多 SOUL 待办结果由 `core/todo_service.py` 合并落库；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装、LLM 回复与待办合流；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表；`core/profile_service.py` 已支持深反思画像 patch，normal 章节自动落盘，high 章节使用更高阈值自动落盘。
+当前代码已完成 v3 地基的第一步：`schema.sql` 作为唯一 SQLite 初始化脚本；`core/db.py` 负责 `workspace/state.db` 初始化、WAL、外键和 FTS5/trigram 可用性检查；CLI 的 `memory.py` 已切到 SQLite 主存储，帖子、待办和 `user.md` revision 都写入 `state.db`；运行 `memory.init_workspace()` 时会通过 `core/soul_service.py` 在被 gitignore 的 `workspace/` 下创建默认 `souls` 与 `soul_memories` 文件，并同步 `souls` / `soul_memory_revisions` 表。发帖写入已抽到 `core/record_service.py`，相关历史检索已接入 FTS5 + ChromaDB 的 RRF hybrid 检索；共享上下文组装已抽到 `core/context_builder.py`；`core/soul_service.py` 已支持 SOUL 同步、列表、新建/编辑、启用/禁用与排序；`core/soul_memory_service.py` 已支持 SOUL 相处记忆读写与 revision 记录；公开评论已由 `core/reply_service.py` 支持多 SOUL 并发生成并写入 `comments`；`core/todo_service.py` 已作为可选 TodoTool 只从公开 post 独立抽取待办并写入 `todos.source_post`；私聊已由 `core/chat_service.py` 支持单 SOUL 线程、消息落库、上下文组装与 LLM 回复，不触发待办抽取；`core/reflector.py` 已支持每条 post 的轻反思抽取、失败重试、CLI 退出时触发全局深反思并写入 `reflections` 表；`core/profile_service.py` 已支持深反思画像 patch，normal 章节自动落盘，high 章节使用更高阈值自动落盘。
 
 尚未完成：私聊摘要沉淀、导出和 Web/API 层。
 
@@ -362,7 +362,8 @@ CREATE TABLE IF NOT EXISTS todos (
     end_time    TEXT,
     status      TEXT NOT NULL DEFAULT '未完成',  -- 未完成 / 已完成
     source_post         TEXT REFERENCES posts(id) ON DELETE SET NULL,
-    source_chat_message INTEGER REFERENCES chat_messages(id) ON DELETE SET NULL,
+    source_chat_message INTEGER REFERENCES chat_messages(id) ON DELETE SET NULL, -- 兼容旧版本，新流程不再写
+    source_comment_message INTEGER REFERENCES comment_messages(id) ON DELETE SET NULL, -- 兼容旧版本，新流程不再写
     created_at  REAL NOT NULL,
     updated_at  REAL NOT NULL,
     completed_at REAL
@@ -525,7 +526,7 @@ updated_at: 2026-05-23T22:00:00+08:00
 - 一篇 post 触发 N 次 LLM 调用（N = `souls.enabled=1` 数量）
 - 每次调用使用相同的 user.md + 共享检索上下文，但 persona 段和 SOUL 记忆段不同
 - 每条返回作为一行写入 `comments` 表（`is_main=0`），前端按评论流形式展示
-- 待办抽取由所有启用 SOUL 都参与产出，主流程做去重 + 合并（见 §6.1 [4]）
+- TodoTool 是独立可选工具，只从公开 post 抽取待办，不由 SOUL 回复产出
 - 用户可随时把某个 SOUL 的 `enabled` 切到 0；后续 post 不再触发该 SOUL，但历史评论保留可读
 
 成本与延迟控制：
@@ -725,14 +726,14 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
     │   - 为每个启用 SOUL 读取 soul_memories/<name>.md
     │   - FTS5 + ChromaDB 双轨检索 top-k 相关历史
     │   - 读最近若干条 post（时间近邻）
-    │   - 读活跃待办
+    │   - Todo 工具开启时读取活跃待办
     │   - 输出：共享上下文 + 启用 SOUL 列表 + 每个 SOUL 的私有记忆
     │
     ▼
 [3] ReplyService.fanout(post_id, shared_context, enabled_souls)
     │   并发对每个启用 SOUL 调用 LLM：
     │   ├─ system prompt = 该 SOUL 的人格段 + 该 SOUL 的相处记忆 + 共享上下文
-    │   ├─ 返回 reply + todos_to_upsert + todos_to_delete
+    │   ├─ 返回 reply
     │   └─ 写一行到 state.db.comments（post_id, soul_name, content）
     │
     │   主 SOUL 规则：
@@ -741,11 +742,11 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
     │     主流程优先用主 SOUL 的 reply 走工具调用
     │
     ▼
-[4] TodoService.merge_and_apply(all_todos_from_souls)
-    │   - 多 SOUL 抽取的 todos_to_upsert 用 (task, date, start_time) 去重
-    │   - todos_to_delete 取并集，但只有引用现存 id 才生效（沿用现有校验）
-    │   - 交互项目：默认采用所有启用 SOUL 的合并结果
-    │   - Agent 项目：默认只采用主 SOUL，其他 SOUL 的待办抽取存入 comments.metadata 备查
+[4] TodoTool.run_for_post(post_id)
+    │   - 可选开启，默认开启
+    │   - 只读取当前公开 post + 当前活跃待办
+    │   - 输出 todos_to_upsert / todos_to_delete，并写入 todos.source_post
+    │   - 与 SOUL 回复、私聊、评论线程解耦
     │
     ▼
 [5] 前端展示评论流
@@ -825,27 +826,22 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
     │      - 用 thread 最近若干轮做 query，对 posts 走 RRF 检索 top-k 原文
     │      - 同时从 comments 拉该 SOUL 自己历史评论里命中的条目
     │      （让 SOUL 在私聊里能引用"用户发过什么 + 我当时怎么评的"）
-    │   ⑤ 当前活跃待办（与 post 流程一致）
+    │   ⑤ 当前活跃待办（仅 Todo 工具开启时注入）
     │   ⑥ 当前线程的消息序列（最近 N 轮 + token 预算截断；远端老消息可由前一轮 LLM 摘要替换）
     │
     ▼
 [3] ChatService.call_chat_reply(soul, context, user_message)
     │   - 单次 LLM 调用，response_format=json_object
-    │   - 返回 reply + todos_to_upsert + todos_to_delete
+    │   - 返回 reply
     │   - 写一行到 chat_messages（role=assistant）
-    │   - 待办落盘时，todos.source_chat_message 指向该 assistant message id
     │
     ▼
-[4] TodoService.merge_and_apply(todos_from_chat)
-    │   - 与 post 流程共用同一个 todos 表与去重逻辑
-    │   - 用 (task, date, start_time) 去重；按线程内最新一次为准
-    │
-    ▼
-[5] 前端展示该消息
+[4] 前端展示该消息
         │
         ▼
         - 不触发全局轻反思（私聊不是 post）
-        - 后台可异步更新当前 SOUL 的相处记忆
+        - 不触发 TodoTool（待办只从公开 post 抽取）
+        - SOUL 深反思时读取原始私聊，更新当前 SOUL 的相处记忆
         - 不写 ChromaDB
         - 不出现在公开评论流
 ```
@@ -856,7 +852,7 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
 | --- | --- |
 | 写 user 消息 | 整个流程失败，提示重发 |
 | LLM 调用失败 | user 消息已落盘，assistant 行暂缺；前端提供"重试"按钮再次调用同一 thread |
-| 待办合流失败 | 不影响消息落盘；后台批量补跑 |
+| SOUL 深反思失败 | 不影响消息落盘；下次深反思可再次处理 |
 
 ### 6.5 私聊与公开评论的边界
 
@@ -866,7 +862,7 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
 | 可见性 | 同帖下所有 SOUL 平权可见 | 仅当前 SOUL + 用户 |
 | 进 ChromaDB / FTS5 | ✗（仅 posts 进） | ✗（明确不进，避免污染语义检索） |
 | 进反思器 | 评论本身不进全局画像；可进入对应 SOUL 的相处记忆 | 不进全局画像；摘要只进入当前 SOUL 的相处记忆 |
-| 待办抽取 | 多 SOUL 合并去重 | 与 post 流程共用 todos 表，按线程做合并 |
+| 待办抽取 | TodoTool 仅从公开 post 抽取 | 不从私聊抽取 |
 | SOUL 切换 | 跟 souls.enabled 联动 | SOUL 被 disable 后旧线程只读，无法继续追加 |
 
 ---
@@ -1317,12 +1313,12 @@ my-tracelog-backup/
 - [x] 抽出完整 `SoulService`：启用/禁用、排序、新建/编辑 SOUL
 - [x] `SoulMemoryService`：加载/保存 `soul_memories/<name>.md`，写 `soul_memory_revisions`
 - [x] CLI 至少能展示多个 SOUL 的评论流
-- [x] 多 SOUL 待办抽取的合并与去重（§6.1 [4]）
+- [x] TodoTool 从公开 post 独立抽取待办，写入 `todos.source_post`
 - [x] `chat_threads` / `chat_messages` 表 + `ChatService`：与单个 SOUL 私聊、按 thread 加载历史
 - [x] CLI 私聊命令：`/chat <soul>` 进入线程，`/chat list` 看线程列表
 - [x] 私聊检索：用 thread 最近若干轮做 query 对 posts 走 RRF + 拉取该 SOUL 历史评论
 - [ ] 私聊摘要进入对应 `soul_memories/<name>.md`，不进入全局 `user.md`
-- [x] 私聊待办合流到 `todos` 表（共用合并逻辑，`source_chat_message` 记溯源）
+- [x] 私聊不触发 TodoTool；待办工具作为可选工具只处理公开 post
 - [x] `ProfileService.apply_patch`：解析 sensitivity 阈值 → 直落或丢弃；写 `user_md_revisions`
 - [x] 轻反思最简版（同步实现也可以，第一期不强求异步）：每帖抽取 entities + emotions + events + importance
 - [x] 深反思最简版：CLI 退出时触发，生成 reflection 并写入 `reflections`
@@ -1397,7 +1393,7 @@ my-tracelog-backup/
 | SOUL 存哪 | `souls/*.md` 文件库 + `souls` 表管理启用/排序 | 文件可分享、可模板化；DB 表负责状态切换不刷文件系统 |
 | SOUL 记忆存哪 | `soul_memories/*.md` + `soul_memory_revisions` | 借鉴 Hermes/Honcho 的 peer-specific memory 思路，但完全本地实现；每个 SOUL 根据自己的风格形成不同理解 |
 | SOUL 调用模型 | 交互项目默认所有启用 SOUL 并发评论；Agent 项目可指定主 SOUL | 入口层是社交媒体形态，多 AI 好友并列才有"群聊"质感；Agent 形态需要单一智能体出口 |
-| 私聊与主记忆 | 私聊独立存 `chat_threads` / `chat_messages`，不写 posts，不进 ChromaDB / FTS5；不直接进全局 `user.md`；摘要只沉淀到对应 SOUL 的 `soul_memories/<name>.md`；待办与 posts 共用同一张 todos 表 | 私聊噪声大，进检索池或全局画像会污染语义结果；但它能塑造某个 SOUL 与用户的关系记忆 |
+| 私聊与主记忆 | 私聊独立存 `chat_threads` / `chat_messages`，不写 posts，不进 ChromaDB / FTS5；不直接进全局 `user.md`；SOUL 深反思只沉淀到对应 `soul_memories/<name>.md`；不触发 TodoTool | 私聊噪声大，进检索池、全局画像或待办工具都会污染主流程；但它能塑造某个 SOUL 与用户的关系记忆 |
 | 用户档案/画像 | 合并为 `user.md`，AI 与用户共同编辑，章节带 sensitivity；high 章节 AI 改动需更高置信度 | 一个文件心智更清爽；AI 与用户对等编辑权但对硬事实加保险栏 |
 | 检索 | FTS5（双 tokenizer）+ ChromaDB + RRF | 中文必须 trigram；语义必须向量 |
 | 反思 | 异步 LLM agent，参考 Hermes background_review | 轻反思每帖、深反思按可配置条件触发 |
@@ -1422,7 +1418,7 @@ my-tracelog-backup/
 | 多 SOUL 全启用导致延迟与成本上升 | 单帖触发 N 倍 token | 第一期内置 SOUL 控制在 2—3 个；并发执行；前端流式渲染先到先显示；`enabled` 默认值由用户自行调整 |
 | SOUL 记忆被私聊噪声带偏 | 某个 SOUL 对用户的理解变得片面 | 私聊摘要 prompt 强调"短期情绪 vs 稳定偏好"；SOUL 记忆写入保留内部留痕；全局 user.md 不读私聊摘要 |
 | 用户与 AI 对同一条目同时编辑 | 后写覆盖前写 | 内部留痕保留写入快照；前端以当前画像为准，用户可直接再次编辑 |
-| 私聊待办与 post 待办重复 | 同一 deadline 被记两次 | 合并键统一为 (task, date, start_time)，最近一次为准；前端展示时显示唯一来源 |
+| post 待办重复 | 同一 deadline 被记两次 | TodoTool 只从公开 post 抽取；合并键统一为 (task, date, start_time)，前端展示时显示 `source_post` |
 
 ---
 

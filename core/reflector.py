@@ -13,6 +13,7 @@ from core import db
 from core import profile_service
 from core import soul_memory_service
 from core import soul_service
+from core import tool_config_service
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -141,7 +142,7 @@ def trigger_global_deep_reflection(
         return None
 
     profile = memory.read_profile()
-    todos = memory.load_todos()
+    todos = memory.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     related_post_ids = [row["id"] for row in posts]
     reflection_result = router.call_global_deep_reflection(
         client=client,
