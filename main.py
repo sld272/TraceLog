@@ -11,6 +11,7 @@ from core import context_builder
 from core import record_service
 from core import reply_service
 from core import retrieval
+from core import soul_service
 from core import todo_service
 import router
 import memory
@@ -28,6 +29,82 @@ def _is_valid_profile(content: str | None) -> bool:
         return False
     has_markdown_structure = ("##" in text) or ("- " in text)
     return has_markdown_structure
+
+
+def _handle_soul_command(user_input: str) -> bool:
+    """Handle SOUL management commands. Returns True if input was a command."""
+    if user_input == "/souls":
+        _print_souls()
+        return True
+    if user_input != "/soul" and not user_input.startswith("/soul "):
+        return False
+
+    parts = user_input.split(maxsplit=3)
+    if len(parts) == 1:
+        _print_soul_help()
+        return True
+
+    action = parts[1]
+    try:
+        if action == "resync":
+            soul_service.sync_souls()
+            print("[SOUL] 已重新扫描 SOUL 库。\n")
+            _print_souls()
+        elif action == "enable" and len(parts) >= 3:
+            record = soul_service.enable_soul(parts[2])
+            print(f"[SOUL] 已启用：{record.name}\n")
+        elif action == "disable" and len(parts) >= 3:
+            record = soul_service.disable_soul(parts[2])
+            print(f"[SOUL] 已禁用：{record.name}\n")
+        elif action == "reorder" and len(parts) >= 3:
+            names = parts[2:]
+            if len(parts) == 4:
+                names = [parts[2], *parts[3].split()]
+            soul_service.reorder_souls(names)
+            print("[SOUL] 排序已更新。\n")
+            _print_souls()
+        elif action == "create" and len(parts) >= 3:
+            name = parts[2]
+            description = parts[3] if len(parts) >= 4 else None
+            record = soul_service.create_soul(name, description=description)
+            print(f"[SOUL] 已创建：{record.name}。可编辑 workspace/{record.file_path} 调整人格。\n")
+        else:
+            _print_soul_help()
+    except ValueError as exc:
+        print(f"[SOUL] {exc}\n")
+    except OSError as exc:
+        print(f"[SOUL] 文件操作失败：{exc}\n")
+    return True
+
+
+def _print_souls() -> None:
+    records = soul_service.list_souls()
+    if not records:
+        print("[SOUL] 当前没有 SOUL。可用 /soul resync 初始化。\n")
+        return
+    print("\n[SOUL 库]")
+    for record in records:
+        status = "启用" if record.enabled else "禁用"
+        persona_status = "" if record.persona_exists else "（人格文件缺失）"
+        memory_status = "" if record.memory_exists else "（记忆文件缺失）"
+        description = f" - {record.description}" if record.description else ""
+        print(
+            f"{record.sort_order:02d}. [{status}] {record.name}"
+            f"{description}{persona_status}{memory_status}"
+        )
+    print()
+
+
+def _print_soul_help() -> None:
+    print(
+        "[SOUL] 可用命令：\n"
+        "  /souls\n"
+        "  /soul create <name> [description]\n"
+        "  /soul enable <name>\n"
+        "  /soul disable <name>\n"
+        "  /soul reorder <name1> <name2> ...\n"
+        "  /soul resync\n"
+    )
 
 
 def load_config() -> dict:
@@ -157,6 +234,8 @@ def main():
             break
 
         if not user_input:
+            continue
+        if _handle_soul_command(user_input):
             continue
 
         # 1. 先检索历史（不包含当前输入），避免“自己搜自己”
