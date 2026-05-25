@@ -9,47 +9,30 @@ from typing import cast
 from openai import OpenAI
 from core import chat_service
 from core import context_builder
+from core import reflector
 from core import record_service
 from core import reply_service
 from core import retrieval
 from core import soul_service
 from core import todo_service
-import router
 import memory
 import vectorstore
 
 CONFIG_FILE = "config.json"
 
 
-def _is_valid_profile(content: str | None) -> bool:
-    """校验画像文本是否具备最小有效性，避免仅靠长度阈值误判。"""
-    if not content:
-        return False
-    text = content.strip()
-    if len(text) < 10:
-        return False
-    has_markdown_structure = ("##" in text) or ("- " in text)
-    return has_markdown_structure
-
-
-def _flush_profile_on_exit(client: OpenAI, model: str) -> None:
-    print("\n\n[记忆] 正在静默整理今日记忆，请稍候（请勿再次终止）...")
+def _run_deep_reflection_on_exit(client: OpenAI, model: str) -> None:
+    print("\n\n[反思] 正在触发一次深反思，请稍候（请勿再次终止）...")
     try:
-        new_profile = router.flush_profile(
-            client, model,
-            old_profile=memory.read_profile(),
-            recent_posts=memory.read_recent_posts(),
-        )
-        if _is_valid_profile(new_profile):
-            profile_text = cast(str, new_profile)
-            memory.write_profile(profile_text.strip())
-            print("[记忆] 画像已更新。")
+        result = reflector.trigger_global_deep_reflection(client, model, trigger="cli_exit")
+        if result is None:
+            print("[反思] 没有新的公开记录，已跳过本次深反思。")
         else:
-            print("[记忆] 画像内容无效或过短，已放弃本次覆盖，保护旧数据。")
+            print(f"[反思] 深反思已保存（id={result.id}，覆盖 {len(result.related_post_ids)} 条记录）。")
     except KeyboardInterrupt:
-        print("\n[警告] 记忆整理被强制中断，已保留旧画像。")
+        print("\n[警告] 深反思被强制中断，已有数据保持不变。")
     except Exception as e:
-        print(f"[记忆] 画像整理失败：{e}，已保留旧画像。")
+        print(f"[反思] 深反思失败：{e}，已有数据保持不变。")
     print("再见！\n")
 
 
@@ -331,14 +314,14 @@ def main():
             if user_input.lower() == "/quit":
                 raise KeyboardInterrupt
         except (KeyboardInterrupt, EOFError):
-            _flush_profile_on_exit(client, model)
+            _run_deep_reflection_on_exit(client, model)
             break
 
         if not user_input:
             continue
         chat_handled, todos, quit_requested = _handle_chat_command(user_input, client, model, todos)
         if quit_requested:
-            _flush_profile_on_exit(client, model)
+            _run_deep_reflection_on_exit(client, model)
             break
         if chat_handled:
             continue

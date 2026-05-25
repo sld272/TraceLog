@@ -1,7 +1,7 @@
 ﻿"""
-TraceLog 拾迹 — LLM Router（双引擎）
+TraceLog 拾迹 — LLM Router
 Post Reply: 共情回复 + 待办提取
-Memory Flush: 重写 profile.md 画像
+Deep Reflection: 生成全局深反思
 """
 
 import json
@@ -290,47 +290,56 @@ def _parse_post_reply_content(content: str | None) -> dict | None:
     return data
 
 
-# 引擎 2：Memory Flush
+# 引擎 2：Global Deep Reflection
 
-FLUSH_PROMPT = """\
-你是 TraceLog 拾迹的记忆整理引擎。
+GLOBAL_DEEP_REFLECTION_PROMPT = """\
+你是 TraceLog 拾迹的全局深反思引擎。
 
-你的任务是读取用户的「旧画像」和「近期帖子」，将其合并提炼，输出一份更新后的、结构化的 Markdown 用户画像。
-
-## 画像合并策略（极其重要）
-1. **保留核心**：旧画像中未被新帖子否定的信息，必须完整保留，不允许随意丢弃。
-2. **吸收新知**：从近期帖子中提取新信息并补充到对应模块。
-3. **解决冲突**：若新帖子与旧画像冲突，以新帖子信息为准更新。
+你会读取用户档案、当前待办和本次触发范围内的帖子，生成一份适合用户回看和行动的深反思。
 
 ## 输出要求
-- 全篇使用第二人称“你”叙述。
 - 仅输出 Markdown 纯文本，不要输出代码块标记。
-- 使用多级标题（##）、列表（-）和加粗（**）保证结构清晰。
-- 仅保留有实质内容的模块，不写“暂无”或“未提及”。建议包含：
-    - 身份与现状
-    - 技能与专长
-    - 兴趣与习惯
-    - 关注的核心人际关系
-    - 性格与情绪倾向
-    - 长期目标与当前痛点
-- 严禁捏造或过度推断，仅基于提供内容进行事实总结。
+- 使用第二人称“你”叙述，语气真诚、具体、克制。
+- 不要重写用户档案，不要输出 JSON，不要输出 profile patch。
+- 严禁捏造事实；观点必须能从输入中找到依据。
+- 建议包含这些部分：
+  - 主线事件回顾
+  - 情绪与状态趋势
+  - 反复出现的压力源或能量来源
+  - 待办与行动线索
+  - 下一步建议
+
+## 当前时间
+{current_datetime}
 """
 
 
-def flush_profile(client: "OpenAI", model: str, old_profile: str, recent_posts: str) -> str | None:
-    """Memory Flush：读取旧画像 + 近期帖子，让 LLM 重写 profile.md。"""
-    user_content = f"## 旧画像\n\n{old_profile or '（无）'}\n\n---\n\n## 近期帖子\n\n{recent_posts or '（无）'}"
+def call_global_deep_reflection(
+    client: "OpenAI",
+    model: str,
+    profile: str,
+    posts: str,
+    todos: str,
+) -> str | None:
+    """Generate one global deep reflection in Markdown."""
+    user_content = (
+        f"## 用户档案\n\n{profile or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 当前待办\n\n{todos or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 本次触发范围内的帖子\n\n{posts or '（暂无）'}"
+    )
 
     try:
         response = client.chat.completions.create(
             model=model,
-            timeout=30,
+            timeout=45,
             messages=[
-                {"role": "system", "content": FLUSH_PROMPT},
+                {"role": "system", "content": GLOBAL_DEEP_REFLECTION_PROMPT.format(current_datetime=_now_str())},
                 {"role": "user", "content": user_content},
             ],
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        print(f"[Router] 画像刷新失败：{e}")
+        print(f"[Router] 深反思生成失败：{e}")
         return None
