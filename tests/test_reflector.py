@@ -106,6 +106,38 @@ class ReflectorTest(unittest.TestCase):
         self.assertIsNone(second)
         self.assertEqual(1, client.calls)
 
+    def test_global_deep_reflection_failure_keeps_posts_for_next_retry(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天完成了比赛计划。")
+        bad_client = FakeClient(content=json.dumps({"reflection_md": "太短", "patches": []}, ensure_ascii=False))
+
+        with self.assertRaises(ValueError):
+            reflector.trigger_global_deep_reflection(bad_client, "fake-model", trigger="cli_exit")
+
+        rows = db.query_all("SELECT id FROM reflections WHERE type = ?", ("global_deep",))
+        self.assertEqual([], rows)
+
+        good_client = FakeClient()
+        result = require_not_none(reflector.trigger_global_deep_reflection(good_client, "fake-model", trigger="cli_exit"))
+
+        self.assertEqual(["20260525-001"], result.related_post_ids)
+
+    def test_preview_global_deep_reflection_scope_matches_pending_posts(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "第一条。")
+        self._insert_post("20260525-002", "2026-05-25T11:00:00+08:00", "第二条。")
+
+        scope = reflector.preview_global_deep_reflection_scope()
+
+        self.assertEqual(["20260525-001", "20260525-002"], scope.post_ids)
+        self.assertEqual("2026-05-25T10:00:00+08:00", scope.scope_start)
+        self.assertEqual("2026-05-25T11:00:00+08:00", scope.scope_end)
+
+        reflector.trigger_global_deep_reflection(FakeClient(), "fake-model", trigger="cli_exit")
+        empty_scope = reflector.preview_global_deep_reflection_scope()
+
+        self.assertEqual([], empty_scope.post_ids)
+        self.assertIsNone(empty_scope.scope_start)
+        self.assertIsNone(empty_scope.scope_end)
+
     def test_trigger_global_deep_reflection_applies_profile_patches_and_metadata(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天开始准备比赛。")
         payload = {
@@ -327,6 +359,49 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual(1, len(first))
         self.assertEqual([], second)
         self.assertEqual(1, client.calls)
+
+    def test_soul_deep_reflection_invalid_result_does_not_advance_cursor(self) -> None:
+        soul_service.sync_souls()
+        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_user = chat_service.append_user_message(chat_thread.id, "这条需要稍后补跑")
+        bad_client = FakeClient(content=json.dumps({"reflection_md": "太短", "patches": []}, ensure_ascii=False))
+
+        first = reflector.trigger_soul_deep_reflections(bad_client, "fake-model", trigger="cli_exit")
+
+        self.assertEqual([], first)
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_deep_cursor:默认",)))
+
+        payload = {
+            "reflection_md": "## SOUL 深反思\n\n用户留下了一条需要在下次退出时补跑的私聊。",
+            "patches": [
+                {
+                    "section": "对用户的理解",
+                    "ops": [{"op": "add", "value": "用户测试 SOUL 补偿语义"}],
+                    "evidence": [f"chat_message:{chat_user.id}"],
+                    "confidence": 0.8,
+                }
+            ],
+        }
+        good_client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+        second = reflector.trigger_soul_deep_reflections(good_client, "fake-model", trigger="cli_exit")
+
+        self.assertEqual(1, len(second))
+        self.assertEqual(1, second[0].interaction_count)
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_deep_cursor:默认",)))
+
+    def test_preview_soul_deep_reflection_scopes_match_pending_interactions(self) -> None:
+        soul_service.sync_souls()
+        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_service.append_user_message(chat_thread.id, "这条会进入 preview")
+
+        scopes = reflector.preview_soul_deep_reflection_scopes()
+
+        self.assertEqual(1, len(scopes))
+        self.assertEqual("默认", scopes[0].soul_name)
+        self.assertEqual(1, scopes[0].interaction_count)
+
+        reflector.trigger_soul_deep_reflections(FakeClient(), "fake-model", trigger="cli_exit")
+        self.assertEqual([], reflector.preview_soul_deep_reflection_scopes())
 
     def _insert_post(self, post_id: str, ts: str, content: str) -> None:
         db.execute(

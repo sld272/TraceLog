@@ -33,6 +33,13 @@ class DeepReflectionResult:
 
 
 @dataclass(frozen=True)
+class GlobalDeepReflectionScope:
+    post_ids: list[str]
+    scope_start: str | None
+    scope_end: str | None
+
+
+@dataclass(frozen=True)
 class LightReflectionResult:
     post_id: str
     entities: list[dict]
@@ -51,6 +58,14 @@ class SoulDeepReflectionResult:
     scope_end: float
     interaction_count: int
     patch_summary: dict
+
+
+@dataclass(frozen=True)
+class SoulDeepReflectionScope:
+    soul_name: str
+    interaction_count: int
+    scope_start: float
+    scope_end: float
 
 
 def trigger_light_reflection(
@@ -124,6 +139,36 @@ def retry_pending_light_reflections(
         except Exception:
             continue
     return fixed
+
+
+def preview_global_deep_reflection_scope(limit: int = 100) -> GlobalDeepReflectionScope:
+    """Preview which public posts would be covered by the next global deep reflection."""
+    posts = _load_posts_since_last_reflection(limit)
+    if not posts:
+        return GlobalDeepReflectionScope(post_ids=[], scope_start=None, scope_end=None)
+    return GlobalDeepReflectionScope(
+        post_ids=[row["id"] for row in posts],
+        scope_start=posts[0]["ts"],
+        scope_end=posts[-1]["ts"],
+    )
+
+
+def preview_soul_deep_reflection_scopes(limit_per_soul: int = 100) -> list[SoulDeepReflectionScope]:
+    """Preview SOUL interactions that would be covered by the next SOUL deep reflection."""
+    scopes: list[SoulDeepReflectionScope] = []
+    for soul in soul_service.list_enabled_souls():
+        interactions = _load_soul_interactions_since_cursor(soul.name, limit_per_soul)
+        if not interactions:
+            continue
+        scopes.append(
+            SoulDeepReflectionScope(
+                soul_name=soul.name,
+                interaction_count=len(interactions),
+                scope_start=float(interactions[0]["created_at"]),
+                scope_end=float(max(item["created_at"] for item in interactions)),
+            )
+        )
+    return scopes
 
 
 def trigger_global_deep_reflection(

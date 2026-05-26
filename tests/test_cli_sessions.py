@@ -58,6 +58,56 @@ class CliSessionsTest(unittest.TestCase):
 
         self.assertEqual((todos, True), result)
 
+    def test_exit_reflection_message_describes_compensation(self) -> None:
+        output = StringIO()
+        global_result = SimpleNamespace(
+            id=7,
+            related_post_ids=["p1", "p2"],
+            patch_summary={"applied": 0, "skipped": 0},
+        )
+        soul_result = SimpleNamespace(patch_summary={"applied": 1, "skipped": 0})
+
+        with (
+            patch(
+                "core.cli.sessions.reflector.preview_global_deep_reflection_scope",
+                return_value=SimpleNamespace(post_ids=["p1", "p2"]),
+            ),
+            patch("core.cli.sessions.reflector.trigger_global_deep_reflection", return_value=global_result),
+            patch(
+                "core.cli.sessions.reflector.preview_soul_deep_reflection_scopes",
+                return_value=[SimpleNamespace(interaction_count=3)],
+            ),
+            patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[soul_result]),
+            redirect_stdout(output),
+        ):
+            sessions.run_deep_reflection_on_exit(object(), "model")
+
+        text = output.getvalue()
+        self.assertIn("正在检查并补跑未完成的退出反思", text)
+        self.assertIn("检测到 2 条尚未深反思的公开记录，正在补跑", text)
+        self.assertIn("检测到 3 条尚未沉淀的 SOUL 互动，正在补跑", text)
+        self.assertNotIn("正在触发一次深反思", text)
+
+    def test_exit_reflection_global_keyboard_interrupt_keeps_warning(self) -> None:
+        output = StringIO()
+
+        with (
+            patch(
+                "core.cli.sessions.reflector.preview_global_deep_reflection_scope",
+                return_value=SimpleNamespace(post_ids=[]),
+            ),
+            patch("core.cli.sessions.reflector.trigger_global_deep_reflection", side_effect=KeyboardInterrupt),
+            patch(
+                "core.cli.sessions.reflector.preview_soul_deep_reflection_scopes",
+                return_value=[],
+            ),
+            patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[]),
+            redirect_stdout(output),
+        ):
+            sessions.run_deep_reflection_on_exit(object(), "model")
+
+        self.assertIn("深反思被强制中断，已有数据保持不变", output.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
