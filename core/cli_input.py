@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import os
 import sys
-import termios
-import tty
 import unicodedata
 from shutil import get_terminal_size
+
+if os.name == "nt":
+    termios = None
+    tty = None
+else:
+    import termios
+    import tty
 
 
 def read_cli_input(prompt: str) -> str:
     """Read one input line, redrawing explicitly so CJK backspace stays sane."""
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
+    if _is_windows() or not sys.stdin.isatty() or not sys.stdout.isatty():
+        return input(prompt)
+
+    if termios is None or tty is None:
         return input(prompt)
 
     old_settings = termios.tcgetattr(sys.stdin)
@@ -21,6 +30,10 @@ def read_cli_input(prompt: str) -> str:
         return editor.read()
     finally:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 class _LineEditor:
