@@ -34,6 +34,8 @@ def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
             )
         else:
             print("[反思] 没有新的 SOUL 互动，已跳过 SOUL 深反思。")
+    except KeyboardInterrupt:
+        print("\n[警告] SOUL 深反思被强制中断，已有数据保持不变。")
     except Exception as e:
         print(f"[反思] SOUL 深反思失败：{e}，已有数据保持不变。")
     print("再见！\n")
@@ -76,7 +78,7 @@ def run_comment_session(
     while True:
         try:
             raw_input = read_cli_input(f"[{thread.soul_name} 评论] 你: ")
-        except EOFError:
+        except (KeyboardInterrupt, EOFError):
             return current_todos, True
         user_message = raw_input.strip()
         if not user_message:
@@ -111,7 +113,7 @@ def run_chat_session(
     while True:
         try:
             raw_input = read_cli_input(f"[{thread.soul_name}] 你: ")
-        except EOFError:
+        except (KeyboardInterrupt, EOFError):
             return current_todos, True
         user_message = raw_input.strip()
         if not user_message:
