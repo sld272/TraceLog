@@ -20,6 +20,13 @@ class VectorStoreInitResult:
     path: str
 
 
+@dataclass(frozen=True)
+class VectorHit:
+    post_id: str
+    rank: int
+    distance: float | None
+
+
 class VectorStoreInitError(RuntimeError):
     """Raised when the vector store cannot be initialized."""
 
@@ -82,13 +89,33 @@ def search_relevant_posts(query: str, n_results: int = 3) -> list[str]:
 
 def query_post_ids(query: str, n_results: int = 20) -> list[str]:
     """语义检索相关帖子，返回按相关性排序的 post_id 列表。"""
+    return [hit.post_id for hit in query_post_hits(query, n_results)]
+
+
+def query_post_hits(query: str, n_results: int = 20) -> list[VectorHit]:
+    """语义检索相关帖子，返回排序与可选 distance 信号。"""
     if _collection is None:
         return []
     count = _collection.count()
     if count == 0:
         return []
     n = min(n_results, count)
-    results = _collection.query(query_texts=[query], n_results=n)
+    try:
+        results = _collection.query(query_texts=[query], n_results=n, include=["distances"])
+    except Exception:
+        results = _collection.query(query_texts=[query], n_results=n)
     if results and results.get("ids") and len(results["ids"]) > 0:
-        return results["ids"][0]
+        ids = results["ids"][0]
+        distances = _first_result_list(results.get("distances"))
+        hits: list[VectorHit] = []
+        for index, post_id in enumerate(ids):
+            distance = distances[index] if distances is not None and index < len(distances) else None
+            hits.append(VectorHit(post_id=str(post_id), rank=index + 1, distance=distance))
+        return hits
     return []
+
+
+def _first_result_list(value) -> list[float] | None:
+    if not value or len(value) == 0:
+        return None
+    return value[0]

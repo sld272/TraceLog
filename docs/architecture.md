@@ -533,21 +533,19 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
 
 ---
 
-## 6. 读取流程：双轨检索与 RRF
+## 6. 读取流程：双轨检索与动态融合
 
 ### 6.1 检索路由
 
-接到查询时，先决定走哪条路或两条都走：
-
-用户 / Agent 发起 `query` 后，`Query Router` 按以下规则选择检索路径：
+接到查询时，统一走 FTS5 + ChromaDB 双轨召回，再根据查询特征动态调整融合权重：
 
 - 含具体名词、日期、人名：FTS5 优先。
 - FTS5 优先触发条件：`query` 中含 `entities` 表里的名字 / 含 ISO 日期 / 长度 ≤ 6 字。
 - 抽象、情绪、状态描述：ChromaDB 优先。
 - ChromaDB 优先触发条件：包含"感觉""觉得""为什么""最近""那种"等模糊词。
-- 其他 / 默认：双轨 + RRF 融合。
+- 其他 / 默认：双轨等权融合。
 
-第一期可以简化成"全部走双轨 + RRF"，省去 router 实现。
+融合不是简单平均：单路强命中可以独立保留，双路都命中时再给一致性奖励。
 
 ### 6.2 中文 vs 英文：FTS5 双表选择
 
@@ -588,32 +586,33 @@ def has_cjk(s: str) -> bool:
 
 ### 6.3 ChromaDB 语义检索
 
-保留现状，无需改动：
-
 ```python
 def vector_search(query: str, k: int = 10) -> list[tuple[str, float]]:
     """返回 [(post_id, distance), ...] distance 越小越相关"""
-    results = chroma_collection.query(query_texts=[query], n_results=k)
-    return list(zip(results["ids"][0], results["distances"][0]))
+    results = chroma_collection.query(query_texts=[query], n_results=k, include=["distances"])
+    return list(zip(results["ids"][0], results.get("distances", [[]])[0]))
 ```
 
-### 6.4 RRF 融合
+### 6.4 动态权重融合
+
+FTS5 `rank` 只作为 debug 原始值保留，v1 最终 FTS 分数使用排序位置分；Chroma distance 只在本次返回的候选内部做相对归一化，不设置跨查询绝对阈值。
 
 ```python
-def hybrid_search(query: str, k: int = 5) -> list[str]:
-    fts_hits = fts_search(query, k=20)         # [(id, rank), ...]
-    vec_hits = vector_search(query, k=20)      # [(id, dist), ...]
+def hybrid_search_scored(query: str, k: int = 3) -> list[HybridHit]:
+    fts_hits = fts_search(query, k=20)
+    vector_hits = vector_search(query, k=20)
+    fts_weight, vector_weight = infer_query_weights(query)  # 归一到总和 1.0
 
-    scores: dict[str, float] = {}
-    RRF_K = 60  # 论文默认值
+    for post_id in union(fts_hits, vector_hits):
+        fts_part = fts_weight * normalized_fts_position_score(post_id)
+        vector_part = vector_weight * normalized_vector_relative_score(post_id)
 
-    for rank, (post_id, _) in enumerate(fts_hits, start=1):
-        scores[post_id] = scores.get(post_id, 0) + 1.0 / (RRF_K + rank)
+        score = max(fts_part, vector_part)
+        score += 0.20 * min(fts_part, vector_part)  # agreement bonus
+        score += exact_phrase_bonus(post_id, query)
+        score += token_coverage_bonus(post_id, query)
 
-    for rank, (post_id, _) in enumerate(vec_hits, start=1):
-        scores[post_id] = scores.get(post_id, 0) + 1.0 / (RRF_K + rank)
-
-    return [pid for pid, _ in sorted(scores.items(), key=lambda x: -x[1])[:k]]
+    return sorted_hits[:k]
 ```
 
 ### 6.5 三因子重排（第二期）

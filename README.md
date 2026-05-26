@@ -120,7 +120,7 @@ workspace/
 - `core/todo_service.py` / `core/tool_config_service.py`：可选 TodoTool 抽取与开关
 - `core/llm/`：回复、TodoTool、轻/深反思 prompt 与 JSON 解析；`types.LLMClient` Protocol
 - `core/reflector.py`：轻反思、全局深反思、SOUL 深反思
-- `core/retrieval.py`：FTS5 + ChromaDB + RRF 融合
+- `core/retrieval.py`：FTS5 + ChromaDB 动态权重 hybrid scoring
 - `core/vectorstore.py`：ChromaDB 向量索引 provider
 - `schema.sql`：SQLite 初始化 schema
 - `core/db.py`：SQLite 连接、初始化、查询 helper 与 `require_lastrowid`
