@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from core import db, profile_service, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import db, evidence_service, profile_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 
 COMMENT_HISTORY_LIMIT = 30
+COMMENT_RELATED_POST_LIMIT = 3
+RETRIEVAL_USER_MESSAGE_LIMIT = 3
 FAILED_COMMENT_REPLY = "这个 SOUL 暂时没有回复成功，稍后可以重试。"
 
 
@@ -39,6 +41,8 @@ class CommentContext:
     soul: SoulContext
     context: str
     messages: list[CommentMessage]
+    retrieval_query: str
+    relevant_post_ids: list[str]
 
 
 @dataclass(frozen=True)
@@ -138,7 +142,6 @@ def append_user_message(thread_id: int, content: str) -> CommentMessage:
 
 def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
     """Build prompt context after the current user message has been appended."""
-    del user_message
     thread = get_thread(thread_id)
     soul = _load_soul_context(thread.soul_name)
     messages = list_thread_messages(thread_id, limit=COMMENT_HISTORY_LIMIT)
@@ -151,6 +154,20 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
     post = _get_post(thread.post_id)
     if post is not None:
         sections.append(f"# 原始 post\n\n[{post['id']}] {post['content']}")
+
+    retrieval_query = _build_comment_retrieval_query(post, messages, user_message)
+    relevant_post_ids = [
+        post_id
+        for post_id in retrieval.hybrid_search(retrieval_query, k=COMMENT_RELATED_POST_LIMIT)
+        if post_id != thread.post_id
+    ]
+    relevant_posts = evidence_service.read_posts_by_ids(relevant_post_ids)
+    if relevant_posts:
+        sections.append(f"# 相关帖子\n\n{relevant_posts}")
+
+    related_comments = evidence_service.read_soul_comments(thread.soul_name, relevant_post_ids)
+    if related_comments:
+        sections.append(f"# 该 SOUL 对相关帖子的历史评论\n\n{related_comments}")
 
     root_comment = _get_comment(thread.root_comment_id)
     if root_comment is not None:
@@ -166,6 +183,8 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
         soul=soul,
         context="\n\n---\n\n".join(sections),
         messages=messages,
+        retrieval_query=retrieval_query,
+        relevant_post_ids=relevant_post_ids,
     )
 
 
@@ -323,6 +342,27 @@ def _message_from_row(row) -> CommentMessage:
         content=row["content"],
         created_at=float(row["created_at"]),
     )
+
+
+def _build_comment_retrieval_query(post, messages: list[CommentMessage], user_message: str) -> str:
+    parts: list[str] = []
+    if post is not None:
+        content = str(post["content"]).strip()
+        if content:
+            parts.append(content)
+    parts.extend(_recent_user_message_contents(messages, limit=RETRIEVAL_USER_MESSAGE_LIMIT))
+    if parts:
+        return "\n".join(parts)
+    return user_message
+
+
+def _recent_user_message_contents(messages, limit: int) -> list[str]:
+    contents = [
+        message.content.strip()
+        for message in messages
+        if message.role == "user" and message.content.strip()
+    ]
+    return contents[-limit:]
 
 
 def _format_todo(todo: dict) -> str:

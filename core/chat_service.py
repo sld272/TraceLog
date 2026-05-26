@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from core import db, profile_service, record_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import db, evidence_service, profile_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 CHAT_HISTORY_LIMIT = 20
 RELATED_POST_LIMIT = 3
+RETRIEVAL_USER_MESSAGE_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -155,11 +156,11 @@ def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
         sections.append(f"# 用户档案\n\n{profile}")
 
     relevant_post_ids = retrieval.hybrid_search(retrieval_query, k=RELATED_POST_LIMIT)
-    relevant_posts = _read_posts_by_ids(relevant_post_ids)
+    relevant_posts = evidence_service.read_posts_by_ids(relevant_post_ids)
     if relevant_posts:
         sections.append(f"# 相关帖子\n\n{relevant_posts}")
 
-    related_comments = _read_soul_comments(thread.soul_name, relevant_post_ids)
+    related_comments = evidence_service.read_soul_comments(thread.soul_name, relevant_post_ids)
     if related_comments:
         sections.append(f"# 该 SOUL 对相关帖子的历史评论\n\n{related_comments}")
 
@@ -267,34 +268,6 @@ def _load_soul_context(soul_name: str) -> SoulContext:
     )
 
 
-def _read_posts_by_ids(post_ids: list[str]) -> str:
-    parts = []
-    for post_id in post_ids:
-        row = db.query_one(
-            "SELECT id, ts, content FROM posts WHERE id = ?",
-            (post_id,),
-        )
-        if row is not None:
-            parts.append(record_service.format_post(row).strip())
-    return "\n\n---\n\n".join(parts)
-
-
-def _read_soul_comments(soul_name: str, post_ids: list[str]) -> str:
-    lines = []
-    for post_id in post_ids:
-        row = db.query_one(
-            """
-            SELECT content
-            FROM comments
-            WHERE post_id = ? AND soul_name = ?
-            """,
-            (post_id, soul_name),
-        )
-        if row is not None:
-            lines.append(f"- {post_id}: {row['content']}")
-    return "\n".join(lines)
-
-
 def _format_todo(todo: dict) -> str:
     date_str = todo.get("date") or "待定"
     start = todo.get("start_time")
@@ -309,9 +282,20 @@ def _format_todo(todo: dict) -> str:
 
 
 def _build_retrieval_query(user_message: str, messages: list[ChatMessage]) -> str:
-    """Return the search query for related posts; currently no rewrite is applied."""
-    del messages
+    """Return the search query for related posts; currently no LLM rewrite is applied."""
+    parts = _recent_user_message_contents(messages, limit=RETRIEVAL_USER_MESSAGE_LIMIT)
+    if parts:
+        return "\n".join(parts)
     return user_message
+
+
+def _recent_user_message_contents(messages, limit: int) -> list[str]:
+    contents = [
+        message.content.strip()
+        for message in messages
+        if message.role == "user" and message.content.strip()
+    ]
+    return contents[-limit:]
 
 
 def _failed_result(thread: ChatThread, user_message_id: int, error: str) -> ChatReplyResult:

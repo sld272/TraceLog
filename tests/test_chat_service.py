@@ -137,9 +137,19 @@ class ChatServiceTest(unittest.TestCase):
         self.assertNotIn("聊聊考试", context.context)
         self.assertEqual(["聊聊考试"], [message.content for message in context.messages])
 
-    def test_build_chat_context_uses_current_message_as_default_retrieval_query(self) -> None:
+    def test_build_chat_context_uses_recent_user_messages_as_retrieval_query(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
-        chat_service.append_user_message(thread.id, "考试怎么办")
+        chat_service.append_user_message(thread.id, "第一条")
+        db.execute(
+            """
+            INSERT INTO chat_messages(thread_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (thread.id, "assistant", "这句不该进检索", 2.0),
+        )
+        chat_service.append_user_message(thread.id, "第二条")
+        chat_service.append_user_message(thread.id, "第三条")
+        chat_service.append_user_message(thread.id, "第四条")
         captured: dict[str, str] = {}
 
         def fake_search(query: str, k: int = 3) -> list[str]:
@@ -149,10 +159,27 @@ class ChatServiceTest(unittest.TestCase):
 
         retrieval.hybrid_search = fake_search
 
-        context = chat_service.build_chat_context(thread.id, "考试怎么办")
+        context = chat_service.build_chat_context(thread.id, "第四条")
 
-        self.assertEqual("考试怎么办", context.retrieval_query)
-        self.assertEqual("考试怎么办", captured["query"])
+        self.assertEqual("第二条\n第三条\n第四条", context.retrieval_query)
+        self.assertEqual("第二条\n第三条\n第四条", captured["query"])
+        self.assertNotIn("这句不该进检索", context.retrieval_query)
+
+    def test_build_chat_context_falls_back_to_current_message_without_user_history(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        captured: dict[str, str] = {}
+
+        def fake_search(query: str, k: int = 3) -> list[str]:
+            del k
+            captured["query"] = query
+            return []
+
+        retrieval.hybrid_search = fake_search
+
+        context = chat_service.build_chat_context(thread.id, "没有落库的当前消息")
+
+        self.assertEqual("没有落库的当前消息", context.retrieval_query)
+        self.assertEqual("没有落库的当前消息", captured["query"])
 
     def test_chat_reply_success_writes_assistant_message(self) -> None:
         thread = chat_service.get_or_create_thread("默认")

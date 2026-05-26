@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import comment_service, db, profile_service, soul_memory_service, soul_service, tool_config_service
+from core import comment_service, db, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
 from tests.helpers import require_not_none
 
 
@@ -35,6 +35,7 @@ class CommentServiceTest(unittest.TestCase):
         self.old_souls_dir = soul_service.SOULS_DIR
         self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
         self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
+        self.old_hybrid_search = retrieval.hybrid_search
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
@@ -42,6 +43,7 @@ class CommentServiceTest(unittest.TestCase):
         soul_service.SOULS_DIR = self.workspace / "souls"
         soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
+        retrieval.hybrid_search = lambda query, k=3: []
 
         db.init_db()
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -57,6 +59,7 @@ class CommentServiceTest(unittest.TestCase):
         soul_service.SOULS_DIR = self.old_souls_dir
         soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
         soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
+        retrieval.hybrid_search = self.old_hybrid_search
         self.tmp.cleanup()
 
     def test_get_or_create_thread_is_per_post_and_soul(self) -> None:
@@ -85,6 +88,12 @@ class CommentServiceTest(unittest.TestCase):
     def test_build_comment_context_separates_evidence_and_messages(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
         comment_service.append_user_message(thread.id, "继续聊练歌")
+        self._insert_custom_post_and_comment(
+            "20260524-001",
+            "默认",
+            "我之前也提到过练歌卡住。",
+            "那次也是练歌话题。",
+        )
         db.execute(
             """
             INSERT INTO todos(id, task, status, created_at, updated_at)
@@ -92,16 +101,85 @@ class CommentServiceTest(unittest.TestCase):
             """,
             ("todo-1", "整理歌单", "未完成", 1.0, 1.0),
         )
+        retrieval.hybrid_search = lambda query, k=3: ["20260525-001", "20260524-001"]
 
         context = comment_service.build_comment_context(thread.id, "继续聊练歌")
 
         self.assertIn("测试用户", context.context)
         self.assertIn("今天想认真练歌", context.context)
+        self.assertEqual(1, context.context.count("今天想认真练歌。"))
+        self.assertIn("我之前也提到过练歌卡住", context.context)
+        self.assertIn("那次也是练歌话题", context.context)
         self.assertIn("我陪你继续拆", context.context)
         self.assertIn("整理歌单", context.context)
         self.assertNotIn("继续聊练歌", context.context)
         self.assertNotIn("# 当前评论线程", context.context)
         self.assertEqual(["继续聊练歌"], [message.content for message in context.messages])
+        self.assertEqual(["20260524-001"], context.relevant_post_ids)
+
+    def test_build_comment_context_uses_post_and_recent_user_messages_as_retrieval_query(self) -> None:
+        thread = comment_service.get_or_create_thread("20260525-001", "默认")
+        comment_service.append_user_message(thread.id, "第一条")
+        db.execute(
+            """
+            INSERT INTO comment_messages(thread_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (thread.id, "assistant", "这句不该进检索", 2.0),
+        )
+        comment_service.append_user_message(thread.id, "第二条")
+        comment_service.append_user_message(thread.id, "第三条")
+        comment_service.append_user_message(thread.id, "第四条")
+        captured: dict[str, str] = {}
+
+        def fake_search(query: str, k: int = 3) -> list[str]:
+            del k
+            captured["query"] = query
+            return []
+
+        retrieval.hybrid_search = fake_search
+
+        context = comment_service.build_comment_context(thread.id, "第四条")
+
+        expected = "今天想认真练歌。\n第二条\n第三条\n第四条"
+        self.assertEqual(expected, context.retrieval_query)
+        self.assertEqual(expected, captured["query"])
+        self.assertNotIn("这句不该进检索", context.retrieval_query)
+
+    def test_build_comment_context_falls_back_when_post_is_missing(self) -> None:
+        thread = comment_service.get_or_create_thread("20260525-001", "默认")
+        comment_service.append_user_message(thread.id, "最近用户消息")
+        captured: dict[str, str] = {}
+
+        def fake_search(query: str, k: int = 3) -> list[str]:
+            del k
+            captured["query"] = query
+            return []
+
+        retrieval.hybrid_search = fake_search
+
+        with patch("core.comment_service._get_post", return_value=None):
+            context = comment_service.build_comment_context(thread.id, "当前消息")
+
+        self.assertEqual("最近用户消息", context.retrieval_query)
+        self.assertEqual("最近用户消息", captured["query"])
+
+    def test_build_comment_context_falls_back_to_current_message_without_post_or_history(self) -> None:
+        thread = comment_service.get_or_create_thread("20260525-001", "默认")
+        captured: dict[str, str] = {}
+
+        def fake_search(query: str, k: int = 3) -> list[str]:
+            del k
+            captured["query"] = query
+            return []
+
+        retrieval.hybrid_search = fake_search
+
+        with patch("core.comment_service._get_post", return_value=None):
+            context = comment_service.build_comment_context(thread.id, "未落库当前消息")
+
+        self.assertEqual("未落库当前消息", context.retrieval_query)
+        self.assertEqual("未落库当前消息", captured["query"])
 
     def test_comment_reply_sends_multi_turn_messages(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
@@ -221,6 +299,22 @@ class CommentServiceTest(unittest.TestCase):
                 """,
                 (post_id, "2026-05-25T10:00:00+08:00", "今天想认真练歌。", 1.0, 1.0),
             )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (post_id, soul_name, comment, 2.0),
+        )
+
+    def _insert_custom_post_and_comment(self, post_id: str, soul_name: str, post: str, comment: str) -> None:
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (post_id, "2026-05-24T10:00:00+08:00", post, 1.0, 1.0),
+        )
         db.execute(
             """
             INSERT INTO comments(post_id, soul_name, content, created_at)
