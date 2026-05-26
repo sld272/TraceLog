@@ -38,6 +38,7 @@ class CommentContext:
     thread: CommentThread
     soul: SoulContext
     context: str
+    messages: list[CommentMessage]
 
 
 @dataclass(frozen=True)
@@ -136,9 +137,11 @@ def append_user_message(thread_id: int, content: str) -> CommentMessage:
 
 
 def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
+    """Build prompt context after the current user message has been appended."""
     del user_message
     thread = get_thread(thread_id)
     soul = _load_soul_context(thread.soul_name)
+    messages = list_thread_messages(thread_id, limit=COMMENT_HISTORY_LIMIT)
     sections: list[str] = []
 
     profile = profile_service.read_profile().strip()
@@ -158,14 +161,11 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
         if pending:
             sections.append("# 待办事项\n\n" + "\n".join(_format_todo(todo) for todo in pending))
 
-    messages = list_thread_messages(thread_id, limit=COMMENT_HISTORY_LIMIT)
-    if messages:
-        sections.append("# 当前评论线程\n\n" + "\n".join(_format_message(m) for m in messages))
-
     return CommentContext(
         thread=thread,
         soul=soul,
         context="\n\n---\n\n".join(sections),
+        messages=messages,
     )
 
 
@@ -178,7 +178,7 @@ def call_comment_reply(
     """Append user input, call one SOUL, and persist the assistant comment reply."""
     user_message_row = append_user_message(thread_id, user_message)
     comment_context = build_comment_context(thread_id, user_message)
-    data = reply_router.call_soul_comment_reply(user_message, client, model, comment_context, comment_context.soul)
+    data = reply_router.call_soul_comment_reply(client, model, comment_context, comment_context.soul)
     if data is None:
         return _failed_result(comment_context.thread, user_message_row.id, "LLM call failed or returned invalid JSON")
 
@@ -323,11 +323,6 @@ def _message_from_row(row) -> CommentMessage:
         content=row["content"],
         created_at=float(row["created_at"]),
     )
-
-
-def _format_message(message: CommentMessage) -> str:
-    speaker = "用户" if message.role == "user" else "SOUL"
-    return f"- {speaker}: {message.content}"
 
 
 def _format_todo(todo: dict) -> str:

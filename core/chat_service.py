@@ -36,6 +36,8 @@ class ChatContext:
     thread: ChatThread
     soul: SoulContext
     context: str
+    messages: list[ChatMessage]
+    retrieval_query: str
     relevant_post_ids: list[str]
 
 
@@ -141,16 +143,18 @@ def append_user_message(thread_id: int, content: str) -> ChatMessage:
 
 
 def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
-    """Build prompt context for a one-on-one SOUL chat reply."""
+    """Build prompt context after the current user message has been appended."""
     thread = get_thread(thread_id)
     soul = _load_soul_context(thread.soul_name)
+    messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT)
+    retrieval_query = _build_retrieval_query(user_message, messages)
     sections: list[str] = []
 
     profile = profile_service.read_profile().strip()
     if profile:
         sections.append(f"# 用户档案\n\n{profile}")
 
-    relevant_post_ids = retrieval.hybrid_search(user_message, k=RELATED_POST_LIMIT)
+    relevant_post_ids = retrieval.hybrid_search(retrieval_query, k=RELATED_POST_LIMIT)
     relevant_posts = _read_posts_by_ids(relevant_post_ids)
     if relevant_posts:
         sections.append(f"# 相关帖子\n\n{relevant_posts}")
@@ -164,14 +168,12 @@ def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
         if pending:
             sections.append("# 待办事项\n\n" + "\n".join(_format_todo(todo) for todo in pending))
 
-    messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT)
-    if messages:
-        sections.append("# 当前私聊线程\n\n" + "\n".join(_format_message(m) for m in messages))
-
     return ChatContext(
         thread=thread,
         soul=soul,
         context="\n\n---\n\n".join(sections),
+        messages=messages,
+        retrieval_query=retrieval_query,
         relevant_post_ids=relevant_post_ids,
     )
 
@@ -185,7 +187,7 @@ def call_chat_reply(
     """Append user input, call one SOUL, and persist the assistant reply."""
     user_message_row = append_user_message(thread_id, user_message)
     chat_context = build_chat_context(thread_id, user_message)
-    data = reply_router.call_soul_chat_reply(user_message, client, model, chat_context, chat_context.soul)
+    data = reply_router.call_soul_chat_reply(client, model, chat_context, chat_context.soul)
     if data is None:
         return _failed_result(chat_context.thread, user_message_row.id, "LLM call failed or returned invalid JSON")
 
@@ -306,9 +308,10 @@ def _format_todo(todo: dict) -> str:
     return f"- [{todo.get('id', '?')}] {todo['task']}（{date_str}{time_str}）"
 
 
-def _format_message(message: ChatMessage) -> str:
-    role = "用户" if message.role == "user" else "SOUL"
-    return f"{role}: {message.content}"
+def _build_retrieval_query(user_message: str, messages: list[ChatMessage]) -> str:
+    """Return the search query for related posts; currently no rewrite is applied."""
+    del messages
+    return user_message
 
 
 def _failed_result(thread: ChatThread, user_message_id: int, error: str) -> ChatReplyResult:
