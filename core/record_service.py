@@ -16,13 +16,21 @@ def save_post(content: str) -> str:
     post_id = _next_post_id(now.strftime("%Y%m%d"))
     body = content.strip()
 
-    db.execute(
-        """
-        INSERT INTO posts(id, ts, content, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (post_id, now.isoformat(), body, now.timestamp(), now.timestamp()),
-    )
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (post_id, now.isoformat(), body, now.timestamp(), now.timestamp()),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            (
+                f"pending_embedding:{post_id}",
+                _pending_embedding_payload(post_id, body, "pending before embedding"),
+            ),
+        )
 
     try:
         vectorstore = _vectorstore()
@@ -30,6 +38,8 @@ def save_post(content: str) -> str:
             raise RuntimeError("vectorstore is not initialized")
         vectorstore.index_post(post_id, body)
         _clear_pending_embedding(post_id)
+    except KeyboardInterrupt:
+        raise
     except Exception as exc:
         _mark_pending_embedding(post_id, body, str(exc))
 
@@ -115,16 +125,20 @@ def _next_post_id(today: str) -> str:
 
 
 def _mark_pending_embedding(post_id: str, content: str, error: str) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+        (f"pending_embedding:{post_id}", _pending_embedding_payload(post_id, content, error)),
+    )
+
+
+def _pending_embedding_payload(post_id: str, content: str, error: str) -> str:
     payload = {
         "post_id": post_id,
         "content": content,
         "error": error,
         "created_at": db.now_ts(),
     }
-    db.execute(
-        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-        (f"pending_embedding:{post_id}", json.dumps(payload, ensure_ascii=False)),
-    )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _clear_pending_embedding(post_id: str) -> None:
