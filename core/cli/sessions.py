@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core import chat_service, comment_service, reflector, todo_service, tool_config_service
+from core import chat_service, comment_service, logging_service, reflector, todo_service, tool_config_service
 from core.cli_input import read_cli_input
 from core.llm.types import LLMClient
 
@@ -20,14 +20,22 @@ def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
         if result is None:
             print("[反思] 没有新的公开记录，已跳过本次深反思。")
         else:
+            logging_service.log_event(
+                "deep_reflection_saved",
+                reflection_id=result.id,
+                related_post_ids=result.related_post_ids,
+                patch_summary=result.patch_summary,
+            )
             print(
                 f"[反思] 深反思已保存（id={result.id}，覆盖 {len(result.related_post_ids)} 条记录，"
                 f"画像更新 applied={result.patch_summary.get('applied', 0)} "
                 f"skipped={result.patch_summary.get('skipped', 0)}）。"
             )
     except KeyboardInterrupt:
+        logging_service.log_event("deep_reflection_interrupted", level="WARNING", type="global")
         print("\n[警告] 深反思被强制中断，已有数据保持不变。")
     except Exception as e:
+        logging_service.log_event("deep_reflection_failed", level="ERROR", type="global", error=str(e))
         print(f"[反思] 深反思失败：{e}，已有数据保持不变。")
     try:
         try:
@@ -41,6 +49,13 @@ def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
         if soul_results:
             applied = sum(item.patch_summary.get("applied", 0) for item in soul_results)
             skipped = sum(item.patch_summary.get("skipped", 0) for item in soul_results)
+            logging_service.log_event(
+                "deep_reflection_saved",
+                type="soul",
+                count=len(soul_results),
+                applied=applied,
+                skipped=skipped,
+            )
             print(
                 f"[反思] SOUL 深反思已保存 {len(soul_results)} 份，"
                 f"独立画像更新 applied={applied} skipped={skipped}。"
@@ -48,8 +63,10 @@ def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
         else:
             print("[反思] 没有新的 SOUL 互动，已跳过 SOUL 深反思。")
     except KeyboardInterrupt:
+        logging_service.log_event("deep_reflection_interrupted", level="WARNING", type="soul")
         print("\n[警告] SOUL 深反思被强制中断，已有数据保持不变。")
     except Exception as e:
+        logging_service.log_event("deep_reflection_failed", level="ERROR", type="soul", error=str(e))
         print(f"[反思] SOUL 深反思失败：{e}，已有数据保持不变。")
     print("再见！\n")
 

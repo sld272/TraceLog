@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from core import db
+from core import db, logging_service
 
 CONTEXT_POST_COUNT = 3
 
@@ -38,10 +38,17 @@ def save_post(content: str) -> str:
             raise RuntimeError("vectorstore is not initialized")
         vectorstore.index_post(post_id, body)
         _clear_pending_embedding(post_id)
+        logging_service.log_event("post_indexed", post_id=post_id, content_length=len(body))
     except KeyboardInterrupt:
         raise
     except Exception as exc:
         _mark_pending_embedding(post_id, body, str(exc))
+        logging_service.log_event(
+            "post_index_failed",
+            level="WARNING",
+            post_id=post_id,
+            error=str(exc),
+        )
 
     return post_id
 
@@ -92,14 +99,23 @@ def retry_pending_embeddings(limit: int | None = None) -> int:
 
     fixed = 0
     for row in db.query_all(sql, params):
+        payload = None
         try:
             payload = json.loads(row["value"])
             post_id = payload["post_id"]
             content = payload["content"]
             vectorstore.index_post(post_id, content)
             db.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
+            logging_service.log_event("post_indexed", post_id=post_id, retry=True, content_length=len(content))
             fixed += 1
-        except Exception:
+        except Exception as exc:
+            logging_service.log_event(
+                "post_index_failed",
+                level="WARNING",
+                post_id=payload.get("post_id") if isinstance(payload, dict) else None,
+                retry=True,
+                error=str(exc),
+            )
             continue
     return fixed
 

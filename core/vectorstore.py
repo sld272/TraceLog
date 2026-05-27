@@ -50,7 +50,7 @@ def init_vectorstore(
         from chromadb.utils.embedding_functions.openai_embedding_function import OpenAIEmbeddingFunction
 
         actual_api_key = embedding_api_key or api_key
-        actual_base_url = embedding_base_url or base_url
+        actual_base_url = _normalize_openai_base_url(embedding_base_url or base_url)
 
         embed_fn = OpenAIEmbeddingFunction(
             api_key=actual_api_key,
@@ -119,3 +119,10 @@ def _first_result_list(value) -> list[float] | None:
     if not value or len(value) == 0:
         return None
     return value[0]
+
+
+def _normalize_openai_base_url(base_url: str) -> str:
+    normalized = str(base_url).rstrip("/")
+    if normalized in {"https://api.openai.com", "http://api.openai.com"}:
+        return normalized + "/v1"
+    return normalized
