@@ -30,7 +30,7 @@ class ContextBuilderTest(unittest.TestCase):
         self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与现状\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
-        self._insert_post("p-1", "历史 post")
+        self._insert_post("p-1", "历史 post", created_at=10.0)
 
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
@@ -44,6 +44,7 @@ class ContextBuilderTest(unittest.TestCase):
     def test_public_post_context_includes_global_memory_only(self) -> None:
         self._create_global("公开全局记忆", "用户公开偏好短回复。公开context词")
         self._create_soul_scoped("私聊不该出现", "私聊偏好。公开context词")
+        self._create_post_visible("评论不该出现", "评论线程偏好。公开context词")
 
         built = context_builder.build_context(relevant_post_ids=[], query="公开context词")
 
@@ -51,6 +52,32 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertIn("L1", built.shared_context)
         self.assertIn("公开全局记忆", built.shared_context)
         self.assertNotIn("私聊不该出现", built.shared_context)
+        self.assertNotIn("评论不该出现", built.shared_context)
+
+    def test_public_context_is_observation_first_and_suppresses_raw_related_posts(self) -> None:
+        self._seed_public_related_posts()
+        self._create_global("公开主链路记忆", "这是公开主链路接管词。")
+
+        built = context_builder.build_context(relevant_post_ids=["p-related"], query="公开主链路接管词")
+
+        self.assertIn("# 相关记忆", built.shared_context)
+        self.assertIn("# 近期帖子", built.shared_context)
+        self.assertNotIn("# 相关帖子", built.shared_context)
+        self.assertNotIn("raw related fallback content", built.shared_context)
+        self.assertLess(built.shared_context.index("# 相关记忆"), built.shared_context.index("# 近期帖子"))
+        self.assertEqual(["p-related"], built.relevant_post_ids)
+
+    def test_public_context_uses_raw_related_posts_as_cold_start_fallback(self) -> None:
+        self._seed_public_related_posts()
+
+        built = context_builder.build_context(relevant_post_ids=["p-related"], query="没有 observation 命中")
+
+        self.assertNotIn("# 相关记忆", built.shared_context)
+        self.assertIn("# 近期帖子", built.shared_context)
+        self.assertIn("# 相关帖子", built.shared_context)
+        self.assertIn("raw related fallback content", built.shared_context)
+        self.assertLess(built.shared_context.index("# 近期帖子"), built.shared_context.index("# 相关帖子"))
+        self.assertEqual(["p-related"], built.relevant_post_ids)
 
     def _create_global(self, title: str, narrative: str) -> int:
         return observation_service.create_observation(
@@ -79,13 +106,33 @@ class ContextBuilderTest(unittest.TestCase):
             [{"source_type": "chat_message", "source_id": "1", "evidence_access": "source_soul_only"}],
         )
 
-    def _insert_post(self, post_id: str, content: str) -> None:
+    def _create_post_visible(self, title: str, narrative: str) -> int:
+        return observation_service.create_observation(
+            {
+                "type": "state",
+                "title": title,
+                "narrative": narrative,
+                "source_channel": "comment_thread",
+                "visibility_scope": "post_visible",
+                "scope_post_id": "p-1",
+                "observed_at": 1.0,
+            },
+            [{"source_type": "comment_message", "source_id": "1", "evidence_access": "post_visible"}],
+        )
+
+    def _seed_public_related_posts(self) -> None:
+        self._insert_post("p-2", "recent post two", created_at=20.0)
+        self._insert_post("p-3", "recent post three", created_at=30.0)
+        self._insert_post("p-4", "recent post four", created_at=40.0)
+        self._insert_post("p-related", "raw related fallback content", created_at=5.0)
+
+    def _insert_post(self, post_id: str, content: str, *, created_at: float = 1.0) -> None:
         db.execute(
             """
             INSERT INTO posts(id, ts, content, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (post_id, "2026-05-25T10:00:00+08:00", content, 1.0, 1.0),
+            (post_id, "2026-05-25T10:00:00+08:00", content, created_at, created_at),
         )
 
 

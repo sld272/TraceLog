@@ -451,6 +451,8 @@ Observation v1 使用：
 - `observations_fts` 对 observation 标题、摘要、narrative 做关键词检索。
 - 现有 post ChromaDB 召回 `post_id`，再通过 `observation_sources` 反查这些 post 关联的 `active` observations，作为间接语义召回。
 
+公开 post 回复已采用 observation-first 主链路：post FTS/ChromaDB 的主要职责不再是把 raw related posts 直接塞进 prompt，而是为 `search_public_post_memory()` 提供 `related_post_ids`，让系统通过 `observation_sources(source_type='post')` 反查 `global` observations。只有没有相关 observation 命中时，raw `# 相关帖子` 才作为冷启动兜底进入公开回复上下文。
+
 第一版不对所有 observation 建向量索引。若后续引入 observation 向量索引，默认只允许 `global` / `post_visible` observation 向量化；`soul_scoped` 默认不向量化，除非未来引入本地 embedding 并另行设计；`private_blocked` 永不向量化。
 
 FTS 查询必须 join `observations` 并先过滤：

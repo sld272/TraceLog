@@ -28,20 +28,22 @@ def build_context(relevant_post_ids: list[str] | None = None, query: str | None 
     if profile and profile != profile_service.DEFAULT_USER_MD.strip():
         sections.append(profile)
 
-    recent_posts = record_service.read_recent_posts()
-    if recent_posts:
-        sections.append(f"# 近期帖子\n\n{recent_posts}")
-
     effective_relevant_ids: list[str] = []
+    relevant_posts = ""
     if relevant_post_ids:
         candidate_ids = _dedupe_relevant_ids(relevant_post_ids, recent_ids)
         relevant_posts, effective_relevant_ids = _read_posts_by_ids(candidate_ids)
-        if relevant_posts:
-            sections.append(f"# 相关帖子\n\n{relevant_posts}")
 
     related_memory = memory_retrieval.search_public_post_memory(query or "", effective_relevant_ids)
     if related_memory:
         sections.append(related_memory)
+
+    recent_posts = record_service.read_recent_posts()
+    if recent_posts:
+        sections.append(f"# 近期帖子\n\n{recent_posts}")
+
+    if not related_memory and relevant_posts:
+        sections.append(f"# 相关帖子\n\n{relevant_posts}")
 
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()
