@@ -274,3 +274,158 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
 - 全局画像反思器只读 `posts` 及其派生表；私聊不直接进入全局 `user.md`。
 - SOUL 记忆反思器可读取该 SOUL 的 `chat_messages` 摘要，并把沉淀写入对应的 `soul_memories/<name>.md`。
 - 私聊不写 `comments` 表（评论是公开评论流，私聊是单独频道）。
+
+## 5. Observation 设计草案（未实现）
+
+本节是后续 Observation Schema 阶段的设计冻结，不代表当前 `schema.sql` 已经包含这些表。实现时仍保持单一初始化 SQL 文件，不引入迁移框架。
+
+Observation 是 raw evidence 与深反思之间的中层记忆单位。它只保存可检索、可过滤、可审计的信号；具体原始证据统一写入 `observation_sources`。
+
+### 5.1 概念表
+
+后续 Schema 阶段需要新增四类表：
+
+- `observations`：中层记忆主表，保存 narrative、时间、状态和权限边界。
+- `observation_sources`：证据链表，保存具体来源类型、来源 ID、摘录和展开权限。
+- `observations_fts`：observation 标题、摘要和 narrative 的 FTS5 索引。
+- `observation_cursors`：按来源增量提取 observation 的游标，避免崩溃或 Ctrl+C 后丢失待提取内容。
+
+`observations` 只保存检索与权限边界字段，不保存所有具体来源 ID：
+
+```sql
+CREATE TABLE IF NOT EXISTS observations (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    type              TEXT NOT NULL,
+    title             TEXT NOT NULL,
+    summary           TEXT,
+    narrative         TEXT NOT NULL,
+    source_channel    TEXT NOT NULL,
+    visibility_scope  TEXT NOT NULL,
+    scope_post_id     TEXT REFERENCES posts(id) ON DELETE CASCADE,
+    scope_soul_name   TEXT REFERENCES souls(name) ON DELETE CASCADE,
+    importance        REAL NOT NULL DEFAULT 0.5,
+    confidence        REAL NOT NULL DEFAULT 0.5,
+    status            TEXT NOT NULL DEFAULT 'active',
+    merged_into       INTEGER REFERENCES observations(id) ON DELETE SET NULL,
+    superseded_by     INTEGER REFERENCES observations(id) ON DELETE SET NULL,
+    observed_at       REAL NOT NULL,
+    created_at        REAL NOT NULL,
+    updated_at        REAL NOT NULL,
+    metadata          TEXT
+);
+```
+
+建议索引：
+
+```sql
+CREATE INDEX IF NOT EXISTS idx_observations_status_time
+    ON observations(status, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_post_scope
+    ON observations(visibility_scope, scope_post_id, status, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_soul_scope
+    ON observations(visibility_scope, scope_soul_name, status, observed_at DESC);
+```
+
+`observation_sources` 保存具体证据来源。`source_id` 是多态 ID，因此不能依赖 SQLite foreign key 自动跨表级联：
+
+```sql
+CREATE TABLE IF NOT EXISTS observation_sources (
+    observation_id  INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+    source_type     TEXT NOT NULL,
+    source_id       TEXT NOT NULL,
+    excerpt         TEXT,
+    evidence_access TEXT NOT NULL,
+    created_at      REAL NOT NULL,
+    metadata        TEXT,
+    PRIMARY KEY (observation_id, source_type, source_id)
+);
+```
+
+后续实现必须为 posts、comments、comment_messages、chat_messages 等来源设计 delete triggers 或启动时 cleanup，防止删除原文后残留无法访问的僵尸证据。
+
+`observation_cursors` 用于 crash-safe 增量提取：
+
+```sql
+CREATE TABLE IF NOT EXISTS observation_cursors (
+    source_kind      TEXT NOT NULL,
+    source_key       TEXT NOT NULL,
+    cursor_value     TEXT NOT NULL,
+    updated_at       REAL NOT NULL,
+    metadata         TEXT,
+    PRIMARY KEY (source_kind, source_key)
+);
+```
+
+游标推进必须与 observation 写入在同一个写事务提交。涉及 observation 写入、状态变更、consolidation、cursor advance 的事务后续应使用 `BEGIN IMMEDIATE`，避免并发下 deferred transaction 锁升级造成 `SQLITE_BUSY`。
+
+### 5.2 冻结枚举
+
+Observation 类型：
+
+```text
+preference
+correction
+convention
+decision
+insight
+pattern
+state
+relationship
+todo_signal
+```
+
+可见性：
+
+```text
+global
+post_visible
+soul_scoped
+private_blocked
+```
+
+证据展开权限：
+
+```text
+all
+post_visible
+source_soul_only
+none
+```
+
+状态：
+
+```text
+active
+merged
+superseded
+archived
+```
+
+### 5.3 来源边界规则
+
+| 来源 | `visibility_scope` | scope 字段 | `evidence_access` |
+| --- | --- | --- | --- |
+| 公开 post | `global` | 无 | `all` |
+| SOUL 首条公开评论 | `post_visible` | `scope_post_id` | `post_visible` |
+| 评论线程消息 | `post_visible` | `scope_post_id` | `post_visible` |
+| 私聊消息 | `soul_scoped` | `scope_soul_name` | `source_soul_only` |
+| 不应记录内容 | `private_blocked` | 可选 | `none` |
+
+私聊边界不用 `visible_to_souls` JSON 数组表达。第一版私聊 observation 绝对不跨 SOUL，因此 `soul_scoped` 使用可索引的 `scope_soul_name TEXT REFERENCES souls(name)`。
+
+### 5.4 检索与向量化策略
+
+Observation v1 使用：
+
+- `observations_fts` 对 observation 标题、摘要、narrative 做关键词检索。
+- 现有 post ChromaDB 召回 `post_id`，再通过 `observation_sources` 反查这些 post 关联的 `active` observations，作为间接语义召回。
+
+第一版不对所有 observation 建向量索引。若后续引入 observation 向量索引，默认只允许 `global` / `post_visible` observation 向量化；`soul_scoped` 默认不向量化，除非未来引入本地 embedding 并另行设计；`private_blocked` 永不向量化。
+
+FTS 查询必须 join `observations` 并先过滤：
+
+- `status = 'active'`
+- 当前场景允许的 `visibility_scope`
+- 当前 `scope_post_id` 或 `scope_soul_name`
+
+公开 post 回复和公开评论回复场景永远不能召回 `soul_scoped` observation，即使当前回复 SOUL 与 `scope_soul_name` 相同。
