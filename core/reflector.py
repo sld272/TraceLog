@@ -303,7 +303,7 @@ def _load_posts_since_last_reflection(limit: int) -> list:
         SELECT COALESCE(scope_end, ts) AS cursor_ts
         FROM reflections
         WHERE type = ?
-        ORDER BY ts DESC, id DESC
+        ORDER BY julianday(ts) DESC, id DESC
         LIMIT 1
         """,
         (GLOBAL_DEEP_REFLECTION_TYPE,),
@@ -313,7 +313,7 @@ def _load_posts_since_last_reflection(limit: int) -> list:
             """
             SELECT id, ts, content
             FROM posts
-            ORDER BY ts ASC, id ASC
+            ORDER BY julianday(ts) ASC, id ASC
             LIMIT ?
             """,
             (limit,),
@@ -323,8 +323,8 @@ def _load_posts_since_last_reflection(limit: int) -> list:
         """
         SELECT id, ts, content
         FROM posts
-        WHERE ts > ?
-        ORDER BY ts ASC, id ASC
+        WHERE julianday(ts) > julianday(?)
+        ORDER BY julianday(ts) ASC, id ASC
         LIMIT ?
         """,
         (last["cursor_ts"], limit),
@@ -350,8 +350,9 @@ def _load_recent_posts_before(post_id: str, limit: int) -> list:
         """
         SELECT id, ts, content
         FROM posts
-        WHERE ts < ? OR (ts = ? AND id < ?)
-        ORDER BY ts DESC, id DESC
+        WHERE julianday(ts) < julianday(?)
+           OR (julianday(ts) = julianday(?) AND id < ?)
+        ORDER BY julianday(ts) DESC, id DESC
         LIMIT ?
         """,
         (post["ts"], post["ts"], post_id, limit),
@@ -572,7 +573,7 @@ def _format_light_summary(post_ids: list[str]) -> str:
         SELECT id, ts, importance
         FROM posts
         WHERE id IN ({placeholders})
-        ORDER BY ts ASC, id ASC
+        ORDER BY julianday(ts) ASC, id ASC
         """,
         tuple(post_ids),
     )

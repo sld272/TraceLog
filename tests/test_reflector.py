@@ -123,6 +123,18 @@ class ReflectorTest(unittest.TestCase):
 
         self.assertEqual(["20260525-001"], result.related_post_ids)
 
+    def test_global_deep_reflection_orders_and_filters_iso_timestamps_by_absolute_time(self) -> None:
+        self._insert_post("20260527-001", "2026-05-27T01:00:00+00:00", "绝对时间较晚。")
+        self._insert_post("20260527-002", "2026-05-27T08:00:00+08:00", "绝对时间较早。")
+        client = FakeClient()
+
+        first = require_not_none(reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit"))
+        self._insert_post("20260527-003", "2026-05-27T08:30:00+08:00", "绝对时间早于游标但字符串更大。")
+        second = reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
+
+        self.assertEqual(["20260527-002", "20260527-001"], first.related_post_ids)
+        self.assertIsNone(second)
+
     def test_preview_global_deep_reflection_scope_matches_pending_posts(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "第一条。")
         self._insert_post("20260525-002", "2026-05-25T11:00:00+08:00", "第二条。")
@@ -303,6 +315,15 @@ class ReflectorTest(unittest.TestCase):
         self.assertIn("- importance: 0.00", summary)
         self.assertIn("## 20260525-002", summary)
         self.assertIn("- importance: 0.50", summary)
+
+    def test_load_recent_posts_before_uses_absolute_iso_time(self) -> None:
+        self._insert_post("20260527-001", "2026-05-27T01:00:00+00:00", "目标。")
+        self._insert_post("20260527-002", "2026-05-27T08:30:00+08:00", "绝对时间更早但字符串更大。")
+        self._insert_post("20260527-003", "2026-05-27T09:30:00+08:00", "绝对时间更晚。")
+
+        rows = reflector._load_recent_posts_before("20260527-001", limit=5)
+
+        self.assertEqual(["20260527-002"], [row["id"] for row in rows])
 
     def test_soul_deep_reflection_reads_raw_chat_and_comment_messages_and_patches_memory(self) -> None:
         soul_service.sync_souls()
