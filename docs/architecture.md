@@ -384,29 +384,26 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
 用户输入 user_input
     │
     ▼
-[1] RecordService.save_post(user_input)
-    │   - 生成 post_id（YYYYMMDD-NNN）
-    │   - 写 state.db.posts 表（不再绑定单一 SOUL）
-    │   - FTS5 双表通过 trigger 自动同步
-    │   - ChromaDB.upsert(id=post_id, document=user_input)
+[1] Retrieval.hybrid_search(user_input, k=3) -> relevant_ids
+    │   - 调用方先基于当前输入做 FTS5 + ChromaDB 混合检索
+    │   - 检索结果只作为 ContextBuilder 的输入，不由 ContextBuilder 内部发起检索
     │
     ▼
-[2] ContextBuilder.build_context(user_input)
+[2] ContextBuilder.build_context(relevant_post_ids=relevant_ids)
     │   - 读 souls 表 enabled=1 的 SOUL 列表（按 sort_order）
     │   - 读 user.md
     │   - 为每个启用 SOUL 读取 soul_memories/<name>.md
-    │   - FTS5 + ChromaDB 双轨检索 top-k 相关历史
+    │   - 根据调用方传入的 relevant_post_ids 读取相关历史 post
     │   - 读最近若干条 post（时间近邻）
     │   - Todo 工具开启时读取活跃待办
     │   - 输出：共享上下文 + 启用 SOUL 列表 + 每个 SOUL 的私有记忆
     │
     ▼
-[3] ReplyService.fanout(post_id, shared_context, enabled_souls)
-    │   并发对每个启用 SOUL 调用 LLM：
-    │   ├─ system prompt = 该 SOUL 的人格段 + 该 SOUL 的相处记忆 + 共享上下文
-    │   ├─ 返回 reply
-    │   └─ 写一行到 state.db.comments（post_id, soul_name, content）
-    │
+[3] RecordService.save_post(user_input)
+    │   - 生成 post_id（YYYYMMDD-NNN）
+    │   - 写 state.db.posts 表（不再绑定单一 SOUL）
+    │   - FTS5 双表通过 trigger 自动同步
+    │   - ChromaDB.upsert(id=post_id, document=user_input)
     │
     ▼
 [4] TodoTool.run_for_post(post_id)
@@ -416,12 +413,19 @@ CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DE
     │   - 与 SOUL 回复、私聊、评论线程解耦
     │
     ▼
-[5] 前端展示评论流
+[5] ReplyService.fanout(post_id, user_input, client, model, built_context)
+    │   并发对每个启用 SOUL 调用 LLM：
+    │   ├─ system prompt = 该 SOUL 的人格段 + 该 SOUL 的相处记忆 + 共享上下文
+    │   ├─ 返回 reply
+    │   └─ 写一行到 state.db.comments（post_id, soul_name, content）
+    │
+    ▼
+[6] 前端展示评论流
     │   - 按 souls.sort_order 渲染评论卡片
     │   - 流式：先到先显示，最慢者补位
     │
     ▼
-[6] Reflector.spawn_async(post_id)  ← 关键：异步，不阻塞前端
+[7] Reflector.spawn_async(post_id)  ← 关键：异步，不阻塞前端
         │
         ▼ （在后台线程）
         - 读这条 post + 最近 N 条 post
