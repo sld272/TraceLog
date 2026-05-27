@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import chat_service, db, logging_service, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
 from core.llm import reply_router
 from tests.helpers import require_not_none
 
@@ -49,11 +49,13 @@ class ChatServiceTest(unittest.TestCase):
         retrieval.hybrid_search = lambda query, k=3: []
 
         db.init_db()
+        logging_service.init_logging({"enabled": True, "llm_payload": "off"})
         self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与现状\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
 
     def tearDown(self) -> None:
+        logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         profile_service.USER_MD_PATH = self.old_user_md_path
@@ -260,6 +262,29 @@ class ChatServiceTest(unittest.TestCase):
 
         self.assertEqual(["system"], [message["role"] for message in messages if message["role"] == "system"])
         self.assertNotIn("非法消息", [message["content"] for message in messages])
+        event = self._last_log_event("thread_message_skipped")
+        self.assertEqual("invalid_role", event["reason"])
+        self.assertEqual("system", event["role"])
+
+    def test_thread_message_with_non_string_content_is_logged_and_skipped(self) -> None:
+        client = FakeClient({"reply": "收到。"})
+        context = SimpleNamespace(
+            context="",
+            messages=[
+                SimpleNamespace(role="assistant", content=123),
+                SimpleNamespace(role="user", content="正常消息"),
+            ],
+        )
+        soul = SimpleNamespace(persona="测试人格", soul_memory="")
+
+        reply_router.call_soul_chat_reply(client, "fake-model", context, soul)
+        messages = client.calls[0]["messages"]
+
+        self.assertNotIn(123, [message["content"] for message in messages])
+        event = self._last_log_event("thread_message_skipped")
+        self.assertEqual("non_string_content", event["reason"])
+        self.assertEqual("assistant", event["role"])
+        self.assertEqual("int", event["content_type"])
 
     def test_chat_router_returns_none_without_current_user_message(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
@@ -349,6 +374,17 @@ class ChatServiceTest(unittest.TestCase):
 
         self.assertNotIn("复习数学", context.context)
         self.assertNotIn("# 待办事项", context.context)
+
+    def _last_log_event(self, event_name: str) -> dict:
+        log_path = self.workspace / "logs" / "current.jsonl"
+        records = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matches = [record for record in records if record.get("event") == event_name]
+        self.assertTrue(matches)
+        return matches[-1]
 
 
 if __name__ == "__main__":

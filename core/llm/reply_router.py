@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import logging
 
+from core import logging_service
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
@@ -285,10 +285,21 @@ def _thread_messages_to_dicts(messages) -> list[dict[str, str]]:
         role = getattr(message, "role", None)
         content = getattr(message, "content", None)
         if role not in valid_roles:
-            logging.warning("skipping thread message with invalid role: %s", role)
+            logging_service.log_event(
+                "thread_message_skipped",
+                level="WARNING",
+                reason="invalid_role",
+                role=role,
+            )
             continue
         if not isinstance(content, str):
-            logging.warning("skipping thread message with non-string content")
+            logging_service.log_event(
+                "thread_message_skipped",
+                level="WARNING",
+                reason="non_string_content",
+                role=role,
+                content_type=type(content).__name__,
+            )
             continue
         if role == "assistant":
             content = json.dumps({"reply": content}, ensure_ascii=False)
