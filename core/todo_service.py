@@ -124,6 +124,8 @@ def apply_post_todos(post_id: str, to_upsert: list, to_delete: list) -> tuple[in
         for item in deletes:
             todo_id = item["id"]
             if todo_id in existing_rows:
+                old = existing_rows.pop(todo_id)
+                existing_keys.discard((old["task"], old["date"], old["start_time"]))
                 conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
                 deleted += 1
 

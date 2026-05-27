@@ -163,6 +163,46 @@ class TodoServiceTest(unittest.TestCase):
         self.assertIsNotNone(updated["completed_at"])
         self.assertIsNone(deleted_row)
 
+    def test_apply_post_todos_can_reinsert_same_key_after_delete_in_one_batch(self) -> None:
+        db.execute(
+            """
+            INSERT INTO todos(id, task, date, start_time, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("todo-1", "交项目 PPT", "2026-05-26", "15:00", "未完成", 1.0, 1.0),
+        )
+
+        upserted, deleted = todo_service.apply_post_todos(
+            "20260525-001",
+            [
+                {
+                    "id": None,
+                    "task": "交项目 PPT",
+                    "date": "2026-05-26",
+                    "start_time": "15:00",
+                    "end_time": None,
+                    "status": "未完成",
+                }
+            ],
+            [{"id": "todo-1"}],
+        )
+        old_row = db.query_one("SELECT 1 FROM todos WHERE id = ?", ("todo-1",))
+        new_row = require_not_none(
+            db.query_one(
+                """
+                SELECT id, source_post
+                FROM todos
+                WHERE task = ? AND date = ? AND start_time = ?
+                """,
+                ("交项目 PPT", "2026-05-26", "15:00"),
+            )
+        )
+
+        self.assertEqual((1, 1), (upserted, deleted))
+        self.assertIsNone(old_row)
+        self.assertNotEqual("todo-1", new_row["id"])
+        self.assertEqual("20260525-001", new_row["source_post"])
+
     def _insert_post(self, post_id: str, content: str) -> None:
         db.execute(
             """
