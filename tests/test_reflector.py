@@ -17,6 +17,7 @@ from core import (
     soul_memory_service,
     soul_service,
 )
+from core.llm import reflection_router
 from tests.helpers import require_not_none
 
 
@@ -105,6 +106,30 @@ class ReflectorTest(unittest.TestCase):
         self.assertIn("深反思", row["content"])
         self.assertIn("20260525-001", row["related_posts"])
         self.assertIn("cli_exit", row["metadata"])
+
+    def test_global_deep_reflection_accepts_plain_paragraph_content(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天完成了比赛计划。")
+        payload = {
+            "reflection_md": "你这次把比赛计划推进得比较清楚，虽然输出不是 Markdown 分段，但已经包含足够具体的复盘内容。",
+            "patches": [],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        result = require_not_none(reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit"))
+        row = require_not_none(db.query_one("SELECT type, content FROM reflections WHERE id = ?", (result.id,)))
+
+        self.assertEqual("global_deep", row["type"])
+        self.assertIn("不是 Markdown 分段", row["content"])
+
+    def test_global_deep_reflection_validator_rejects_empty_and_too_short_content(self) -> None:
+        self.assertFalse(reflector._is_valid_reflection(None))
+        self.assertFalse(reflector._is_valid_reflection(""))
+        self.assertFalse(reflector._is_valid_reflection("太短"))
+        self.assertTrue(reflector._is_valid_reflection("这是一段足够长的普通深反思正文，不依赖 Markdown 标记。"))
+
+    def test_global_deep_reflection_prompt_requests_multiline_markdown(self) -> None:
+        self.assertIn("使用多行 Markdown", reflection_router.GLOBAL_DEEP_REFLECTION_PROMPT)
+        self.assertIn("## 深反思", reflection_router.GLOBAL_DEEP_REFLECTION_PROMPT)
 
     def test_trigger_global_deep_reflection_skips_when_no_new_posts(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天完成了比赛计划。")

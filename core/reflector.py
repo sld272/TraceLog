@@ -907,7 +907,7 @@ def _is_valid_reflection(content: str | None) -> bool:
     if not content:
         return False
     text = content.strip()
-    return len(text) >= 20 and ("##" in text or "- " in text or "\n" in text)
+    return len(text) >= 20
 
 
 def _is_valid_soul_reflection(content: str | None) -> bool:
