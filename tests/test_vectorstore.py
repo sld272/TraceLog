@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import builtins
+import json
+import sys
+import tempfile
+import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from core import vectorstore
+from core import db, logging_service, vectorstore
 
 
 class FakeCollection:
@@ -23,10 +28,20 @@ class FakeCollection:
 
 class VectorStoreTest(unittest.TestCase):
     def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name) / "workspace"
+        self.old_workspace = db.WORKSPACE_DIR
+        db.WORKSPACE_DIR = self.workspace
+        logging_service.init_logging({"enabled": True})
         self.old_collection = vectorstore._collection
+        self.old_embedding_diagnostics = vectorstore._embedding_diagnostics
 
     def tearDown(self) -> None:
+        logging_service.init_logging({"enabled": False})
+        db.WORKSPACE_DIR = self.old_workspace
         vectorstore._collection = self.old_collection
+        vectorstore._embedding_diagnostics = self.old_embedding_diagnostics
+        self.tmp.cleanup()
 
     def test_init_failure_raises_without_exiting_process(self) -> None:
         original_import = builtins.__import__
@@ -37,7 +52,7 @@ class VectorStoreTest(unittest.TestCase):
             return original_import(name, globals, locals, fromlist, level)
 
         with patch("builtins.__import__", side_effect=fake_import):
-            with self.assertRaises(vectorstore.VectorStoreInitError):
+            with self.assertRaises(vectorstore.VectorStoreInitError) as raised:
                 vectorstore.init_vectorstore(
                     api_key="test-key",
                     base_url="https://example.invalid/v1",
@@ -45,6 +60,62 @@ class VectorStoreTest(unittest.TestCase):
                 )
 
         self.assertFalse(vectorstore.is_initialized())
+        message = str(raised.exception)
+        self.assertIn("embedding_model=test-embedding", message)
+        self.assertIn("embedding_base_url=https://example.invalid/v1", message)
+        self.assertIn("embedding_base_url_source=base_url", message)
+        self.assertIn("ImportError: chromadb unavailable", message)
+        self.assertIn("配置 embedding_base_url", message)
+
+    def test_init_uses_configured_base_url_without_adding_v1(self) -> None:
+        captured: list[dict] = []
+
+        class FakeOpenAIEmbeddingFunction:
+            def __init__(self, **kwargs):
+                captured.append(kwargs)
+
+        class FakeEmbeddingFunction:
+            def __class_getitem__(cls, item):
+                del item
+                return cls
+
+        class FakeClient:
+            def __init__(self, path):
+                self.path = path
+
+            def get_or_create_collection(self, **kwargs):
+                del kwargs
+                return FakeCollection({"ids": [[]]})
+
+        modules = {
+            "chromadb": types.SimpleNamespace(PersistentClient=FakeClient),
+            "chromadb.api": types.SimpleNamespace(),
+            "chromadb.api.types": types.SimpleNamespace(Embeddable=object, EmbeddingFunction=FakeEmbeddingFunction),
+            "chromadb.utils": types.SimpleNamespace(),
+            "chromadb.utils.embedding_functions": types.SimpleNamespace(),
+            "chromadb.utils.embedding_functions.openai_embedding_function": types.SimpleNamespace(
+                OpenAIEmbeddingFunction=FakeOpenAIEmbeddingFunction
+            ),
+        }
+
+        with patch.dict(sys.modules, modules):
+            vectorstore.init_vectorstore(
+                api_key="main-key",
+                base_url="https://api.openai.com",
+                embedding_model="text-embedding-3-small",
+            )
+            vectorstore.init_vectorstore(
+                api_key="main-key",
+                base_url="https://api.deepseek.com",
+                embedding_model="text-embedding-3-small",
+                embedding_base_url="https://api.openai.com/v1",
+                embedding_api_key="embedding-key",
+            )
+
+        self.assertEqual("https://api.openai.com", captured[0]["api_base"])
+        self.assertEqual("main-key", captured[0]["api_key"])
+        self.assertEqual("https://api.openai.com/v1", captured[1]["api_base"])
+        self.assertEqual("embedding-key", captured[1]["api_key"])
 
     def test_query_post_hits_returns_ranks_and_distances(self) -> None:
         vectorstore._collection = FakeCollection(
@@ -77,12 +148,47 @@ class VectorStoreTest(unittest.TestCase):
             hits,
         )
 
+    def test_query_post_hits_logs_when_query_fails_after_fallback(self) -> None:
+        class FailingCollection:
+            def count(self) -> int:
+                return 1
+
+            def query(self, **kwargs):
+                raise RuntimeError("embedding endpoint unavailable")
+
+        vectorstore._collection = FailingCollection()
+        vectorstore._embedding_diagnostics = {
+            "embedding_model": "text-embedding-3-small",
+            "embedding_base_url": "https://api.deepseek.com",
+            "embedding_base_url_source": "base_url",
+        }
+
+        hits = vectorstore.query_post_hits("焦虑", n_results=20)
+        event = self._last_log_event("vector_query_failed")
+
+        self.assertEqual([], hits)
+        self.assertEqual("vector_query_posts", event["operation"])
+        self.assertEqual("RuntimeError", event["exception_type"])
+        self.assertEqual("embedding endpoint unavailable", event["exception_message"])
+        self.assertIn("配置 embedding_base_url", " ".join(event["suggestions"]))
+
     def test_query_post_ids_preserves_existing_behavior(self) -> None:
         vectorstore._collection = FakeCollection(
             {"ids": [["p-1", "p-2"]], "distances": [[0.2, 0.7]]}
         )
 
         self.assertEqual(["p-1", "p-2"], vectorstore.query_post_ids("焦虑", n_results=20))
+
+    def _last_log_event(self, event_name: str) -> dict:
+        log_path = self.workspace / "logs" / "current.jsonl"
+        records = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matches = [record for record in records if record.get("event") == event_name]
+        self.assertTrue(matches)
+        return matches[-1]
 
 
 if __name__ == "__main__":

@@ -48,6 +48,7 @@ def save_post(content: str) -> str:
             level="WARNING",
             post_id=post_id,
             error=str(exc),
+            **_external_api_error_fields(exc, operation="vector_index_post"),
         )
 
     return post_id
@@ -115,6 +116,7 @@ def retry_pending_embeddings(limit: int | None = None) -> int:
                 post_id=payload.get("post_id") if isinstance(payload, dict) else None,
                 retry=True,
                 error=str(exc),
+                **_external_api_error_fields(exc, operation="vector_index_post"),
             )
             continue
     return fixed
@@ -159,6 +161,14 @@ def _pending_embedding_payload(post_id: str, content: str, error: str) -> str:
 
 def _clear_pending_embedding(post_id: str) -> None:
     db.execute("DELETE FROM meta WHERE key = ?", (f"pending_embedding:{post_id}",))
+
+
+def _external_api_error_fields(exc: Exception, *, operation: str) -> dict:
+    return {
+        "operation": operation,
+        "exception_type": type(exc).__name__,
+        "exception_message": str(exc),
+    }
 
 
 def _vectorstore():

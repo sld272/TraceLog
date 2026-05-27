@@ -129,7 +129,7 @@ def log_llm_call(
     messages: list[dict[str, Any]],
     response_content: str | None = None,
     parsed: Any = None,
-    error: str | None = None,
+    error: Any = None,
     context: dict | None = None,
     response_format: dict | None = None,
 ) -> None:

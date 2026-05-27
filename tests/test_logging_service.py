@@ -158,8 +158,13 @@ class LoggingServiceTest(unittest.TestCase):
             messages=messages,
             parser=lambda content: json.loads(content or "{}"),
         )
+        api_error_record = self._last_record()
         self.assertIsNone(api_error)
-        self.assertEqual("api_error", self._last_record()["status"])
+        self.assertEqual("api_error", api_error_record["status"])
+        self.assertEqual("RuntimeError", api_error_record["error"]["exception_type"])
+        self.assertEqual("boom", api_error_record["error"]["exception_message"])
+        self.assertEqual("api_error_probe", api_error_record["error"]["operation"])
+        self.assertEqual("fake-model", api_error_record["error"]["model"])
 
     def _last_record(self) -> dict:
         current = self.workspace / "logs" / "current.jsonl"

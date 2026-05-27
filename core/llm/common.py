@@ -46,7 +46,7 @@ def call_json_completion(
     response_content: str | None = None
     parsed: dict | None = None
     status = "ok"
-    error: str | None = None
+    error: dict | str | None = None
 
     try:
         kwargs: dict[str, Any] = {
@@ -65,7 +65,7 @@ def call_json_completion(
         return parsed
     except Exception as exc:
         status = "api_error"
-        error = str(exc)
+        error = _api_error_details(exc, operation=operation, model=model, timeout_s=timeout)
         return None
     finally:
         duration_ms = int((perf_counter() - started) * 1000)
@@ -91,6 +91,30 @@ def _invalid_response_status(content: str | None) -> str:
     except json.JSONDecodeError:
         return "invalid_json"
     return "invalid_response"
+
+
+def _api_error_details(exc: Exception, *, operation: str, model: str, timeout_s: int | float | None) -> dict:
+    details = {
+        "operation": operation,
+        "model": model,
+        "timeout_s": timeout_s,
+        "exception_type": type(exc).__name__,
+        "exception_message": str(exc),
+    }
+    for attr in ("status_code", "code", "type", "request_id"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            details[attr] = value
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status_code = getattr(response, "status_code", None)
+        if status_code is not None and "status_code" not in details:
+            details["status_code"] = status_code
+        headers = getattr(response, "headers", {})
+        request_id = headers.get("x-request-id") if hasattr(headers, "get") else None
+        if request_id is not None and "request_id" not in details:
+            details["request_id"] = request_id
+    return details
 
 
 def _new_call_id() -> str:
