@@ -290,6 +290,8 @@ def _thread_messages_to_dicts(messages) -> list[dict[str, str]]:
         if not isinstance(content, str):
             logging.warning("skipping thread message with non-string content")
             continue
+        if role == "assistant":
+            content = json.dumps({"reply": content}, ensure_ascii=False)
         result.append({"role": role, "content": content})
     return result
 

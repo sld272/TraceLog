@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from core import db, evidence_service, profile_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import db, evidence_service, logging_service, profile_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
@@ -211,11 +211,35 @@ def call_comment_reply(
         },
     )
     if data is None:
-        return _failed_result(comment_context.thread, user_message_row.id, "LLM call failed or returned invalid JSON")
+        error = "LLM call failed or returned invalid JSON"
+        logging_service.log_event(
+            "reply_failed",
+            level="WARNING",
+            channel="comment",
+            thread_id=thread_id,
+            post_id=comment_context.thread.post_id,
+            soul_name=comment_context.thread.soul_name,
+            user_message_id=user_message_row.id,
+            error=error,
+            fallback_reply=FAILED_COMMENT_REPLY,
+        )
+        return _failed_result(comment_context.thread, user_message_row.id, error)
 
     reply = data.get("reply")
     if not isinstance(reply, str) or not reply.strip():
-        return _failed_result(comment_context.thread, user_message_row.id, "LLM response missing non-empty reply")
+        error = "LLM response missing non-empty reply"
+        logging_service.log_event(
+            "reply_failed",
+            level="WARNING",
+            channel="comment",
+            thread_id=thread_id,
+            post_id=comment_context.thread.post_id,
+            soul_name=comment_context.thread.soul_name,
+            user_message_id=user_message_row.id,
+            error=error,
+            fallback_reply=FAILED_COMMENT_REPLY,
+        )
+        return _failed_result(comment_context.thread, user_message_row.id, error)
 
     assistant_message = _append_message(thread_id, "assistant", reply.strip())
     return CommentReplyResult(

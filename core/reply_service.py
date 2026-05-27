@@ -6,7 +6,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from core import db
+from core import db, logging_service
 from core.context_builder import BuiltContext
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -81,11 +81,31 @@ def _call_one_soul(
         trace_context={"post_id": post_id, "soul_name": soul.name},
     )
     if data is None:
-        return _failed_result(soul, "LLM call failed or returned invalid JSON")
+        error = "LLM call failed or returned invalid JSON"
+        logging_service.log_event(
+            "reply_failed",
+            level="WARNING",
+            channel="public_post",
+            post_id=post_id,
+            soul_name=soul.name,
+            error=error,
+            fallback_reply=FAILED_REPLY,
+        )
+        return _failed_result(soul, error)
 
     reply = data.get("reply")
     if not isinstance(reply, str) or not reply.strip():
-        return _failed_result(soul, "LLM response missing non-empty reply")
+        error = "LLM response missing non-empty reply"
+        logging_service.log_event(
+            "reply_failed",
+            level="WARNING",
+            channel="public_post",
+            post_id=post_id,
+            soul_name=soul.name,
+            error=error,
+            fallback_reply=FAILED_REPLY,
+        )
+        return _failed_result(soul, error)
 
     return SoulReplyResult(
         soul_name=soul.name,

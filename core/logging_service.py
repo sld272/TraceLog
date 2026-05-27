@@ -150,6 +150,7 @@ def log_llm_call(
             "mode": "full",
             "content": response_content,
             "content_length": len(response_content or ""),
+            "content_stripped_length": len((response_content or "").strip()),
         }
         parsed_payload = parsed
     else:
@@ -163,6 +164,7 @@ def log_llm_call(
             "mode": "summary",
             "content_preview": _preview(response_content),
             "content_length": len(response_content or ""),
+            "content_stripped_length": len((response_content or "").strip()),
         }
         parsed_payload = _summarize_value(parsed)
 
