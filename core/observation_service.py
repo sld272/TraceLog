@@ -79,6 +79,84 @@ def replace_post_observations(
         return _replace_post_observations(write_conn, source_id, normalized_items, source)
 
 
+def save_extraction_batch(
+    *,
+    source_kind: str,
+    source_key: str,
+    cursor_value: str,
+    observations: list[dict[str, Any]],
+    source_channel: str,
+    visibility_scope: str,
+    source_type: str,
+    evidence_access: str,
+    source_excerpt_by_id: dict[int, str],
+    source_observed_at_by_id: dict[int, float],
+    scope_post_id: str | None = None,
+    scope_soul_name: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> list[int]:
+    """Save extracted observations and advance the source cursor atomically."""
+    if not source_kind.strip() or not source_key.strip():
+        raise ValueError("source_kind and source_key are required")
+    _require_choice({"source_channel": source_channel}, "source_channel", SOURCE_CHANNELS)
+    _require_choice({"visibility_scope": visibility_scope}, "visibility_scope", VISIBILITY_SCOPES)
+    _require_choice({"source_type": source_type}, "source_type", SOURCE_TYPES)
+    _require_choice({"evidence_access": evidence_access}, "evidence_access", EVIDENCE_ACCESS)
+
+    normalized_items: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for item in observations:
+        source_ids = _valid_source_ids(item.get("source_message_ids"), source_excerpt_by_id)
+        if not source_ids:
+            continue
+        observed_at = max(source_observed_at_by_id.get(source_id, db.now_ts()) for source_id in source_ids)
+        normalized = _normalize_observation(
+            {
+                **item,
+                "source_channel": source_channel,
+                "visibility_scope": visibility_scope,
+                "scope_post_id": scope_post_id,
+                "scope_soul_name": scope_soul_name,
+                "observed_at": observed_at,
+                "metadata": {
+                    **(metadata or {}),
+                    "extractor": "thread_observation",
+                    "source_kind": source_kind,
+                    "source_key": str(source_key),
+                },
+            }
+        )
+        sources = [
+            _normalize_source(
+                {
+                    "source_type": source_type,
+                    "source_id": source_id,
+                    "excerpt": source_excerpt_by_id[source_id],
+                    "evidence_access": evidence_access,
+                    "metadata": {"extractor": "thread_observation"},
+                },
+                visibility_scope,
+            )
+            for source_id in source_ids
+        ]
+        normalized_items.append((normalized, sources))
+
+    now = db.now_ts()
+    with db.immediate_transaction() as conn:
+        observation_ids = [
+            _insert_observation(conn, item, sources, now=now)
+            for item, sources in normalized_items
+        ]
+        _set_cursor(
+            conn,
+            source_kind.strip(),
+            source_key.strip(),
+            str(cursor_value),
+            now=now,
+            metadata=metadata,
+        )
+    return observation_ids
+
+
 def get_observation(observation_id: int) -> dict[str, Any] | None:
     row = db.query_one("SELECT * FROM observations WHERE id = ?", (observation_id,))
     if row is None:
@@ -166,23 +244,7 @@ def set_cursor(
         raise ValueError("source_kind and source_key are required")
     now = db.now_ts()
     with db.immediate_transaction() as conn:
-        conn.execute(
-            """
-            INSERT INTO observation_cursors(source_kind, source_key, cursor_value, updated_at, metadata)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(source_kind, source_key) DO UPDATE SET
-                cursor_value = excluded.cursor_value,
-                updated_at = excluded.updated_at,
-                metadata = excluded.metadata
-            """,
-            (
-                source_kind.strip(),
-                source_key.strip(),
-                str(cursor_value),
-                now,
-                _json_or_none(metadata),
-            ),
-        )
+        _set_cursor(conn, source_kind.strip(), source_key.strip(), str(cursor_value), now=now, metadata=metadata)
 
 
 def cleanup_orphan_observations() -> int:
@@ -285,6 +347,48 @@ def _insert_observation(
             ),
         )
     return observation_id
+
+
+def _set_cursor(
+    conn,
+    source_kind: str,
+    source_key: str,
+    cursor_value: str,
+    *,
+    now: float,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO observation_cursors(source_kind, source_key, cursor_value, updated_at, metadata)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(source_kind, source_key) DO UPDATE SET
+            cursor_value = excluded.cursor_value,
+            updated_at = excluded.updated_at,
+            metadata = excluded.metadata
+        """,
+        (
+            source_kind,
+            source_key,
+            cursor_value,
+            now,
+            _json_or_none(metadata),
+        ),
+    )
+
+
+def _valid_source_ids(value: Any, source_excerpt_by_id: dict[int, str]) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    valid_ids = []
+    for raw_id in value:
+        try:
+            source_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if source_id in source_excerpt_by_id and source_id not in valid_ids:
+            valid_ids.append(source_id)
+    return valid_ids
 
 
 def _normalize_observation(observation: dict[str, Any]) -> dict[str, Any]:

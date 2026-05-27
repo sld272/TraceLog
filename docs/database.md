@@ -277,7 +277,7 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
 
 ## 5. Observation 数据底座
 
-本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation。评论线程/私聊 Signal Extraction、Memory Retrieval、Progressive Disclosure 和 Consolidation 仍是后续阶段。
+本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入 `post_visible` / `soul_scoped` observation。Memory Retrieval、Progressive Disclosure 和 Consolidation 仍是后续阶段。
 
 Observation 是 raw evidence 与深反思之间的中层记忆单位。它只保存可检索、可过滤、可审计的信号；具体原始证据统一写入 `observation_sources`。
 
@@ -364,6 +364,15 @@ CREATE TABLE IF NOT EXISTS observation_cursors (
 
 游标推进必须与 observation 写入在同一个写事务提交。涉及 observation 写入、状态变更、consolidation、cursor advance 的事务使用 `core.db.immediate_transaction()`，避免并发下 deferred transaction 锁升级造成 `SQLITE_BUSY`。
 
+当前实际使用的 cursor key：
+
+| source_kind | source_key | cursor_value |
+| --- | --- | --- |
+| `chat_thread` | `chat_threads.id` 字符串 | 已处理的最大 `chat_messages.id` |
+| `comment_thread` | `comment_threads.id` 字符串 | 已处理的最大 `comment_messages.id` |
+
+线程 observation 提取成功后，即使本批次没有生成 observation，也会推进 cursor，避免无意义消息反复消耗 LLM。若 LLM 返回无效 JSON 或写入失败，cursor 不推进，下次按同一批次重试。
+
 ### 5.2 冻结枚举
 
 Observation 类型：
@@ -420,6 +429,11 @@ archived
 私聊边界不用 `visible_to_souls` JSON 数组表达。第一版私聊 observation 绝对不跨 SOUL，因此 `soul_scoped` 使用可索引的 `scope_soul_name TEXT REFERENCES souls(name)`。
 
 公开 post observation 的边界不由 LLM 决定。轻反思 parser 只接受 `type`、`title`、`summary`、`narrative`、`importance`、`confidence`，写入时由系统固定补齐 `source_channel='post'`、`visibility_scope='global'`、`source_type='post'`、`evidence_access='all'`。同一 post 轻反思重跑时会按 `source_type='post' + source_id=post_id` 替换旧 observation，避免重复堆积。
+
+评论线程与私聊 observation 的边界同样不由 LLM 决定。线程提取 parser 只接受 `type`、`title`、`summary`、`narrative`、`importance`、`confidence`、`source_message_ids`。`source_message_ids` 必须来自本批次 user messages；assistant messages 只作为理解语境，不作为证据源。写入时系统固定补齐：
+
+- 私聊：`source_channel='chat'`、`visibility_scope='soul_scoped'`、`scope_soul_name=<thread.soul_name>`、`source_type='chat_message'`、`evidence_access='source_soul_only'`
+- 评论线程：`source_channel='comment_thread'`、`visibility_scope='post_visible'`、`scope_post_id=<thread.post_id>`、`source_type='comment_message'`、`evidence_access='post_visible'`
 
 ### 5.4 检索与向量化策略
 

@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from core import chat_service, comment_service, logging_service, reflector, todo_service, tool_config_service
+from core import chat_service, comment_service, logging_service, observation_extractor, reflector, todo_service, tool_config_service
 from core.cli_input import read_cli_input
 from core.llm.types import LLMClient
 
 
 def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
     print("\n\n[反思] 正在整理本次记录与 SOUL 互动，请稍候（请勿再次终止）...")
+    observation_results = observation_extractor.run_pending_observation_extractions_safely(client, model)
+    observation_count = sum(result.observation_count for result in observation_results if result.error is None)
+    processed_count = sum(result.processed_count for result in observation_results if result.error is None)
+    failed_count = sum(1 for result in observation_results if result.error is not None)
+    if processed_count:
+        print(f"[Observation] 已处理 {processed_count} 条线程消息，新增 {observation_count} 条 observation。")
+    if failed_count:
+        print(f"[Observation] {failed_count} 个线程暂时提取失败，已保留待下次重试。")
     try:
         try:
             scope = reflector.preview_global_deep_reflection_scope()

@@ -301,6 +301,159 @@ def _clamp_float(value, default: float, minimum: float, maximum: float) -> float
     return max(minimum, min(maximum, number))
 
 
+# 引擎 2b：Thread Observation Extraction
+
+THREAD_OBSERVATION_PROMPT = """\
+你是 TraceLog 拾迹的线程 observation 提取器。你的任务是从一段私聊或评论线程消息中，抽取短小、可检索、可追溯的 observation。
+
+## 输入说明
+- 线程语境：说明这是私聊还是公开 post 下的评论线程。
+- 新消息批次：本次唯一允许提取的消息。旧语境只帮助理解，不要从旧语境里制造新 observation。
+- 只有 role=user 的消息可以作为 observation 的 source_message_ids；assistant 消息只能用于理解用户为什么这样说。
+
+## JSON 输出格式强制要求
+你必须且只能输出一个标准 JSON 对象，不要包含 Markdown 代码块或解释文字。
+
+{
+  "observations": [
+    {
+      "type": "preference|correction|convention|decision|insight|pattern|state|relationship|todo_signal",
+      "title": "短标题，最多 24 字",
+      "summary": "可选摘要，最多 60 字",
+      "narrative": "一条可独立检索的记忆信号，必须只基于本批次 user 消息",
+      "importance": 0.0,
+      "confidence": 0.0,
+      "source_message_ids": [123]
+    }
+  ]
+}
+
+## 严格规则
+1. observations 最多输出 5 条；没有值得沉淀的信号时输出 []。
+2. source_message_ids 必须只包含输入批次中 role=user 的真实 message id。
+3. 不要输出 visibility、scope、source_type 或 evidence_access；这些边界由系统固定。
+4. 私聊中的内容绝对不要写成跨 SOUL 共享记忆；你只负责抽取内容，边界由系统保证。
+5. 如果用户明确表达"不要记住/不要记录"，或内容不适合沉淀为记忆，observations 输出 []。
+
+## 当前时间
+{current_datetime}
+"""
+
+
+def call_thread_observation_extraction(
+    client: LLMClient,
+    model: str,
+    *,
+    thread_context: str,
+    messages: str,
+    user_message_ids: list[int],
+    trace_context: dict | None = None,
+) -> dict | None:
+    """Extract observations from new chat/comment thread messages."""
+    allowed_user_ids = set(user_message_ids)
+    user_content = (
+        f"## 线程语境\n\n{thread_context or '（暂无）'}\n\n"
+        "---\n\n"
+        f"## 新消息批次\n\n{messages or '（暂无）'}"
+    )
+
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="thread_observation_extraction",
+        timeout=30,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": THREAD_OBSERVATION_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": user_content},
+        ],
+        parser=lambda content: _parse_thread_observation_content(content, allowed_user_ids),
+        trace_context=trace_context,
+    )
+
+
+def _parse_thread_observation_content(content: str | None, allowed_user_ids: set[int]) -> dict | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    observations = _normalize_thread_observations(data.get("observations"), allowed_user_ids)
+    return {"observations": observations}
+
+
+def _normalize_thread_observations(value, allowed_user_ids: set[int]) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    allowed_types = {
+        "preference",
+        "correction",
+        "convention",
+        "decision",
+        "insight",
+        "pattern",
+        "state",
+        "relationship",
+        "todo_signal",
+    }
+    observations = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        observation_type = item.get("type")
+        title = item.get("title")
+        narrative = item.get("narrative")
+        if observation_type not in allowed_types:
+            continue
+        if not isinstance(title, str) or not title.strip():
+            continue
+        if not isinstance(narrative, str) or not narrative.strip():
+            continue
+        source_ids = _normalize_source_message_ids(item.get("source_message_ids"), allowed_user_ids)
+        if not source_ids:
+            continue
+        summary = item.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = None
+        key = (observation_type, title.strip(), narrative.strip(), tuple(source_ids))
+        if key in seen:
+            continue
+        seen.add(key)
+        observations.append(
+            {
+                "type": observation_type,
+                "title": title.strip()[:80],
+                "summary": summary.strip()[:160] if summary else None,
+                "narrative": narrative.strip()[:500],
+                "importance": _clamp_float(item.get("importance"), 0.5, 0.0, 1.0),
+                "confidence": _clamp_float(item.get("confidence"), 0.5, 0.0, 1.0),
+                "source_message_ids": source_ids,
+            }
+        )
+        if len(observations) >= 5:
+            break
+    return observations
+
+
+def _normalize_source_message_ids(value, allowed_user_ids: set[int]) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    for raw_id in value:
+        try:
+            message_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if message_id in allowed_user_ids and message_id not in normalized:
+            normalized.append(message_id)
+    return normalized
+
+
 # 引擎 3：Global Deep Reflection
 
 GLOBAL_DEEP_REFLECTION_PROMPT = """\

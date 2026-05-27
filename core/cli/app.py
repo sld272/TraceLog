@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from core import context_builder, logging_service, record_service, reply_service, retrieval, todo_service, tool_config_service
+from core import context_builder, logging_service, observation_extractor, record_service, reply_service, retrieval, todo_service, tool_config_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
 from core.cli.config import load_config
@@ -60,6 +60,14 @@ def main() -> None:
         fixed_reflections = reflector.retry_pending_light_reflections(client, model)
         if fixed_reflections:
             print(f"[反思] 已处理 {fixed_reflections} 条待反思记录。")
+        observation_results = observation_extractor.run_pending_observation_extractions_safely(client, model)
+        observation_count = sum(result.observation_count for result in observation_results if result.error is None)
+        processed_count = sum(result.processed_count for result in observation_results if result.error is None)
+        failed_count = sum(1 for result in observation_results if result.error is not None)
+        if processed_count:
+            print(f"[Observation] 已处理 {processed_count} 条待提取线程消息，新增 {observation_count} 条 observation。")
+        if failed_count:
+            print(f"[Observation] {failed_count} 个线程暂时提取失败，已保留待下次重试。")
         todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     except vectorstore.VectorStoreInitError as e:
         print(f"[向量存储] 初始化失败：{e}")
