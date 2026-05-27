@@ -252,6 +252,10 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
     ON soul_memory_revisions(soul_name, created_at DESC);
 ```
 
+`user_md_revisions` 与 `soul_memory_revisions` 是长期记忆审计源。当前无前端阶段不新增 schema，而是在 `core.memory_review_service` 上提供统一读取接口：列表接口只返回 `id`、目标类型、目标名称、`source`、`patch`、`created_at`，详情接口才返回完整 `snapshot`。
+
+用户手动编辑最终长期记忆时同样写 revision：`user.md` 覆盖写入使用 `source='user'` 与 `{"op":"overwrite_user_memory"}`；`soul_memories/<name>.md` 覆盖写入使用 `source='user'` 与 `{"op":"overwrite_soul_memory"}`。这些用户写入不经过 AI patch 的 evidence/confidence gate，但只作用于最终 Markdown 记忆文件，不修改 observation、evidence、cursor 或 consolidation 状态。
+
 ## 3. 为什么 FTS5 用 external content 模式
 
 `content='posts', content_rowid='rowid'` 这两行让 FTS5 不真的存正文副本，只存 token 化索引。优点：

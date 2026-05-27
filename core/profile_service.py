@@ -328,10 +328,10 @@ def read_profile() -> str:
         return f.read()
 
 
-def write_profile(content: str) -> None:
+def write_profile(content: str, source: str = "reflector", patch: dict | None = None) -> None:
     """Overwrite user.md and record a revision snapshot."""
     _write_text_atomic(USER_MD_PATH, content)
-    _record_user_md_revision(content, {"op": "overwrite_profile"}, "reflector")
+    _record_user_md_revision(content, patch or {"op": "overwrite_profile"}, source)
 
 
 def _record_user_md_revision(snapshot: str, patch: dict, source: str) -> None:

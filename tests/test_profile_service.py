@@ -78,6 +78,22 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertIn("熟悉 ChromaDB", row["patch"])
         self.assertEqual("reflector", row["source"])
 
+    def test_user_overwrite_writes_user_source_revision(self) -> None:
+        updated = USER_MD + "\n用户手动覆盖\n"
+
+        profile_service.write_profile(
+            updated,
+            source="user",
+            patch={"op": "overwrite_user_memory"},
+        )
+        row = db.query_one("SELECT snapshot, patch, source FROM user_md_revisions ORDER BY id DESC LIMIT 1")
+
+        row = require_not_none(row)
+        self.assertEqual(updated, profile_service.read_profile())
+        self.assertEqual(updated, row["snapshot"])
+        self.assertIn("overwrite_user_memory", row["patch"])
+        self.assertEqual("user", row["source"])
+
     def test_default_user_md_has_empty_sections_without_placeholders(self) -> None:
         self.assertNotIn("暂无", profile_service.DEFAULT_USER_MD)
         self.assertIn("## 基本信息\n\n## 关键身份", profile_service.DEFAULT_USER_MD)
