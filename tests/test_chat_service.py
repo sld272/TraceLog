@@ -193,9 +193,10 @@ class ChatServiceTest(unittest.TestCase):
         context = chat_service.build_chat_context(thread.id, "私聊context词")
 
         self.assertIn("# 相关记忆", context.context)
+        self.assertIn("L2", context.context)
         self.assertIn("默认短回复记忆", context.context)
         self.assertNotIn("其他 SOUL 私聊记忆", context.context)
-        self.assertNotIn("私聊原文不该出现", context.context)
+        self.assertIn("私聊原文不该出现", context.context)
 
     def test_chat_reply_success_writes_assistant_message(self) -> None:
         thread = chat_service.get_or_create_thread("默认")

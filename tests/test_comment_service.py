@@ -202,10 +202,11 @@ class CommentServiceTest(unittest.TestCase):
         context = comment_service.build_comment_context(thread.id, "评论context词")
 
         self.assertIn("# 相关记忆", context.context)
+        self.assertIn("L2", context.context)
         self.assertIn("当前 post 评论记忆", context.context)
         self.assertNotIn("其他 post 评论记忆", context.context)
         self.assertNotIn("私聊不该进评论", context.context)
-        self.assertNotIn("评论原文不该出现", context.context)
+        self.assertIn("评论原文不该出现", context.context)
 
     def test_comment_reply_sends_multi_turn_messages(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")

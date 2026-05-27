@@ -11,6 +11,21 @@ from core import db
 
 
 @dataclass(frozen=True)
+class RetrievalScope:
+    channel: str
+    soul_name: str | None = None
+    post_id: str | None = None
+
+
+@dataclass(frozen=True)
+class EvidenceSnippet:
+    source_type: str
+    source_id: str
+    excerpt: str
+    evidence_access: str
+
+
+@dataclass(frozen=True)
 class MemoryHit:
     id: int
     type: str
@@ -25,6 +40,8 @@ class MemoryHit:
     observed_at: float
     score: float
     sources: list[str]
+    evidence_snippets: list[EvidenceSnippet]
+    disclosure_level: str
 
 
 def search_public_post_memory(query: str, related_post_ids: list[str], limit: int = 5) -> str:
@@ -33,6 +50,7 @@ def search_public_post_memory(query: str, related_post_ids: list[str], limit: in
         query=query,
         related_post_ids=related_post_ids,
         allowed_scopes=[("global", None)],
+        retrieval_scope=RetrievalScope(channel="public_post"),
         limit=limit,
     )
     return _format_memory_context(hits)
@@ -44,6 +62,7 @@ def search_chat_memory(query: str, soul_name: str, related_post_ids: list[str], 
         query=query,
         related_post_ids=related_post_ids,
         allowed_scopes=[("global", None), ("soul_scoped", soul_name)],
+        retrieval_scope=RetrievalScope(channel="chat", soul_name=soul_name),
         limit=limit,
     )
     return _format_memory_context(hits)
@@ -55,6 +74,7 @@ def search_comment_memory(query: str, post_id: str, related_post_ids: list[str],
         query=query,
         related_post_ids=related_post_ids,
         allowed_scopes=[("global", None), ("post_visible", post_id)],
+        retrieval_scope=RetrievalScope(channel="comment_thread", post_id=post_id),
         limit=limit,
     )
     return _format_memory_context(hits)
@@ -65,6 +85,7 @@ def _search_memory(
     query: str,
     related_post_ids: list[str],
     allowed_scopes: list[tuple[str, str | None]],
+    retrieval_scope: RetrievalScope,
     limit: int,
 ) -> list[MemoryHit]:
     if limit <= 0:
@@ -86,7 +107,7 @@ def _search_memory(
         ),
         reverse=True,
     )
-    return hits[:limit]
+    return _apply_progressive_disclosure(hits[:limit], retrieval_scope)
 
 
 def _fts_observation_rows(
@@ -205,7 +226,88 @@ def _candidate_to_hit(candidate: dict[str, Any]) -> MemoryHit:
         observed_at=float(row["observed_at"]),
         score=round(score, 6),
         sources=list(sources),
+        evidence_snippets=[],
+        disclosure_level="L1",
     )
+
+
+def _apply_progressive_disclosure(hits: list[MemoryHit], retrieval_scope: RetrievalScope) -> list[MemoryHit]:
+    disclosed: list[MemoryHit] = []
+    l2_count = 0
+    for hit in hits:
+        snippets: list[EvidenceSnippet] = []
+        level = "L1"
+        if l2_count < 2:
+            snippets = _allowed_evidence_snippets(hit, retrieval_scope)
+            if snippets:
+                level = "L2"
+                l2_count += 1
+        disclosed.append(
+            MemoryHit(
+                id=hit.id,
+                type=hit.type,
+                title=hit.title,
+                summary=hit.summary,
+                narrative=hit.narrative,
+                visibility_scope=hit.visibility_scope,
+                scope_post_id=hit.scope_post_id,
+                scope_soul_name=hit.scope_soul_name,
+                importance=hit.importance,
+                confidence=hit.confidence,
+                observed_at=hit.observed_at,
+                score=hit.score,
+                sources=hit.sources,
+                evidence_snippets=snippets,
+                disclosure_level=level,
+            )
+        )
+    return disclosed
+
+
+def _allowed_evidence_snippets(hit: MemoryHit, retrieval_scope: RetrievalScope) -> list[EvidenceSnippet]:
+    rows = db.query_all(
+        """
+        SELECT source_type, source_id, excerpt, evidence_access
+        FROM observation_sources
+        WHERE observation_id = ?
+        ORDER BY source_type, source_id
+        """,
+        (hit.id,),
+    )
+    snippets: list[EvidenceSnippet] = []
+    for row in rows:
+        excerpt = row["excerpt"]
+        if not isinstance(excerpt, str) or not excerpt.strip():
+            continue
+        if not _can_expand_evidence(hit, row["evidence_access"], retrieval_scope):
+            continue
+        snippets.append(
+            EvidenceSnippet(
+                source_type=row["source_type"],
+                source_id=row["source_id"],
+                excerpt=_truncate_excerpt(excerpt.strip()),
+                evidence_access=row["evidence_access"],
+            )
+        )
+    return snippets
+
+
+def _can_expand_evidence(hit: MemoryHit, evidence_access: str, retrieval_scope: RetrievalScope) -> bool:
+    if evidence_access == "all":
+        return True
+    if evidence_access == "post_visible":
+        return (
+            retrieval_scope.channel == "comment_thread"
+            and hit.scope_post_id is not None
+            and hit.scope_post_id == retrieval_scope.post_id
+        )
+    if evidence_access == "source_soul_only":
+        return (
+            retrieval_scope.channel == "chat"
+            and hit.scope_soul_name is not None
+            and hit.scope_soul_name == retrieval_scope.soul_name
+        )
+    return False
 
 
 def _format_memory_context(hits: list[MemoryHit]) -> str:
@@ -216,8 +318,12 @@ def _format_memory_context(hits: list[MemoryHit]) -> str:
         scope = _scope_label(hit)
         summary = f"；{hit.summary}" if hit.summary else ""
         lines.append(
-            f"- [{hit.id}] ({hit.type}/{scope}) {hit.title}{summary}：{hit.narrative}"
+            f"- [{hit.id}] {hit.disclosure_level} ({hit.type}/{scope}) {hit.title}{summary}：{hit.narrative}"
         )
+        for snippet in hit.evidence_snippets:
+            lines.append(
+                f"  evidence({snippet.source_type}:{snippet.source_id}): {snippet.excerpt}"
+            )
     return "\n".join(lines)
 
 
@@ -265,6 +371,13 @@ def _build_match_query(query: str) -> str:
 def _sanitize_fts5(query: str) -> str:
     text = re.sub(r'["\'`()*:^{}[\]]+', " ", query)
     return " ".join(text.split())
+
+
+def _truncate_excerpt(excerpt: str, limit: int = 160) -> str:
+    text = " ".join(excerpt.split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip()
 
 
 def _query_terms(query: str) -> list[str]:

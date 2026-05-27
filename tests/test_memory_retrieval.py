@@ -118,9 +118,137 @@ class MemoryRetrievalTest(unittest.TestCase):
 
         self.assertIn("安全格式", context)
         self.assertIn("只展示 narrative", context)
-        self.assertNotIn("这是一段不该进入 prompt 的私聊原文", context)
+        self.assertIn("这是一段不该进入 prompt 的私聊原文", context)
 
-    def _create_global(self, title: str, narrative: str, source_post_id: str = "p-1") -> int:
+    def test_public_post_expands_all_evidence_only(self) -> None:
+        self._create_global(
+            "公开可展开",
+            "公开 evidence 可展开。公开证据词",
+            excerpt="公开 post 摘录可以进入公开上下文",
+        )
+        self._create_post_visible(
+            "p-1",
+            "评论不可公开展开",
+            "评论 evidence 不该进入公开 post。公开证据词",
+            excerpt="评论线程摘录不该进入公开 post",
+        )
+        self._create_soul_scoped(
+            "默认",
+            "私聊不可公开展开",
+            "私聊 evidence 不该进入公开 post。公开证据词",
+            excerpt="私聊摘录不该进入公开 post",
+        )
+
+        context = memory_retrieval.search_public_post_memory("公开证据词", [], limit=5)
+
+        self.assertIn("L2", context)
+        self.assertIn("公开 post 摘录可以进入公开上下文", context)
+        self.assertNotIn("评论线程摘录不该进入公开 post", context)
+        self.assertNotIn("私聊摘录不该进入公开 post", context)
+
+    def test_chat_expands_current_soul_private_evidence_only(self) -> None:
+        self._create_soul_scoped(
+            "默认",
+            "默认可展开",
+            "默认私聊 evidence 可展开。私聊证据词",
+            excerpt="默认私聊摘录可以展开",
+        )
+        self._create_soul_scoped(
+            "毒舌好友",
+            "毒舌不可展开",
+            "毒舌私聊 evidence 不可给默认。私聊证据词",
+            excerpt="毒舌私聊摘录不该出现",
+        )
+
+        context = memory_retrieval.search_chat_memory("私聊证据词", "默认", [], limit=5)
+
+        self.assertIn("默认私聊摘录可以展开", context)
+        self.assertNotIn("毒舌私聊摘录不该出现", context)
+
+    def test_comment_expands_same_post_visible_evidence_only(self) -> None:
+        self._create_post_visible(
+            "p-1",
+            "当前 post 可展开",
+            "当前 post 评论 evidence 可展开。评论证据词",
+            excerpt="当前 post 评论摘录可以展开",
+        )
+        self._create_post_visible(
+            "p-2",
+            "其他 post 不可展开",
+            "其他 post 评论 evidence 不可展开。评论证据词",
+            excerpt="其他 post 评论摘录不该出现",
+        )
+
+        context = memory_retrieval.search_comment_memory("评论证据词", "p-1", [], limit=5)
+
+        self.assertIn("当前 post 评论摘录可以展开", context)
+        self.assertNotIn("其他 post 评论摘录不该出现", context)
+
+    def test_evidence_access_none_never_expands(self) -> None:
+        observation_service.create_observation(
+            {
+                "type": "insight",
+                "title": "无展开证据",
+                "narrative": "这条不展开 none evidence。none证据词",
+                "source_channel": "post",
+                "visibility_scope": "global",
+            },
+            [
+                {
+                    "source_type": "post",
+                    "source_id": "p-1",
+                    "excerpt": "none evidence 不该出现",
+                    "evidence_access": "none",
+                }
+            ],
+        )
+
+        context = memory_retrieval.search_public_post_memory("none证据词", [], limit=5)
+
+        self.assertIn("无展开证据", context)
+        self.assertIn("L1", context)
+        self.assertNotIn("none evidence 不该出现", context)
+
+    def test_l2_excerpt_is_truncated(self) -> None:
+        long_excerpt = "长摘录" * 80
+        self._create_global(
+            "长摘录记忆",
+            "这条有很长 evidence。长摘录词",
+            excerpt=long_excerpt,
+        )
+
+        context = memory_retrieval.search_public_post_memory("长摘录词", [], limit=5)
+
+        self.assertIn("长摘录记忆", context)
+        self.assertIn("evidence(post:p-1):", context)
+        self.assertNotIn(long_excerpt, context)
+
+    def test_only_top_two_eligible_hits_expand_l2(self) -> None:
+        for index in range(4):
+            self._create_global(
+                f"可展开记忆 {index}",
+                f"top two disclosure marker {index}",
+                excerpt=f"可展开摘录 {index}",
+                observed_at=20.0 - index,
+            )
+
+        context = memory_retrieval.search_public_post_memory("top two disclosure marker", [], limit=4)
+
+        self.assertEqual(2, context.count(" L2 "))
+        self.assertEqual(2, context.count(" L1 "))
+        self.assertIn("可展开摘录 0", context)
+        self.assertIn("可展开摘录 1", context)
+        self.assertNotIn("可展开摘录 2", context)
+        self.assertNotIn("可展开摘录 3", context)
+
+    def _create_global(
+        self,
+        title: str,
+        narrative: str,
+        source_post_id: str = "p-1",
+        excerpt: str | None = None,
+        observed_at: float = 10.0,
+    ) -> int:
         return observation_service.create_observation(
             {
                 "type": "preference",
@@ -130,12 +258,19 @@ class MemoryRetrievalTest(unittest.TestCase):
                 "visibility_scope": "global",
                 "importance": 0.7,
                 "confidence": 0.8,
-                "observed_at": 10.0,
+                "observed_at": observed_at,
             },
-            [{"source_type": "post", "source_id": source_post_id, "evidence_access": "all"}],
+            [
+                {
+                    "source_type": "post",
+                    "source_id": source_post_id,
+                    "excerpt": excerpt,
+                    "evidence_access": "all",
+                }
+            ],
         )
 
-    def _create_soul_scoped(self, soul_name: str, title: str, narrative: str) -> int:
+    def _create_soul_scoped(self, soul_name: str, title: str, narrative: str, excerpt: str | None = None) -> int:
         return observation_service.create_observation(
             {
                 "type": "correction",
@@ -148,10 +283,17 @@ class MemoryRetrievalTest(unittest.TestCase):
                 "confidence": 0.8,
                 "observed_at": 10.0,
             },
-            [{"source_type": "chat_message", "source_id": "1", "evidence_access": "source_soul_only"}],
+            [
+                {
+                    "source_type": "chat_message",
+                    "source_id": "1",
+                    "excerpt": excerpt,
+                    "evidence_access": "source_soul_only",
+                }
+            ],
         )
 
-    def _create_post_visible(self, post_id: str, title: str, narrative: str) -> int:
+    def _create_post_visible(self, post_id: str, title: str, narrative: str, excerpt: str | None = None) -> int:
         return observation_service.create_observation(
             {
                 "type": "state",
@@ -164,7 +306,14 @@ class MemoryRetrievalTest(unittest.TestCase):
                 "confidence": 0.8,
                 "observed_at": 10.0,
             },
-            [{"source_type": "comment_message", "source_id": "1", "evidence_access": "post_visible"}],
+            [
+                {
+                    "source_type": "comment_message",
+                    "source_id": "1",
+                    "excerpt": excerpt,
+                    "evidence_access": "post_visible",
+                }
+            ],
         )
 
     def _insert_soul(self, name: str) -> None:

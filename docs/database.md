@@ -277,7 +277,7 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
 
 ## 5. Observation 数据底座
 
-本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入 `post_visible` / `soul_scoped` observation。Memory Retrieval v1 已接入 narrative 层召回；Progressive Disclosure 和 Consolidation 仍是后续阶段。
+本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入 `post_visible` / `soul_scoped` observation。Memory Retrieval v1 已接入 L1 narrative 层召回，并支持 L2 evidence excerpt 渐进展开；Consolidation 仍是后续阶段。
 
 Observation 是 raw evidence 与深反思之间的中层记忆单位。它只保存可检索、可过滤、可审计的信号；具体原始证据统一写入 `observation_sources`。
 
@@ -460,4 +460,18 @@ FTS 查询必须 join `observations` 并先过滤：
 | 私聊 | `global` + 当前 `scope_soul_name` 的 `soul_scoped` | `global` |
 | 评论线程 | `global` + 当前 `scope_post_id` 的 `post_visible` | `global` |
 
-v1 只把 observation id、type、title、summary、narrative 和 scope label 注入 `# 相关记忆`，不展开 `observation_sources.excerpt` 或任何 raw evidence。
+Progressive Disclosure v1 在 `# 相关记忆` 中使用 L1/L2 分层：
+
+- L1：observation id、type、title、summary、narrative 和 scope label。
+- L2：权限允许时，额外展开 `observation_sources.excerpt`，最多展开前 2 条 eligible memory，每条 excerpt 最多 160 字。
+
+v1 不读取完整 raw evidence；不会为了展开去查询 `posts.content`、`chat_messages.content` 或 `comment_messages.content`。
+
+L2 evidence access gate：
+
+| evidence_access | 展开规则 |
+| --- | --- |
+| `all` | 所有场景可展开 |
+| `post_visible` | 只在同一个 `scope_post_id` 的评论线程展开 |
+| `source_soul_only` | 只在同一个 `scope_soul_name` 的私聊展开 |
+| `none` | 永不展开 |

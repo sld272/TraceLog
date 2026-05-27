@@ -48,6 +48,7 @@ class ContextBuilderTest(unittest.TestCase):
         built = context_builder.build_context(relevant_post_ids=[], query="公开context词")
 
         self.assertIn("# 相关记忆", built.shared_context)
+        self.assertIn("L1", built.shared_context)
         self.assertIn("公开全局记忆", built.shared_context)
         self.assertNotIn("私聊不该出现", built.shared_context)
 
