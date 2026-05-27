@@ -43,6 +43,7 @@ def fanout(
         future_to_soul = {
             executor.submit(
                 _call_one_soul,
+                post_id,
                 soul,
                 user_input,
                 client,
@@ -64,13 +65,21 @@ def fanout(
 
 
 def _call_one_soul(
+    post_id: str,
     soul: SoulContext,
     user_input: str,
     client: LLMClient,
     model: str,
     shared_context: str,
 ) -> SoulReplyResult:
-    data = reply_router.call_soul_post_reply(user_input, client, model, shared_context, soul)
+    data = reply_router.call_soul_post_reply(
+        user_input,
+        client,
+        model,
+        shared_context,
+        soul,
+        trace_context={"post_id": post_id, "soul_name": soul.name},
+    )
     if data is None:
         return _failed_result(soul, "LLM call failed or returned invalid JSON")
 

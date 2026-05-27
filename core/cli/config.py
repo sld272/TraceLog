@@ -7,6 +7,7 @@ import json
 import os
 
 from core.cli_input import read_cli_input
+from core.logging_service import default_config as default_logging_config
 
 CONFIG_FILE = "config.json"
 
@@ -22,6 +23,7 @@ def load_config() -> dict:
         if not missing:
             config.setdefault("embedding_api_key", None)
             config.setdefault("embedding_base_url", None)
+            config["logging"] = _normalize_logging_config(config.get("logging"))
             return config
 
         print(f"[配置] 检测到配置不完整（缺少：{', '.join(missing)}），将重新配置。")
@@ -63,6 +65,7 @@ def load_config() -> dict:
         "embedding_model": embedding_model,
         "embedding_api_key": embedding_api_key,
         "embedding_base_url": embedding_base_url,
+        "logging": default_logging_config(),
     }
     tmp = CONFIG_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -71,3 +74,10 @@ def load_config() -> dict:
 
     print(f"\n配置已保存到 {CONFIG_FILE} 。\n")
     return config
+
+
+def _normalize_logging_config(value) -> dict:
+    logging_config = default_logging_config()
+    if isinstance(value, dict):
+        logging_config.update({key: item for key, item in value.items() if item is not None})
+    return logging_config

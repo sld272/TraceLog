@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from core import context_builder, record_service, reply_service, retrieval, todo_service, tool_config_service
+from core import context_builder, logging_service, record_service, reply_service, retrieval, todo_service, tool_config_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
 from core.cli.config import load_config
@@ -23,6 +23,13 @@ def main() -> None:
         print(f"\n[错误] {e}")
         return
 
+    logging_service.init_logging(config.get("logging"))
+    logging_service.log_event(
+        "cli_start",
+        model=config.get("model"),
+        base_url=config.get("base_url"),
+    )
+
     client = OpenAI(
         api_key=config["api_key"],
         base_url=config.get("base_url", "https://api.openai.com/v1"),
@@ -32,12 +39,19 @@ def main() -> None:
 
     try:
         workspace_service.init_workspace()
+        logging_service.log_event("workspace_initialized")
         vector_result = vectorstore.init_vectorstore(
             config["api_key"],
             config["base_url"],
             config["embedding_model"],
             config.get("embedding_base_url"),
             config.get("embedding_api_key"),
+        )
+        logging_service.log_event(
+            "vectorstore_initialized",
+            collection_name=vector_result.collection_name,
+            indexed_count=vector_result.indexed_count,
+            path=vector_result.path,
         )
         print(f"[向量存储] 初始化成功，已索引 {vector_result.indexed_count} 篇帖子。")
         fixed_embeddings = record_service.retry_pending_embeddings()
@@ -90,6 +104,7 @@ def main() -> None:
         built_context = context_builder.build_context(relevant_post_ids=relevant_ids)
 
         post_id = record_service.save_post(user_input)
+        logging_service.log_event("post_saved", post_id=post_id, content_length=len(user_input))
         sessions.run_todo_tool_for_post(post_id, client, model)
 
         results = reply_service.fanout(post_id, user_input, client, model, built_context)

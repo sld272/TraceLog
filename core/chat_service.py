@@ -188,7 +188,18 @@ def call_chat_reply(
     """Append user input, call one SOUL, and persist the assistant reply."""
     user_message_row = append_user_message(thread_id, user_message)
     chat_context = build_chat_context(thread_id, user_message)
-    data = reply_router.call_soul_chat_reply(client, model, chat_context, chat_context.soul)
+    data = reply_router.call_soul_chat_reply(
+        client,
+        model,
+        chat_context,
+        chat_context.soul,
+        trace_context={
+            "thread_id": thread_id,
+            "soul_name": chat_context.thread.soul_name,
+            "user_message_id": user_message_row.id,
+            "relevant_post_ids": chat_context.relevant_post_ids,
+        },
+    )
     if data is None:
         return _failed_result(chat_context.thread, user_message_row.id, "LLM call failed or returned invalid JSON")
 

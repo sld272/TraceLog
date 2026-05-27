@@ -197,7 +197,19 @@ def call_comment_reply(
     """Append user input, call one SOUL, and persist the assistant comment reply."""
     user_message_row = append_user_message(thread_id, user_message)
     comment_context = build_comment_context(thread_id, user_message)
-    data = reply_router.call_soul_comment_reply(client, model, comment_context, comment_context.soul)
+    data = reply_router.call_soul_comment_reply(
+        client,
+        model,
+        comment_context,
+        comment_context.soul,
+        trace_context={
+            "thread_id": thread_id,
+            "post_id": comment_context.thread.post_id,
+            "soul_name": comment_context.thread.soul_name,
+            "user_message_id": user_message_row.id,
+            "relevant_post_ids": comment_context.relevant_post_ids,
+        },
+    )
     if data is None:
         return _failed_result(comment_context.thread, user_message_row.id, "LLM call failed or returned invalid JSON")
 

@@ -52,6 +52,7 @@ def run_for_post(post_id: str, client: LLMClient, model: str) -> TodoToolResult:
         model=model,
         post=_format_post_for_tool(post),
         active_todos=_format_active_todos(),
+        trace_context={"post_id": post_id},
     )
     if data is None:
         return TodoToolResult(

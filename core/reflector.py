@@ -84,6 +84,7 @@ def trigger_light_reflection(
         post=_format_posts([post]),
         recent_posts=_format_posts(_load_recent_posts_before(post_id, limit=5)),
         profile=profile_service.read_profile(),
+        trace_context={"post_id": post_id},
     )
     if data is None:
         raise ValueError("轻反思没有返回有效 JSON")
@@ -193,6 +194,11 @@ def trigger_global_deep_reflection(
         posts=_format_posts(posts),
         light_summary=_format_light_summary(related_post_ids),
         todos=_format_todos(todos),
+        trace_context={
+            "trigger": trigger,
+            "post_ids": related_post_ids,
+            "post_count": len(related_post_ids),
+        },
     )
     if reflection_result is None or not _is_valid_reflection(reflection_result.get("reflection_md")):
         raise ValueError("深反思内容无效或过短")
@@ -236,6 +242,12 @@ def trigger_soul_deep_reflections(
             model=model,
             soul=soul,
             interactions=formatted,
+            trace_context={
+                "trigger": trigger,
+                "soul_name": soul.name,
+                "interaction_count": len(interactions),
+                "evidence_ids": _interaction_evidence_ids(interactions),
+            },
         )
         if reflection_result is None or not _is_valid_reflection(reflection_result.get("reflection_md")):
             continue

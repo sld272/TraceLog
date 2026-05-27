@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from core.llm.common import clean_json_content, now_str
+from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
@@ -74,6 +74,7 @@ def call_light_reflection(
     post: str,
     recent_posts: str,
     profile: str,
+    trace_context: dict | None = None,
 ) -> dict | None:
     """Extract structured memory from one post."""
     user_content = (
@@ -84,20 +85,19 @@ def call_light_reflection(
         f"## 目标 post\n\n{post}"
     )
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            timeout=30,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": LIGHT_REFLECTION_PROMPT.replace("{current_datetime}", now_str())},
-                {"role": "user", "content": user_content},
-            ],
-        )
-    except Exception:
-        return None
-
-    return _parse_light_reflection_content(response.choices[0].message.content)
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="light_reflection",
+        timeout=30,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": LIGHT_REFLECTION_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": user_content},
+        ],
+        parser=_parse_light_reflection_content,
+        trace_context=trace_context,
+    )
 
 
 def _parse_light_reflection_content(content: str | None) -> dict | None:
@@ -296,6 +296,8 @@ def call_global_deep_reflection(
     posts: str,
     light_summary: str,
     todos: str,
+    *,
+    trace_context: dict | None = None,
 ) -> dict | None:
     """Generate one global deep reflection plus profile patches."""
     user_content = (
@@ -308,20 +310,19 @@ def call_global_deep_reflection(
         f"## 本次触发范围内的帖子\n\n{posts or '（暂无）'}"
     )
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            timeout=45,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": GLOBAL_DEEP_REFLECTION_PROMPT.replace("{current_datetime}", now_str())},
-                {"role": "user", "content": user_content},
-            ],
-        )
-    except Exception:
-        return None
-
-    return _parse_global_deep_reflection_content(response.choices[0].message.content)
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="global_deep_reflection",
+        timeout=45,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": GLOBAL_DEEP_REFLECTION_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": user_content},
+        ],
+        parser=_parse_global_deep_reflection_content,
+        trace_context=trace_context,
+    )
 
 
 SOUL_DEEP_REFLECTION_PROMPT = """\
@@ -372,6 +373,8 @@ def call_soul_deep_reflection(
     model: str,
     soul: SoulContext,
     interactions: str,
+    *,
+    trace_context: dict | None = None,
 ) -> dict | None:
     """Generate one SOUL-specific deep reflection plus soul memory patches."""
     user_content = (
@@ -382,20 +385,19 @@ def call_soul_deep_reflection(
         f"## 本次触发范围内的原始互动\n\n{interactions or '（暂无）'}"
     )
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            timeout=45,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SOUL_DEEP_REFLECTION_PROMPT.replace("{current_datetime}", now_str())},
-                {"role": "user", "content": user_content},
-            ],
-        )
-    except Exception:
-        return None
-
-    return _parse_global_deep_reflection_content(response.choices[0].message.content)
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="soul_deep_reflection",
+        timeout=45,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SOUL_DEEP_REFLECTION_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": user_content},
+        ],
+        parser=_parse_global_deep_reflection_content,
+        trace_context=trace_context,
+    )
 
 
 def _parse_global_deep_reflection_content(content: str | None) -> dict | None:

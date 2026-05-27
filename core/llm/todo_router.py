@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from core.llm.common import clean_json_content, now_str
+from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 
 
@@ -55,6 +55,7 @@ def call_todo_tool(
     *,
     post: str,
     active_todos: str,
+    trace_context: dict | None = None,
 ) -> dict | None:
     """Extract todo changes from one public post."""
     user_content = (
@@ -63,20 +64,19 @@ def call_todo_tool(
         f"## 目标公开 post\n\n{post}"
     )
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            timeout=30,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": TODO_TOOL_PROMPT.replace("{current_datetime}", now_str())},
-                {"role": "user", "content": user_content},
-            ],
-        )
-    except Exception:
-        return None
-
-    return _parse_todo_tool_content(response.choices[0].message.content)
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="todo_tool",
+        timeout=30,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": TODO_TOOL_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": user_content},
+        ],
+        parser=_parse_todo_tool_content,
+        trace_context=trace_context,
+    )
 
 
 def _parse_todo_tool_content(content: str | None) -> dict | None:

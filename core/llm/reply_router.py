@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from core.llm.common import clean_json_content, now_str
+from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
@@ -86,12 +86,27 @@ COMMENT_REPLY_TASK_PROMPT = """\
 """
 
 
-def call_post_reply(user_input: str, client: LLMClient, model: str, context: str) -> dict | None:
+def call_post_reply(
+    user_input: str,
+    client: LLMClient,
+    model: str,
+    context: str,
+    *,
+    trace_context: dict | None = None,
+) -> dict | None:
     """Post Reply: generate one empathetic reply."""
     system_msg = POST_REPLY_PROMPT.format(
         task_prompt=_post_reply_task_prompt(),
     )
-    return _call_post_reply_json(user_input, client, model, context, system_msg)
+    return _call_post_reply_json(
+        user_input,
+        client,
+        model,
+        context,
+        system_msg,
+        operation="post_reply",
+        trace_context=trace_context,
+    )
 
 
 def call_soul_post_reply(
@@ -100,6 +115,8 @@ def call_soul_post_reply(
     model: str,
     shared_context: str,
     soul: SoulContext,
+    *,
+    trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a public post reply."""
     soul_memory = soul.soul_memory.strip() or "（暂无）"
@@ -108,7 +125,15 @@ def call_soul_post_reply(
         f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
         f"---\n\n{_post_reply_task_prompt()}"
     )
-    return _call_post_reply_json(user_input, client, model, shared_context, system_msg)
+    return _call_post_reply_json(
+        user_input,
+        client,
+        model,
+        shared_context,
+        system_msg,
+        operation="soul_post_reply",
+        trace_context=trace_context,
+    )
 
 
 def call_soul_chat_reply(
@@ -116,6 +141,8 @@ def call_soul_chat_reply(
     model: str,
     chat_context,
     soul: SoulContext,
+    *,
+    trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a private chat reply."""
     soul_memory = soul.soul_memory.strip() or "（暂无）"
@@ -127,7 +154,13 @@ def call_soul_chat_reply(
     messages = _build_multi_turn_messages(system_msg, chat_context.context, chat_context.messages)
     if messages is None:
         return None
-    return _call_reply_json(client, model, messages)
+    return _call_reply_json(
+        client,
+        model,
+        messages,
+        operation="soul_chat_reply",
+        trace_context=trace_context,
+    )
 
 
 def call_soul_comment_reply(
@@ -135,6 +168,8 @@ def call_soul_comment_reply(
     model: str,
     comment_context,
     soul: SoulContext,
+    *,
+    trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a post comment thread reply."""
     soul_memory = soul.soul_memory.strip() or "（暂无）"
@@ -146,7 +181,13 @@ def call_soul_comment_reply(
     messages = _build_multi_turn_messages(system_msg, comment_context.context, comment_context.messages)
     if messages is None:
         return None
-    return _call_reply_json(client, model, messages)
+    return _call_reply_json(
+        client,
+        model,
+        messages,
+        operation="soul_comment_reply",
+        trace_context=trace_context,
+    )
 
 
 def _post_reply_task_prompt() -> str:
@@ -167,41 +208,45 @@ def _call_post_reply_json(
     model: str,
     context: str,
     system_msg: str,
+    *,
+    operation: str,
+    trace_context: dict | None,
 ) -> dict | None:
     user_msg = _post_reply_user_message(user_input, context)
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            timeout=30,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg},
-            ],
-        )
-    except Exception:
-        return None
-
-    return _parse_post_reply_content(response.choices[0].message.content)
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation=operation,
+        timeout=30,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+        parser=_parse_post_reply_content,
+        trace_context=trace_context,
+    )
 
 
 def _call_reply_json(
     client: LLMClient,
     model: str,
     messages: list[dict[str, str]],
+    *,
+    operation: str,
+    trace_context: dict | None,
 ) -> dict | None:
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            timeout=30,
-            response_format={"type": "json_object"},
-            messages=messages,
-        )
-    except Exception:
-        return None
-
-    return _parse_post_reply_content(response.choices[0].message.content)
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation=operation,
+        timeout=30,
+        response_format={"type": "json_object"},
+        messages=messages,
+        parser=_parse_post_reply_content,
+        trace_context=trace_context,
+    )
 
 
 def _post_reply_user_message(user_input: str, context: str) -> str:
