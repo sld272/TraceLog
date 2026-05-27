@@ -105,6 +105,22 @@ class TodoServiceTest(unittest.TestCase):
         self.assertNotIn("已有任务", context.shared_context)
         self.assertNotIn("# 待办事项", context.shared_context)
 
+    def test_format_todo_for_context_has_consistent_prompt_shape(self) -> None:
+        todo = {
+            "id": None,
+            "task": "整理歌单",
+            "date": None,
+            "start_time": "20:00",
+            "end_time": "21:00",
+            "status": "未完成",
+        }
+
+        self.assertEqual("- [?] 整理歌单（待定 20:00~21:00）", todo_service.format_todo_for_context(todo))
+        self.assertEqual(
+            "- [?] 整理歌单（待定 20:00~21:00，未完成）",
+            todo_service.format_todo_for_context(todo, include_status=True),
+        )
+
     def test_apply_post_todos_updates_existing_and_deletes_existing_only(self) -> None:
         db.execute(
             """

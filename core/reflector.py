@@ -559,13 +559,7 @@ def _set_soul_deep_cursor(soul_name: str, cursor: float) -> None:
 def _format_todos(todos: list) -> str:
     if not todos:
         return "（暂无）"
-    lines = []
-    for item in todos:
-        date = item.get("date") or "无日期"
-        start_time = item.get("start_time") or ""
-        time_part = f" {start_time}" if start_time else ""
-        status = item.get("status") or "未完成"
-        lines.append(f"- [{status}] {item.get('task', '')}（{date}{time_part}）")
+    lines = [todo_service.format_todo_for_context(item, include_status=True) for item in todos]
     return "\n".join(lines)
 
 

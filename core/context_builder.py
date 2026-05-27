@@ -42,7 +42,7 @@ def build_context(relevant_post_ids: list[str] | None = None) -> BuiltContext:
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()
         if pending:
-            lines = [_format_todo_for_context(todo) for todo in pending]
+            lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
     return BuiltContext(
@@ -91,14 +91,3 @@ def _read_posts_by_ids(post_ids: list[str]) -> tuple[str, list[str]]:
     return "\n\n---\n\n".join(parts), found_ids
 
 
-def _format_todo_for_context(todo: dict) -> str:
-    date_str = todo.get("date") or "待定"
-    start = todo.get("start_time")
-    end = todo.get("end_time")
-    if start and end:
-        time_str = f" {start}~{end}"
-    elif start:
-        time_str = f" {start}"
-    else:
-        time_str = ""
-    return f"- [{todo.get('id', '?')}] {todo['task']}（{date_str}{time_str}）"

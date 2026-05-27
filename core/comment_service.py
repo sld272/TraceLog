@@ -176,7 +176,8 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()
         if pending:
-            sections.append("# 待办事项\n\n" + "\n".join(_format_todo(todo) for todo in pending))
+            lines = [todo_service.format_todo_for_context(todo) for todo in pending]
+            sections.append("# 待办事项\n\n" + "\n".join(lines))
 
     return CommentContext(
         thread=thread,
@@ -399,10 +400,3 @@ def _recent_user_message_contents(messages, limit: int) -> list[str]:
         if message.role == "user" and message.content.strip()
     ]
     return contents[-limit:]
-
-
-def _format_todo(todo: dict) -> str:
-    date = todo.get("date") or "无日期"
-    start_time = todo.get("start_time") or ""
-    time_part = f" {start_time}" if start_time else ""
-    return f"- [{todo.get('id')}] {todo.get('task')}（{date}{time_part}，{todo.get('status')}）"

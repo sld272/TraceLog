@@ -219,13 +219,21 @@ def _format_active_todos() -> str:
     pending = list_active_todos()
     if not pending:
         return "（暂无）"
-    lines = []
-    for todo in pending:
-        date = todo.get("date") or "无日期"
-        start_time = todo.get("start_time") or ""
-        time_part = f" {start_time}" if start_time else ""
-        lines.append(f"- [{todo.get('id')}] {todo.get('task')}（{date}{time_part}，{todo.get('status')}）")
-    return "\n".join(lines)
+    return "\n".join(format_todo_for_context(todo, include_status=True) for todo in pending)
+
+
+def format_todo_for_context(todo: dict, *, include_status: bool = False) -> str:
+    date_str = todo.get("date") or "待定"
+    start = todo.get("start_time")
+    end = todo.get("end_time")
+    if start and end:
+        time_str = f" {start}~{end}"
+    elif start:
+        time_str = f" {start}"
+    else:
+        time_str = ""
+    status_str = f"，{todo.get('status')}" if include_status and todo.get("status") else ""
+    return f"- [{todo.get('id') or '?'}] {todo.get('task', '')}（{date_str}{time_str}{status_str}）"
 
 
 def _merge_upserts(items: list) -> list[dict]:

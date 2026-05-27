@@ -167,7 +167,8 @@ def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()
         if pending:
-            sections.append("# 待办事项\n\n" + "\n".join(_format_todo(todo) for todo in pending))
+            lines = [todo_service.format_todo_for_context(todo) for todo in pending]
+            sections.append("# 待办事项\n\n" + "\n".join(lines))
 
     return ChatContext(
         thread=thread,
@@ -299,19 +300,6 @@ def _load_soul_context(soul_name: str) -> SoulContext:
         persona=persona,
         soul_memory=soul_memory,
     )
-
-
-def _format_todo(todo: dict) -> str:
-    date_str = todo.get("date") or "待定"
-    start = todo.get("start_time")
-    end = todo.get("end_time")
-    if start and end:
-        time_str = f" {start}~{end}"
-    elif start:
-        time_str = f" {start}"
-    else:
-        time_str = ""
-    return f"- [{todo.get('id', '?')}] {todo['task']}（{date_str}{time_str}）"
 
 
 def _build_retrieval_query(user_message: str, messages: list[ChatMessage]) -> str:
