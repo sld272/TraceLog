@@ -277,7 +277,7 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
 
 ## 5. Observation 数据底座
 
-本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它只提供存储、边界过滤、FTS、游标和证据清理能力；Signal Extraction、Memory Retrieval、Progressive Disclosure 和 Consolidation 仍是后续阶段。
+本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation。评论线程/私聊 Signal Extraction、Memory Retrieval、Progressive Disclosure 和 Consolidation 仍是后续阶段。
 
 Observation 是 raw evidence 与深反思之间的中层记忆单位。它只保存可检索、可过滤、可审计的信号；具体原始证据统一写入 `observation_sources`。
 
@@ -418,6 +418,8 @@ archived
 | 不应记录内容 | `private_blocked` | 可选 | `none` |
 
 私聊边界不用 `visible_to_souls` JSON 数组表达。第一版私聊 observation 绝对不跨 SOUL，因此 `soul_scoped` 使用可索引的 `scope_soul_name TEXT REFERENCES souls(name)`。
+
+公开 post observation 的边界不由 LLM 决定。轻反思 parser 只接受 `type`、`title`、`summary`、`narrative`、`importance`、`confidence`，写入时由系统固定补齐 `source_channel='post'`、`visibility_scope='global'`、`source_type='post'`、`evidence_access='all'`。同一 post 轻反思重跑时会按 `source_type='post' + source_id=post_id` 替换旧 observation，避免重复堆积。
 
 ### 5.4 检索与向量化策略
 

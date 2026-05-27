@@ -211,6 +211,56 @@ class ObservationServiceTest(unittest.TestCase):
         self.assertEqual(target_id, superseded["superseded_by"])
         self.assertEqual("archived", archived["status"])
 
+    def test_replace_post_observations_replaces_global_post_extraction(self) -> None:
+        first_ids = observation_service.replace_post_observations(
+            "p-1",
+            [
+                {
+                    "type": "insight",
+                    "title": "旧 post 观察",
+                    "narrative": "old_post_observation_marker",
+                    "importance": 0.5,
+                    "confidence": 0.6,
+                }
+            ],
+            observed_at=2.0,
+            excerpt="原文摘录",
+        )
+        second_ids = observation_service.replace_post_observations(
+            "p-1",
+            [
+                {
+                    "type": "decision",
+                    "title": "新 post 观察",
+                    "narrative": "new_post_observation_marker",
+                    "importance": 0.8,
+                    "confidence": 0.9,
+                }
+            ],
+            observed_at=3.0,
+            excerpt="新摘录",
+        )
+
+        self.assertEqual(1, len(first_ids))
+        self.assertEqual(1, len(second_ids))
+        self.assertIsNone(observation_service.get_observation(first_ids[0]))
+        observation = require_not_none(observation_service.get_observation(second_ids[0]))
+        self.assertEqual("global", observation["visibility_scope"])
+        self.assertEqual("post", observation["source_channel"])
+        self.assertEqual(3.0, observation["observed_at"])
+        self.assertEqual("all", observation["sources"][0]["evidence_access"])
+        self.assertEqual("新摘录", observation["sources"][0]["excerpt"])
+        old_fts = db.query_all(
+            "SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?",
+            ("old_post_observation_marker",),
+        )
+        new_fts = db.query_all(
+            "SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?",
+            ("new_post_observation_marker",),
+        )
+        self.assertEqual([], old_fts)
+        self.assertEqual([second_ids[0]], [row["rowid"] for row in new_fts])
+
     def test_cursor_set_get_overwrites_existing_value(self) -> None:
         observation_service.set_cursor("chat_thread", "1", "10", metadata={"phase": "first"})
         observation_service.set_cursor("chat_thread", "1", "12", metadata={"phase": "second"})

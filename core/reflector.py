@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from core import db, logging_service
+from core import observation_service
 from core import profile_service
 from core.llm import reflection_router
 from core.llm.types import LLMClient
@@ -46,6 +47,7 @@ class LightReflectionResult:
     emotions: list[dict]
     events: list[dict]
     relations: list[dict]
+    observations: list[dict]
     importance: float
 
 
@@ -97,6 +99,7 @@ def trigger_light_reflection(
         emotions=data["emotions"],
         events=data["events"],
         relations=data["relations"],
+        observations=data["observations"],
         importance=data["importance"],
     )
 
@@ -334,7 +337,7 @@ def _load_posts_since_last_reflection(limit: int) -> list:
 def _get_post(post_id: str):
     return db.query_one(
         """
-        SELECT id, ts, content, importance
+        SELECT id, ts, content, importance, created_at
         FROM posts
         WHERE id = ?
         """,
@@ -627,7 +630,7 @@ def _format_light_summary(post_ids: list[str]) -> str:
 def _apply_light_reflection(post, data: dict) -> None:
     post_id = post["id"]
     post_ts = post["ts"]
-    with db.transaction() as conn:
+    with db.immediate_transaction() as conn:
         _remove_old_light_rows(conn, post_id)
         entity_ids_by_name = {}
         for entity in data.get("entities", []):
@@ -678,6 +681,27 @@ def _apply_light_reflection(post, data: dict) -> None:
             "UPDATE posts SET importance = ?, updated_at = ? WHERE id = ?",
             (data.get("importance", 0.5), db.now_ts(), post_id),
         )
+        observation_service.replace_post_observations(
+            post_id,
+            data.get("observations", []),
+            observed_at=_post_observed_at(post),
+            excerpt=_post_excerpt(post["content"]),
+            conn=conn,
+        )
+
+
+def _post_observed_at(post) -> float:
+    try:
+        return float(post["created_at"])
+    except (IndexError, KeyError, TypeError, ValueError):
+        return db.now_ts()
+
+
+def _post_excerpt(content: str, limit: int = 500) -> str:
+    text = str(content or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip()
 
 
 def _remove_old_light_rows(conn, post_id: str) -> None:

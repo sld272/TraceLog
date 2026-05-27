@@ -33,58 +33,50 @@ def create_observation(observation: dict[str, Any], sources: list[dict[str, Any]
         raise ValueError("observation must have at least one source")
 
     now = db.now_ts()
-    observed_at = normalized.get("observed_at") or now
-    metadata = _json_or_none(normalized.get("metadata"))
     with db.immediate_transaction() as conn:
-        cursor = conn.execute(
-            """
-            INSERT INTO observations(
-                type, title, summary, narrative, source_channel,
-                visibility_scope, scope_post_id, scope_soul_name,
-                importance, confidence, status,
-                merged_into, superseded_by,
-                observed_at, created_at, updated_at, metadata
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, ?, ?, ?, ?)
-            """,
-            (
-                normalized["type"],
-                normalized["title"],
-                normalized.get("summary"),
-                normalized["narrative"],
-                normalized["source_channel"],
-                normalized["visibility_scope"],
-                normalized.get("scope_post_id"),
-                normalized.get("scope_soul_name"),
-                normalized["importance"],
-                normalized["confidence"],
-                observed_at,
-                now,
-                now,
-                metadata,
-            ),
+        return _insert_observation(conn, normalized, normalized_sources, now=now)
+
+
+def replace_post_observations(
+    post_id: str,
+    observations: list[dict[str, Any]],
+    *,
+    observed_at: float | None = None,
+    excerpt: str | None = None,
+    conn=None,
+) -> list[int]:
+    """Replace light-reflection observations extracted from one public post."""
+    source_id = str(post_id).strip()
+    if not source_id:
+        raise ValueError("post_id is required")
+
+    normalized_items = [
+        _normalize_observation(
+            {
+                **item,
+                "source_channel": "post",
+                "visibility_scope": "global",
+                "observed_at": observed_at,
+            }
         )
-        observation_id = db.require_lastrowid(cursor, "observation insert")
-        for source in normalized_sources:
-            conn.execute(
-                """
-                INSERT INTO observation_sources(
-                    observation_id, source_type, source_id,
-                    excerpt, evidence_access, created_at, metadata
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    observation_id,
-                    source["source_type"],
-                    source["source_id"],
-                    source.get("excerpt"),
-                    source["evidence_access"],
-                    now,
-                    _json_or_none(source.get("metadata")),
-                ),
-            )
-    return observation_id
+        for item in observations
+    ]
+    source = _normalize_source(
+        {
+            "source_type": "post",
+            "source_id": source_id,
+            "excerpt": excerpt,
+            "evidence_access": "all",
+            "metadata": {"extractor": "light_reflection"},
+        },
+        "global",
+    )
+
+    if conn is not None:
+        return _replace_post_observations(conn, source_id, normalized_items, source)
+
+    with db.immediate_transaction() as write_conn:
+        return _replace_post_observations(write_conn, source_id, normalized_items, source)
 
 
 def get_observation(observation_id: int) -> dict[str, Any] | None:
@@ -210,6 +202,89 @@ def cleanup_orphan_observations() -> int:
             """
         )
         return cursor.rowcount if cursor.rowcount is not None else 0
+
+
+def _replace_post_observations(conn, post_id: str, observations: list[dict[str, Any]], source: dict[str, Any]) -> list[int]:
+    conn.execute(
+        """
+        DELETE FROM observations
+        WHERE id IN (
+            SELECT observations.id
+            FROM observations
+            JOIN observation_sources
+                ON observation_sources.observation_id = observations.id
+            WHERE observations.source_channel = 'post'
+              AND observations.visibility_scope = 'global'
+              AND observation_sources.source_type = 'post'
+              AND observation_sources.source_id = ?
+        )
+        """,
+        (post_id,),
+    )
+    now = db.now_ts()
+    return [
+        _insert_observation(conn, item, [source], now=now)
+        for item in observations
+    ]
+
+
+def _insert_observation(
+    conn,
+    observation: dict[str, Any],
+    sources: list[dict[str, Any]],
+    *,
+    now: float,
+) -> int:
+    observed_at = observation.get("observed_at") or now
+    cursor = conn.execute(
+        """
+        INSERT INTO observations(
+            type, title, summary, narrative, source_channel,
+            visibility_scope, scope_post_id, scope_soul_name,
+            importance, confidence, status,
+            merged_into, superseded_by,
+            observed_at, created_at, updated_at, metadata
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, NULL, ?, ?, ?, ?)
+        """,
+        (
+            observation["type"],
+            observation["title"],
+            observation.get("summary"),
+            observation["narrative"],
+            observation["source_channel"],
+            observation["visibility_scope"],
+            observation.get("scope_post_id"),
+            observation.get("scope_soul_name"),
+            observation["importance"],
+            observation["confidence"],
+            observed_at,
+            now,
+            now,
+            _json_or_none(observation.get("metadata")),
+        ),
+    )
+    observation_id = db.require_lastrowid(cursor, "observation insert")
+    for source in sources:
+        conn.execute(
+            """
+            INSERT INTO observation_sources(
+                observation_id, source_type, source_id,
+                excerpt, evidence_access, created_at, metadata
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                observation_id,
+                source["source_type"],
+                source["source_id"],
+                source.get("excerpt"),
+                source["evidence_access"],
+                now,
+                _json_or_none(source.get("metadata")),
+            ),
+        )
+    return observation_id
 
 
 def _normalize_observation(observation: dict[str, Any]) -> dict[str, Any]:

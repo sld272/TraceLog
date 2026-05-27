@@ -7,7 +7,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, comment_service, db, profile_service, reflector, soul_memory_service, soul_service
+from core import (
+    chat_service,
+    comment_service,
+    db,
+    observation_service,
+    profile_service,
+    reflector,
+    soul_memory_service,
+    soul_service,
+)
 from tests.helpers import require_not_none
 
 
@@ -260,12 +269,100 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual(("焦虑", 0.7), (emotion["label"], emotion["intensity"]))
         event = require_not_none(db.query_one("SELECT summary, category FROM events WHERE post_id = ?", ("20260525-001",)))
         self.assertEqual(("和小李完成比赛计划", "project"), (event["summary"], event["category"]))
+        self.assertEqual([], result.observations)
+
+    def test_trigger_light_reflection_writes_public_post_observations(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我发现自己写 Python 项目时更喜欢先做小原型。")
+        payload = self._light_payload(
+            observations=[
+                {
+                    "type": "preference",
+                    "title": "Python 原型偏好",
+                    "summary": "用户偏好先做小原型",
+                    "narrative": "用户写 Python 项目时偏好先做小原型。python_focus_marker",
+                    "importance": 0.7,
+                    "confidence": 0.8,
+                }
+            ]
+        )
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        result = reflector.trigger_light_reflection("20260525-001", client, "fake-model")
+
+        rows = observation_service.list_active_observations(visibility_scope="global")
+        self.assertEqual(["Python 原型偏好"], [row["title"] for row in rows])
+        self.assertEqual("preference", result.observations[0]["type"])
+        observation = require_not_none(observation_service.get_observation(rows[0]["id"]))
+        self.assertEqual("global", observation["visibility_scope"])
+        self.assertEqual("post", observation["source_channel"])
+        self.assertEqual(1.0, observation["observed_at"])
+        self.assertEqual("post", observation["sources"][0]["source_type"])
+        self.assertEqual("20260525-001", observation["sources"][0]["source_id"])
+        self.assertEqual("all", observation["sources"][0]["evidence_access"])
+        self.assertIn("Python 项目", observation["sources"][0]["excerpt"])
+        fts_rows = db.query_all(
+            "SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?",
+            ("python_focus_marker",),
+        )
+        self.assertEqual([observation["id"]], [row["rowid"] for row in fts_rows])
+
+    def test_light_reflection_skips_invalid_observation_items(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天确认了后续要少做空泛规划。")
+        payload = self._light_payload(
+            observations=[
+                {
+                    "type": "invalid",
+                    "title": "错误类型",
+                    "narrative": "这条应该被跳过。",
+                    "importance": 0.9,
+                    "confidence": 0.9,
+                },
+                {
+                    "type": "decision",
+                    "title": "减少空泛规划",
+                    "narrative": "用户决定后续减少空泛规划。valid_observation_marker",
+                    "importance": 0.8,
+                    "confidence": 0.9,
+                },
+            ]
+        )
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        result = reflector.trigger_light_reflection("20260525-001", client, "fake-model")
+
+        rows = observation_service.list_active_observations(visibility_scope="global")
+        self.assertEqual(["减少空泛规划"], [row["title"] for row in rows])
+        self.assertEqual(["减少空泛规划"], [item["title"] for item in result.observations])
+
+    def test_light_reflection_accepts_payload_without_observations(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天和小李完成了比赛计划。")
+        payload = self._light_payload()
+        del payload["observations"]
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        result = reflector.trigger_light_reflection("20260525-001", client, "fake-model")
+
+        self.assertEqual([], result.observations)
+        self.assertEqual([], observation_service.list_active_observations(visibility_scope="global"))
 
     def test_light_reflection_is_idempotent_on_rerun(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天和小李完成了比赛计划。")
         client = FakeClient(
             contents=[
-                json.dumps(self._light_payload(), ensure_ascii=False),
+                json.dumps(
+                    self._light_payload(
+                        observations=[
+                            {
+                                "type": "insight",
+                                "title": "旧观察",
+                                "narrative": "old_observation_marker",
+                                "importance": 0.5,
+                                "confidence": 0.6,
+                            }
+                        ]
+                    ),
+                    ensure_ascii=False,
+                ),
                 json.dumps(
                     {
                         "entities": [
@@ -274,6 +371,15 @@ class ReflectorTest(unittest.TestCase):
                         "emotions": [{"label": "兴奋", "intensity": 0.6}],
                         "events": [],
                         "relations": [],
+                        "observations": [
+                            {
+                                "type": "insight",
+                                "title": "新观察",
+                                "narrative": "new_observation_marker",
+                                "importance": 0.6,
+                                "confidence": 0.7,
+                            }
+                        ],
                         "importance": 0.6,
                     },
                     ensure_ascii=False,
@@ -288,11 +394,23 @@ class ReflectorTest(unittest.TestCase):
         new_entity = require_not_none(db.query_one("SELECT mention_count FROM entities WHERE name = ?", ("比赛计划",)))
         emotions = db.query_all("SELECT label FROM emotions WHERE post_id = ?", ("20260525-001",))
         events = db.query_all("SELECT id FROM events WHERE post_id = ?", ("20260525-001",))
+        observations = observation_service.list_active_observations(visibility_scope="global")
+        old_fts = db.query_all(
+            "SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?",
+            ("old_observation_marker",),
+        )
+        new_fts = db.query_all(
+            "SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?",
+            ("new_observation_marker",),
+        )
 
         self.assertEqual(0, old_entity["mention_count"])
         self.assertEqual(1, new_entity["mention_count"])
         self.assertEqual(["兴奋"], [row["label"] for row in emotions])
         self.assertEqual([], events)
+        self.assertEqual(["新观察"], [row["title"] for row in observations])
+        self.assertEqual([], old_fts)
+        self.assertEqual([observations[0]["id"]], [row["rowid"] for row in new_fts])
 
     def test_run_light_reflection_safely_marks_pending_on_failure(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天完成了比赛计划。")
@@ -303,6 +421,26 @@ class ReflectorTest(unittest.TestCase):
         self.assertIsNone(result)
         row = db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_reflect:20260525-001",))
         self.assertIsNotNone(row)
+
+    def test_run_light_reflection_safely_rolls_back_when_observation_write_fails(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天和小李完成了比赛计划。")
+        client = FakeClient(content=json.dumps(self._light_payload(observations=[{
+            "type": "insight",
+            "title": "会失败的观察",
+            "narrative": "这条观察写入会失败。",
+            "importance": 0.7,
+            "confidence": 0.8,
+        }]), ensure_ascii=False))
+
+        with patch("core.reflector.observation_service.replace_post_observations", side_effect=RuntimeError("boom")):
+            result = reflector.run_light_reflection_safely("20260525-001", client, "fake-model")
+
+        self.assertIsNone(result)
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_reflect:20260525-001",)))
+        self.assertEqual([], db.query_all("SELECT post_id FROM post_entities WHERE post_id = ?", ("20260525-001",)))
+        self.assertEqual([], db.query_all("SELECT label FROM emotions WHERE post_id = ?", ("20260525-001",)))
+        self.assertEqual([], db.query_all("SELECT id FROM events WHERE post_id = ?", ("20260525-001",)))
+        self.assertEqual([], observation_service.list_active_observations(visibility_scope="global"))
 
     def test_light_summary_preserves_zero_importance_and_defaults_only_null(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "零权重。")
@@ -569,7 +707,7 @@ class ReflectorTest(unittest.TestCase):
             ("20260525-001", "默认", "我陪你继续练。", 2.0),
         )
 
-    def _light_payload(self) -> dict:
+    def _light_payload(self, observations: list[dict] | None = None) -> dict:
         return {
             "entities": [
                 {"type": "person", "name": "小李", "aliases": ["李同学"], "role": "subject"},
@@ -586,6 +724,7 @@ class ReflectorTest(unittest.TestCase):
             "relations": [
                 {"a": "小李", "b": "比赛计划", "rel_type": "teammate", "strength_delta": 0.1}
             ],
+            "observations": observations or [],
             "importance": 0.8,
         }
 

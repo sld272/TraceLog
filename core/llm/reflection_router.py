@@ -52,6 +52,16 @@ LIGHT_REFLECTION_PROMPT = """\
       "strength_delta": 0.0
     }
   ],
+  "observations": [
+    {
+      "type": "preference|correction|convention|decision|insight|pattern|state|relationship|todo_signal",
+      "title": "短标题，最多 24 字",
+      "summary": "可选摘要，最多 60 字",
+      "narrative": "一条可独立检索的记忆信号，必须只基于目标 post",
+      "importance": 0.0,
+      "confidence": 0.0
+    }
+  ],
   "importance": 0.0
 }
 
@@ -61,6 +71,9 @@ LIGHT_REFLECTION_PROMPT = """\
 3. emotions 最多输出 3 个；没有明显情绪时输出 [{"label":"无感","intensity":0.1}]。
 4. events 最多输出 3 个；没有可总结事件时输出 []。
 5. relations 只有在目标 post 明确提供互动证据时才输出；strength_delta 限制在 -0.2 到 0.2。
+6. observations 最多输出 3 条；只记录对后续理解用户有用的偏好、纠正、约定、决策、洞察、模式、状态、关系或待办信号。
+7. observations 不要输出可见性、scope、source 或 evidence 字段；公开 post 的 observation 边界由系统固定为 global。
+8. 如果目标 post 明确表达"不要记住/不要记录"，或内容不适合沉淀为记忆，observations 输出 []。
 
 ## 当前时间
 {current_datetime}
@@ -115,6 +128,7 @@ def _parse_light_reflection_content(content: str | None) -> dict | None:
         "emotions": _normalize_reflection_emotions(data.get("emotions")),
         "events": _normalize_reflection_events(data.get("events")),
         "relations": _normalize_reflection_relations(data.get("relations")),
+        "observations": _normalize_reflection_observations(data.get("observations")),
         "importance": _clamp_float(data.get("importance"), 0.5, 0.0, 1.0),
     }
 
@@ -227,6 +241,56 @@ def _normalize_reflection_relations(value) -> list[dict]:
             }
         )
     return relations
+
+
+def _normalize_reflection_observations(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    allowed_types = {
+        "preference",
+        "correction",
+        "convention",
+        "decision",
+        "insight",
+        "pattern",
+        "state",
+        "relationship",
+        "todo_signal",
+    }
+    observations = []
+    seen = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        observation_type = item.get("type")
+        title = item.get("title")
+        narrative = item.get("narrative")
+        if observation_type not in allowed_types:
+            continue
+        if not isinstance(title, str) or not title.strip():
+            continue
+        if not isinstance(narrative, str) or not narrative.strip():
+            continue
+        summary = item.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            summary = None
+        key = (observation_type, title.strip(), narrative.strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        observations.append(
+            {
+                "type": observation_type,
+                "title": title.strip()[:80],
+                "summary": summary.strip()[:160] if summary else None,
+                "narrative": narrative.strip()[:500],
+                "importance": _clamp_float(item.get("importance"), 0.5, 0.0, 1.0),
+                "confidence": _clamp_float(item.get("confidence"), 0.5, 0.0, 1.0),
+            }
+        )
+        if len(observations) >= 3:
+            break
+    return observations
 
 
 def _clamp_float(value, default: float, minimum: float, maximum: float) -> float:
