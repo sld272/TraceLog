@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from core import chat_service, comment_service, db, profile_service, reflector, soul_memory_service, soul_service
 from tests.helpers import require_not_none
@@ -19,10 +20,11 @@ class FakeClient:
         self.content = content
         self.contents = list(contents or [])
         self.calls = 0
+        self.requests: list[dict] = []
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
 
     def create(self, **kwargs):
-        del kwargs
+        self.requests.append(kwargs)
         self.calls += 1
         if self.contents:
             content = self.contents.pop(0)
@@ -413,6 +415,84 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual(1, len(second))
         self.assertEqual(1, second[0].interaction_count)
         self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_deep_cursor:默认",)))
+
+    def test_soul_deep_reflection_uses_global_interaction_limit(self) -> None:
+        soul_service.sync_souls()
+        for index, created_at in enumerate((1.0, 4.0), start=1):
+            post_id = f"20260525-root-{index:03d}"
+            self._insert_post(post_id, f"2026-05-25T10:0{index}:00+08:00", f"root post {index}")
+            db.execute(
+                """
+                INSERT INTO comments(post_id, soul_name, content, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (post_id, "默认", f"root comment {index}", created_at),
+            )
+
+        chat_thread = chat_service.get_or_create_thread("默认")
+        db.execute(
+            """
+            INSERT INTO chat_messages(thread_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (chat_thread.id, "user", "chat early", 2.0),
+        )
+        db.execute(
+            """
+            INSERT INTO chat_messages(thread_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (chat_thread.id, "assistant", "chat late", 6.0),
+        )
+
+        comment_thread = comment_service.get_or_create_thread("20260525-root-001", "默认")
+        db.execute(
+            """
+            INSERT INTO comment_messages(thread_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (comment_thread.id, "user", "comment early", 3.0),
+        )
+        db.execute(
+            """
+            INSERT INTO comment_messages(thread_id, role, content, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (comment_thread.id, "assistant", "comment late", 5.0),
+        )
+
+        with patch("core.reflector.db.query_all", wraps=db.query_all) as query_all:
+            interactions = reflector._load_soul_interactions_since_cursor("默认", 3)
+
+        self.assertEqual(1, query_all.call_count)
+        self.assertIn("UNION ALL", query_all.call_args.args[0])
+        self.assertEqual(
+            [("root_comment", 1.0), ("chat_message", 2.0), ("comment_message", 3.0)],
+            [(item["type"], item["created_at"]) for item in interactions],
+        )
+        self.assertEqual([], reflector._load_soul_interactions_since_cursor("默认", 0))
+
+        payload = {
+            "reflection_md": "## SOUL 深反思\n\n用户与默认产生了多种互动，系统只应读取全局最早的三条。",
+            "patches": [],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+        results = reflector.trigger_soul_deep_reflections(
+            client,
+            "fake-model",
+            trigger="cli_exit",
+            limit_per_soul=3,
+        )
+        prompt = client.requests[0]["messages"][1]["content"]
+
+        self.assertEqual(1, len(results))
+        self.assertEqual(3, results[0].interaction_count)
+        self.assertIn("root comment 1", prompt)
+        self.assertIn("chat early", prompt)
+        self.assertIn("comment early", prompt)
+        self.assertNotIn("root comment 2", prompt)
+        self.assertNotIn("comment late", prompt)
+        self.assertNotIn("chat late", prompt)
 
     def test_preview_soul_deep_reflection_scopes_match_pending_interactions(self) -> None:
         soul_service.sync_souls()

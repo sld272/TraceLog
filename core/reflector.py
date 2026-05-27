@@ -374,93 +374,115 @@ def _format_posts(rows: list) -> str:
 
 
 def _load_soul_interactions_since_cursor(soul_name: str, limit: int) -> list[dict]:
-    cursor = _get_soul_deep_cursor(soul_name)
-    interactions: list[dict] = []
+    if limit <= 0:
+        return []
 
-    root_comments = db.query_all(
+    cursor = _get_soul_deep_cursor(soul_name)
+    rows = db.query_all(
         """
+        WITH interactions AS (
         SELECT
+            'root_comment' AS type,
             comments.id AS comment_id,
             comments.created_at AS created_at,
+            comments.id AS item_id,
             posts.id AS post_id,
             posts.ts AS post_ts,
             posts.content AS post_content,
-            comments.content AS comment_content
+            comments.content AS comment_content,
+            NULL AS message_id,
+            NULL AS thread_id,
+            NULL AS role,
+            NULL AS content
         FROM comments
         JOIN posts ON posts.id = comments.post_id
         WHERE comments.soul_name = ? AND comments.created_at > ?
-        ORDER BY comments.created_at ASC, comments.id ASC
-        LIMIT ?
-        """,
-        (soul_name, cursor, limit),
-    )
-    for row in root_comments:
-        interactions.append(
-            {
-                "type": "root_comment",
-                "created_at": float(row["created_at"]),
-                "post_id": row["post_id"],
-                "post_ts": row["post_ts"],
-                "post_content": row["post_content"],
-                "comment_id": int(row["comment_id"]),
-                "comment_content": row["comment_content"],
-            }
-        )
 
-    chat_messages = db.query_all(
-        """
-        SELECT chat_messages.id, chat_messages.thread_id, chat_messages.role,
-               chat_messages.content, chat_messages.created_at
+        UNION ALL
+
+        SELECT
+            'chat_message' AS type,
+            NULL AS comment_id,
+            chat_messages.created_at AS created_at,
+            chat_messages.id AS item_id,
+            NULL AS post_id,
+            NULL AS post_ts,
+            NULL AS post_content,
+            NULL AS comment_content,
+            chat_messages.id AS message_id,
+            chat_messages.thread_id AS thread_id,
+            chat_messages.role AS role,
+            chat_messages.content AS content
         FROM chat_messages
         JOIN chat_threads ON chat_threads.id = chat_messages.thread_id
         WHERE chat_threads.soul_name = ? AND chat_messages.created_at > ?
-        ORDER BY chat_messages.created_at ASC, chat_messages.id ASC
-        LIMIT ?
-        """,
-        (soul_name, cursor, limit),
-    )
-    for row in chat_messages:
-        interactions.append(
-            {
-                "type": "chat_message",
-                "created_at": float(row["created_at"]),
-                "message_id": int(row["id"]),
-                "thread_id": int(row["thread_id"]),
-                "role": row["role"],
-                "content": row["content"],
-            }
-        )
 
-    comment_messages = db.query_all(
-        """
-        SELECT comment_messages.id, comment_messages.thread_id, comment_messages.role,
-               comment_messages.content, comment_messages.created_at,
-               comment_threads.post_id
+        UNION ALL
+
+        SELECT
+            'comment_message' AS type,
+            NULL AS comment_id,
+            comment_messages.created_at AS created_at,
+            comment_messages.id AS item_id,
+            comment_threads.post_id AS post_id,
+            NULL AS post_ts,
+            NULL AS post_content,
+            NULL AS comment_content,
+            comment_messages.id AS message_id,
+            comment_messages.thread_id AS thread_id,
+            comment_messages.role AS role,
+            comment_messages.content AS content
         FROM comment_messages
         JOIN comment_threads ON comment_threads.id = comment_messages.thread_id
         WHERE comment_threads.soul_name = ? AND comment_messages.created_at > ?
-        ORDER BY comment_messages.created_at ASC, comment_messages.id ASC
+        )
+        SELECT *
+        FROM interactions
+        ORDER BY created_at ASC, type ASC, item_id ASC
         LIMIT ?
         """,
-        (soul_name, cursor, limit),
+        (soul_name, cursor, soul_name, cursor, soul_name, cursor, limit),
     )
-    for row in comment_messages:
-        interactions.append(
-            {
-                "type": "comment_message",
-                "created_at": float(row["created_at"]),
-                "message_id": int(row["id"]),
-                "thread_id": int(row["thread_id"]),
-                "post_id": row["post_id"],
-                "role": row["role"],
-                "content": row["content"],
-            }
-        )
 
-    return sorted(
-        interactions,
-        key=lambda item: (item["created_at"], item["type"], item.get("message_id", item.get("comment_id", 0))),
-    )[:limit]
+    interactions: list[dict] = []
+    for row in rows:
+        if row["type"] == "root_comment":
+            interactions.append(
+                {
+                    "type": "root_comment",
+                    "created_at": float(row["created_at"]),
+                    "post_id": row["post_id"],
+                    "post_ts": row["post_ts"],
+                    "post_content": row["post_content"],
+                    "comment_id": int(row["comment_id"]),
+                    "comment_content": row["comment_content"],
+                }
+            )
+        elif row["type"] == "chat_message":
+            interactions.append(
+                {
+                    "type": "chat_message",
+                    "created_at": float(row["created_at"]),
+                    "message_id": int(row["message_id"]),
+                    "thread_id": int(row["thread_id"]),
+                    "role": row["role"],
+                    "content": row["content"],
+                }
+            )
+        elif row["type"] == "comment_message":
+            interactions.append(
+                {
+                    "type": "comment_message",
+                    "created_at": float(row["created_at"]),
+                    "message_id": int(row["message_id"]),
+                    "thread_id": int(row["thread_id"]),
+                    "post_id": row["post_id"],
+                    "role": row["role"],
+                    "content": row["content"],
+                }
+            )
+
+    return interactions
 
 
 def _format_soul_interactions(interactions: list[dict]) -> str:
