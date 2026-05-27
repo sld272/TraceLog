@@ -21,6 +21,7 @@ GLOBAL_DEEP_REFLECTION_TYPE = "global_deep"
 SOUL_DEEP_REFLECTION_TYPE = "soul_deep"
 PENDING_LIGHT_REFLECT_PREFIX = "pending_reflect:"
 SOUL_DEEP_CURSOR_PREFIX = "soul_deep_cursor:"
+SOUL_OBSERVATION_DEEP_CURSOR_PREFIX = "soul_observation_deep_cursor:"
 
 
 @dataclass(frozen=True)
@@ -158,18 +159,18 @@ def preview_global_deep_reflection_scope(limit: int = 100) -> GlobalDeepReflecti
 
 
 def preview_soul_deep_reflection_scopes(limit_per_soul: int = 100) -> list[SoulDeepReflectionScope]:
-    """Preview SOUL interactions that would be covered by the next SOUL deep reflection."""
+    """Preview SOUL observations that would be covered by the next SOUL deep reflection."""
     scopes: list[SoulDeepReflectionScope] = []
     for soul in soul_service.list_enabled_souls():
-        interactions = _load_soul_interactions_since_cursor(soul.name, limit_per_soul)
-        if not interactions:
+        observations = _load_soul_observations_since_cursor(soul.name, limit_per_soul)
+        if not observations:
             continue
         scopes.append(
             SoulDeepReflectionScope(
                 soul_name=soul.name,
-                interaction_count=len(interactions),
-                scope_start=float(interactions[0]["created_at"]),
-                scope_end=float(max(item["created_at"] for item in interactions)),
+                interaction_count=len(observations),
+                scope_start=float(observations[0]["observed_at"]),
+                scope_end=float(max(item["observed_at"] for item in observations)),
             )
         )
     return scopes
@@ -190,24 +191,31 @@ def trigger_global_deep_reflection(
     profile = profile_service.read_profile()
     todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     related_post_ids = [row["id"] for row in posts]
+    observations = _load_global_observations_for_posts(related_post_ids)
+    allowed_patch_evidence = _observation_evidence_ids(observations, allowed_source_types={"post"})
     reflection_result = reflection_router.call_global_deep_reflection(
         client=client,
         model=model,
         profile=profile,
         posts=_format_posts(posts),
         light_summary=_format_light_summary(related_post_ids),
+        observations=_format_observations_for_reflection(observations),
         todos=_format_todos(todos),
         trace_context={
             "trigger": trigger,
             "post_ids": related_post_ids,
             "post_count": len(related_post_ids),
+            "observation_ids": [int(row["id"]) for row in observations],
         },
     )
     if reflection_result is None or not _is_valid_reflection(reflection_result.get("reflection_md")):
         raise ValueError("深反思内容无效或过短")
 
     content = reflection_result["reflection_md"].strip()
-    patch_summary = _apply_profile_patches(reflection_result.get("patches", []))
+    patch_summary = _apply_profile_patches(
+        reflection_result.get("patches", []),
+        allowed_evidence=allowed_patch_evidence,
+    )
     reflection_id = _insert_reflection(
         content=content,
         scope_start=posts[0]["ts"],
@@ -233,23 +241,25 @@ def trigger_soul_deep_reflections(
     trigger: str = "manual",
     limit_per_soul: int = 100,
 ) -> list[SoulDeepReflectionResult]:
-    """Generate SOUL-specific deep reflections for raw chat/comment interactions."""
+    """Generate SOUL-specific deep reflections from scoped observations."""
     results: list[SoulDeepReflectionResult] = []
     for soul in soul_service.list_enabled_souls():
-        interactions = _load_soul_interactions_since_cursor(soul.name, limit_per_soul)
-        if not interactions:
+        observations = _load_soul_observations_since_cursor(soul.name, limit_per_soul)
+        if not observations:
             continue
-        formatted = _format_soul_interactions(interactions)
+        formatted = _format_observations_for_reflection(observations)
+        evidence_ids = _observation_evidence_ids(observations)
         reflection_result = reflection_router.call_soul_deep_reflection(
             client=client,
             model=model,
             soul=soul,
-            interactions=formatted,
+            observations=formatted,
             trace_context={
                 "trigger": trigger,
                 "soul_name": soul.name,
-                "interaction_count": len(interactions),
-                "evidence_ids": _interaction_evidence_ids(interactions),
+                "observation_count": len(observations),
+                "observation_ids": [int(row["id"]) for row in observations],
+                "evidence_ids": evidence_ids,
             },
         )
         if reflection_result is None:
@@ -258,7 +268,7 @@ def trigger_soul_deep_reflections(
                 level="WARNING",
                 soul_name=soul.name,
                 reason="invalid_json",
-                interaction_count=len(interactions),
+                observation_count=len(observations),
             )
             continue
         if not _is_valid_soul_reflection(reflection_result.get("reflection_md")):
@@ -267,25 +277,29 @@ def trigger_soul_deep_reflections(
                 level="WARNING",
                 soul_name=soul.name,
                 reason="invalid_reflection",
-                interaction_count=len(interactions),
+                observation_count=len(observations),
                 content_length=len(str(reflection_result.get("reflection_md") or "")),
             )
             continue
 
         content = reflection_result["reflection_md"].strip()
-        patch_summary = _apply_soul_memory_patches(soul.name, reflection_result.get("patches", []))
-        scope_start = float(interactions[0]["created_at"])
-        scope_end = float(max(item["created_at"] for item in interactions))
+        patch_summary = _apply_soul_memory_patches(
+            soul.name,
+            reflection_result.get("patches", []),
+            allowed_evidence=evidence_ids,
+        )
+        scope_start = float(observations[0]["observed_at"])
+        scope_end = float(max(item["observed_at"] for item in observations))
         reflection_id = _insert_soul_reflection(
             soul_name=soul.name,
             content=content,
             scope_start=scope_start,
             scope_end=scope_end,
-            related_evidence_ids=_interaction_evidence_ids(interactions),
+            related_evidence_ids=evidence_ids,
             trigger=trigger,
             patch_summary=patch_summary,
         )
-        _set_soul_deep_cursor(soul.name, scope_end)
+        _set_soul_observation_deep_cursor(soul.name, max(int(row["id"]) for row in observations))
         results.append(
             SoulDeepReflectionResult(
                 id=reflection_id,
@@ -293,7 +307,7 @@ def trigger_soul_deep_reflections(
                 content=content,
                 scope_start=scope_start,
                 scope_end=scope_end,
-                interaction_count=len(interactions),
+                interaction_count=len(observations),
                 patch_summary=patch_summary,
             )
         )
@@ -375,6 +389,118 @@ def _format_posts(rows: list) -> str:
             f"{row['content']}"
         )
     return "\n\n---\n\n".join(parts)
+
+
+def _load_global_observations_for_posts(post_ids: list[str]) -> list:
+    if not post_ids:
+        return []
+    placeholders = ",".join("?" for _ in post_ids)
+    return db.query_all(
+        f"""
+        SELECT DISTINCT observations.*
+        FROM observations
+        JOIN observation_sources
+          ON observation_sources.observation_id = observations.id
+        WHERE observations.status = 'active'
+          AND observations.visibility_scope = 'global'
+          AND observation_sources.source_type = 'post'
+          AND observation_sources.source_id IN ({placeholders})
+        ORDER BY observations.observed_at ASC, observations.id ASC
+        """,
+        tuple(post_ids),
+    )
+
+
+def _load_soul_observations_since_cursor(soul_name: str, limit: int) -> list:
+    if limit <= 0:
+        return []
+    cursor = _get_soul_observation_deep_cursor(soul_name)
+    return db.query_all(
+        """
+        SELECT DISTINCT observations.*
+        FROM observations
+        WHERE observations.status = 'active'
+          AND observations.id > ?
+          AND (
+              (
+                  observations.visibility_scope = 'soul_scoped'
+                  AND observations.scope_soul_name = ?
+              )
+              OR (
+                  observations.visibility_scope = 'post_visible'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM observation_sources
+                      JOIN comment_messages
+                        ON CAST(comment_messages.id AS TEXT) = observation_sources.source_id
+                      JOIN comment_threads
+                        ON comment_threads.id = comment_messages.thread_id
+                      WHERE observation_sources.observation_id = observations.id
+                        AND observation_sources.source_type = 'comment_message'
+                        AND comment_threads.soul_name = ?
+                  )
+              )
+          )
+        ORDER BY observations.id ASC
+        LIMIT ?
+        """,
+        (cursor, soul_name, soul_name, limit),
+    )
+
+
+def _format_observations_for_reflection(rows: list) -> str:
+    if not rows:
+        return "（暂无）"
+    parts = []
+    for row in rows:
+        sources = _observation_sources(int(row["id"]))
+        evidence = ", ".join(f"{source['source_type']}:{source['source_id']}" for source in sources) or "none"
+        scope = row["visibility_scope"]
+        if row["scope_post_id"]:
+            scope += f":{row['scope_post_id']}"
+        if row["scope_soul_name"]:
+            scope += f":{row['scope_soul_name']}"
+        summary = f"\nsummary: {row['summary']}" if row["summary"] else ""
+        parts.append(
+            "---\n"
+            f"observation_id: {row['id']}\n"
+            f"type: {row['type']}\n"
+            f"scope: {scope}\n"
+            f"title: {row['title']}{summary}\n"
+            f"importance: {float(row['importance']):.2f}\n"
+            f"confidence: {float(row['confidence']):.2f}\n"
+            f"evidence: {evidence}\n"
+            "---\n\n"
+            f"{row['narrative']}"
+        )
+    return "\n\n".join(parts)
+
+
+def _observation_evidence_ids(rows: list, allowed_source_types: set[str] | None = None) -> list[str]:
+    evidence: list[str] = []
+    for row in rows:
+        for source in _observation_sources(int(row["id"])):
+            source_type = source["source_type"]
+            if allowed_source_types is not None and source_type not in allowed_source_types:
+                continue
+            item = f"{source_type}:{source['source_id']}"
+            if source_type == "post":
+                item = str(source["source_id"])
+            if item not in evidence:
+                evidence.append(item)
+    return evidence
+
+
+def _observation_sources(observation_id: int) -> list:
+    return db.query_all(
+        """
+        SELECT source_type, source_id
+        FROM observation_sources
+        WHERE observation_id = ?
+        ORDER BY source_type, source_id
+        """,
+        (observation_id,),
+    )
 
 
 def _load_soul_interactions_since_cursor(soul_name: str, limit: int) -> list[dict]:
@@ -558,6 +684,24 @@ def _set_soul_deep_cursor(soul_name: str, cursor: float) -> None:
         "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
         (f"{SOUL_DEEP_CURSOR_PREFIX}{soul_name}", str(cursor)),
     )
+
+
+def _get_soul_observation_deep_cursor(soul_name: str) -> int:
+    row = db.query_one("SELECT value FROM meta WHERE key = ?", (f"{SOUL_OBSERVATION_DEEP_CURSOR_PREFIX}{soul_name}",))
+    if row is None:
+        return 0
+    try:
+        return int(row["value"])
+    except (TypeError, ValueError):
+        return 0
+
+
+def _set_soul_observation_deep_cursor(soul_name: str, cursor: int) -> None:
+    with db.immediate_transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            (f"{SOUL_OBSERVATION_DEEP_CURSOR_PREFIX}{soul_name}", str(cursor)),
+        )
 
 
 def _format_todos(todos: list) -> str:
@@ -930,15 +1074,20 @@ def _is_valid_soul_reflection(content: str | None) -> bool:
     return len(content.strip()) >= 20
 
 
-def _apply_profile_patches(patches: list) -> dict:
+def _apply_profile_patches(patches: list, allowed_evidence: list[str] | None = None) -> dict:
     summary = {"applied": 0, "skipped": 0, "skipped_details": []}
     if not isinstance(patches, list):
         return summary
+    allowed = set(allowed_evidence) if allowed_evidence is not None else None
 
     for patch in patches:
         if not isinstance(patch, dict):
             summary["skipped"] += 1
             summary["skipped_details"].append({"reason": "invalid_patch"})
+            continue
+        if allowed is not None and not _patch_evidence_allowed(patch, allowed):
+            summary["skipped"] += 1
+            summary["skipped_details"].append(_profile_patch_skip_detail(patch, {"status": "skipped", "reason": "invalid_evidence"}))
             continue
         result = profile_service.apply_patch(patch, source="reflector")
         status = result.get("status")
@@ -951,15 +1100,24 @@ def _apply_profile_patches(patches: list) -> dict:
     return summary
 
 
-def _apply_soul_memory_patches(soul_name: str, patches: list) -> dict:
+def _apply_soul_memory_patches(
+    soul_name: str,
+    patches: list,
+    allowed_evidence: list[str] | None = None,
+) -> dict:
     summary = {"applied": 0, "skipped": 0, "skipped_details": []}
     if not isinstance(patches, list):
         return summary
+    allowed = set(allowed_evidence) if allowed_evidence is not None else None
 
     for patch in patches:
         if not isinstance(patch, dict):
             summary["skipped"] += 1
             summary["skipped_details"].append({"reason": "invalid_patch"})
+            continue
+        if allowed is not None and not _patch_evidence_allowed(patch, allowed):
+            summary["skipped"] += 1
+            summary["skipped_details"].append(_profile_patch_skip_detail(patch, {"status": "skipped", "reason": "invalid_evidence"}))
             continue
         result = soul_memory_service.apply_patch(soul_name, patch, source="soul_deep_reflector")
         status = result.get("status")
@@ -980,3 +1138,13 @@ def _profile_patch_skip_detail(patch: dict, result: dict) -> dict:
         "evidence": patch.get("evidence"),
         "confidence": patch.get("confidence"),
     }
+
+
+def _patch_evidence_allowed(patch: dict, allowed_evidence: set[str]) -> bool:
+    evidence = patch.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return False
+    for item in evidence:
+        if not isinstance(item, str) or item.strip() not in allowed_evidence:
+            return False
+    return True

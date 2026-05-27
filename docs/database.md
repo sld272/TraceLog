@@ -277,7 +277,7 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
 
 ## 5. Observation 数据底座
 
-本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入 `post_visible` / `soul_scoped` observation。Memory Retrieval v1 已接入 L1 narrative 层召回，并支持 L2 evidence excerpt 渐进展开；Consolidation 仍是后续阶段。
+本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入 `post_visible` / `soul_scoped` observation。Memory Retrieval v1 已接入 L1 narrative 层召回，并支持 L2 evidence excerpt 渐进展开；Deep Reflection 已消费 observation，Consolidation v1 已按 visibility boundary 执行 `merge` / `supersede`。
 
 Observation 是 raw evidence 与深反思之间的中层记忆单位。它只保存可检索、可过滤、可审计的信号；具体原始证据统一写入 `observation_sources`。
 
@@ -372,6 +372,15 @@ CREATE TABLE IF NOT EXISTS observation_cursors (
 | `comment_thread` | `comment_threads.id` 字符串 | 已处理的最大 `comment_messages.id` |
 
 线程 observation 提取成功后，即使本批次没有生成 observation，也会推进 cursor，避免无意义消息反复消耗 LLM。若 LLM 返回无效 JSON 或写入失败，cursor 不推进，下次按同一批次重试。
+
+Consolidation 与 SOUL observation deep reflection 不新增表，继续使用 `meta` 存 cursor：
+
+| meta key 前缀 | value |
+| --- | --- |
+| `observation_consolidation_cursor:<bucket_key>` | 该 bucket 已成功 consolidation 到的最大 `observations.id` |
+| `soul_observation_deep_cursor:<soul_name>` | 该 SOUL 已成功深反思到的最大 `observations.id` |
+
+`bucket_key` 固定为 `global`、`post_visible:<post_id>` 或 `soul_scoped:<soul_name>`。Consolidation 写状态时只更新 `observations.status`、`merged_into`、`superseded_by` 与 `updated_at`；FTS trigger 会自动让 `merged` / `superseded` observation 从默认检索中消失。
 
 ### 5.2 冻结枚举
 

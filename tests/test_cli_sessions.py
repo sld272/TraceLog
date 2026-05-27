@@ -84,6 +84,16 @@ class CliSessionsTest(unittest.TestCase):
                 return_value=[SimpleNamespace(interaction_count=3)],
             ),
             patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[soul_result]),
+            patch(
+                "core.cli.sessions.observation_consolidation.run_observation_consolidation",
+                return_value=SimpleNamespace(
+                    bucket_count=0,
+                    merged_count=0,
+                    superseded_count=0,
+                    skipped_count=0,
+                    invalid_count=0,
+                ),
+            ),
             redirect_stdout(output),
         ):
             sessions.run_deep_reflection_on_exit(object(), "model")
@@ -109,11 +119,79 @@ class CliSessionsTest(unittest.TestCase):
                 return_value=[],
             ),
             patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[]),
+            patch(
+                "core.cli.sessions.observation_consolidation.run_observation_consolidation",
+                return_value=SimpleNamespace(
+                    bucket_count=0,
+                    merged_count=0,
+                    superseded_count=0,
+                    skipped_count=0,
+                    invalid_count=0,
+                ),
+            ),
             redirect_stdout(output),
         ):
             sessions.run_deep_reflection_on_exit(object(), "model")
 
         self.assertIn("深反思被强制中断，已有数据保持不变", output.getvalue())
+
+    def test_exit_reflection_runs_observation_consolidation_after_deep_reflections(self) -> None:
+        output = StringIO()
+        client = object()
+        consolidation_result = SimpleNamespace(
+            bucket_count=2,
+            merged_count=3,
+            superseded_count=1,
+            skipped_count=0,
+            invalid_count=1,
+        )
+
+        with (
+            patch("core.cli.sessions.observation_extractor.run_pending_observation_extractions_safely", return_value=[]),
+            patch("core.cli.sessions.reflector.preview_global_deep_reflection_scope", return_value=SimpleNamespace(post_ids=[])),
+            patch("core.cli.sessions.reflector.trigger_global_deep_reflection", return_value=None),
+            patch("core.cli.sessions.reflector.preview_soul_deep_reflection_scopes", return_value=[]),
+            patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[]),
+            patch(
+                "core.cli.sessions.observation_consolidation.run_observation_consolidation",
+                return_value=consolidation_result,
+            ) as consolidation,
+            patch("core.cli.sessions.logging_service.log_event") as log_event,
+            redirect_stdout(output),
+        ):
+            sessions.run_deep_reflection_on_exit(client, "model")
+
+        consolidation.assert_called_once_with(client, "model")
+        text = output.getvalue()
+        self.assertIn("Consolidation 已完成", text)
+        self.assertIn("merged=3", text)
+        log_event.assert_any_call(
+            "observation_consolidation_saved",
+            bucket_count=2,
+            merged_count=3,
+            superseded_count=1,
+            skipped_count=0,
+            invalid_count=1,
+        )
+
+    def test_exit_reflection_consolidation_failure_does_not_block_exit(self) -> None:
+        output = StringIO()
+
+        with (
+            patch("core.cli.sessions.observation_extractor.run_pending_observation_extractions_safely", return_value=[]),
+            patch("core.cli.sessions.reflector.preview_global_deep_reflection_scope", return_value=SimpleNamespace(post_ids=[])),
+            patch("core.cli.sessions.reflector.trigger_global_deep_reflection", return_value=None),
+            patch("core.cli.sessions.reflector.preview_soul_deep_reflection_scopes", return_value=[]),
+            patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[]),
+            patch("core.cli.sessions.observation_consolidation.run_observation_consolidation", side_effect=RuntimeError("boom")),
+            patch("core.cli.sessions.logging_service.log_event") as log_event,
+            redirect_stdout(output),
+        ):
+            sessions.run_deep_reflection_on_exit(object(), "model")
+
+        self.assertIn("Consolidation 暂时失败", output.getvalue())
+        self.assertIn("再见", output.getvalue())
+        log_event.assert_any_call("observation_consolidation_failed", level="WARNING", error="boom")
 
     def test_startup_orphan_cleanup_prints_and_logs_deleted_count(self) -> None:
         output = StringIO()

@@ -163,6 +163,7 @@ class ReflectorTest(unittest.TestCase):
 
     def test_trigger_global_deep_reflection_applies_profile_patches_and_metadata(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天开始准备比赛。")
+        self._create_global_observation("20260525-001", "比赛准备", "用户开始把比赛准备推进成具体行动。")
         payload = {
             "reflection_md": "## 深反思\n\n你开始把比赛准备推进成具体行动。",
             "patches": [
@@ -201,6 +202,7 @@ class ReflectorTest(unittest.TestCase):
 
     def test_global_deep_reflection_applies_update_remove_and_skips_placeholder_patch(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "我不再用测试用户这个说法，改为比赛项目参与者。")
+        self._create_global_observation("20260525-001", "身份修正", "用户把当前身份描述修正为比赛项目参与者。")
         payload = {
             "reflection_md": "## 深反思\n\n你在修正对自己当前身份的描述。",
             "patches": [
@@ -249,6 +251,41 @@ class ReflectorTest(unittest.TestCase):
         self.assertIn("比赛项目参与者 <!-- id: status-user -->", content)
         self.assertNotIn("bf-empty", content)
         self.assertNotIn("- 暂无", content)
+
+    def test_global_deep_reflection_prompt_uses_global_observations_only(self) -> None:
+        soul_service.sync_souls()
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "公开 post。")
+        self._create_global_observation("20260525-001", "全局观察", "global_observation_marker")
+        observation_service.create_observation(
+            {
+                "type": "correction",
+                "title": "私聊观察",
+                "narrative": "soul_scoped_marker",
+                "source_channel": "chat",
+                "visibility_scope": "soul_scoped",
+                "scope_soul_name": "默认",
+            },
+            [{"source_type": "post", "source_id": "20260525-001", "evidence_access": "source_soul_only"}],
+        )
+        observation_service.create_observation(
+            {
+                "type": "state",
+                "title": "评论观察",
+                "narrative": "post_visible_marker",
+                "source_channel": "comment_thread",
+                "visibility_scope": "post_visible",
+                "scope_post_id": "20260525-001",
+            },
+            [{"source_type": "post", "source_id": "20260525-001", "evidence_access": "post_visible"}],
+        )
+        client = FakeClient()
+
+        reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit")
+        prompt = client.requests[0]["messages"][1]["content"]
+
+        self.assertIn("global_observation_marker", prompt)
+        self.assertNotIn("soul_scoped_marker", prompt)
+        self.assertNotIn("post_visible_marker", prompt)
 
     def test_trigger_light_reflection_writes_derived_memory(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天和小李完成了比赛计划，但有点焦虑。")
@@ -463,7 +500,7 @@ class ReflectorTest(unittest.TestCase):
 
         self.assertEqual(["20260527-002"], [row["id"] for row in rows])
 
-    def test_soul_deep_reflection_reads_raw_chat_and_comment_messages_and_patches_memory(self) -> None:
+    def test_soul_deep_reflection_reads_scoped_observations_and_patches_memory(self) -> None:
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("默认")
         chat_user = chat_service.append_user_message(chat_thread.id, "我在默认面前会直接说累")
@@ -471,6 +508,8 @@ class ReflectorTest(unittest.TestCase):
         self._insert_comment_seed()
         comment_thread = comment_service.get_or_create_thread("20260525-001", "默认")
         comment_user = comment_service.append_user_message(comment_thread.id, "这条评论也只给默认看")
+        self._create_soul_scoped_observation("默认", chat_user.id, "直接说累", "用户在默认面前会直接说累。")
+        self._create_post_visible_observation("20260525-001", comment_user.id, "评论限定可见", "用户在该 post 评论线程继续表达限定可见的想法。")
         payload = {
             "reflection_md": "## SOUL 深反思\n\n用户在这个 SOUL 面前表达了更私人的疲惫与限定可见的评论。",
             "patches": [
@@ -499,6 +538,10 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual("默认", metadata["soul_name"])
         self.assertIn(f"chat_message:{chat_user.id}", reflection["related_posts"])
         self.assertIn(f"comment_message:{comment_user.id}", reflection["related_posts"])
+        prompt = client.requests[0]["messages"][1]["content"]
+        self.assertIn("Observation 记忆信号", prompt)
+        self.assertIn("直接说累", prompt)
+        self.assertNotIn("我听见了。", prompt)
 
     def test_soul_deep_reflection_skips_souls_without_new_interactions(self) -> None:
         soul_service.sync_souls()
@@ -509,10 +552,28 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual([], results)
         self.assertEqual(0, client.calls)
 
+    def test_soul_deep_reflection_excludes_other_soul_private_observations(self) -> None:
+        soul_service.sync_souls()
+        chat_thread = chat_service.get_or_create_thread("默认")
+        default_user = chat_service.append_user_message(chat_thread.id, "默认能看到这条")
+        other_thread = chat_service.get_or_create_thread("毒舌好友")
+        other_user = chat_service.append_user_message(other_thread.id, "毒舌好友私聊不该给默认")
+        self._create_soul_scoped_observation("默认", default_user.id, "默认私聊", "default_private_marker")
+        self._create_soul_scoped_observation("毒舌好友", other_user.id, "毒舌私聊", "other_private_marker")
+        client = FakeClient()
+
+        results = reflector.trigger_soul_deep_reflections(client, "fake-model", trigger="cli_exit")
+        default_prompt = client.requests[0]["messages"][1]["content"]
+
+        self.assertEqual(2, len(results))
+        self.assertIn("default_private_marker", default_prompt)
+        self.assertNotIn("other_private_marker", default_prompt)
+
     def test_soul_deep_reflection_cursor_prevents_rerun(self) -> None:
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("默认")
         chat_user = chat_service.append_user_message(chat_thread.id, "这条只处理一次")
+        observation_id = self._create_soul_scoped_observation("默认", chat_user.id, "只处理一次", "用户留下了一条只需要处理一次的私聊 observation。")
         payload = {
             "reflection_md": "## SOUL 深反思\n\n用户说了一条只需要处理一次的私聊。",
             "patches": [
@@ -532,11 +593,14 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual(1, len(first))
         self.assertEqual([], second)
         self.assertEqual(1, client.calls)
+        cursor = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_observation_deep_cursor:默认",)))
+        self.assertEqual(str(observation_id), cursor["value"])
 
     def test_soul_deep_reflection_accepts_plain_paragraph_content(self) -> None:
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("默认")
         chat_user = chat_service.append_user_message(chat_thread.id, "这是一条普通段落反思的证据")
+        self._create_soul_scoped_observation("默认", chat_user.id, "普通段落证据", "用户测试普通段落 SOUL 深反思。")
         payload = {
             "reflection_md": "用户留下了一条普通段落形式的 SOUL 深反思内容，虽然没有 Markdown 标题但内容足够有效。",
             "patches": [
@@ -554,7 +618,7 @@ class ReflectorTest(unittest.TestCase):
 
         self.assertEqual(1, len(results))
         self.assertEqual("默认", results[0].soul_name)
-        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_deep_cursor:默认",)))
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_observation_deep_cursor:默认",)))
         reflection = require_not_none(db.query_one("SELECT content FROM reflections WHERE type = 'soul_deep'"))
         self.assertIn("普通段落形式", reflection["content"])
 
@@ -562,12 +626,13 @@ class ReflectorTest(unittest.TestCase):
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("默认")
         chat_user = chat_service.append_user_message(chat_thread.id, "这条需要稍后补跑")
+        self._create_soul_scoped_observation("默认", chat_user.id, "稍后补跑", "用户留下了一条需要稍后补跑的私聊 observation。")
         bad_client = FakeClient(content=json.dumps({"reflection_md": "太短", "patches": []}, ensure_ascii=False))
 
         first = reflector.trigger_soul_deep_reflections(bad_client, "fake-model", trigger="cli_exit")
 
         self.assertEqual([], first)
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_deep_cursor:默认",)))
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_observation_deep_cursor:默认",)))
 
         payload = {
             "reflection_md": "## SOUL 深反思\n\n用户留下了一条需要在下次退出时补跑的私聊。",
@@ -585,66 +650,38 @@ class ReflectorTest(unittest.TestCase):
 
         self.assertEqual(1, len(second))
         self.assertEqual(1, second[0].interaction_count)
-        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_deep_cursor:默认",)))
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_observation_deep_cursor:默认",)))
 
-    def test_soul_deep_reflection_uses_global_interaction_limit(self) -> None:
+    def test_soul_deep_reflection_uses_observation_limit(self) -> None:
         soul_service.sync_souls()
-        for index, created_at in enumerate((1.0, 4.0), start=1):
-            post_id = f"20260525-root-{index:03d}"
-            self._insert_post(post_id, f"2026-05-25T10:0{index}:00+08:00", f"root post {index}")
-            db.execute(
-                """
-                INSERT INTO comments(post_id, soul_name, content, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (post_id, "默认", f"root comment {index}", created_at),
-            )
-
         chat_thread = chat_service.get_or_create_thread("默认")
+        chat_1 = chat_service.append_user_message(chat_thread.id, "chat observation 1")
+        chat_2 = chat_service.append_user_message(chat_thread.id, "chat observation 2")
+        self._insert_post("20260525-root-001", "2026-05-25T10:00:00+08:00", "root post")
         db.execute(
             """
-            INSERT INTO chat_messages(thread_id, role, content, created_at)
+            INSERT INTO comments(post_id, soul_name, content, created_at)
             VALUES (?, ?, ?, ?)
             """,
-            (chat_thread.id, "user", "chat early", 2.0),
+            ("20260525-root-001", "默认", "root comment", 1.0),
         )
-        db.execute(
-            """
-            INSERT INTO chat_messages(thread_id, role, content, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (chat_thread.id, "assistant", "chat late", 6.0),
-        )
-
         comment_thread = comment_service.get_or_create_thread("20260525-root-001", "默认")
-        db.execute(
-            """
-            INSERT INTO comment_messages(thread_id, role, content, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (comment_thread.id, "user", "comment early", 3.0),
-        )
-        db.execute(
-            """
-            INSERT INTO comment_messages(thread_id, role, content, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (comment_thread.id, "assistant", "comment late", 5.0),
-        )
+        comment_1 = comment_service.append_user_message(comment_thread.id, "comment observation 1")
+        comment_2 = comment_service.append_user_message(comment_thread.id, "comment observation 2")
+        obs_1 = self._create_soul_scoped_observation("默认", chat_1.id, "chat early", "chat early narrative")
+        obs_2 = self._create_soul_scoped_observation("默认", chat_2.id, "chat second", "chat second narrative")
+        obs_3 = self._create_post_visible_observation("20260525-root-001", comment_1.id, "comment early", "comment early narrative")
+        obs_4 = self._create_post_visible_observation("20260525-root-001", comment_2.id, "comment late", "comment late narrative")
 
         with patch("core.reflector.db.query_all", wraps=db.query_all) as query_all:
-            interactions = reflector._load_soul_interactions_since_cursor("默认", 3)
+            observations = reflector._load_soul_observations_since_cursor("默认", 3)
 
         self.assertEqual(1, query_all.call_count)
-        self.assertIn("UNION ALL", query_all.call_args.args[0])
-        self.assertEqual(
-            [("root_comment", 1.0), ("chat_message", 2.0), ("comment_message", 3.0)],
-            [(item["type"], item["created_at"]) for item in interactions],
-        )
-        self.assertEqual([], reflector._load_soul_interactions_since_cursor("默认", 0))
+        self.assertEqual([obs_1, obs_2, obs_3], [row["id"] for row in observations])
+        self.assertEqual([], reflector._load_soul_observations_since_cursor("默认", 0))
 
         payload = {
-            "reflection_md": "## SOUL 深反思\n\n用户与默认产生了多种互动，系统只应读取全局最早的三条。",
+            "reflection_md": "## SOUL 深反思\n\n用户与默认产生了多条 observation，系统只应读取最早的三条。",
             "patches": [],
         }
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
@@ -658,17 +695,16 @@ class ReflectorTest(unittest.TestCase):
 
         self.assertEqual(1, len(results))
         self.assertEqual(3, results[0].interaction_count)
-        self.assertIn("root comment 1", prompt)
         self.assertIn("chat early", prompt)
+        self.assertIn("chat second", prompt)
         self.assertIn("comment early", prompt)
-        self.assertNotIn("root comment 2", prompt)
         self.assertNotIn("comment late", prompt)
-        self.assertNotIn("chat late", prompt)
 
     def test_preview_soul_deep_reflection_scopes_match_pending_interactions(self) -> None:
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("默认")
-        chat_service.append_user_message(chat_thread.id, "这条会进入 preview")
+        chat_user = chat_service.append_user_message(chat_thread.id, "这条会进入 preview")
+        self._create_soul_scoped_observation("默认", chat_user.id, "preview observation", "这条 observation 会进入 preview。")
 
         scopes = reflector.preview_soul_deep_reflection_scopes()
 
@@ -705,6 +741,53 @@ class ReflectorTest(unittest.TestCase):
             VALUES (?, ?, ?, ?)
             """,
             ("20260525-001", "默认", "我陪你继续练。", 2.0),
+        )
+
+    def _create_global_observation(self, post_id: str, title: str, narrative: str) -> int:
+        return observation_service.create_observation(
+            {
+                "type": "insight",
+                "title": title,
+                "narrative": narrative,
+                "source_channel": "post",
+                "visibility_scope": "global",
+                "importance": 0.8,
+                "confidence": 0.9,
+                "observed_at": 1.0,
+            },
+            [{"source_type": "post", "source_id": post_id, "evidence_access": "all"}],
+        )
+
+    def _create_soul_scoped_observation(self, soul_name: str, message_id: int, title: str, narrative: str) -> int:
+        return observation_service.create_observation(
+            {
+                "type": "correction",
+                "title": title,
+                "narrative": narrative,
+                "source_channel": "chat",
+                "visibility_scope": "soul_scoped",
+                "scope_soul_name": soul_name,
+                "importance": 0.8,
+                "confidence": 0.9,
+                "observed_at": float(message_id),
+            },
+            [{"source_type": "chat_message", "source_id": str(message_id), "evidence_access": "source_soul_only"}],
+        )
+
+    def _create_post_visible_observation(self, post_id: str, message_id: int, title: str, narrative: str) -> int:
+        return observation_service.create_observation(
+            {
+                "type": "state",
+                "title": title,
+                "narrative": narrative,
+                "source_channel": "comment_thread",
+                "visibility_scope": "post_visible",
+                "scope_post_id": post_id,
+                "importance": 0.7,
+                "confidence": 0.8,
+                "observed_at": float(message_id),
+            },
+            [{"source_type": "comment_message", "source_id": str(message_id), "evidence_access": "post_visible"}],
         )
 
     def _light_payload(self, observations: list[dict] | None = None) -> dict:
