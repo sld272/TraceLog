@@ -109,7 +109,7 @@ def main() -> None:
         relevant_ids = retrieval.hybrid_search(user_input, k=3)
 
         print("\n[TraceLog 正在思考...]\n")
-        built_context = context_builder.build_context(relevant_post_ids=relevant_ids)
+        built_context = context_builder.build_context(relevant_post_ids=relevant_ids, query=user_input)
 
         post_id = record_service.save_post(user_input)
         logging_service.log_event("post_saved", post_id=post_id, content_length=len(user_input))

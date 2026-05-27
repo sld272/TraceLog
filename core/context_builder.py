@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, profile_service, record_service, todo_service, tool_config_service
+from core import db, memory_retrieval, profile_service, record_service, todo_service, tool_config_service
 from core.soul_service import SoulContext, list_enabled_souls
 
 CONTEXT_POST_COUNT = 3
@@ -18,7 +18,7 @@ class BuiltContext:
     relevant_post_ids: list[str]
 
 
-def build_context(relevant_post_ids: list[str] | None = None) -> BuiltContext:
+def build_context(relevant_post_ids: list[str] | None = None, query: str | None = None) -> BuiltContext:
     """Build shared user/profile/history/todo context plus enabled SOULs."""
     enabled_souls = list_enabled_souls()
     recent_ids = _recent_post_ids()
@@ -38,6 +38,10 @@ def build_context(relevant_post_ids: list[str] | None = None) -> BuiltContext:
         relevant_posts, effective_relevant_ids = _read_posts_by_ids(candidate_ids)
         if relevant_posts:
             sections.append(f"# 相关帖子\n\n{relevant_posts}")
+
+    related_memory = memory_retrieval.search_public_post_memory(query or "", effective_relevant_ids)
+    if related_memory:
+        sections.append(related_memory)
 
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()

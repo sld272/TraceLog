@@ -277,7 +277,7 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
 
 ## 5. Observation 数据底座
 
-本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入 `post_visible` / `soul_scoped` observation。Memory Retrieval、Progressive Disclosure 和 Consolidation 仍是后续阶段。
+本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入 `post_visible` / `soul_scoped` observation。Memory Retrieval v1 已接入 narrative 层召回；Progressive Disclosure 和 Consolidation 仍是后续阶段。
 
 Observation 是 raw evidence 与深反思之间的中层记忆单位。它只保存可检索、可过滤、可审计的信号；具体原始证据统一写入 `observation_sources`。
 
@@ -451,3 +451,13 @@ FTS 查询必须 join `observations` 并先过滤：
 - 当前 `scope_post_id` 或 `scope_soul_name`
 
 公开 post 回复和公开评论回复场景永远不能召回 `soul_scoped` observation，即使当前回复 SOUL 与 `scope_soul_name` 相同。
+
+当前 Memory Retrieval v1 的召回矩阵：
+
+| 场景 | FTS 允许范围 | 间接 post 语义范围 |
+| --- | --- | --- |
+| 公开 post 回复 | `global` | `global` |
+| 私聊 | `global` + 当前 `scope_soul_name` 的 `soul_scoped` | `global` |
+| 评论线程 | `global` + 当前 `scope_post_id` 的 `post_visible` | `global` |
+
+v1 只把 observation id、type、title、summary、narrative 和 scope label 注入 `# 相关记忆`，不展开 `observation_sources.excerpt` 或任何 raw evidence。

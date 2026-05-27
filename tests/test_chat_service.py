@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import chat_service, db, logging_service, observation_service, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
 from core.llm import reply_router
 from tests.helpers import require_not_none
 
@@ -182,6 +182,20 @@ class ChatServiceTest(unittest.TestCase):
 
         self.assertEqual("没有落库的当前消息", context.retrieval_query)
         self.assertEqual("没有落库的当前消息", captured["query"])
+
+    def test_build_chat_context_includes_current_soul_memory_only(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        user_message = chat_service.append_user_message(thread.id, "以后默认回复短一点")
+        soul_service.create_soul("测试好友", description="测试描述")
+        self._create_soul_observation("默认", "默认短回复记忆", "默认私聊偏好：以后默认回复短一点。", user_message.id)
+        self._create_soul_observation("测试好友", "其他 SOUL 私聊记忆", "其他 SOUL 私聊偏好：以后默认回复短一点。", user_message.id)
+
+        context = chat_service.build_chat_context(thread.id, "私聊context词")
+
+        self.assertIn("# 相关记忆", context.context)
+        self.assertIn("默认短回复记忆", context.context)
+        self.assertNotIn("其他 SOUL 私聊记忆", context.context)
+        self.assertNotIn("私聊原文不该出现", context.context)
 
     def test_chat_reply_success_writes_assistant_message(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
@@ -385,6 +399,27 @@ class ChatServiceTest(unittest.TestCase):
         matches = [record for record in records if record.get("event") == event_name]
         self.assertTrue(matches)
         return matches[-1]
+
+    def _create_soul_observation(self, soul_name: str, title: str, narrative: str, message_id: int) -> int:
+        return observation_service.create_observation(
+            {
+                "type": "correction",
+                "title": title,
+                "narrative": narrative,
+                "source_channel": "chat",
+                "visibility_scope": "soul_scoped",
+                "scope_soul_name": soul_name,
+                "observed_at": 1.0,
+            },
+            [
+                {
+                    "source_type": "chat_message",
+                    "source_id": message_id,
+                    "excerpt": "私聊原文不该出现",
+                    "evidence_access": "source_soul_only",
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

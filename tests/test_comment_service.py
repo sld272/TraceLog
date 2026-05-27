@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import comment_service, db, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import comment_service, db, observation_service, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
 from tests.helpers import require_not_none
 
 
@@ -181,6 +181,32 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("未落库当前消息", context.retrieval_query)
         self.assertEqual("未落库当前消息", captured["query"])
 
+    def test_build_comment_context_includes_same_post_memory_only(self) -> None:
+        thread = comment_service.get_or_create_thread("20260525-001", "默认")
+        user_message = comment_service.append_user_message(thread.id, "继续公开聊练歌")
+        self._insert_custom_post_and_comment("20260524-001", "默认", "其他 post", "其他回复")
+        self._create_post_observation(
+            "20260525-001",
+            "当前 post 评论记忆",
+            "当前 post 评论线程记忆：继续公开聊练歌。",
+            user_message.id,
+        )
+        self._create_post_observation(
+            "20260524-001",
+            "其他 post 评论记忆",
+            "其他 post 评论线程记忆：继续公开聊练歌。",
+            user_message.id,
+        )
+        self._create_soul_observation("私聊不该进评论", "私聊记忆：继续公开聊练歌。")
+
+        context = comment_service.build_comment_context(thread.id, "评论context词")
+
+        self.assertIn("# 相关记忆", context.context)
+        self.assertIn("当前 post 评论记忆", context.context)
+        self.assertNotIn("其他 post 评论记忆", context.context)
+        self.assertNotIn("私聊不该进评论", context.context)
+        self.assertNotIn("评论原文不该出现", context.context)
+
     def test_comment_reply_sends_multi_turn_messages(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
         client = FakeClient({"reply": "我在。"})
@@ -324,6 +350,41 @@ class CommentServiceTest(unittest.TestCase):
             VALUES (?, ?, ?, ?)
             """,
             (post_id, soul_name, comment, 2.0),
+        )
+
+    def _create_post_observation(self, post_id: str, title: str, narrative: str, message_id: int) -> int:
+        return observation_service.create_observation(
+            {
+                "type": "state",
+                "title": title,
+                "narrative": narrative,
+                "source_channel": "comment_thread",
+                "visibility_scope": "post_visible",
+                "scope_post_id": post_id,
+                "observed_at": 1.0,
+            },
+            [
+                {
+                    "source_type": "comment_message",
+                    "source_id": message_id,
+                    "excerpt": "评论原文不该出现",
+                    "evidence_access": "post_visible",
+                }
+            ],
+        )
+
+    def _create_soul_observation(self, title: str, narrative: str) -> int:
+        return observation_service.create_observation(
+            {
+                "type": "correction",
+                "title": title,
+                "narrative": narrative,
+                "source_channel": "chat",
+                "visibility_scope": "soul_scoped",
+                "scope_soul_name": "默认",
+                "observed_at": 1.0,
+            },
+            [{"source_type": "chat_message", "source_id": "1", "evidence_access": "source_soul_only"}],
         )
 
 

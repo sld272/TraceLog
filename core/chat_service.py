@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from core import db, evidence_service, logging_service, profile_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import db, evidence_service, logging_service, memory_retrieval, profile_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
@@ -159,6 +159,14 @@ def build_chat_context(thread_id: int, user_message: str) -> ChatContext:
     relevant_posts = evidence_service.read_posts_by_ids(relevant_post_ids)
     if relevant_posts:
         sections.append(f"# 相关帖子\n\n{relevant_posts}")
+
+    related_memory = memory_retrieval.search_chat_memory(
+        retrieval_query,
+        thread.soul_name,
+        relevant_post_ids,
+    )
+    if related_memory:
+        sections.append(related_memory)
 
     related_comments = evidence_service.read_soul_comments(thread.soul_name, relevant_post_ids)
     if related_comments:
