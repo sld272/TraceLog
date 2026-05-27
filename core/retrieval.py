@@ -166,10 +166,6 @@ def hybrid_search_scored(
     return []
 
 
-def _like_search(query: str, k: int) -> list[str]:
-    return [hit.post_id for hit in _like_search_scored(query, k)]
-
-
 def _like_search_scored(query: str, k: int) -> list[RetrievalHit]:
     pattern = f"%{query.replace(' ', '')}%"
     rows = db.query_all(
