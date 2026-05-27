@@ -287,6 +287,63 @@ class ReflectorTest(unittest.TestCase):
         self.assertNotIn("soul_scoped_marker", prompt)
         self.assertNotIn("post_visible_marker", prompt)
 
+    def test_observation_sources_are_loaded_once_for_global_deep_reflection(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "第一条公开 post。")
+        self._insert_post("20260525-002", "2026-05-25T11:00:00+08:00", "第二条公开 post。")
+        self._create_global_observation("20260525-001", "第一条观察", "first_global_observation_marker")
+        self._create_global_observation("20260525-002", "第二条观察", "second_global_observation_marker")
+        payload = {
+            "reflection_md": "## 深反思\n\n用户连续留下了两条公开 observation。",
+            "patches": [
+                {
+                    "section": "身份与现状",
+                    "ops": [{"op": "add", "value": "连续记录公开观察"}],
+                    "evidence": ["20260525-001", "20260525-002"],
+                    "confidence": 0.8,
+                }
+            ],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        with patch("core.reflector._observation_sources_by_id", wraps=reflector._observation_sources_by_id) as load_sources:
+            result = require_not_none(reflector.trigger_global_deep_reflection(client, "fake-model", trigger="cli_exit"))
+
+        self.assertEqual(1, load_sources.call_count)
+        self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, result.patch_summary)
+        prompt = client.requests[0]["messages"][1]["content"]
+        self.assertIn("evidence: post:20260525-001", prompt)
+        self.assertIn("evidence: post:20260525-002", prompt)
+
+    def test_observation_evidence_helpers_keep_profile_and_soul_shapes(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "公开 evidence post。")
+        post_observation_id = self._create_global_observation(
+            "20260525-001",
+            "profile evidence",
+            "profile evidence narrative",
+        )
+        soul_service.sync_souls()
+        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_user = chat_service.append_user_message(chat_thread.id, "SOUL evidence")
+        soul_observation_id = self._create_soul_scoped_observation(
+            "默认",
+            chat_user.id,
+            "soul evidence",
+            "soul evidence narrative",
+        )
+        rows = db.query_all(
+            "SELECT * FROM observations WHERE id IN (?, ?) ORDER BY id",
+            (post_observation_id, soul_observation_id),
+        )
+        sources = reflector._observation_sources_by_id(rows)
+
+        profile_evidence = reflector._profile_observation_evidence_ids(rows, sources)
+        soul_evidence = reflector._soul_observation_evidence_ids(rows, sources)
+
+        self.assertIn("20260525-001", profile_evidence)
+        self.assertNotIn("post:20260525-001", profile_evidence)
+        self.assertIn("post:20260525-001", soul_evidence)
+        self.assertIn(f"chat_message:{chat_user.id}", soul_evidence)
+
     def test_trigger_light_reflection_writes_derived_memory(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天和小李完成了比赛计划，但有点焦虑。")
         client = FakeClient(content=json.dumps(self._light_payload(), ensure_ascii=False))

@@ -377,7 +377,7 @@ CREATE TABLE IF NOT EXISTS observation_cursors (
 
 线程 observation 提取成功后，即使本批次没有生成 observation，也会推进 cursor，避免无意义消息反复消耗 LLM。若 LLM 返回无效 JSON 或写入失败，cursor 不推进，下次按同一批次重试。
 
-Consolidation 与 SOUL observation deep reflection 不新增表，继续使用 `meta` 存 cursor：
+Consolidation 与 SOUL observation deep reflection 不新增表，继续使用 `meta` 存 process-level cursor；`observation_cursors` 表只用于 Signal Extraction 的 source cursor：
 
 | meta key 前缀 | value |
 | --- | --- |
@@ -385,6 +385,8 @@ Consolidation 与 SOUL observation deep reflection 不新增表，继续使用 `
 | `soul_observation_deep_cursor:<soul_name>` | 该 SOUL 已成功深反思到的最大 `observations.id` |
 
 `bucket_key` 固定为 `global`、`post_visible:<post_id>` 或 `soul_scoped:<soul_name>`。Consolidation 写状态时只更新 `observations.status`、`merged_into`、`superseded_by` 与 `updated_at`；FTS trigger 会自动让 `merged` / `superseded` observation 从默认检索中消失。
+
+Consolidation v1 不直接执行 `promote`。进入 `user.md` 或 `soul_memories/<name>.md` 的 promotion 由 global / SOUL deep reflection 的 patch 流程完成；consolidation 只负责同一 visibility boundary 内的 `merge` 与 `supersede` 状态整理。
 
 ### 5.2 冻结枚举
 

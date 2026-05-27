@@ -139,32 +139,61 @@ def _all_active_buckets() -> list[ConsolidationScope]:
             scope_value = row["scope_soul_name"]
         bucket_key = _bucket_key(visibility, scope_value)
         cursor = _get_cursor(bucket_key)
-        pending = db.query_one(
-            """
-            SELECT COUNT(*) AS count
-            FROM observations
-            WHERE status = 'active'
-              AND id > ?
-              AND visibility_scope = ?
-              AND (
-                  (? IS NULL AND scope_post_id IS NULL AND scope_soul_name IS NULL)
-                  OR scope_post_id = ?
-                  OR scope_soul_name = ?
-              )
-            """,
-            (cursor, visibility, scope_value, scope_value, scope_value),
-        )
+        pending_count = _pending_count(visibility, scope_value, cursor)
         scopes.append(
             ConsolidationScope(
                 bucket_key=bucket_key,
                 visibility_scope=visibility,
                 scope_value=scope_value,
                 active_count=int(row["active_count"]),
-                pending_count=int(pending["count"] if pending is not None else 0),
+                pending_count=pending_count,
                 max_observation_id=int(row["max_id"]),
             )
         )
     return scopes
+
+
+def _pending_count(visibility_scope: str, scope_value: str | None, cursor: int) -> int:
+    if visibility_scope == "global":
+        row = db.query_one(
+            """
+            SELECT COUNT(*) AS count
+            FROM observations
+            WHERE status = 'active'
+              AND id > ?
+              AND visibility_scope = 'global'
+              AND scope_post_id IS NULL
+              AND scope_soul_name IS NULL
+            """,
+            (cursor,),
+        )
+    elif visibility_scope == "post_visible":
+        row = db.query_one(
+            """
+            SELECT COUNT(*) AS count
+            FROM observations
+            WHERE status = 'active'
+              AND id > ?
+              AND visibility_scope = 'post_visible'
+              AND scope_post_id = ?
+            """,
+            (cursor, scope_value),
+        )
+    elif visibility_scope == "soul_scoped":
+        row = db.query_one(
+            """
+            SELECT COUNT(*) AS count
+            FROM observations
+            WHERE status = 'active'
+              AND id > ?
+              AND visibility_scope = 'soul_scoped'
+              AND scope_soul_name = ?
+            """,
+            (cursor, scope_value),
+        )
+    else:
+        return 0
+    return int(row["count"] if row is not None else 0)
 
 
 def _load_bucket_rows(scope: ConsolidationScope, limit: int) -> list[Any]:

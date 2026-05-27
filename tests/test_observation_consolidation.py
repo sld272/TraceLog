@@ -135,6 +135,24 @@ class ObservationConsolidationTest(unittest.TestCase):
         self.assertEqual(1, result.bucket_count)
         self.assertEqual("active", require_not_none(observation_service.get_observation(private_id))["status"])
 
+    def test_preview_pending_counts_are_isolated_by_bucket_scope_type(self) -> None:
+        self._insert_post("shared")
+        self._insert_soul("shared")
+        self._create_global("全局 pending", "全局 pending narrative。")
+        self._create_post_visible("shared", "post pending", "post pending narrative。")
+        self._create_soul_scoped("shared", "soul pending", "soul pending narrative。")
+
+        scopes = {
+            scope.bucket_key: scope
+            for scope in observation_consolidation.preview_consolidation_scopes()
+        }
+
+        self.assertEqual(1, scopes["global"].pending_count)
+        self.assertEqual(1, scopes["post_visible:shared"].pending_count)
+        self.assertEqual(1, scopes["soul_scoped:shared"].pending_count)
+        self.assertEqual("shared", scopes["post_visible:shared"].scope_value)
+        self.assertEqual("shared", scopes["soul_scoped:shared"].scope_value)
+
     def test_successful_llm_result_applies_supersede_and_advances_cursor(self) -> None:
         old_id = self._create_global("旧约定", "用户以前偏好详细解释。")
         new_id = self._create_global("新约定", "用户现在偏好简短回答。")
