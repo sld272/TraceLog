@@ -60,6 +60,15 @@ def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
                 f"[反思] SOUL 深反思已保存 {len(soul_results)} 份，"
                 f"独立画像更新 applied={applied} skipped={skipped}。"
             )
+        elif soul_interaction_count:
+            logging_service.log_event(
+                "deep_reflection_failed",
+                level="WARNING",
+                type="soul",
+                reason="no_saved_results",
+                pending_interaction_count=soul_interaction_count,
+            )
+            print("[反思] SOUL 深反思未保存：检测到互动，但本次没有生成有效结果，已保留待下次重试。")
         else:
             print("[反思] 没有新的 SOUL 互动，已跳过 SOUL 深反思。")
     except KeyboardInterrupt:

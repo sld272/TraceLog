@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 
-from core import db
+from core import db, logging_service
 from core import profile_service
 from core.llm import reflection_router
 from core.llm.types import LLMClient
@@ -249,7 +249,24 @@ def trigger_soul_deep_reflections(
                 "evidence_ids": _interaction_evidence_ids(interactions),
             },
         )
-        if reflection_result is None or not _is_valid_reflection(reflection_result.get("reflection_md")):
+        if reflection_result is None:
+            logging_service.log_event(
+                "soul_deep_reflection_skipped",
+                level="WARNING",
+                soul_name=soul.name,
+                reason="invalid_json",
+                interaction_count=len(interactions),
+            )
+            continue
+        if not _is_valid_soul_reflection(reflection_result.get("reflection_md")):
+            logging_service.log_event(
+                "soul_deep_reflection_skipped",
+                level="WARNING",
+                soul_name=soul.name,
+                reason="invalid_reflection",
+                interaction_count=len(interactions),
+                content_length=len(str(reflection_result.get("reflection_md") or "")),
+            )
             continue
 
         content = reflection_result["reflection_md"].strip()
@@ -863,6 +880,12 @@ def _is_valid_reflection(content: str | None) -> bool:
         return False
     text = content.strip()
     return len(text) >= 20 and ("##" in text or "- " in text or "\n" in text)
+
+
+def _is_valid_soul_reflection(content: str | None) -> bool:
+    if not content:
+        return False
+    return len(content.strip()) >= 20
 
 
 def _apply_profile_patches(patches: list) -> dict:

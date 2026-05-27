@@ -360,6 +360,31 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual([], second)
         self.assertEqual(1, client.calls)
 
+    def test_soul_deep_reflection_accepts_plain_paragraph_content(self) -> None:
+        soul_service.sync_souls()
+        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_user = chat_service.append_user_message(chat_thread.id, "这是一条普通段落反思的证据")
+        payload = {
+            "reflection_md": "用户留下了一条普通段落形式的 SOUL 深反思内容，虽然没有 Markdown 标题但内容足够有效。",
+            "patches": [
+                {
+                    "section": "对用户的理解",
+                    "ops": [{"op": "add", "value": "用户测试普通段落 SOUL 深反思"}],
+                    "evidence": [f"chat_message:{chat_user.id}"],
+                    "confidence": 0.8,
+                }
+            ],
+        }
+        client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
+
+        results = reflector.trigger_soul_deep_reflections(client, "fake-model", trigger="cli_exit")
+
+        self.assertEqual(1, len(results))
+        self.assertEqual("默认", results[0].soul_name)
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_deep_cursor:默认",)))
+        reflection = require_not_none(db.query_one("SELECT content FROM reflections WHERE type = 'soul_deep'"))
+        self.assertIn("普通段落形式", reflection["content"])
+
     def test_soul_deep_reflection_invalid_result_does_not_advance_cursor(self) -> None:
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("默认")
