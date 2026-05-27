@@ -179,10 +179,9 @@ def _validate_patch_gate(patch: dict) -> str | None:
             return "insufficient_evidence"
         if patch["confidence"] < min_confidence:
             return "low_confidence"
-    if _find_section_bounds(doc.lines, patch["section"]) is None:
-        return "missing_section"
     bounds = _find_section_bounds(doc.lines, patch["section"])
-    assert bounds is not None
+    if bounds is None:
+        return "missing_section"
     start, end = bounds
     for op in patch["ops"]:
         if op["op"] in ("update", "remove") and _find_anchor_line(doc.lines, start, end, op["anchor"]) is None:

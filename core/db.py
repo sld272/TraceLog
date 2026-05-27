@@ -56,10 +56,11 @@ def init_db() -> None:
 
 
 def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:
+    probe_id = f"__fts5_probe__:{os.getpid()}:{time.time_ns()}"
     try:
         conn.execute("INSERT INTO posts(id, ts, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                     ("__fts5_probe__", "1970-01-01T00:00:00+00:00", "中文 probe", 0.0, 0.0))
-        conn.execute("DELETE FROM posts WHERE id = ?", ("__fts5_probe__",))
+                     (probe_id, "1970-01-01T00:00:00+00:00", "中文 probe", 0.0, 0.0))
+        conn.execute("DELETE FROM posts WHERE id = ?", (probe_id,))
     except sqlite3.Error as exc:
         raise RuntimeError("SQLite FTS5 trigram support is required but unavailable") from exc
 

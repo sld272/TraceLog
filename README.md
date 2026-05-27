@@ -140,7 +140,6 @@ workspace/
 - `schema.sql`：SQLite 初始化 schema
 - `core/db.py`：SQLite 连接、初始化、查询 helper 与 `require_lastrowid`
 - `docs/architecture.md`：项目架构设计
-- `docs/competition_roadmap.md`：参赛规划与执行清单
 
 ## 设计理念
 

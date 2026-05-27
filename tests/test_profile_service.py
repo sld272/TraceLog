@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core import db, profile_service
 from tests.helpers import require_not_none
@@ -235,6 +236,21 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertIn("Python 后端与 SQLite <!-- id: sk-py -->", content)
         self.assertNotIn("容易焦虑", content)
         self.assertEqual(2, len(rows))
+
+    def test_patch_gate_reuses_section_bounds_lookup(self) -> None:
+        original = profile_service._find_section_bounds
+        with patch("core.profile_service._find_section_bounds", wraps=original) as find_section_bounds:
+            result = profile_service.apply_patch(
+                {
+                    "section": "技能与专长",
+                    "ops": [{"op": "update", "anchor": "sk-py", "value": "Python 后端与 SQLite"}],
+                    "evidence": ["20260525-001"],
+                    "confidence": 0.65,
+                }
+            )
+
+        self.assertEqual("applied", result["status"])
+        self.assertEqual(2, find_section_bounds.call_count)
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(
