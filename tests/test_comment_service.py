@@ -205,7 +205,10 @@ class CommentServiceTest(unittest.TestCase):
         thread_messages = client.calls[0]["messages"][2:]
 
         self.assertEqual(["user", "assistant", "user"], [message["role"] for message in thread_messages])
-        self.assertEqual(["你好", "你好呀", "再说说"], [message["content"] for message in thread_messages])
+        self.assertEqual(
+            ["你好", '{"reply": "你好呀"}', "再说说"],
+            [message["content"] for message in thread_messages],
+        )
 
     def test_invalid_comment_thread_role_is_skipped(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")

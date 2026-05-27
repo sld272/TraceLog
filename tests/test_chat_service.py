@@ -219,7 +219,10 @@ class ChatServiceTest(unittest.TestCase):
         thread_messages = client.calls[0]["messages"][2:]
 
         self.assertEqual(["user", "assistant", "user"], [message["role"] for message in thread_messages])
-        self.assertEqual(["你好", "你好呀", "我好累"], [message["content"] for message in thread_messages])
+        self.assertEqual(
+            ["你好", '{"reply": "你好呀"}', "我好累"],
+            [message["content"] for message in thread_messages],
+        )
 
     def test_evidence_with_injection_attempt_stays_in_evidence_block(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
