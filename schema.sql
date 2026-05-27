@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
+INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
 
 CREATE TABLE IF NOT EXISTS souls (
     name        TEXT PRIMARY KEY,
@@ -241,3 +241,216 @@ CREATE TABLE IF NOT EXISTS soul_memory_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
     ON soul_memory_revisions(soul_name, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS observations (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    type             TEXT NOT NULL CHECK (type IN (
+        'preference',
+        'correction',
+        'convention',
+        'decision',
+        'insight',
+        'pattern',
+        'state',
+        'relationship',
+        'todo_signal'
+    )),
+    title            TEXT NOT NULL,
+    summary          TEXT,
+    narrative        TEXT NOT NULL,
+    source_channel   TEXT NOT NULL CHECK (source_channel IN (
+        'post',
+        'comment',
+        'comment_thread',
+        'chat',
+        'reflection',
+        'todo'
+    )),
+    visibility_scope TEXT NOT NULL CHECK (visibility_scope IN (
+        'global',
+        'post_visible',
+        'soul_scoped',
+        'private_blocked'
+    )),
+    scope_post_id    TEXT REFERENCES posts(id) ON DELETE CASCADE,
+    scope_soul_name  TEXT REFERENCES souls(name) ON DELETE CASCADE,
+    importance       REAL NOT NULL DEFAULT 0.5 CHECK (importance >= 0.0 AND importance <= 1.0),
+    confidence       REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    status           TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
+        'active',
+        'merged',
+        'superseded',
+        'archived'
+    )),
+    merged_into      INTEGER REFERENCES observations(id) ON DELETE SET NULL,
+    superseded_by    INTEGER REFERENCES observations(id) ON DELETE SET NULL,
+    observed_at      REAL NOT NULL,
+    created_at       REAL NOT NULL,
+    updated_at       REAL NOT NULL,
+    metadata         TEXT,
+    CHECK (visibility_scope != 'post_visible' OR scope_post_id IS NOT NULL),
+    CHECK (visibility_scope != 'soul_scoped' OR scope_soul_name IS NOT NULL),
+    CHECK (visibility_scope != 'global' OR scope_soul_name IS NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_observations_status_time
+    ON observations(status, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_post_scope
+    ON observations(visibility_scope, scope_post_id, status, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_soul_scope
+    ON observations(visibility_scope, scope_soul_name, status, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_type_time
+    ON observations(type, observed_at DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS observations_fts USING fts5(
+    title,
+    summary,
+    narrative,
+    tokenize='trigram',
+    content='observations',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS observations_ai AFTER INSERT ON observations
+WHEN new.status = 'active' AND new.visibility_scope != 'private_blocked'
+BEGIN
+    INSERT INTO observations_fts(rowid, title, summary, narrative)
+    VALUES (new.id, new.title, IFNULL(new.summary, ''), new.narrative);
+END;
+
+CREATE TRIGGER IF NOT EXISTS observations_ad AFTER DELETE ON observations
+WHEN old.status = 'active' AND old.visibility_scope != 'private_blocked'
+BEGIN
+    INSERT INTO observations_fts(observations_fts, rowid, title, summary, narrative)
+        VALUES ('delete', old.id, old.title, IFNULL(old.summary, ''), old.narrative);
+END;
+
+CREATE TRIGGER IF NOT EXISTS observations_au_delete AFTER UPDATE ON observations
+WHEN old.status = 'active' AND old.visibility_scope != 'private_blocked'
+BEGIN
+    INSERT INTO observations_fts(observations_fts, rowid, title, summary, narrative)
+        VALUES ('delete', old.id, old.title, IFNULL(old.summary, ''), old.narrative);
+END;
+
+CREATE TRIGGER IF NOT EXISTS observations_au_insert AFTER UPDATE ON observations
+WHEN new.status = 'active' AND new.visibility_scope != 'private_blocked'
+BEGIN
+    INSERT INTO observations_fts(rowid, title, summary, narrative)
+    VALUES (new.id, new.title, IFNULL(new.summary, ''), new.narrative);
+END;
+
+CREATE TABLE IF NOT EXISTS observation_sources (
+    observation_id  INTEGER NOT NULL REFERENCES observations(id) ON DELETE CASCADE,
+    source_type     TEXT NOT NULL CHECK (source_type IN (
+        'post',
+        'comment',
+        'comment_message',
+        'chat_message',
+        'todo',
+        'reflection'
+    )),
+    source_id       TEXT NOT NULL,
+    excerpt         TEXT,
+    evidence_access TEXT NOT NULL CHECK (evidence_access IN (
+        'all',
+        'post_visible',
+        'source_soul_only',
+        'none'
+    )),
+    created_at      REAL NOT NULL,
+    metadata        TEXT,
+    PRIMARY KEY (observation_id, source_type, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_observation_sources_source
+    ON observation_sources(source_type, source_id);
+
+CREATE TABLE IF NOT EXISTS observation_cursors (
+    source_kind  TEXT NOT NULL,
+    source_key   TEXT NOT NULL,
+    cursor_value TEXT NOT NULL,
+    updated_at   REAL NOT NULL,
+    metadata     TEXT,
+    PRIMARY KEY (source_kind, source_key)
+);
+
+CREATE TRIGGER IF NOT EXISTS observation_sources_posts_ad AFTER DELETE ON posts BEGIN
+    DELETE FROM observation_sources
+    WHERE source_type = 'post' AND source_id = old.id;
+    DELETE FROM observations
+    WHERE id IN (
+        SELECT observations.id
+        FROM observations
+        LEFT JOIN observation_sources
+            ON observation_sources.observation_id = observations.id
+        WHERE observation_sources.observation_id IS NULL
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS observation_sources_comments_ad AFTER DELETE ON comments BEGIN
+    DELETE FROM observation_sources
+    WHERE source_type = 'comment' AND source_id = CAST(old.id AS TEXT);
+    DELETE FROM observations
+    WHERE id IN (
+        SELECT observations.id
+        FROM observations
+        LEFT JOIN observation_sources
+            ON observation_sources.observation_id = observations.id
+        WHERE observation_sources.observation_id IS NULL
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS observation_sources_comment_messages_ad
+AFTER DELETE ON comment_messages BEGIN
+    DELETE FROM observation_sources
+    WHERE source_type = 'comment_message' AND source_id = CAST(old.id AS TEXT);
+    DELETE FROM observations
+    WHERE id IN (
+        SELECT observations.id
+        FROM observations
+        LEFT JOIN observation_sources
+            ON observation_sources.observation_id = observations.id
+        WHERE observation_sources.observation_id IS NULL
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS observation_sources_chat_messages_ad
+AFTER DELETE ON chat_messages BEGIN
+    DELETE FROM observation_sources
+    WHERE source_type = 'chat_message' AND source_id = CAST(old.id AS TEXT);
+    DELETE FROM observations
+    WHERE id IN (
+        SELECT observations.id
+        FROM observations
+        LEFT JOIN observation_sources
+            ON observation_sources.observation_id = observations.id
+        WHERE observation_sources.observation_id IS NULL
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS observation_sources_todos_ad AFTER DELETE ON todos BEGIN
+    DELETE FROM observation_sources
+    WHERE source_type = 'todo' AND source_id = old.id;
+    DELETE FROM observations
+    WHERE id IN (
+        SELECT observations.id
+        FROM observations
+        LEFT JOIN observation_sources
+            ON observation_sources.observation_id = observations.id
+        WHERE observation_sources.observation_id IS NULL
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS observation_sources_reflections_ad
+AFTER DELETE ON reflections BEGIN
+    DELETE FROM observation_sources
+    WHERE source_type = 'reflection' AND source_id = CAST(old.id AS TEXT);
+    DELETE FROM observations
+    WHERE id IN (
+        SELECT observations.id
+        FROM observations
+        LEFT JOIN observation_sources
+            ON observation_sources.observation_id = observations.id
+        WHERE observation_sources.observation_id IS NULL
+    );
+END;

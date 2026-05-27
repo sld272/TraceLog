@@ -42,8 +42,8 @@ def init_db() -> None:
             raise RuntimeError(f"SQLite WAL mode unavailable: {mode}")
         _validate_fts5_trigram(conn)
         conn.execute(
-            "INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)",
-            ("schema_version", "1"),
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            ("schema_version", "2"),
         )
         conn.commit()
     except sqlite3.Error as exc:
@@ -68,9 +68,22 @@ def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:
 @contextmanager
 def transaction() -> Iterator[sqlite3.Connection]:
     """Run statements in a write transaction."""
+    with _transaction("BEGIN") as conn:
+        yield conn
+
+
+@contextmanager
+def immediate_transaction() -> Iterator[sqlite3.Connection]:
+    """Run statements in a write transaction that acquires the write lock up front."""
+    with _transaction("BEGIN IMMEDIATE") as conn:
+        yield conn
+
+
+@contextmanager
+def _transaction(begin_sql: str) -> Iterator[sqlite3.Connection]:
     conn = connect()
     try:
-        conn.execute("BEGIN")
+        conn.execute(begin_sql)
         yield conn
         conn.commit()
     except BaseException:

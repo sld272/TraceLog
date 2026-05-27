@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 
 -- Schema 版本，便于后续升级
-INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', '1');
+INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
 -- 注意：交互项目（社交媒体形态）默认所有 enabled=1 的 SOUL 都参与评论，
 -- 因此不再使用单一 active_soul。交互项目默认所有 enabled=1 的 SOUL 都平权参与评论。
 
@@ -275,19 +275,19 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
 - SOUL 记忆反思器可读取该 SOUL 的 `chat_messages` 摘要，并把沉淀写入对应的 `soul_memories/<name>.md`。
 - 私聊不写 `comments` 表（评论是公开评论流，私聊是单独频道）。
 
-## 5. Observation 设计草案（未实现）
+## 5. Observation 数据底座
 
-本节是后续 Observation Schema 阶段的设计冻结，不代表当前 `schema.sql` 已经包含这些表。实现时仍保持单一初始化 SQL 文件，不引入迁移框架。
+本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它只提供存储、边界过滤、FTS、游标和证据清理能力；Signal Extraction、Memory Retrieval、Progressive Disclosure 和 Consolidation 仍是后续阶段。
 
 Observation 是 raw evidence 与深反思之间的中层记忆单位。它只保存可检索、可过滤、可审计的信号；具体原始证据统一写入 `observation_sources`。
 
 ### 5.1 概念表
 
-后续 Schema 阶段需要新增四类表：
+当前 Schema 包含四类 Observation 表：
 
 - `observations`：中层记忆主表，保存 narrative、时间、状态和权限边界。
 - `observation_sources`：证据链表，保存具体来源类型、来源 ID、摘录和展开权限。
-- `observations_fts`：observation 标题、摘要和 narrative 的 FTS5 索引。
+- `observations_fts`：observation 标题、摘要和 narrative 的 FTS5 trigram 索引。
 - `observation_cursors`：按来源增量提取 observation 的游标，避免崩溃或 Ctrl+C 后丢失待提取内容。
 
 `observations` 只保存检索与权限边界字段，不保存所有具体来源 ID：
@@ -315,6 +315,8 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 ```
 
+实际 schema 通过 `CHECK` 约束冻结 observation type、source channel、visibility、status、importance/confidence 范围和 scope 必填规则：`post_visible` 必须有 `scope_post_id`，`soul_scoped` 必须有 `scope_soul_name`，`global` 不能带 `scope_soul_name`。
+
 建议索引：
 
 ```sql
@@ -324,7 +326,11 @@ CREATE INDEX IF NOT EXISTS idx_observations_post_scope
     ON observations(visibility_scope, scope_post_id, status, observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_observations_soul_scope
     ON observations(visibility_scope, scope_soul_name, status, observed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_observations_type_time
+    ON observations(type, observed_at DESC);
 ```
+
+`observations_fts` 使用 external content + `tokenize='trigram'`。只有 `status='active'` 且 `visibility_scope!='private_blocked'` 的 observation 会被 trigger 写入 FTS；状态变成 `merged`、`superseded` 或 `archived` 时会被 trigger 从 FTS 删除。
 
 `observation_sources` 保存具体证据来源。`source_id` 是多态 ID，因此不能依赖 SQLite foreign key 自动跨表级联：
 
@@ -341,7 +347,7 @@ CREATE TABLE IF NOT EXISTS observation_sources (
 );
 ```
 
-后续实现必须为 posts、comments、comment_messages、chat_messages 等来源设计 delete triggers 或启动时 cleanup，防止删除原文后残留无法访问的僵尸证据。
+实际 schema 通过 `CHECK` 约束冻结 `source_type` 和 `evidence_access` 枚举。由于 `source_id` 是多态 ID，SQLite 不能用单个 foreign key 自动级联到多张表；schema 已为 posts、comments、comment_messages、chat_messages、todos、reflections 设计 source cleanup triggers，`ObservationService.cleanup_orphan_observations()` 也提供启动时清理兜底，防止删除原文后残留无法访问的僵尸证据。
 
 `observation_cursors` 用于 crash-safe 增量提取：
 
@@ -356,7 +362,7 @@ CREATE TABLE IF NOT EXISTS observation_cursors (
 );
 ```
 
-游标推进必须与 observation 写入在同一个写事务提交。涉及 observation 写入、状态变更、consolidation、cursor advance 的事务后续应使用 `BEGIN IMMEDIATE`，避免并发下 deferred transaction 锁升级造成 `SQLITE_BUSY`。
+游标推进必须与 observation 写入在同一个写事务提交。涉及 observation 写入、状态变更、consolidation、cursor advance 的事务使用 `core.db.immediate_transaction()`，避免并发下 deferred transaction 锁升级造成 `SQLITE_BUSY`。
 
 ### 5.2 冻结枚举
 
