@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from core import context_builder, logging_service, observation_extractor, record_service, reply_service, retrieval, todo_service, tool_config_service
+from core import context_builder, logging_service, observation_extractor, observation_service, record_service, reply_service, retrieval, todo_service, tool_config_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
 from core.cli.config import load_config
@@ -60,6 +60,7 @@ def main() -> None:
         fixed_reflections = reflector.retry_pending_light_reflections(client, model)
         if fixed_reflections:
             print(f"[反思] 已处理 {fixed_reflections} 条待反思记录。")
+        _cleanup_orphan_observations_on_startup()
         observation_results = observation_extractor.run_pending_observation_extractions_safely(client, model)
         observation_count = sum(result.observation_count for result in observation_results if result.error is None)
         processed_count = sum(result.processed_count for result in observation_results if result.error is None)
@@ -135,3 +136,19 @@ def main() -> None:
 
         if tool_config_service.is_tool_enabled("todo"):
             todos = todo_service.load_todos()
+
+
+def _cleanup_orphan_observations_on_startup() -> None:
+    try:
+        deleted = observation_service.cleanup_orphan_observations()
+    except Exception as exc:
+        logging_service.log_event(
+            "observation_orphan_cleanup_failed",
+            level="WARNING",
+            exception_type=type(exc).__name__,
+            exception_message=str(exc),
+        )
+        return
+    if deleted:
+        logging_service.log_event("observation_orphan_cleanup", deleted_count=deleted)
+        print(f"[Observation] 已清理 {deleted} 条孤儿 observation。")

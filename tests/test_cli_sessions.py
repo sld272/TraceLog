@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import sys
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
+openai_stub = ModuleType("openai")
+openai_stub.OpenAI = object
+sys.modules.setdefault("openai", openai_stub)
+
+from core.cli import app
 from core.cli import sessions
 
 
@@ -108,6 +114,36 @@ class CliSessionsTest(unittest.TestCase):
             sessions.run_deep_reflection_on_exit(object(), "model")
 
         self.assertIn("深反思被强制中断，已有数据保持不变", output.getvalue())
+
+    def test_startup_orphan_cleanup_prints_and_logs_deleted_count(self) -> None:
+        output = StringIO()
+
+        with (
+            patch("core.cli.app.observation_service.cleanup_orphan_observations", return_value=2) as cleanup,
+            patch("core.cli.app.logging_service.log_event") as log_event,
+            redirect_stdout(output),
+        ):
+            app._cleanup_orphan_observations_on_startup()
+
+        cleanup.assert_called_once_with()
+        self.assertIn("已清理 2 条孤儿 observation", output.getvalue())
+        log_event.assert_called_once_with("observation_orphan_cleanup", deleted_count=2)
+
+    def test_startup_orphan_cleanup_failure_is_logged_without_printing_traceback(self) -> None:
+        output = StringIO()
+
+        with (
+            patch("core.cli.app.observation_service.cleanup_orphan_observations", side_effect=RuntimeError("boom")),
+            patch("core.cli.app.logging_service.log_event") as log_event,
+            redirect_stdout(output),
+        ):
+            app._cleanup_orphan_observations_on_startup()
+
+        self.assertEqual("", output.getvalue())
+        log_event.assert_called_once()
+        self.assertEqual("observation_orphan_cleanup_failed", log_event.call_args.args[0])
+        self.assertEqual("WARNING", log_event.call_args.kwargs["level"])
+        self.assertEqual("RuntimeError", log_event.call_args.kwargs["exception_type"])
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core import db, memory_retrieval, observation_service
 from tests.helpers import require_not_none
@@ -85,6 +86,48 @@ class MemoryRetrievalTest(unittest.TestCase):
         context = memory_retrieval.search_public_post_memory("完全不同的查询", ["p-1"], limit=5)
 
         self.assertIn("间接语义记忆", context)
+
+    def test_indirect_semantic_dedupes_multi_source_observations_by_best_related_post_rank(self) -> None:
+        lower_rank_id = self._create_global("低排序记忆", "只来自第二个 related post。", source_post_id="p-2")
+        higher_rank_id = observation_service.create_observation(
+            {
+                "type": "preference",
+                "title": "高排序记忆",
+                "narrative": "同时来自两个 related posts。",
+                "source_channel": "post",
+                "visibility_scope": "global",
+                "importance": 0.7,
+                "confidence": 0.8,
+                "observed_at": 10.0,
+            },
+            [
+                {
+                    "source_type": "post",
+                    "source_id": "p-2",
+                    "evidence_access": "all",
+                },
+                {
+                    "source_type": "post",
+                    "source_id": "p-1",
+                    "evidence_access": "all",
+                },
+            ],
+        )
+
+        rows = memory_retrieval._indirect_observation_rows(["p-1", "p-2"])
+
+        self.assertEqual([higher_rank_id, lower_rank_id], [row["id"] for row in rows])
+        self.assertEqual(1, [row["id"] for row in rows].count(higher_rank_id))
+
+    def test_indirect_semantic_uses_one_query_for_sources(self) -> None:
+        self._create_global("间接语义记忆", "这条 narrative 不包含查询词。", source_post_id="p-1")
+        self._create_global("另一条间接语义记忆", "这条 narrative 也不包含查询词。", source_post_id="p-2")
+
+        with patch("core.memory_retrieval.db.query_all", wraps=db.query_all) as query_all:
+            rows = memory_retrieval._indirect_observation_rows(["p-1", "p-2"])
+
+        self.assertEqual(2, len(rows))
+        self.assertEqual(1, query_all.call_count)
 
     def test_fts_and_indirect_hits_are_deduped(self) -> None:
         self._create_global("重复命中记忆", "这条同时被 FTS 和 post source 命中。dedupe检索词", source_post_id="p-1")

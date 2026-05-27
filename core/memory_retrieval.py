@@ -143,7 +143,7 @@ def _indirect_observation_rows(related_post_ids: list[str]) -> list[Any]:
     placeholders = ", ".join("?" for _ in post_ids)
     rows = db.query_all(
         f"""
-        SELECT DISTINCT observations.*
+        SELECT observations.*, observation_sources.source_id AS matched_source_id
         FROM observations
         JOIN observation_sources
           ON observation_sources.observation_id = observations.id
@@ -155,21 +155,20 @@ def _indirect_observation_rows(related_post_ids: list[str]) -> list[Any]:
         tuple(post_ids),
     )
     order = {post_id: index for index, post_id in enumerate(post_ids)}
-    return sorted(
-        rows,
-        key=lambda row: min(
-            order.get(source["source_id"], len(order))
-            for source in db.query_all(
-                """
-                SELECT source_id
-                FROM observation_sources
-                WHERE observation_id = ?
-                  AND source_type = 'post'
-                """,
-                (row["id"],),
-            )
-        ),
-    )
+    ranked_rows: dict[int, tuple[int, Any]] = {}
+    for row in rows:
+        observation_id = int(row["id"])
+        rank = order.get(row["matched_source_id"], len(order))
+        existing = ranked_rows.get(observation_id)
+        if existing is None or rank < existing[0]:
+            ranked_rows[observation_id] = (rank, row)
+    return [
+        row
+        for _, row in sorted(
+            ranked_rows.values(),
+            key=lambda item: (item[0], int(item[1]["id"])),
+        )
+    ]
 
 
 def _scope_filter_sql(allowed_scopes: list[tuple[str, str | None]]) -> tuple[str, list[Any]]:
