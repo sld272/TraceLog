@@ -612,9 +612,10 @@ def _format_light_summary(post_ids: list[str]) -> str:
         entity_text = "、".join(f"{row['name']}({row['type']}/{row['role']})" for row in entities) or "无"
         emotion_text = "、".join(f"{row['label']} {row['intensity']:.2f}" for row in emotions) or "无"
         event_text = "、".join(f"{row['summary']}({row['category']})" for row in events) or "无"
+        importance = 0.5 if post["importance"] is None else float(post["importance"])
         parts.append(
             f"## {post['id']} {post['ts']}\n"
-            f"- importance: {post['importance'] or 0.5:.2f}\n"
+            f"- importance: {importance:.2f}\n"
             f"- entities: {entity_text}\n"
             f"- emotions: {emotion_text}\n"
             f"- events: {event_text}"

@@ -292,6 +292,18 @@ class ReflectorTest(unittest.TestCase):
         row = db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_reflect:20260525-001",))
         self.assertIsNotNone(row)
 
+    def test_light_summary_preserves_zero_importance_and_defaults_only_null(self) -> None:
+        self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "零权重。")
+        self._insert_post("20260525-002", "2026-05-25T11:00:00+08:00", "空权重。")
+        db.execute("UPDATE posts SET importance = ? WHERE id = ?", (0.0, "20260525-001"))
+
+        summary = reflector._format_light_summary(["20260525-001", "20260525-002"])
+
+        self.assertIn("## 20260525-001", summary)
+        self.assertIn("- importance: 0.00", summary)
+        self.assertIn("## 20260525-002", summary)
+        self.assertIn("- importance: 0.50", summary)
+
     def test_soul_deep_reflection_reads_raw_chat_and_comment_messages_and_patches_memory(self) -> None:
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("默认")
