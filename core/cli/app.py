@@ -59,7 +59,7 @@ def main() -> None:
             print(f"[向量存储] 已补齐 {fixed_embeddings} 条待索引帖子。")
         fixed_reflections = reflector.retry_pending_light_reflections(client, model)
         if fixed_reflections:
-            print(f"[反思] 已补跑 {fixed_reflections} 条轻反思。")
+            print(f"[反思] 已处理 {fixed_reflections} 条待反思记录。")
         todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     except vectorstore.VectorStoreInitError as e:
         print(f"[向量存储] 初始化失败：{e}")

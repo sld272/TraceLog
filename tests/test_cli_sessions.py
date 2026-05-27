@@ -58,7 +58,7 @@ class CliSessionsTest(unittest.TestCase):
 
         self.assertEqual((todos, True), result)
 
-    def test_exit_reflection_message_describes_compensation(self) -> None:
+    def test_exit_reflection_message_describes_current_reflection(self) -> None:
         output = StringIO()
         global_result = SimpleNamespace(
             id=7,
@@ -83,9 +83,10 @@ class CliSessionsTest(unittest.TestCase):
             sessions.run_deep_reflection_on_exit(object(), "model")
 
         text = output.getvalue()
-        self.assertIn("正在检查并补跑未完成的退出反思", text)
-        self.assertIn("检测到 2 条尚未深反思的公开记录，正在补跑", text)
-        self.assertIn("检测到 3 条尚未沉淀的 SOUL 互动，正在补跑", text)
+        self.assertIn("正在整理本次记录与 SOUL 互动", text)
+        self.assertIn("检测到 2 条尚未深反思的公开记录，正在反思", text)
+        self.assertIn("检测到 3 条尚未沉淀的 SOUL 互动，正在反思", text)
+        self.assertNotIn("补跑", text)
         self.assertNotIn("正在触发一次深反思", text)
 
     def test_exit_reflection_global_keyboard_interrupt_keeps_warning(self) -> None:

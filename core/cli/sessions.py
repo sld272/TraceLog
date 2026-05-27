@@ -8,14 +8,14 @@ from core.llm.types import LLMClient
 
 
 def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
-    print("\n\n[反思] 正在检查并补跑未完成的退出反思，请稍候（请勿再次终止）...")
+    print("\n\n[反思] 正在整理本次记录与 SOUL 互动，请稍候（请勿再次终止）...")
     try:
         try:
             scope = reflector.preview_global_deep_reflection_scope()
         except Exception:
             scope = None
         if scope is not None and scope.post_ids:
-            print(f"[反思] 检测到 {len(scope.post_ids)} 条尚未深反思的公开记录，正在补跑。")
+            print(f"[反思] 检测到 {len(scope.post_ids)} 条尚未深反思的公开记录，正在反思。")
         result = reflector.trigger_global_deep_reflection(client, model, trigger="cli_exit")
         if result is None:
             print("[反思] 没有新的公开记录，已跳过本次深反思。")
@@ -44,7 +44,7 @@ def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
             soul_scopes = []
         soul_interaction_count = sum(scope.interaction_count for scope in soul_scopes)
         if soul_interaction_count:
-            print(f"[反思] 检测到 {soul_interaction_count} 条尚未沉淀的 SOUL 互动，正在补跑。")
+            print(f"[反思] 检测到 {soul_interaction_count} 条尚未沉淀的 SOUL 互动，正在反思。")
         soul_results = reflector.trigger_soul_deep_reflections(client, model, trigger="cli_exit")
         if soul_results:
             applied = sum(item.patch_summary.get("applied", 0) for item in soul_results)
