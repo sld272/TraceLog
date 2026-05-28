@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
+INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '1');
 
 CREATE TABLE IF NOT EXISTS souls (
     name        TEXT PRIMARY KEY,

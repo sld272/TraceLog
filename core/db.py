@@ -43,7 +43,7 @@ def init_db() -> None:
         _validate_fts5_trigram(conn)
         conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            ("schema_version", "2"),
+            ("schema_version", "1"),
         )
         conn.commit()
     except sqlite3.Error as exc:

@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
--- Schema 版本，便于后续升级
-INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
+-- Schema 初始化标识；未发布阶段保持 1
+INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '1');
 -- 注意：交互项目（社交媒体形态）默认所有 enabled=1 的 SOUL 都参与评论，
 -- 因此不再使用单一 active_soul。交互项目默认所有 enabled=1 的 SOUL 都平权参与评论。
 

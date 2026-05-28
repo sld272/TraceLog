@@ -61,7 +61,7 @@ class DbTest(unittest.TestCase):
         self.assertIn("observation_sources", tables)
         self.assertIn("observations_fts", tables)
         self.assertIn("observation_cursors", tables)
-        self.assertEqual("2", version["value"])
+        self.assertEqual("1", version["value"])
 
     def test_observations_fts_only_indexes_active_searchable_rows(self) -> None:
         self._insert_post("p-1")
