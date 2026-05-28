@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db, memory_retrieval, observation_service
+from core import db, logging_service, memory_retrieval, observation_service
 from tests.helpers import require_not_none
 
 
@@ -18,12 +19,14 @@ class MemoryRetrievalTest(unittest.TestCase):
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         db.init_db()
+        logging_service.init_logging({"enabled": True})
         self._insert_soul("默认")
         self._insert_soul("毒舌好友")
         self._insert_post("p-1", "用户公开说喜欢短回复。")
         self._insert_post("p-2", "另一个 post。")
 
     def tearDown(self) -> None:
+        logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
@@ -38,6 +41,10 @@ class MemoryRetrievalTest(unittest.TestCase):
         self.assertIn("全局短回复", context)
         self.assertNotIn("私聊短回复", context)
         self.assertNotIn("评论短回复", context)
+        event = self._last_event("memory_retrieval_result")
+        self.assertEqual("public_post", event["channel"])
+        self.assertEqual([{"visibility_scope": "global", "scope_value": None}], event["allowed_scopes"])
+        self.assertTrue(event["final_hits"])
 
     def test_chat_memory_returns_global_and_current_soul_scoped_only(self) -> None:
         self._create_global("全局偏好", "用户有全局偏好。私聊检索词")
@@ -142,6 +149,9 @@ class MemoryRetrievalTest(unittest.TestCase):
         context = memory_retrieval.search_public_post_memory("我之前是不是说过晚上图书馆学习效率更高", [], limit=5)
 
         self.assertIn("图书馆效率", context)
+        fts_event = self._last_event("fts_query_built")
+        self.assertEqual("observations", fts_event["target"])
+        self.assertIn("图书馆", fts_event["deterministic_candidates"])
 
     def test_rewrite_keywords_can_drive_observation_fts(self) -> None:
         self._create_global("图书馆效率", "用户提到晚上在图书馆学习效率更高。")
@@ -154,6 +164,11 @@ class MemoryRetrievalTest(unittest.TestCase):
         )
 
         self.assertIn("图书馆效率", context)
+        fts_event = self._last_event("fts_query_built")
+        self.assertEqual("observations", fts_event["target"])
+        self.assertEqual(["图书馆", "学习效率"], fts_event["fts_keywords"])
+        memory_event = self._last_event("memory_retrieval_result")
+        self.assertEqual(["图书馆", "学习效率"], memory_event["fts_keywords"])
 
     def test_rewrite_keywords_do_not_change_memory_visibility(self) -> None:
         self._create_global("全局图书馆", "用户提到晚上在图书馆学习效率更高。")
@@ -334,6 +349,10 @@ class MemoryRetrievalTest(unittest.TestCase):
         self.assertIn("可展开摘录 1", context)
         self.assertNotIn("可展开摘录 2", context)
         self.assertNotIn("可展开摘录 3", context)
+        event = self._last_event("memory_retrieval_result")
+        levels = [hit["disclosure_level"] for hit in event["final_hits"]]
+        self.assertEqual(2, levels.count("L2"))
+        self.assertEqual(2, levels.count("L1"))
 
     def _create_global(
         self,
@@ -427,6 +446,17 @@ class MemoryRetrievalTest(unittest.TestCase):
             """,
             (post_id, "2026-05-25T10:00:00+08:00", content, 1.0, 1.0),
         )
+
+    def _last_event(self, event_name: str) -> dict:
+        current = self.workspace / "logs" / "current.jsonl"
+        records = [
+            json.loads(line)
+            for line in current.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matches = [record for record in records if record.get("event") == event_name]
+        self.assertTrue(matches)
+        return matches[-1]
 
 
 if __name__ == "__main__":

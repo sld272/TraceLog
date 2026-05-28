@@ -147,20 +147,13 @@ workspace/
   "logging": {
     "enabled": true,
     "level": "INFO",
-    "llm_payload": "summary",
     "preview_chars": 300,
     "history_retention": 5
   }
 }
 ```
 
-`llm_payload` 可选值：
-
-- `"summary"`：默认，只记录消息数量、角色、预览和响应摘要。
-- `"full"`：记录完整 prompt/response，适合排查 LLM 问题，但可能包含私密内容。
-- `"off"`：LLM 调用只记录元信息，不记录请求/响应正文。
-
-日志会尽量脱敏 API key/token 形态的字符串。需要排查“LLM call failed or returned invalid JSON”、embedding 初始化失败、向量检索失败等问题时，优先查看 `workspace/logs/current.jsonl` 中的 `llm_call`、`external_api_error`、`vector_query_failed`、`post_index_failed` 等事件。
+LLM 调用会默认记录完整 prompt、response 与解析结果；query rewrite、FTS 构造、hybrid retrieval、observation memory retrieval 和上下文组装也会写入结构化 debug 事件。日志会尽量脱敏 API key/token 形态的字符串。需要排查“LLM call failed or returned invalid JSON”、embedding 初始化失败、向量检索失败、检索命中异常等问题时，优先查看 `workspace/logs/current.jsonl` 中的 `llm_call`、`query_rewrite_result`、`fts_query_built`、`hybrid_retrieval_result`、`memory_retrieval_result`、`context_assembly_result`、`external_api_error`、`vector_query_failed`、`post_index_failed` 等事件。
 
 ## 配置注意事项
 

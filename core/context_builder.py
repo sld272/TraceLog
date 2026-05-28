@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, memory_retrieval, profile_service, record_service, todo_service, tool_config_service
+from core import db, logging_service, memory_retrieval, profile_service, record_service, todo_service, tool_config_service
 from core.soul_service import SoulContext, list_enabled_souls
 
 CONTEXT_POST_COUNT = 3
@@ -22,6 +22,7 @@ def build_context(
     relevant_post_ids: list[str] | None = None,
     query: str | None = None,
     fts_keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> BuiltContext:
     """Build shared user/profile/history/todo context plus enabled SOULs."""
     enabled_souls = list_enabled_souls()
@@ -42,6 +43,7 @@ def build_context(
         query or "",
         effective_relevant_ids,
         fts_keywords=fts_keywords,
+        trace_context=trace_context,
     )
     if related_memory:
         sections.append(related_memory)
@@ -59,8 +61,21 @@ def build_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
+    shared_context = "\n\n---\n\n".join(sections)
+    logging_service.log_event(
+        "context_assembly_result",
+        **(trace_context or {}),
+        context_type="public_post",
+        sections=_section_summaries(sections),
+        memory_ids=_memory_ids_from_context(related_memory),
+        related_memory_present=bool(related_memory),
+        raw_related_post_fallback_used=bool(not related_memory and relevant_posts),
+        recent_post_ids=sorted(recent_ids),
+        relevant_post_ids=effective_relevant_ids,
+        shared_context_length=len(shared_context),
+    )
     return BuiltContext(
-        shared_context="\n\n---\n\n".join(sections),
+        shared_context=shared_context,
         enabled_souls=enabled_souls,
         recent_post_ids=recent_ids,
         relevant_post_ids=effective_relevant_ids,
@@ -103,5 +118,32 @@ def _read_posts_by_ids(post_ids: list[str]) -> tuple[str, list[str]]:
             found_ids.append(post_id)
             parts.append(record_service.format_post(row).strip())
     return "\n\n---\n\n".join(parts), found_ids
+
+
+def _section_summaries(sections: list[str]) -> list[dict]:
+    summaries = []
+    for section in sections:
+        first_line = section.splitlines()[0] if section.splitlines() else ""
+        summaries.append(
+            {
+                "title": first_line[:80],
+                "length": len(section),
+            }
+        )
+    return summaries
+
+
+def _memory_ids_from_context(value: str) -> list[int]:
+    ids: list[int] = []
+    for line in value.splitlines():
+        if not line.startswith("- ["):
+            continue
+        end = line.find("]")
+        if end <= 3:
+            continue
+        raw_id = line[3:end]
+        if raw_id.isdigit():
+            ids.append(int(raw_id))
+    return ids
 
 

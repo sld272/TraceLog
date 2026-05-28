@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from core import db, fts_query, retrieval
+from core import db, fts_query, logging_service, retrieval
 
 
 class FtsQueryTest(unittest.TestCase):
@@ -170,8 +171,10 @@ class RetrievalDatabaseTest(unittest.TestCase):
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         db.init_db()
+        logging_service.init_logging({"enabled": True})
 
     def tearDown(self) -> None:
+        logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         retrieval.vector_search_scored = self.old_vector_search_scored
@@ -209,6 +212,11 @@ class RetrievalDatabaseTest(unittest.TestCase):
         hits = retrieval.fts_search_scored("我之前是不是说过晚上图书馆学习效率更高", k=5)
 
         self.assertIn("p-library", [hit.post_id for hit in hits])
+        event = self._last_event("fts_query_built")
+        self.assertEqual("posts", event["target"])
+        self.assertEqual("posts_fts_trigram", event["table"])
+        self.assertIn("图书馆", event["deterministic_candidates"])
+        self.assertIn('"图书馆"', event["match"])
 
     def test_empty_or_symbol_only_fts_query_returns_empty(self) -> None:
         self.insert_post("p-1", "ChromaDB 和 FTS5。", 1.0)
@@ -227,6 +235,10 @@ class RetrievalDatabaseTest(unittest.TestCase):
 
         self.assertIn("p-library", [hit.post_id for hit in hits])
         self.assertEqual("fts_rewrite", hits[0].source)
+        event = self._last_event("fts_query_built")
+        self.assertEqual(["图书馆", "学习效率"], event["fts_keywords"])
+        self.assertEqual(["图书馆", "学习效率"], event["keyword_candidates"])
+        self.assertEqual("fts_rewrite", event["source"])
 
     def test_semantic_query_is_used_for_vector_search(self) -> None:
         captured: dict[str, str] = {}
@@ -240,6 +252,21 @@ class RetrievalDatabaseTest(unittest.TestCase):
         )
 
         self.assertEqual("改写后的语义查询", captured["query"])
+        event = self._last_event("hybrid_retrieval_result")
+        self.assertEqual("原始查询", event["raw_query"])
+        self.assertEqual("改写后的语义查询", event["semantic_query"])
+        self.assertEqual([], event["fts_keywords"])
+
+    def _last_event(self, event_name: str) -> dict:
+        current = self.workspace / "logs" / "current.jsonl"
+        records = [
+            json.loads(line)
+            for line in current.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matches = [record for record in records if record.get("event") == event_name]
+        self.assertTrue(matches)
+        return matches[-1]
 
 
 if __name__ == "__main__":

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from core import context_builder, db, observation_service, profile_service, soul_memory_service, soul_service
+from core import context_builder, db, logging_service, observation_service, profile_service, soul_memory_service, soul_service
 
 
 class ContextBuilderTest(unittest.TestCase):
@@ -27,12 +28,14 @@ class ContextBuilderTest(unittest.TestCase):
         soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
 
         db.init_db()
+        logging_service.init_logging({"enabled": True})
         self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与现状\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
         self._insert_post("p-1", "历史 post", created_at=10.0)
 
     def tearDown(self) -> None:
+        logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         profile_service.USER_MD_PATH = self.old_user_md_path
@@ -66,6 +69,12 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertNotIn("raw related fallback content", built.shared_context)
         self.assertLess(built.shared_context.index("# 相关记忆"), built.shared_context.index("# 近期帖子"))
         self.assertEqual(["p-related"], built.relevant_post_ids)
+        event = self._last_event("context_assembly_result")
+        self.assertEqual("public_post", event["context_type"])
+        self.assertTrue(event["related_memory_present"])
+        self.assertTrue(event["memory_ids"])
+        self.assertFalse(event["raw_related_post_fallback_used"])
+        self.assertEqual(["p-related"], event["relevant_post_ids"])
 
     def test_public_context_uses_raw_related_posts_as_cold_start_fallback(self) -> None:
         self._seed_public_related_posts()
@@ -78,6 +87,9 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertIn("raw related fallback content", built.shared_context)
         self.assertLess(built.shared_context.index("# 近期帖子"), built.shared_context.index("# 相关帖子"))
         self.assertEqual(["p-related"], built.relevant_post_ids)
+        event = self._last_event("context_assembly_result")
+        self.assertFalse(event["related_memory_present"])
+        self.assertTrue(event["raw_related_post_fallback_used"])
 
     def test_public_context_can_use_rewrite_keywords_for_memory(self) -> None:
         self._create_global("图书馆效率", "用户提到晚上在图书馆学习效率更高。")
@@ -146,6 +158,17 @@ class ContextBuilderTest(unittest.TestCase):
             """,
             (post_id, "2026-05-25T10:00:00+08:00", content, created_at, created_at),
         )
+
+    def _last_event(self, event_name: str) -> dict:
+        current = self.workspace / "logs" / "current.jsonl"
+        records = [
+            json.loads(line)
+            for line in current.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matches = [record for record in records if record.get("event") == event_name]
+        self.assertTrue(matches)
+        return matches[-1]
 
 
 if __name__ == "__main__":

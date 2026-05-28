@@ -8,6 +8,7 @@ from typing import Any
 
 from core import db
 from core import fts_query
+from core import logging_service
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ def search_public_post_memory(
     related_post_ids: list[str],
     limit: int = 5,
     fts_keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> str:
     """Return formatted global observation memory for public post replies."""
     hits = _search_memory(
@@ -58,6 +60,7 @@ def search_public_post_memory(
         retrieval_scope=RetrievalScope(channel="public_post"),
         limit=limit,
         fts_keywords=fts_keywords,
+        trace_context=trace_context,
     )
     return _format_memory_context(hits)
 
@@ -68,6 +71,7 @@ def search_chat_memory(
     related_post_ids: list[str],
     limit: int = 5,
     fts_keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> str:
     """Return formatted global + current SOUL scoped memory for private chat."""
     hits = _search_memory(
@@ -77,6 +81,7 @@ def search_chat_memory(
         retrieval_scope=RetrievalScope(channel="chat", soul_name=soul_name),
         limit=limit,
         fts_keywords=fts_keywords,
+        trace_context=trace_context,
     )
     return _format_memory_context(hits)
 
@@ -87,6 +92,7 @@ def search_comment_memory(
     related_post_ids: list[str],
     limit: int = 5,
     fts_keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> str:
     """Return formatted global + same-post visible memory for comment threads."""
     hits = _search_memory(
@@ -96,6 +102,7 @@ def search_comment_memory(
         retrieval_scope=RetrievalScope(channel="comment_thread", post_id=post_id),
         limit=limit,
         fts_keywords=fts_keywords,
+        trace_context=trace_context,
     )
     return _format_memory_context(hits)
 
@@ -108,13 +115,22 @@ def _search_memory(
     retrieval_scope: RetrievalScope,
     limit: int,
     fts_keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> list[MemoryHit]:
     if limit <= 0:
         return []
     candidates: dict[int, dict[str, Any]] = {}
-    for rank, row in enumerate(_fts_observation_rows(query, allowed_scopes, max(limit * 4, 10), fts_keywords=fts_keywords), start=1):
+    fts_rows = _fts_observation_rows(
+        query,
+        allowed_scopes,
+        max(limit * 4, 10),
+        fts_keywords=fts_keywords,
+        trace_context={**(trace_context or {}), "channel": retrieval_scope.channel},
+    )
+    for rank, row in enumerate(fts_rows, start=1):
         _merge_candidate(candidates, row, source="fts", base_score=_position_score(rank, max(limit * 4, 10)))
-    for rank, row in enumerate(_indirect_observation_rows(related_post_ids), start=1):
+    indirect_rows = _indirect_observation_rows(related_post_ids)
+    for rank, row in enumerate(indirect_rows, start=1):
         _merge_candidate(candidates, row, source="post_semantic", base_score=0.72 * _position_score(rank, max(len(related_post_ids), 1)))
 
     hits = [_candidate_to_hit(candidate) for candidate in candidates.values()]
@@ -128,7 +144,19 @@ def _search_memory(
         ),
         reverse=True,
     )
-    return _apply_progressive_disclosure(hits[:limit], retrieval_scope)
+    final_hits = _apply_progressive_disclosure(hits[:limit], retrieval_scope)
+    _log_memory_retrieval_result(
+        query=query,
+        fts_keywords=fts_keywords or [],
+        related_post_ids=related_post_ids,
+        allowed_scopes=allowed_scopes,
+        retrieval_scope=retrieval_scope,
+        fts_rows=fts_rows,
+        indirect_rows=indirect_rows,
+        final_hits=final_hits,
+        trace_context=trace_context,
+    )
+    return final_hits
 
 
 def _fts_observation_rows(
@@ -136,8 +164,16 @@ def _fts_observation_rows(
     allowed_scopes: list[tuple[str, str | None]],
     limit: int,
     fts_keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> list[Any]:
-    match = fts_query.build_keyword_match_query(fts_keywords or []) if fts_keywords else _build_match_query(query)
+    clean = _sanitize_fts5(query)
+    keyword_candidates = fts_query.keyword_candidates(fts_keywords or [])
+    deterministic_candidates: list[str] = []
+    if keyword_candidates:
+        match = fts_query.quote_match_candidates(keyword_candidates)
+    else:
+        deterministic_candidates = fts_query.match_candidates(clean)
+        match = fts_query.quote_match_candidates(deterministic_candidates)
     if not match:
         return []
     scope_sql, params = _scope_filter_sql(allowed_scopes)
@@ -153,8 +189,31 @@ def _fts_observation_rows(
         LIMIT ?
     """
     try:
-        return db.query_all(sql, (match, *params, limit))
+        rows = db.query_all(sql, (match, *params, limit))
+        _log_observation_fts_query_built(
+            query=query,
+            clean=clean,
+            fts_keywords=fts_keywords or [],
+            keyword_candidates=keyword_candidates,
+            deterministic_candidates=deterministic_candidates,
+            match=match,
+            allowed_scopes=allowed_scopes,
+            hit_count=len(rows),
+            trace_context=trace_context,
+        )
+        return rows
     except sqlite3.Error:
+        _log_observation_fts_query_built(
+            query=query,
+            clean=clean,
+            fts_keywords=fts_keywords or [],
+            keyword_candidates=keyword_candidates,
+            deterministic_candidates=deterministic_candidates,
+            match=match,
+            allowed_scopes=allowed_scopes,
+            hit_count=0,
+            trace_context={**(trace_context or {}), "fallback_type": "sqlite_error"},
+        )
         return []
 
 
@@ -392,3 +451,88 @@ def _truncate_excerpt(excerpt: str, limit: int = 160) -> str:
 
 def _query_terms(query: str) -> list[str]:
     return fts_query.query_terms(query)
+
+
+def _log_observation_fts_query_built(
+    *,
+    query: str,
+    clean: str,
+    fts_keywords: list[str],
+    keyword_candidates: list[str],
+    deterministic_candidates: list[str],
+    match: str,
+    allowed_scopes: list[tuple[str, str | None]],
+    hit_count: int,
+    trace_context: dict | None,
+) -> None:
+    logging_service.log_event(
+        "fts_query_built",
+        **(trace_context or {}),
+        target="observations",
+        raw_query=query,
+        sanitized_query=clean,
+        fts_keywords=fts_keywords,
+        keyword_candidates=keyword_candidates,
+        deterministic_candidates=deterministic_candidates,
+        match=match,
+        table="observations_fts",
+        source="observation_fts_rewrite" if keyword_candidates else "observation_fts",
+        allowed_scopes=_scope_payload(allowed_scopes),
+        hit_count=hit_count,
+    )
+
+
+def _log_memory_retrieval_result(
+    *,
+    query: str,
+    fts_keywords: list[str],
+    related_post_ids: list[str],
+    allowed_scopes: list[tuple[str, str | None]],
+    retrieval_scope: RetrievalScope,
+    fts_rows: list[Any],
+    indirect_rows: list[Any],
+    final_hits: list[MemoryHit],
+    trace_context: dict | None,
+) -> None:
+    fields = {
+        **(trace_context or {}),
+        "channel": retrieval_scope.channel,
+        "soul_name": retrieval_scope.soul_name,
+        "post_id": retrieval_scope.post_id,
+    }
+    logging_service.log_event(
+        "memory_retrieval_result",
+        **fields,
+        raw_query=query,
+        fts_keywords=fts_keywords,
+        related_post_ids=related_post_ids,
+        allowed_scopes=_scope_payload(allowed_scopes),
+        fts_observation_hits=[int(row["id"]) for row in fts_rows],
+        indirect_observation_hits=[int(row["id"]) for row in indirect_rows],
+        final_hits=[_memory_hit_payload(hit) for hit in final_hits],
+    )
+
+
+def _scope_payload(scopes: list[tuple[str, str | None]]) -> list[dict[str, str | None]]:
+    return [
+        {
+            "visibility_scope": visibility_scope,
+            "scope_value": scope_value,
+        }
+        for visibility_scope, scope_value in scopes
+    ]
+
+
+def _memory_hit_payload(hit: MemoryHit) -> dict:
+    return {
+        "id": hit.id,
+        "type": hit.type,
+        "title": hit.title,
+        "visibility_scope": hit.visibility_scope,
+        "scope_post_id": hit.scope_post_id,
+        "scope_soul_name": hit.scope_soul_name,
+        "score": hit.score,
+        "sources": hit.sources,
+        "disclosure_level": hit.disclosure_level,
+        "evidence_snippet_count": len(hit.evidence_snippets),
+    }

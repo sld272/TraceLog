@@ -176,6 +176,12 @@ def build_comment_context(
         thread.post_id,
         relevant_post_ids,
         fts_keywords=rewritten_query.keywords if rewritten_query.used_rewrite else None,
+        trace_context={
+            "channel": "comment_thread",
+            "thread_id": thread_id,
+            "post_id": thread.post_id,
+            "soul_name": thread.soul_name,
+        },
     )
     if related_memory:
         sections.append(related_memory)
@@ -194,10 +200,26 @@ def build_comment_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
+    context_text = "\n\n---\n\n".join(sections)
+    logging_service.log_event(
+        "context_assembly_result",
+        channel="comment_thread",
+        context_type="comment_thread",
+        thread_id=thread_id,
+        post_id=thread.post_id,
+        soul_name=thread.soul_name,
+        sections=_section_summaries(sections),
+        memory_ids=_memory_ids_from_context(related_memory),
+        related_memory_present=bool(related_memory),
+        raw_related_post_fallback_used=False,
+        relevant_post_ids=relevant_post_ids,
+        context_length=len(context_text),
+        message_count=len(messages),
+    )
     return CommentContext(
         thread=thread,
         soul=soul,
-        context="\n\n---\n\n".join(sections),
+        context=context_text,
         messages=messages,
         retrieval_query=retrieval_query,
         relevant_post_ids=relevant_post_ids,
@@ -431,10 +453,15 @@ def _rewrite_for_retrieval(
     )
     logging_service.log_event(
         "query_rewrite_result",
+        **trace_context,
         channel=channel,
+        raw_query=rewritten.raw_query,
+        semantic_query=rewritten.semantic_query,
+        keywords=rewritten.keywords,
         used_rewrite=rewritten.used_rewrite,
         keyword_count=len(rewritten.keywords),
         semantic_query_length=len(rewritten.semantic_query),
+        raw_query_length=len(rewritten.raw_query),
         rewrite_skipped_by_gate=rewritten.rewrite_skipped_by_gate,
     )
     return rewritten
@@ -463,3 +490,30 @@ def _recent_user_message_contents(messages, limit: int) -> list[str]:
         if message.role == "user" and message.content.strip()
     ]
     return contents[-limit:]
+
+
+def _section_summaries(sections: list[str]) -> list[dict]:
+    summaries = []
+    for section in sections:
+        first_line = section.splitlines()[0] if section.splitlines() else ""
+        summaries.append(
+            {
+                "title": first_line[:80],
+                "length": len(section),
+            }
+        )
+    return summaries
+
+
+def _memory_ids_from_context(value: str) -> list[int]:
+    ids: list[int] = []
+    for line in value.splitlines():
+        if not line.startswith("- ["):
+            continue
+        end = line.find("]")
+        if end <= 3:
+            continue
+        raw_id = line[3:end]
+        if raw_id.isdigit():
+            ids.append(int(raw_id))
+    return ids

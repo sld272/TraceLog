@@ -17,7 +17,6 @@ from core import db
 DEFAULT_LOGGING_CONFIG = {
     "enabled": True,
     "level": "INFO",
-    "llm_payload": "summary",
     "preview_chars": 300,
     "history_retention": 5,
 }
@@ -25,10 +24,10 @@ DEFAULT_LOGGING_CONFIG = {
 _lock = threading.RLock()
 _enabled = False
 _level = logging.INFO
-_llm_payload = "summary"
 _preview_chars = 300
 _history_retention = 5
 _current_log_path: Path | None = None
+_LOGGING_CONFIG_KEYS = set(DEFAULT_LOGGING_CONFIG)
 
 _SENSITIVE_KEYS = {"api_key", "authorization", "password", "secret", "token"}
 _SECRET_PATTERNS = [
@@ -46,12 +45,13 @@ def normalize_config(config: dict | None) -> dict:
     """Merge user logging config with safe defaults."""
     raw = config if isinstance(config, dict) else {}
     merged = default_config()
-    merged.update({key: value for key, value in raw.items() if value is not None})
-
-    payload = str(merged.get("llm_payload", "summary")).lower()
-    if payload not in {"summary", "full", "off"}:
-        payload = "summary"
-    merged["llm_payload"] = payload
+    merged.update(
+        {
+            key: value
+            for key, value in raw.items()
+            if key in _LOGGING_CONFIG_KEYS and value is not None
+        }
+    )
 
     try:
         merged["preview_chars"] = max(0, int(merged.get("preview_chars", 300)))
@@ -71,13 +71,12 @@ def normalize_config(config: dict | None) -> dict:
 
 def init_logging(config: dict | None = None) -> None:
     """Initialize JSONL logging and rotate the previous current log."""
-    global _enabled, _level, _llm_payload, _preview_chars, _history_retention, _current_log_path
+    global _enabled, _level, _preview_chars, _history_retention, _current_log_path
 
     settings = normalize_config(config)
     with _lock:
         _enabled = bool(settings["enabled"])
         _level = int(getattr(logging, settings["level"], logging.INFO))
-        _llm_payload = settings["llm_payload"]
         _preview_chars = settings["preview_chars"]
         _history_retention = settings["history_retention"]
         _current_log_path = db.WORKSPACE_DIR / "logs" / "current.jsonl"
@@ -133,40 +132,18 @@ def log_llm_call(
     context: dict | None = None,
     response_format: dict | None = None,
 ) -> None:
-    """Write one LLM call log entry according to the configured payload mode."""
-    if _llm_payload == "off":
-        request_payload = {"mode": "off"}
-        response_payload = {"mode": "off"}
-        parsed_payload = None
-    elif _llm_payload == "full":
-        request_payload = {
-            "mode": "full",
-            "model": model,
-            "timeout": timeout_s,
-            "response_format": response_format,
-            "messages": messages,
-        }
-        response_payload = {
-            "mode": "full",
-            "content": response_content,
-            "content_length": len(response_content or ""),
-            "content_stripped_length": len((response_content or "").strip()),
-        }
-        parsed_payload = parsed
-    else:
-        request_payload = {
-            "mode": "summary",
-            "message_count": len(messages),
-            "roles": [message.get("role") for message in messages],
-            "messages": [_summarize_message(message) for message in messages],
-        }
-        response_payload = {
-            "mode": "summary",
-            "content_preview": _preview(response_content),
-            "content_length": len(response_content or ""),
-            "content_stripped_length": len((response_content or "").strip()),
-        }
-        parsed_payload = _summarize_value(parsed)
+    """Write one LLM call log entry with full local debug payload."""
+    request_payload = {
+        "model": model,
+        "timeout": timeout_s,
+        "response_format": response_format,
+        "messages": messages,
+    }
+    response_payload = {
+        "content": response_content,
+        "content_length": len(response_content or ""),
+        "content_stripped_length": len((response_content or "").strip()),
+    }
 
     fields: dict[str, Any] = {
         "call_id": call_id,
@@ -179,8 +156,8 @@ def log_llm_call(
         "request": request_payload,
         "response": response_payload,
     }
-    if parsed_payload is not None:
-        fields["parsed"] = parsed_payload
+    if parsed is not None:
+        fields["parsed"] = parsed
     if error:
         fields["error"] = error
 

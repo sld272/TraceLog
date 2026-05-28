@@ -111,9 +111,13 @@ def main() -> None:
         logging_service.log_event(
             "query_rewrite_result",
             channel="public_post",
+            raw_query=rewritten_query.raw_query,
+            semantic_query=rewritten_query.semantic_query,
+            keywords=rewritten_query.keywords,
             used_rewrite=rewritten_query.used_rewrite,
             keyword_count=len(rewritten_query.keywords),
             semantic_query_length=len(rewritten_query.semantic_query),
+            raw_query_length=len(rewritten_query.raw_query),
             rewrite_skipped_by_gate=rewritten_query.rewrite_skipped_by_gate,
         )
         relevant_ids = retrieval.hybrid_search(
@@ -121,6 +125,7 @@ def main() -> None:
             k=3,
             semantic_query=rewritten_query.semantic_query,
             fts_keywords=rewritten_query.keywords,
+            trace_context={"channel": "public_post"},
         )
 
         print("\n[TraceLog 正在思考...]\n")
@@ -128,6 +133,7 @@ def main() -> None:
             relevant_post_ids=relevant_ids,
             query=user_input,
             fts_keywords=rewritten_query.keywords,
+            trace_context={"channel": "public_post"},
         )
 
         post_id = record_service.save_post(user_input)

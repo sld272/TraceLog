@@ -78,22 +78,21 @@ class LoggingServiceTest(unittest.TestCase):
         self.assertNotIn("thisShouldNotAppear", serialized)
         self.assertIn("[REDACTED]", serialized)
 
-    def test_llm_payload_modes(self) -> None:
+    def test_default_logging_config_no_longer_contains_llm_payload(self) -> None:
+        self.assertNotIn("llm_payload", logging_service.default_config())
+
+    def test_legacy_llm_payload_config_is_ignored(self) -> None:
+        normalized = logging_service.normalize_config(
+            {"enabled": True, "llm_payload": "off", "preview_chars": 12}
+        )
+
+        self.assertNotIn("llm_payload", normalized)
+        self.assertEqual(12, normalized["preview_chars"])
+
+    def test_llm_call_always_logs_full_payload(self) -> None:
         messages = [{"role": "user", "content": "hello full payload"}]
 
-        logging_service.init_logging({"enabled": True, "llm_payload": "summary", "preview_chars": 5})
-        call_json_completion(
-            client=FakeClient('{"ok": true}'),
-            model="fake-model",
-            operation="summary_probe",
-            messages=messages,
-            parser=lambda content: json.loads(content or "{}"),
-        )
-        summary = self._last_record()
-        self.assertEqual("summary", summary["request"]["mode"])
-        self.assertEqual("hello...", summary["request"]["messages"][0]["content_preview"])
-
-        logging_service.init_logging({"enabled": True, "llm_payload": "full"})
+        logging_service.init_logging({"enabled": True, "llm_payload": "off", "preview_chars": 5})
         call_json_completion(
             client=FakeClient('{"ok": true}'),
             model="fake-model",
@@ -101,21 +100,12 @@ class LoggingServiceTest(unittest.TestCase):
             messages=messages,
             parser=lambda content: json.loads(content or "{}"),
         )
-        full = self._last_record()
-        self.assertEqual("full", full["request"]["mode"])
-        self.assertEqual(messages, full["request"]["messages"])
-
-        logging_service.init_logging({"enabled": True, "llm_payload": "off"})
-        call_json_completion(
-            client=FakeClient('{"ok": true}'),
-            model="fake-model",
-            operation="off_probe",
-            messages=messages,
-            parser=lambda content: json.loads(content or "{}"),
-        )
-        off = self._last_record()
-        self.assertEqual("off", off["request"]["mode"])
-        self.assertEqual("off", off["response"]["mode"])
+        record = self._last_record()
+        self.assertEqual(messages, record["request"]["messages"])
+        self.assertEqual('{"ok": true}', record["response"]["content"])
+        self.assertEqual({"ok": True}, record["parsed"])
+        self.assertNotIn("mode", record["request"])
+        self.assertNotIn("mode", record["response"])
 
     def test_llm_helper_logs_statuses_without_changing_return_contract(self) -> None:
         messages = [{"role": "user", "content": "hello"}]

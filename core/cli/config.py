@@ -8,6 +8,7 @@ import os
 
 from core.cli_input import read_cli_input
 from core.logging_service import default_config as default_logging_config
+from core.logging_service import normalize_config as normalize_logging_settings
 
 CONFIG_FILE = "config.json"
 
@@ -77,7 +78,4 @@ def load_config() -> dict:
 
 
 def _normalize_logging_config(value) -> dict:
-    logging_config = default_logging_config()
-    if isinstance(value, dict):
-        logging_config.update({key: item for key, item in value.items() if item is not None})
-    return logging_config
+    return normalize_logging_settings(value)
