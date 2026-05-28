@@ -7,6 +7,7 @@ import re
 import sqlite3
 
 from core import db
+from core import fts_query
 
 LIKE_FALLBACK_TRUST = 0.85
 
@@ -320,11 +321,7 @@ def _content_bonus(query: str, content: str) -> tuple[float, list[str]]:
 
 
 def _query_terms(query: str) -> list[str]:
-    return [
-        term
-        for term in re.findall(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]{2,}", query)
-        if len(term.strip()) >= 2
-    ]
+    return fts_query.query_terms(query)
 
 
 def _read_candidate_contents(post_ids: list[str]) -> dict[str, str]:
@@ -354,23 +351,12 @@ def _ordered_unique(values: list[str]) -> list[str]:
 
 
 def _sanitize_fts5(query: str) -> str:
-    text = re.sub(r'["\'`()*:^{}[\]]+', " ", query)
-    return " ".join(text.split())
+    return fts_query.sanitize_fts5(query)
 
 
 def _build_match_query(query: str) -> str:
-    if _has_cjk(query):
-        escaped = query.replace('"', '""')
-        return f'"{escaped}"'
-    terms = [term for term in query.split() if term]
-    if not terms:
-        return ""
-    quoted_terms = []
-    for term in terms:
-        escaped = term.replace('"', '""')
-        quoted_terms.append(f'"{escaped}"')
-    return " OR ".join(quoted_terms)
+    return fts_query.build_match_query(query)
 
 
 def _has_cjk(text: str) -> bool:
-    return any("\u4e00" <= char <= "\u9fff" for char in text)
+    return fts_query.has_cjk(text)

@@ -4,7 +4,49 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db, retrieval
+from core import db, fts_query, retrieval
+
+
+class FtsQueryTest(unittest.TestCase):
+    def test_long_cjk_query_builds_phrase_and_window_candidates(self) -> None:
+        query = "我之前是不是说过晚上图书馆学习效率更高"
+
+        candidates = fts_query.match_candidates(query)
+        match = fts_query.build_match_query(query)
+
+        self.assertGreater(len(candidates), 1)
+        self.assertEqual("我之前是不是说过晚上图书馆学习效率更高", candidates[0])
+        self.assertIn("晚上", candidates)
+        self.assertIn("图书馆", candidates)
+        self.assertIn("学习", candidates)
+        self.assertIn("效率", candidates)
+        self.assertIn("更高", candidates)
+        self.assertNotIn("我之", candidates)
+        self.assertNotIn("之前", candidates)
+        self.assertNotIn("是不是", candidates)
+        self.assertNotIn("说过", candidates)
+        self.assertLessEqual(len(candidates), 16)
+        self.assertIn('"图书馆"', match)
+        self.assertIn(" OR ", match)
+
+    def test_english_and_numeric_terms_are_preserved(self) -> None:
+        candidates = fts_query.match_candidates("ChromaDB fts5 2026")
+
+        self.assertIn("ChromaDB", candidates)
+        self.assertIn("fts5", candidates)
+        self.assertIn("2026", candidates)
+
+    def test_special_symbols_do_not_create_unquoted_match_syntax(self) -> None:
+        match = fts_query.build_match_query('"ChromaDB" (fts5) ^ {2026}')
+
+        self.assertIn('"ChromaDB"', match)
+        self.assertIn('"fts5"', match)
+        self.assertIn('"2026"', match)
+        self.assertNotIn("^", match)
+
+    def test_empty_or_symbol_only_query_returns_empty_match(self) -> None:
+        self.assertEqual("", fts_query.build_match_query(""))
+        self.assertEqual("", fts_query.build_match_query('"""()^{}[]'))
 
 
 class RetrievalFusionTest(unittest.TestCase):
@@ -158,6 +200,20 @@ class RetrievalDatabaseTest(unittest.TestCase):
         like_hit = next(hit for hit in hits if hit.post_id == "p-new-like")
         self.assertIn("like_fallback", like_hit.reasons)
         self.assertIn("low_trust", like_hit.reasons)
+
+    def test_long_cjk_fts_uses_window_candidates_to_hit_related_post(self) -> None:
+        self.insert_post("p-library", "晚上在图书馆学习时，我的效率确实更高。", 2.0)
+        self.insert_post("p-other", "今天只是随便散步。", 1.0)
+        retrieval.vector_search_scored = lambda query, k=20: []
+
+        hits = retrieval.fts_search_scored("我之前是不是说过晚上图书馆学习效率更高", k=5)
+
+        self.assertIn("p-library", [hit.post_id for hit in hits])
+
+    def test_empty_or_symbol_only_fts_query_returns_empty(self) -> None:
+        self.insert_post("p-1", "ChromaDB 和 FTS5。", 1.0)
+
+        self.assertEqual([], retrieval.fts_search_scored('"""()^{}[]', k=5))
 
 
 if __name__ == "__main__":

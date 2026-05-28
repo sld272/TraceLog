@@ -136,6 +136,20 @@ class MemoryRetrievalTest(unittest.TestCase):
 
         self.assertEqual(1, context.count("重复命中记忆"))
 
+    def test_long_cjk_query_hits_observation_with_window_candidates(self) -> None:
+        self._create_global("图书馆效率", "用户提到晚上在图书馆学习效率更高。")
+
+        context = memory_retrieval.search_public_post_memory("我之前是不是说过晚上图书馆学习效率更高", [], limit=5)
+
+        self.assertIn("图书馆效率", context)
+
+    def test_empty_or_symbol_only_memory_query_returns_empty(self) -> None:
+        self._create_global("符号不命中", "这条 observation 不该被符号 query 命中。")
+
+        context = memory_retrieval.search_public_post_memory('"""()^{}[]', [], limit=5)
+
+        self.assertEqual("", context)
+
     def test_formatted_context_does_not_include_source_excerpt(self) -> None:
         observation_id = observation_service.create_observation(
             {

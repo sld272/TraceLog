@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 import sqlite3
 from typing import Any
 
 from core import db
+from core import fts_query
 
 
 @dataclass(frozen=True)
@@ -354,22 +354,11 @@ def _ordered_unique(values: list[str]) -> list[str]:
 
 
 def _build_match_query(query: str) -> str:
-    clean = _sanitize_fts5(query)
-    if not clean:
-        return ""
-    terms = _query_terms(clean)
-    if not terms:
-        terms = [clean]
-    quoted_terms = []
-    for term in terms:
-        escaped = term.replace('"', '""')
-        quoted_terms.append(f'"{escaped}"')
-    return " OR ".join(quoted_terms[:8])
+    return fts_query.build_match_query(query)
 
 
 def _sanitize_fts5(query: str) -> str:
-    text = re.sub(r'["\'`()*:^{}[\]]+', " ", query)
-    return " ".join(text.split())
+    return fts_query.sanitize_fts5(query)
 
 
 def _truncate_excerpt(excerpt: str, limit: int = 160) -> str:
@@ -380,8 +369,4 @@ def _truncate_excerpt(excerpt: str, limit: int = 160) -> str:
 
 
 def _query_terms(query: str) -> list[str]:
-    return [
-        term
-        for term in re.findall(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]{2,}", query)
-        if len(term.strip()) >= 2
-    ]
+    return fts_query.query_terms(query)
