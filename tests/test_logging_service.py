@@ -87,7 +87,7 @@ class LoggingServiceTest(unittest.TestCase):
         )
 
         self.assertNotIn("llm_payload", normalized)
-        self.assertEqual(12, normalized["preview_chars"])
+        self.assertNotIn("preview_chars", normalized)
 
     def test_llm_call_always_logs_full_payload(self) -> None:
         messages = [{"role": "user", "content": "hello full payload"}]

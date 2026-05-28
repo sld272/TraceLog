@@ -27,7 +27,7 @@ class CliConfigTest(unittest.TestCase):
                     "base_url": "https://example.invalid/v1",
                     "model": "model",
                     "embedding_model": "embedding",
-                    "logging": {"llm_payload": "off", "history_retention": 2},
+                    "logging": {"llm_payload": "off", "preview_chars": 12, "history_retention": 2},
                 }
             ),
             encoding="utf-8",
@@ -39,6 +39,7 @@ class CliConfigTest(unittest.TestCase):
         self.assertIsNone(loaded["embedding_api_key"])
         self.assertIsNone(loaded["embedding_base_url"])
         self.assertNotIn("llm_payload", loaded["logging"])
+        self.assertNotIn("preview_chars", loaded["logging"])
         self.assertEqual(2, loaded["logging"]["history_retention"])
 
 

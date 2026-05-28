@@ -17,14 +17,12 @@ from core import db
 DEFAULT_LOGGING_CONFIG = {
     "enabled": True,
     "level": "INFO",
-    "preview_chars": 300,
     "history_retention": 5,
 }
 
 _lock = threading.RLock()
 _enabled = False
 _level = logging.INFO
-_preview_chars = 300
 _history_retention = 5
 _current_log_path: Path | None = None
 _LOGGING_CONFIG_KEYS = set(DEFAULT_LOGGING_CONFIG)
@@ -54,11 +52,6 @@ def normalize_config(config: dict | None) -> dict:
     )
 
     try:
-        merged["preview_chars"] = max(0, int(merged.get("preview_chars", 300)))
-    except (TypeError, ValueError):
-        merged["preview_chars"] = 300
-
-    try:
         merged["history_retention"] = max(0, int(merged.get("history_retention", 5)))
     except (TypeError, ValueError):
         merged["history_retention"] = 5
@@ -71,13 +64,12 @@ def normalize_config(config: dict | None) -> dict:
 
 def init_logging(config: dict | None = None) -> None:
     """Initialize JSONL logging and rotate the previous current log."""
-    global _enabled, _level, _preview_chars, _history_retention, _current_log_path
+    global _enabled, _level, _history_retention, _current_log_path
 
     settings = normalize_config(config)
     with _lock:
         _enabled = bool(settings["enabled"])
         _level = int(getattr(logging, settings["level"], logging.INFO))
-        _preview_chars = settings["preview_chars"]
         _history_retention = settings["history_retention"]
         _current_log_path = db.WORKSPACE_DIR / "logs" / "current.jsonl"
 
@@ -203,41 +195,6 @@ def _prune_history(history_dir: Path, retention: int) -> None:
             old_file.unlink()
         except OSError:
             pass
-
-
-def _summarize_message(message: dict[str, Any]) -> dict[str, Any]:
-    content = message.get("content")
-    return {
-        "role": message.get("role"),
-        "content_preview": _preview(content),
-        "content_length": len(content) if isinstance(content, str) else None,
-    }
-
-
-def _summarize_value(value: Any) -> Any:
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    if isinstance(value, str):
-        return {"preview": _preview(value), "length": len(value)}
-    if isinstance(value, list):
-        return {"type": "list", "length": len(value)}
-    if isinstance(value, dict):
-        return {
-            key: _summarize_value(item)
-            for key, item in value.items()
-        }
-    return {"type": type(value).__name__}
-
-
-def _preview(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    if _preview_chars <= 0:
-        return ""
-    text = value.replace("\r\n", "\n")
-    if len(text) <= _preview_chars:
-        return text
-    return text[:_preview_chars] + "..."
 
 
 def _redact(value: Any, key: str | None = None) -> Any:

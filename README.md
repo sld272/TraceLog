@@ -147,7 +147,6 @@ workspace/
   "logging": {
     "enabled": true,
     "level": "INFO",
-    "preview_chars": 300,
     "history_retention": 5
   }
 }
