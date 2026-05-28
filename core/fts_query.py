@@ -42,6 +42,20 @@ def build_match_query(query: str, *, max_terms: int = MAX_MATCH_TERMS) -> str:
     return " OR ".join(quoted_terms)
 
 
+def build_keyword_match_query(keywords: list[str], *, max_terms: int = MAX_MATCH_TERMS) -> str:
+    candidates = []
+    for keyword in keywords:
+        clean = sanitize_fts5(str(keyword or ""))
+        if len(clean) < 2:
+            continue
+        candidates.append(clean[:MAX_PHRASE_CHARS])
+    quoted_terms = []
+    for term in _ordered_unique(candidates)[:max_terms]:
+        escaped = term.replace('"', '""')
+        quoted_terms.append(f'"{escaped}"')
+    return " OR ".join(quoted_terms)
+
+
 def match_candidates(query: str, *, max_terms: int = MAX_MATCH_TERMS) -> list[str]:
     clean = sanitize_fts5(query)
     if not clean or max_terms <= 0:

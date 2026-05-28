@@ -18,7 +18,11 @@ class BuiltContext:
     relevant_post_ids: list[str]
 
 
-def build_context(relevant_post_ids: list[str] | None = None, query: str | None = None) -> BuiltContext:
+def build_context(
+    relevant_post_ids: list[str] | None = None,
+    query: str | None = None,
+    fts_keywords: list[str] | None = None,
+) -> BuiltContext:
     """Build shared user/profile/history/todo context plus enabled SOULs."""
     enabled_souls = list_enabled_souls()
     recent_ids = _recent_post_ids()
@@ -34,7 +38,11 @@ def build_context(relevant_post_ids: list[str] | None = None, query: str | None 
         candidate_ids = _dedupe_relevant_ids(relevant_post_ids, recent_ids)
         relevant_posts, effective_relevant_ids = _read_posts_by_ids(candidate_ids)
 
-    related_memory = memory_retrieval.search_public_post_memory(query or "", effective_relevant_ids)
+    related_memory = memory_retrieval.search_public_post_memory(
+        query or "",
+        effective_relevant_ids,
+        fts_keywords=fts_keywords,
+    )
     if related_memory:
         sections.append(related_memory)
 

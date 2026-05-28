@@ -143,6 +143,43 @@ class MemoryRetrievalTest(unittest.TestCase):
 
         self.assertIn("图书馆效率", context)
 
+    def test_rewrite_keywords_can_drive_observation_fts(self) -> None:
+        self._create_global("图书馆效率", "用户提到晚上在图书馆学习效率更高。")
+
+        context = memory_retrieval.search_public_post_memory(
+            "完全不相关的原始查询",
+            [],
+            limit=5,
+            fts_keywords=["图书馆", "学习效率"],
+        )
+
+        self.assertIn("图书馆效率", context)
+
+    def test_rewrite_keywords_do_not_change_memory_visibility(self) -> None:
+        self._create_global("全局图书馆", "用户提到晚上在图书馆学习效率更高。")
+        self._create_soul_scoped("默认", "默认图书馆", "默认私聊：晚上在图书馆学习效率更高。")
+        self._create_soul_scoped("毒舌好友", "毒舌图书馆", "毒舌私聊：晚上在图书馆学习效率更高。")
+        self._create_post_visible("p-1", "当前评论图书馆", "当前 post 评论：晚上在图书馆学习效率更高。")
+        self._create_post_visible("p-2", "其他评论图书馆", "其他 post 评论：晚上在图书馆学习效率更高。")
+
+        public_context = memory_retrieval.search_public_post_memory(
+            "不相关", [], fts_keywords=["图书馆", "学习效率"]
+        )
+        chat_context = memory_retrieval.search_chat_memory(
+            "不相关", "默认", [], fts_keywords=["图书馆", "学习效率"]
+        )
+        comment_context = memory_retrieval.search_comment_memory(
+            "不相关", "p-1", [], fts_keywords=["图书馆", "学习效率"]
+        )
+
+        self.assertIn("全局图书馆", public_context)
+        self.assertNotIn("默认图书馆", public_context)
+        self.assertNotIn("当前评论图书馆", public_context)
+        self.assertIn("默认图书馆", chat_context)
+        self.assertNotIn("毒舌图书馆", chat_context)
+        self.assertIn("当前评论图书馆", comment_context)
+        self.assertNotIn("其他评论图书馆", comment_context)
+
     def test_empty_or_symbol_only_memory_query_returns_empty(self) -> None:
         self._create_global("符号不命中", "这条 observation 不该被符号 query 命中。")
 

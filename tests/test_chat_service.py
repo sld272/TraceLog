@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, observation_service, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import chat_service, db, logging_service, observation_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service
 from core.llm import reply_router
 from tests.helpers import require_not_none
 
@@ -198,6 +198,34 @@ class ChatServiceTest(unittest.TestCase):
         self.assertNotIn("其他 SOUL 私聊记忆", context.context)
         self.assertIn("私聊原文不该出现", context.context)
 
+    def test_build_chat_context_uses_query_rewrite_for_posts_and_memory(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        user_message = chat_service.append_user_message(thread.id, "我是不是说过图书馆学习效率更高")
+        self._create_soul_observation("默认", "图书馆效率", "用户提到图书馆学习效率更高。", user_message.id)
+        captured: dict[str, object] = {}
+
+        def fake_search(query: str, k: int = 3, semantic_query: str | None = None, fts_keywords: list[str] | None = None) -> list[str]:
+            captured["query"] = query
+            captured["semantic_query"] = semantic_query
+            captured["fts_keywords"] = fts_keywords
+            return []
+
+        retrieval.hybrid_search = fake_search
+        rewritten = query_rewriter.RewrittenQuery(
+            raw_query="raw",
+            semantic_query="用户是否表达过图书馆学习效率更高",
+            keywords=["图书馆", "学习效率"],
+            used_rewrite=True,
+        )
+
+        with patch("core.chat_service.query_rewriter.rewrite_query", return_value=rewritten) as rewrite:
+            context = chat_service.build_chat_context(thread.id, "图书馆学习", FakeClient(), "fake-model")
+
+        rewrite.assert_called_once()
+        self.assertEqual("用户是否表达过图书馆学习效率更高", captured["semantic_query"])
+        self.assertEqual(["图书馆", "学习效率"], captured["fts_keywords"])
+        self.assertIn("图书馆效率", context.context)
+
     def test_chat_reply_success_writes_assistant_message(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
         client = FakeClient({"reply": "先睡一下也行。", "todos_to_upsert": [], "todos_to_delete": []})
@@ -215,7 +243,7 @@ class ChatServiceTest(unittest.TestCase):
         client = FakeClient({"reply": "先睡一下。"})
 
         result = chat_service.call_chat_reply(thread.id, "我好累", client, "fake-model")
-        messages = client.calls[0]["messages"]
+        messages = client.calls[-1]["messages"]
 
         self.assertTrue(result.ok)
         self.assertEqual("system", messages[0]["role"])
@@ -233,7 +261,7 @@ class ChatServiceTest(unittest.TestCase):
         client = FakeClient({"reply": "没事的"})
 
         chat_service.call_chat_reply(thread.id, "我好累", client, "fake-model")
-        thread_messages = client.calls[0]["messages"][2:]
+        thread_messages = client.calls[-1]["messages"][2:]
 
         self.assertEqual(["user", "assistant", "user"], [message["role"] for message in thread_messages])
         self.assertEqual(
@@ -254,7 +282,7 @@ class ChatServiceTest(unittest.TestCase):
         client = FakeClient({"reply": "我会按规则来。"})
 
         chat_service.call_chat_reply(thread.id, "聊聊这条", client, "fake-model")
-        messages = client.calls[0]["messages"]
+        messages = client.calls[-1]["messages"]
 
         self.assertIn("证据边界", messages[0]["content"])
         self.assertIn("可参考的历史证据", messages[1]["content"])
@@ -293,7 +321,7 @@ class ChatServiceTest(unittest.TestCase):
         soul = SimpleNamespace(persona="测试人格", soul_memory="")
 
         reply_router.call_soul_chat_reply(client, "fake-model", context, soul)
-        messages = client.calls[0]["messages"]
+        messages = client.calls[-1]["messages"]
 
         self.assertNotIn(123, [message["content"] for message in messages])
         event = self._last_log_event("thread_message_skipped")

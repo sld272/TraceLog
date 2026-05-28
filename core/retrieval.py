@@ -30,18 +30,23 @@ class HybridHit:
     reasons: list[str]
 
 
-def fts_search(query: str, k: int = 20) -> list[str]:
+def fts_search(query: str, k: int = 20, fts_keywords: list[str] | None = None) -> list[str]:
     """Return post ids ranked by SQLite FTS5, with a short-CJK fallback."""
-    return [hit.post_id for hit in fts_search_scored(query, k)]
+    return [hit.post_id for hit in fts_search_scored(query, k, fts_keywords=fts_keywords)]
 
 
-def fts_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
+def fts_search_scored(query: str, k: int = 20, fts_keywords: list[str] | None = None) -> list[RetrievalHit]:
     """Return FTS hits with source, rank position, and raw FTS rank for debug."""
     clean = _sanitize_fts5(query)
-    if not clean:
+    if not clean and not fts_keywords:
         return []
 
-    if _has_cjk(clean):
+    keyword_match = fts_query.build_keyword_match_query(fts_keywords or [])
+    if keyword_match:
+        match = keyword_match
+        table = "posts_fts_trigram" if any(_has_cjk(keyword) for keyword in fts_keywords or []) else "posts_fts"
+        source = "fts_rewrite"
+    elif _has_cjk(clean):
         if len(clean.replace(" ", "")) < 3:
             return _like_search_scored(clean, k)
         table = "posts_fts_trigram"
@@ -50,7 +55,10 @@ def fts_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
         table = "posts_fts"
         source = "fts"
 
-    match = _build_match_query(clean)
+    if not keyword_match:
+        match = _build_match_query(clean)
+    if not match:
+        return []
     sql = f"""
         SELECT posts.id, rank AS raw_rank
         FROM {table}
@@ -96,9 +104,23 @@ def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
         return []
 
 
-def hybrid_search(query: str, k: int = 3) -> list[str]:
+def hybrid_search(
+    query: str,
+    k: int = 3,
+    semantic_query: str | None = None,
+    fts_keywords: list[str] | None = None,
+) -> list[str]:
     """Return top hybrid result ids for prompt context."""
-    return [hit.post_id for hit in hybrid_search_scored(query, k=k, min_score=None)]
+    return [
+        hit.post_id
+        for hit in hybrid_search_scored(
+            query,
+            k=k,
+            min_score=None,
+            semantic_query=semantic_query,
+            fts_keywords=fts_keywords,
+        )
+    ]
 
 
 def hybrid_search_scored(
@@ -107,10 +129,17 @@ def hybrid_search_scored(
     min_score: float | None = None,
     candidate_k: int = 20,
     allow_fallback: bool = True,
+    semantic_query: str | None = None,
+    fts_keywords: list[str] | None = None,
 ) -> list[HybridHit]:
     """Combine FTS5 and ChromaDB with dynamic weights and explainable scores."""
-    fts_hits = fts_search_scored(query, k=candidate_k)
-    vector_hits = vector_search_scored(query, k=candidate_k)
+    fts_hits = (
+        fts_search_scored(query, k=candidate_k, fts_keywords=fts_keywords)
+        if fts_keywords is not None
+        else fts_search_scored(query, k=candidate_k)
+    )
+    vector_query = semantic_query or query
+    vector_hits = vector_search_scored(vector_query, k=candidate_k)
     if not fts_hits and not vector_hits:
         return []
 

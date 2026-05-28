@@ -215,6 +215,32 @@ class RetrievalDatabaseTest(unittest.TestCase):
 
         self.assertEqual([], retrieval.fts_search_scored('"""()^{}[]', k=5))
 
+    def test_fts_keywords_can_drive_fts_search(self) -> None:
+        self.insert_post("p-library", "晚上在图书馆学习时，我的效率确实更高。", 2.0)
+        self.insert_post("p-other", "今天只是随便散步。", 1.0)
+
+        hits = retrieval.fts_search_scored(
+            "完全不相关的原始查询",
+            k=5,
+            fts_keywords=["图书馆", "学习效率"],
+        )
+
+        self.assertIn("p-library", [hit.post_id for hit in hits])
+        self.assertEqual("fts_rewrite", hits[0].source)
+
+    def test_semantic_query_is_used_for_vector_search(self) -> None:
+        captured: dict[str, str] = {}
+        retrieval.vector_search_scored = lambda query, k=20: captured.setdefault("query", query) and []
+
+        retrieval.hybrid_search_scored(
+            "原始查询",
+            k=3,
+            semantic_query="改写后的语义查询",
+            fts_keywords=[],
+        )
+
+        self.assertEqual("改写后的语义查询", captured["query"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from core import db, evidence_service, logging_service, memory_retrieval, profile_service, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import db, evidence_service, logging_service, memory_retrieval, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
@@ -140,7 +140,12 @@ def append_user_message(thread_id: int, content: str) -> CommentMessage:
     return _append_message(thread_id, "user", content)
 
 
-def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
+def build_comment_context(
+    thread_id: int,
+    user_message: str,
+    client: LLMClient | None = None,
+    model: str | None = None,
+) -> CommentContext:
     """Build prompt context after the current user message has been appended."""
     thread = get_thread(thread_id)
     soul = _load_soul_context(thread.soul_name)
@@ -156,9 +161,10 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
         sections.append(f"# 原始 post\n\n[{post['id']}] {post['content']}")
 
     retrieval_query = _build_comment_retrieval_query(post, messages, user_message)
+    rewritten_query = _rewrite_for_retrieval(client, model, retrieval_query, "comment_thread", thread_id=thread_id, post_id=thread.post_id, soul_name=thread.soul_name)
     relevant_post_ids = [
         post_id
-        for post_id in retrieval.hybrid_search(retrieval_query, k=COMMENT_RELATED_POST_LIMIT)
+        for post_id in _hybrid_search_with_rewrite(retrieval_query, rewritten_query, k=COMMENT_RELATED_POST_LIMIT)
         if post_id != thread.post_id
     ]
     relevant_posts = evidence_service.read_posts_by_ids(relevant_post_ids)
@@ -169,6 +175,7 @@ def build_comment_context(thread_id: int, user_message: str) -> CommentContext:
         retrieval_query,
         thread.post_id,
         relevant_post_ids,
+        fts_keywords=rewritten_query.keywords if rewritten_query.used_rewrite else None,
     )
     if related_memory:
         sections.append(related_memory)
@@ -205,7 +212,7 @@ def call_comment_reply(
 ) -> CommentReplyResult:
     """Append user input, call one SOUL, and persist the assistant comment reply."""
     user_message_row = append_user_message(thread_id, user_message)
-    comment_context = build_comment_context(thread_id, user_message)
+    comment_context = build_comment_context(thread_id, user_message, client, model)
     data = reply_router.call_soul_comment_reply(
         client,
         model,
@@ -399,6 +406,52 @@ def _build_comment_retrieval_query(post, messages: list[CommentMessage], user_me
     if parts:
         return "\n".join(parts)
     return user_message
+
+
+def _rewrite_for_retrieval(
+    client: LLMClient | None,
+    model: str | None,
+    retrieval_query: str,
+    channel: str,
+    **trace_context,
+) -> query_rewriter.RewrittenQuery:
+    if client is None or model is None:
+        return query_rewriter.RewrittenQuery(
+            raw_query=retrieval_query,
+            semantic_query=retrieval_query,
+            keywords=[],
+            used_rewrite=False,
+        )
+    rewritten = query_rewriter.rewrite_query(
+        client,
+        model,
+        retrieval_query,
+        channel,
+        trace_context={"channel": channel, **trace_context},
+    )
+    logging_service.log_event(
+        "query_rewrite_result",
+        channel=channel,
+        used_rewrite=rewritten.used_rewrite,
+        keyword_count=len(rewritten.keywords),
+    )
+    return rewritten
+
+
+def _hybrid_search_with_rewrite(
+    retrieval_query: str,
+    rewritten_query: query_rewriter.RewrittenQuery,
+    *,
+    k: int,
+) -> list[str]:
+    if not rewritten_query.used_rewrite:
+        return retrieval.hybrid_search(retrieval_query, k=k)
+    return retrieval.hybrid_search(
+        retrieval_query,
+        k=k,
+        semantic_query=rewritten_query.semantic_query,
+        fts_keywords=rewritten_query.keywords,
+    )
 
 
 def _recent_user_message_contents(messages, limit: int) -> list[str]:

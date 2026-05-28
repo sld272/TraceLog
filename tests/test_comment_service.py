@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import comment_service, db, observation_service, profile_service, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import comment_service, db, observation_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service
 from tests.helpers import require_not_none
 
 
@@ -208,12 +208,45 @@ class CommentServiceTest(unittest.TestCase):
         self.assertNotIn("私聊不该进评论", context.context)
         self.assertIn("评论原文不该出现", context.context)
 
+    def test_build_comment_context_uses_query_rewrite_for_posts_and_memory(self) -> None:
+        thread = comment_service.get_or_create_thread("20260525-001", "默认")
+        user_message = comment_service.append_user_message(thread.id, "继续聊图书馆学习效率")
+        self._create_post_observation(
+            "20260525-001",
+            "图书馆效率",
+            "用户在该 post 评论线程提到图书馆学习效率更高。",
+            user_message.id,
+        )
+        captured: dict[str, object] = {}
+
+        def fake_search(query: str, k: int = 3, semantic_query: str | None = None, fts_keywords: list[str] | None = None) -> list[str]:
+            captured["query"] = query
+            captured["semantic_query"] = semantic_query
+            captured["fts_keywords"] = fts_keywords
+            return []
+
+        retrieval.hybrid_search = fake_search
+        rewritten = query_rewriter.RewrittenQuery(
+            raw_query="raw",
+            semantic_query="用户是否表达过图书馆学习效率更高",
+            keywords=["图书馆", "学习效率"],
+            used_rewrite=True,
+        )
+
+        with patch("core.comment_service.query_rewriter.rewrite_query", return_value=rewritten) as rewrite:
+            context = comment_service.build_comment_context(thread.id, "图书馆学习", FakeClient(), "fake-model")
+
+        rewrite.assert_called_once()
+        self.assertEqual("用户是否表达过图书馆学习效率更高", captured["semantic_query"])
+        self.assertEqual(["图书馆", "学习效率"], captured["fts_keywords"])
+        self.assertIn("图书馆效率", context.context)
+
     def test_comment_reply_sends_multi_turn_messages(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
         client = FakeClient({"reply": "我在。"})
 
         result = comment_service.call_comment_reply(thread.id, "继续聊练歌", client, "fake-model")
-        messages = client.calls[0]["messages"]
+        messages = client.calls[-1]["messages"]
 
         self.assertTrue(result.ok)
         self.assertEqual("system", messages[0]["role"])
@@ -229,7 +262,7 @@ class CommentServiceTest(unittest.TestCase):
         client = FakeClient({"reply": "继续。"})
 
         comment_service.call_comment_reply(thread.id, "再说说", client, "fake-model")
-        thread_messages = client.calls[0]["messages"][2:]
+        thread_messages = client.calls[-1]["messages"][2:]
 
         self.assertEqual(["user", "assistant", "user"], [message["role"] for message in thread_messages])
         self.assertEqual(
@@ -249,7 +282,7 @@ class CommentServiceTest(unittest.TestCase):
         client = FakeClient({"reply": "收到。"})
 
         comment_service.call_comment_reply(thread.id, "正常评论", client, "fake-model")
-        messages = client.calls[0]["messages"]
+        messages = client.calls[-1]["messages"]
 
         self.assertEqual(["system"], [message["role"] for message in messages if message["role"] == "system"])
         self.assertNotIn("非法评论消息", [message["content"] for message in messages])

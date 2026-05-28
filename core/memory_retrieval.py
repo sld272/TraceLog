@@ -44,7 +44,12 @@ class MemoryHit:
     disclosure_level: str
 
 
-def search_public_post_memory(query: str, related_post_ids: list[str], limit: int = 5) -> str:
+def search_public_post_memory(
+    query: str,
+    related_post_ids: list[str],
+    limit: int = 5,
+    fts_keywords: list[str] | None = None,
+) -> str:
     """Return formatted global observation memory for public post replies."""
     hits = _search_memory(
         query=query,
@@ -52,11 +57,18 @@ def search_public_post_memory(query: str, related_post_ids: list[str], limit: in
         allowed_scopes=[("global", None)],
         retrieval_scope=RetrievalScope(channel="public_post"),
         limit=limit,
+        fts_keywords=fts_keywords,
     )
     return _format_memory_context(hits)
 
 
-def search_chat_memory(query: str, soul_name: str, related_post_ids: list[str], limit: int = 5) -> str:
+def search_chat_memory(
+    query: str,
+    soul_name: str,
+    related_post_ids: list[str],
+    limit: int = 5,
+    fts_keywords: list[str] | None = None,
+) -> str:
     """Return formatted global + current SOUL scoped memory for private chat."""
     hits = _search_memory(
         query=query,
@@ -64,11 +76,18 @@ def search_chat_memory(query: str, soul_name: str, related_post_ids: list[str], 
         allowed_scopes=[("global", None), ("soul_scoped", soul_name)],
         retrieval_scope=RetrievalScope(channel="chat", soul_name=soul_name),
         limit=limit,
+        fts_keywords=fts_keywords,
     )
     return _format_memory_context(hits)
 
 
-def search_comment_memory(query: str, post_id: str, related_post_ids: list[str], limit: int = 5) -> str:
+def search_comment_memory(
+    query: str,
+    post_id: str,
+    related_post_ids: list[str],
+    limit: int = 5,
+    fts_keywords: list[str] | None = None,
+) -> str:
     """Return formatted global + same-post visible memory for comment threads."""
     hits = _search_memory(
         query=query,
@@ -76,6 +95,7 @@ def search_comment_memory(query: str, post_id: str, related_post_ids: list[str],
         allowed_scopes=[("global", None), ("post_visible", post_id)],
         retrieval_scope=RetrievalScope(channel="comment_thread", post_id=post_id),
         limit=limit,
+        fts_keywords=fts_keywords,
     )
     return _format_memory_context(hits)
 
@@ -87,11 +107,12 @@ def _search_memory(
     allowed_scopes: list[tuple[str, str | None]],
     retrieval_scope: RetrievalScope,
     limit: int,
+    fts_keywords: list[str] | None = None,
 ) -> list[MemoryHit]:
     if limit <= 0:
         return []
     candidates: dict[int, dict[str, Any]] = {}
-    for rank, row in enumerate(_fts_observation_rows(query, allowed_scopes, max(limit * 4, 10)), start=1):
+    for rank, row in enumerate(_fts_observation_rows(query, allowed_scopes, max(limit * 4, 10), fts_keywords=fts_keywords), start=1):
         _merge_candidate(candidates, row, source="fts", base_score=_position_score(rank, max(limit * 4, 10)))
     for rank, row in enumerate(_indirect_observation_rows(related_post_ids), start=1):
         _merge_candidate(candidates, row, source="post_semantic", base_score=0.72 * _position_score(rank, max(len(related_post_ids), 1)))
@@ -114,8 +135,9 @@ def _fts_observation_rows(
     query: str,
     allowed_scopes: list[tuple[str, str | None]],
     limit: int,
+    fts_keywords: list[str] | None = None,
 ) -> list[Any]:
-    match = _build_match_query(query)
+    match = fts_query.build_keyword_match_query(fts_keywords or []) if fts_keywords else _build_match_query(query)
     if not match:
         return []
     scope_sql, params = _scope_filter_sql(allowed_scopes)

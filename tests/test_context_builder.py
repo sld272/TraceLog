@@ -79,6 +79,18 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertLess(built.shared_context.index("# 近期帖子"), built.shared_context.index("# 相关帖子"))
         self.assertEqual(["p-related"], built.relevant_post_ids)
 
+    def test_public_context_can_use_rewrite_keywords_for_memory(self) -> None:
+        self._create_global("图书馆效率", "用户提到晚上在图书馆学习效率更高。")
+
+        built = context_builder.build_context(
+            relevant_post_ids=[],
+            query="完全不相关的原始查询",
+            fts_keywords=["图书馆", "学习效率"],
+        )
+
+        self.assertIn("# 相关记忆", built.shared_context)
+        self.assertIn("图书馆效率", built.shared_context)
+
     def _create_global(self, title: str, narrative: str) -> int:
         return observation_service.create_observation(
             {
