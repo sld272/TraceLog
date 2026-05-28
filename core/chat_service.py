@@ -351,6 +351,8 @@ def _rewrite_for_retrieval(
         channel=channel,
         used_rewrite=rewritten.used_rewrite,
         keyword_count=len(rewritten.keywords),
+        semantic_query_length=len(rewritten.semantic_query),
+        rewrite_skipped_by_gate=rewritten.rewrite_skipped_by_gate,
     )
     return rewritten
 

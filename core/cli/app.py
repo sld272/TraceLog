@@ -62,13 +62,7 @@ def main() -> None:
             print(f"[反思] 已处理 {fixed_reflections} 条待反思记录。")
         _cleanup_orphan_observations_on_startup()
         observation_results = observation_extractor.run_pending_observation_extractions_safely(client, model)
-        observation_count = sum(result.observation_count for result in observation_results if result.error is None)
-        processed_count = sum(result.processed_count for result in observation_results if result.error is None)
-        failed_count = sum(1 for result in observation_results if result.error is not None)
-        if processed_count:
-            print(f"[Observation] 已处理 {processed_count} 条待提取线程消息，新增 {observation_count} 条 observation。")
-        if failed_count:
-            print(f"[Observation] {failed_count} 个线程暂时提取失败，已保留待下次重试。")
+        _print_startup_observation_results(observation_results)
         todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     except vectorstore.VectorStoreInitError as e:
         print(f"[向量存储] 初始化失败：{e}")
@@ -119,6 +113,8 @@ def main() -> None:
             channel="public_post",
             used_rewrite=rewritten_query.used_rewrite,
             keyword_count=len(rewritten_query.keywords),
+            semantic_query_length=len(rewritten_query.semantic_query),
+            rewrite_skipped_by_gate=rewritten_query.rewrite_skipped_by_gate,
         )
         relevant_ids = retrieval.hybrid_search(
             user_input,
@@ -174,3 +170,16 @@ def _cleanup_orphan_observations_on_startup() -> None:
     if deleted:
         logging_service.log_event("observation_orphan_cleanup", deleted_count=deleted)
         print(f"[Observation] 已清理 {deleted} 条孤儿 observation。")
+
+
+def _print_startup_observation_results(observation_results) -> None:
+    observation_count = sum(result.observation_count for result in observation_results if result.error is None)
+    processed_count = sum(result.processed_count for result in observation_results if result.error is None)
+    skipped_poison_count = sum(1 for result in observation_results if result.skipped_poison_batch)
+    failed_count = sum(1 for result in observation_results if result.error is not None and not result.skipped_poison_batch)
+    if processed_count:
+        print(f"[Observation] 已处理 {processed_count} 条待提取线程消息，新增 {observation_count} 条 observation。")
+    if failed_count:
+        print(f"[Observation] {failed_count} 个线程暂时提取失败，已保留待下次重试。")
+    if skipped_poison_count:
+        print(f"[Observation] 已跳过 {skipped_poison_count} 个连续解析失败的线程批次，原始消息仍保留。")

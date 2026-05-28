@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import comment_service, db, observation_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import comment_service, db, logging_service, observation_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service
 from tests.helpers import require_not_none
 
 
@@ -46,6 +46,7 @@ class CommentServiceTest(unittest.TestCase):
         retrieval.hybrid_search = lambda query, k=3: []
 
         db.init_db()
+        logging_service.init_logging({"enabled": True, "llm_payload": "off"})
         self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与现状\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
@@ -53,6 +54,7 @@ class CommentServiceTest(unittest.TestCase):
         self._insert_post_and_comment("20260525-001", "毒舌好友", "别装了，继续讲重点。")
 
     def tearDown(self) -> None:
+        logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         profile_service.USER_MD_PATH = self.old_user_md_path
@@ -240,6 +242,26 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("用户是否表达过图书馆学习效率更高", captured["semantic_query"])
         self.assertEqual(["图书馆", "学习效率"], captured["fts_keywords"])
         self.assertIn("图书馆效率", context.context)
+        event = self._last_log_event("query_rewrite_result")
+        self.assertEqual("comment_thread", event["channel"])
+        self.assertTrue(event["used_rewrite"])
+        self.assertEqual(2, event["keyword_count"])
+        self.assertGreater(event["semantic_query_length"], 0)
+        self.assertFalse(event["rewrite_skipped_by_gate"])
+
+    def test_build_comment_context_skips_rewrite_for_short_query(self) -> None:
+        thread = comment_service.get_or_create_thread("20260525-001", "默认")
+        client = FakeClient()
+
+        with patch("core.comment_service._get_post", return_value=None):
+            context = comment_service.build_comment_context(thread.id, "短句", client, "fake-model")
+        event = self._last_log_event("query_rewrite_result")
+
+        self.assertEqual("短句", context.retrieval_query)
+        self.assertEqual([], client.calls)
+        self.assertFalse(event["used_rewrite"])
+        self.assertTrue(event["rewrite_skipped_by_gate"])
+        self.assertEqual(0, event["keyword_count"])
 
     def test_comment_reply_sends_multi_turn_messages(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
@@ -420,6 +442,17 @@ class CommentServiceTest(unittest.TestCase):
             },
             [{"source_type": "chat_message", "source_id": "1", "evidence_access": "source_soul_only"}],
         )
+
+    def _last_log_event(self, event_name: str) -> dict:
+        log_path = self.workspace / "logs" / "current.jsonl"
+        records = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matches = [record for record in records if record.get("event") == event_name]
+        self.assertTrue(matches)
+        return matches[-1]
 
 
 if __name__ == "__main__":

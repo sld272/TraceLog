@@ -297,6 +297,35 @@ class CliSessionsTest(unittest.TestCase):
         self.assertEqual("WARNING", log_event.call_args.kwargs["level"])
         self.assertEqual("RuntimeError", log_event.call_args.kwargs["exception_type"])
 
+    def test_startup_observation_results_distinguish_retry_and_poison_skip(self) -> None:
+        output = StringIO()
+        retry_result = SimpleNamespace(
+            processed_count=0,
+            observation_count=0,
+            error="invalid_extraction_result_retry_1_of_3",
+            skipped_poison_batch=False,
+        )
+        skipped_result = SimpleNamespace(
+            processed_count=3,
+            observation_count=0,
+            error="skipped_poison_batch_after_3_invalid_results",
+            skipped_poison_batch=True,
+        )
+        success_result = SimpleNamespace(
+            processed_count=2,
+            observation_count=1,
+            error=None,
+            skipped_poison_batch=False,
+        )
+
+        with redirect_stdout(output):
+            app._print_startup_observation_results([retry_result, skipped_result, success_result])
+
+        text = output.getvalue()
+        self.assertIn("已处理 2 条待提取线程消息，新增 1 条 observation", text)
+        self.assertIn("1 个线程暂时提取失败，已保留待下次重试", text)
+        self.assertIn("已跳过 1 个连续解析失败的线程批次，原始消息仍保留", text)
+
 
 if __name__ == "__main__":
     unittest.main()

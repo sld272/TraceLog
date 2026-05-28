@@ -225,6 +225,25 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual("用户是否表达过图书馆学习效率更高", captured["semantic_query"])
         self.assertEqual(["图书馆", "学习效率"], captured["fts_keywords"])
         self.assertIn("图书馆效率", context.context)
+        event = self._last_log_event("query_rewrite_result")
+        self.assertEqual("chat", event["channel"])
+        self.assertTrue(event["used_rewrite"])
+        self.assertEqual(2, event["keyword_count"])
+        self.assertGreater(event["semantic_query_length"], 0)
+        self.assertFalse(event["rewrite_skipped_by_gate"])
+
+    def test_build_chat_context_skips_rewrite_for_short_query(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        client = FakeClient()
+
+        context = chat_service.build_chat_context(thread.id, "短句", client, "fake-model")
+        event = self._last_log_event("query_rewrite_result")
+
+        self.assertEqual("短句", context.retrieval_query)
+        self.assertEqual([], client.calls)
+        self.assertFalse(event["used_rewrite"])
+        self.assertTrue(event["rewrite_skipped_by_gate"])
+        self.assertEqual(0, event["keyword_count"])
 
     def test_chat_reply_success_writes_assistant_message(self) -> None:
         thread = chat_service.get_or_create_thread("默认")

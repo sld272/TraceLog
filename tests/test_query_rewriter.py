@@ -41,10 +41,10 @@ class QueryRewriterTest(unittest.TestCase):
     def test_invalid_or_empty_result_falls_back(self) -> None:
         client = FakeClient(json.dumps({"semantic_query": "", "keywords": []}, ensure_ascii=False))
 
-        result = query_rewriter.rewrite_query(client, "fake-model", "原始查询", "chat")
+        result = query_rewriter.rewrite_query(client, "fake-model", "我之前是不是说过图书馆学习效率更高", "chat")
 
         self.assertFalse(result.used_rewrite)
-        self.assertEqual("原始查询", result.semantic_query)
+        self.assertEqual("我之前是不是说过图书馆学习效率更高", result.semantic_query)
         self.assertEqual([], result.keywords)
 
     def test_keyword_normalization_caps_and_filters_values(self) -> None:
@@ -70,7 +70,7 @@ class QueryRewriterTest(unittest.TestCase):
         }
         client = FakeClient(json.dumps(payload, ensure_ascii=False))
 
-        result = query_rewriter.rewrite_query(client, "fake-model", "原始查询", "public_post")
+        result = query_rewriter.rewrite_query(client, "fake-model", "我之前是不是说过图书馆学习效率更高", "public_post")
 
         self.assertTrue(result.used_rewrite)
         self.assertEqual(12, len(result.keywords))
@@ -80,13 +80,37 @@ class QueryRewriterTest(unittest.TestCase):
         self.assertTrue(all(len(keyword) <= 16 for keyword in result.keywords))
 
     def test_invalid_json_and_api_error_fall_back_without_raising(self) -> None:
-        invalid = query_rewriter.rewrite_query(FakeClient("not json"), "fake-model", "原始查询", "comment_thread")
-        api_error = query_rewriter.rewrite_query(FakeClient(exc=RuntimeError("boom")), "fake-model", "原始查询", "comment_thread")
+        invalid = query_rewriter.rewrite_query(FakeClient("not json"), "fake-model", "我之前是不是说过图书馆学习效率更高", "comment_thread")
+        api_error = query_rewriter.rewrite_query(FakeClient(exc=RuntimeError("boom")), "fake-model", "我之前是不是说过图书馆学习效率更高", "comment_thread")
 
         self.assertFalse(invalid.used_rewrite)
         self.assertFalse(api_error.used_rewrite)
-        self.assertEqual("原始查询", invalid.semantic_query)
-        self.assertEqual("原始查询", api_error.semantic_query)
+        self.assertEqual("我之前是不是说过图书馆学习效率更高", invalid.semantic_query)
+        self.assertEqual("我之前是不是说过图书馆学习效率更高", api_error.semantic_query)
+
+    def test_gate_skips_low_value_queries_without_calling_llm(self) -> None:
+        cases = ["", "图书", "ChromaDB fts5", "/quit"]
+        for raw_query in cases:
+            with self.subTest(raw_query=raw_query):
+                client = FakeClient(json.dumps({"semantic_query": "should not call", "keywords": ["x"]}, ensure_ascii=False))
+
+                result = query_rewriter.rewrite_query(client, "fake-model", raw_query, "public_post")
+
+                self.assertFalse(result.used_rewrite)
+                self.assertTrue(result.rewrite_skipped_by_gate)
+                self.assertEqual([], client.calls)
+
+    def test_long_natural_query_calls_llm(self) -> None:
+        payload = {
+            "semantic_query": "用户是否曾表达过图书馆学习效率更高",
+            "keywords": ["图书馆", "学习效率"],
+        }
+        client = FakeClient(json.dumps(payload, ensure_ascii=False))
+
+        result = query_rewriter.rewrite_query(client, "fake-model", "我之前是不是说过图书馆学习效率更高", "public_post")
+
+        self.assertTrue(result.used_rewrite)
+        self.assertEqual(1, len(client.calls))
 
     def test_prompt_forbids_answering_or_changing_boundaries(self) -> None:
         prompt = query_rewrite_router.QUERY_REWRITE_PROMPT
