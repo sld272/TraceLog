@@ -33,6 +33,17 @@ class FakeClient:
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
 
+class RaisingClient:
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+        self.calls: list[dict] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        raise self.exc
+
+
 class ObservationExtractorTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -165,15 +176,106 @@ class ObservationExtractorTest(unittest.TestCase):
         self.assertEqual(1, len(client.calls))
         self.assertEqual(str(user_message.id), observation_service.get_cursor("chat_thread", str(thread.id)))
 
-    def test_invalid_json_does_not_advance_cursor(self) -> None:
+    def test_invalid_json_retries_without_advancing_cursor_before_threshold(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
         chat_service.append_user_message(thread.id, "这条需要之后重试。")
+        client = FakeClient("not json")
+
+        first = require_not_none(observation_extractor.extract_chat_thread_observations(thread.id, client, "fake-model"))
+        second = require_not_none(observation_extractor.extract_chat_thread_observations(thread.id, client, "fake-model"))
+        metadata = self._cursor_metadata("chat_thread", str(thread.id))
+
+        self.assertEqual("invalid_extraction_result_retry_1_of_3", first.error)
+        self.assertEqual("invalid_extraction_result_retry_2_of_3", second.error)
+        self.assertEqual("0", observation_service.get_cursor("chat_thread", str(thread.id)))
+        self.assertEqual(2, metadata["failure_count"])
+        self.assertEqual("invalid_llm_response", metadata["failure_kind"])
+        self.assertEqual([], observation_service.list_active_observations(visibility_scope="soul_scoped"))
+
+    def test_invalid_json_skips_poison_batch_after_threshold(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        user_message = chat_service.append_user_message(thread.id, "这条坏批次会被跳过。")
+        client = FakeClient("not json")
+
+        results = [
+            require_not_none(observation_extractor.extract_chat_thread_observations(thread.id, client, "fake-model"))
+            for _ in range(3)
+        ]
+        metadata = self._cursor_metadata("chat_thread", str(thread.id))
+        next_result = observation_extractor.extract_chat_thread_observations(thread.id, client, "fake-model")
+        pending_results = observation_extractor.run_pending_observation_extractions(client, "fake-model")
+
+        self.assertFalse(results[0].skipped_poison_batch)
+        self.assertFalse(results[1].skipped_poison_batch)
+        self.assertTrue(results[2].skipped_poison_batch)
+        self.assertEqual("skipped_poison_batch_after_3_invalid_results", results[2].error)
+        self.assertEqual(str(user_message.id), observation_service.get_cursor("chat_thread", str(thread.id)))
+        self.assertEqual(str(user_message.id), results[2].cursor_value)
+        self.assertEqual(1, len(metadata["skipped_poison_batches"]))
+        self.assertEqual([user_message.id], metadata["failed_message_ids"])
+        self.assertIsNone(next_result)
+        self.assertEqual([], pending_results)
+        self.assertEqual([], observation_service.list_active_observations(visibility_scope="soul_scoped"))
+
+    def test_new_messages_after_poison_skip_are_extracted_from_new_cursor(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        skipped_message = chat_service.append_user_message(thread.id, "坏批次。")
+        bad_client = FakeClient("not json")
+        for _ in range(3):
+            observation_extractor.extract_chat_thread_observations(thread.id, bad_client, "fake-model")
+
+        new_message = chat_service.append_user_message(thread.id, "以后回复更短一点。")
+        payload = {
+            "observations": [
+                {
+                    "type": "correction",
+                    "title": "回复更短",
+                    "narrative": "用户要求默认以后回复更短一点。",
+                    "source_message_ids": [new_message.id],
+                }
+            ]
+        }
+        good_client = FakeClient(json.dumps(payload, ensure_ascii=False))
+
+        result = require_not_none(observation_extractor.extract_chat_thread_observations(thread.id, good_client, "fake-model"))
+        prompt = good_client.calls[0]["messages"][1]["content"]
+        metadata = self._cursor_metadata("chat_thread", str(thread.id))
+
+        self.assertEqual(1, result.processed_count)
+        self.assertEqual(1, result.observation_count)
+        self.assertNotIn("坏批次。", prompt)
+        self.assertIn(str(new_message.id), prompt)
+        self.assertEqual(str(new_message.id), observation_service.get_cursor("chat_thread", str(thread.id)))
+        self.assertNotIn("failure_count", metadata)
+
+    def test_api_error_does_not_advance_cursor_or_mark_poison_batch(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        chat_service.append_user_message(thread.id, "API 失败时不能跳过。")
 
         with self.assertRaises(ValueError):
-            observation_extractor.extract_chat_thread_observations(thread.id, FakeClient("not json"), "fake-model")
+            observation_extractor.extract_chat_thread_observations(
+                thread.id,
+                RaisingClient(RuntimeError("api down")),
+                "fake-model",
+            )
 
         self.assertIsNone(observation_service.get_cursor("chat_thread", str(thread.id)))
-        self.assertEqual([], observation_service.list_active_observations(visibility_scope="soul_scoped"))
+        self.assertEqual({}, self._cursor_metadata("chat_thread", str(thread.id)))
+
+    def test_comment_thread_invalid_json_uses_poison_batch_policy(self) -> None:
+        self._insert_post_and_comment("20260525-001", "默认", "我陪你拆一下。")
+        thread = comment_service.get_or_create_thread("20260525-001", "默认")
+        user_message = comment_service.append_user_message(thread.id, "这条评论坏批次会被跳过。")
+        client = FakeClient("not json")
+
+        for _ in range(2):
+            result = require_not_none(observation_extractor.extract_comment_thread_observations(thread.id, client, "fake-model"))
+            self.assertFalse(result.skipped_poison_batch)
+        skipped = require_not_none(observation_extractor.extract_comment_thread_observations(thread.id, client, "fake-model"))
+
+        self.assertTrue(skipped.skipped_poison_batch)
+        self.assertEqual(str(user_message.id), observation_service.get_cursor("comment_thread", str(thread.id)))
+        self.assertEqual([], observation_service.list_active_observations(visibility_scope="post_visible"))
 
     def test_write_failure_does_not_advance_cursor_or_leave_observation(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
@@ -315,6 +417,19 @@ class ObservationExtractorTest(unittest.TestCase):
             """,
             (post_id, soul_name, comment, 2.0),
         )
+
+    def _cursor_metadata(self, source_kind: str, source_key: str) -> dict:
+        row = db.query_one(
+            """
+            SELECT metadata
+            FROM observation_cursors
+            WHERE source_kind = ? AND source_key = ?
+            """,
+            (source_kind, source_key),
+        )
+        if row is None or not row["metadata"]:
+            return {}
+        return json.loads(row["metadata"])
 
 
 if __name__ == "__main__":

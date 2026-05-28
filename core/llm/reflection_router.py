@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
@@ -350,14 +351,36 @@ def call_thread_observation_extraction(
     trace_context: dict | None = None,
 ) -> dict | None:
     """Extract observations from new chat/comment thread messages."""
+    result, _status = call_thread_observation_extraction_with_status(
+        client=client,
+        model=model,
+        thread_context=thread_context,
+        messages=messages,
+        user_message_ids=user_message_ids,
+        trace_context=trace_context,
+    )
+    return result
+
+
+def call_thread_observation_extraction_with_status(
+    client: LLMClient,
+    model: str,
+    *,
+    thread_context: str,
+    messages: str,
+    user_message_ids: list[int],
+    trace_context: dict | None = None,
+) -> tuple[dict | None, str | None]:
+    """Extract observations and expose whether a None result was invalid JSON or API failure."""
     allowed_user_ids = set(user_message_ids)
+    status_info: dict[str, Any] = {}
     user_content = (
         f"## 线程语境\n\n{thread_context or '（暂无）'}\n\n"
         "---\n\n"
         f"## 新消息批次\n\n{messages or '（暂无）'}"
     )
 
-    return call_json_completion(
+    result = call_json_completion(
         client=client,
         model=model,
         operation="thread_observation_extraction",
@@ -369,7 +392,9 @@ def call_thread_observation_extraction(
         ],
         parser=lambda content: _parse_thread_observation_content(content, allowed_user_ids),
         trace_context=trace_context,
+        status_callback=status_info.update,
     )
+    return result, status_info.get("status")
 
 
 def _parse_thread_observation_content(content: str | None, allowed_user_ids: set[int]) -> dict | None:

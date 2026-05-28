@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,6 +15,8 @@ from core.llm.types import LLMClient
 CHAT_SOURCE_KIND = "chat_thread"
 COMMENT_SOURCE_KIND = "comment_thread"
 DEFAULT_LIMIT_PER_THREAD = 20
+MAX_INVALID_EXTRACTION_RETRIES = 3
+INVALID_EXTRACTION_STATUSES = {"invalid_json", "invalid_response"}
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,7 @@ class ObservationExtractionResult:
     observation_count: int
     cursor_value: str
     error: str | None = None
+    skipped_poison_batch: bool = False
 
 
 def run_pending_observation_extractions(
@@ -106,7 +110,7 @@ def extract_chat_thread_observations(
     user_messages = [message for message in messages if message["role"] == "user"]
     observations: list[dict[str, Any]] = []
     if user_messages:
-        data = reflection_router.call_thread_observation_extraction(
+        data, status = reflection_router.call_thread_observation_extraction_with_status(
             client=client,
             model=model,
             thread_context=_format_chat_context(thread),
@@ -121,7 +125,16 @@ def extract_chat_thread_observations(
             },
         )
         if data is None:
-            raise ValueError("私聊 observation 提取没有返回有效 JSON")
+            return _handle_invalid_extraction_batch(
+                source_kind=CHAT_SOURCE_KIND,
+                source_key=source_key,
+                cursor_before=cursor,
+                cursor_value=cursor_value,
+                messages=messages,
+                status=status,
+                error="私聊 observation 提取没有返回有效 JSON",
+                metadata={"thread_id": thread_id, "soul_name": thread.soul_name},
+            )
         observations = data["observations"]
 
     observation_ids = observation_service.save_extraction_batch(
@@ -166,7 +179,7 @@ def extract_comment_thread_observations(
     user_messages = [message for message in messages if message["role"] == "user"]
     observations: list[dict[str, Any]] = []
     if user_messages:
-        data = reflection_router.call_thread_observation_extraction(
+        data, status = reflection_router.call_thread_observation_extraction_with_status(
             client=client,
             model=model,
             thread_context=_format_comment_context(thread),
@@ -182,7 +195,16 @@ def extract_comment_thread_observations(
             },
         )
         if data is None:
-            raise ValueError("评论线程 observation 提取没有返回有效 JSON")
+            return _handle_invalid_extraction_batch(
+                source_kind=COMMENT_SOURCE_KIND,
+                source_key=source_key,
+                cursor_before=cursor,
+                cursor_value=cursor_value,
+                messages=messages,
+                status=status,
+                error="评论线程 observation 提取没有返回有效 JSON",
+                metadata={"thread_id": thread_id, "post_id": thread.post_id, "soul_name": thread.soul_name},
+            )
         observations = data["observations"]
 
     observation_ids = observation_service.save_extraction_batch(
@@ -221,6 +243,124 @@ def _extract_source(
     if source_kind == COMMENT_SOURCE_KIND:
         return extract_comment_thread_observations(int(source_key), client, model, limit=limit_per_thread)
     raise ValueError(f"unknown observation source kind: {source_kind}")
+
+
+def _handle_invalid_extraction_batch(
+    *,
+    source_kind: str,
+    source_key: str,
+    cursor_before: int,
+    cursor_value: str,
+    messages: list[dict[str, Any]],
+    status: str | None,
+    error: str,
+    metadata: dict[str, Any],
+) -> ObservationExtractionResult:
+    if status not in INVALID_EXTRACTION_STATUSES:
+        detail = f"{error}: {status}" if status else error
+        raise ValueError(detail)
+
+    message_ids = [int(message["id"]) for message in messages]
+    previous = _cursor_metadata(source_kind, source_key)
+    skipped_batches = previous.get("skipped_poison_batches")
+    if not isinstance(skipped_batches, list):
+        skipped_batches = []
+
+    same_batch = (
+        previous.get("failure_kind") == "invalid_llm_response"
+        and previous.get("failed_cursor_before") == str(cursor_before)
+        and previous.get("failed_cursor_value") == str(cursor_value)
+        and previous.get("failed_message_ids") == message_ids
+    )
+    failure_count = int(previous.get("failure_count") or 0) + 1 if same_batch else 1
+    now = db.now_ts()
+    failure_metadata = {
+        **metadata,
+        "failure_count": failure_count,
+        "failure_kind": "invalid_llm_response",
+        "failure_status": status,
+        "failed_cursor_before": str(cursor_before),
+        "failed_cursor_value": str(cursor_value),
+        "failed_message_ids": message_ids,
+        "last_error": error,
+        "last_failed_at": now,
+        "skipped_poison_batches": skipped_batches,
+    }
+
+    if failure_count >= MAX_INVALID_EXTRACTION_RETRIES:
+        skipped_summary = {
+            "cursor_before": str(cursor_before),
+            "cursor_value": str(cursor_value),
+            "message_ids": message_ids,
+            "failure_count": failure_count,
+            "failure_status": status,
+            "skipped_at": now,
+        }
+        failure_metadata["skipped_poison_batch"] = skipped_summary
+        failure_metadata["skipped_poison_batches"] = [*skipped_batches, skipped_summary]
+        observation_service.set_cursor(source_kind, source_key, cursor_value, metadata=failure_metadata)
+        reason = f"skipped_poison_batch_after_{MAX_INVALID_EXTRACTION_RETRIES}_invalid_results"
+        logging_service.log_event(
+            "observation_extraction_poison_batch_skipped",
+            level="WARNING",
+            source_kind=source_kind,
+            source_key=source_key,
+            cursor_before=str(cursor_before),
+            cursor_value=cursor_value,
+            message_ids=message_ids,
+            failure_count=failure_count,
+            status=status,
+        )
+        return ObservationExtractionResult(
+            source_kind=source_kind,
+            source_key=source_key,
+            processed_count=len(messages),
+            observation_count=0,
+            cursor_value=cursor_value,
+            error=reason,
+            skipped_poison_batch=True,
+        )
+
+    observation_service.set_cursor(source_kind, source_key, str(cursor_before), metadata=failure_metadata)
+    reason = f"invalid_extraction_result_retry_{failure_count}_of_{MAX_INVALID_EXTRACTION_RETRIES}"
+    logging_service.log_event(
+        "observation_extraction_failed",
+        level="WARNING",
+        reason=reason,
+        source_kind=source_kind,
+        source_key=source_key,
+        cursor_before=str(cursor_before),
+        cursor_value=cursor_value,
+        message_ids=message_ids,
+        failure_count=failure_count,
+        status=status,
+    )
+    return ObservationExtractionResult(
+        source_kind=source_kind,
+        source_key=source_key,
+        processed_count=0,
+        observation_count=0,
+        cursor_value=str(cursor_before),
+        error=reason,
+    )
+
+
+def _cursor_metadata(source_kind: str, source_key: str) -> dict[str, Any]:
+    row = db.query_one(
+        """
+        SELECT metadata
+        FROM observation_cursors
+        WHERE source_kind = ? AND source_key = ?
+        """,
+        (source_kind, source_key),
+    )
+    if row is None or not row["metadata"]:
+        return {}
+    try:
+        data = json.loads(row["metadata"])
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _pending_sources() -> list[tuple[str, str]]:

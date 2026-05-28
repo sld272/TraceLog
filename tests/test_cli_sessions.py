@@ -193,6 +193,80 @@ class CliSessionsTest(unittest.TestCase):
         self.assertIn("再见", output.getvalue())
         log_event.assert_any_call("observation_consolidation_failed", level="WARNING", error="boom")
 
+    def test_exit_reflection_observation_failure_mentions_retry(self) -> None:
+        output = StringIO()
+        observation_result = SimpleNamespace(
+            source_kind="chat_thread",
+            source_key="1",
+            processed_count=0,
+            observation_count=0,
+            cursor_value="0",
+            error="invalid_extraction_result_retry_1_of_3",
+            skipped_poison_batch=False,
+        )
+
+        with (
+            patch("core.cli.sessions.observation_extractor.run_pending_observation_extractions_safely", return_value=[observation_result]),
+            patch("core.cli.sessions.reflector.preview_global_deep_reflection_scope", return_value=SimpleNamespace(post_ids=[])),
+            patch("core.cli.sessions.reflector.trigger_global_deep_reflection", return_value=None),
+            patch("core.cli.sessions.reflector.preview_soul_deep_reflection_scopes", return_value=[]),
+            patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[]),
+            patch(
+                "core.cli.sessions.observation_consolidation.run_observation_consolidation",
+                return_value=SimpleNamespace(
+                    bucket_count=0,
+                    merged_count=0,
+                    superseded_count=0,
+                    skipped_count=0,
+                    invalid_count=0,
+                ),
+            ),
+            redirect_stdout(output),
+        ):
+            sessions.run_deep_reflection_on_exit(object(), "model")
+
+        text = output.getvalue()
+        self.assertIn("1 个线程暂时提取失败，已保留待下次重试", text)
+        self.assertNotIn("已跳过 1 个连续解析失败的线程批次", text)
+        self.assertIn("再见", text)
+
+    def test_exit_reflection_observation_poison_skip_mentions_original_messages_remain(self) -> None:
+        output = StringIO()
+        observation_result = SimpleNamespace(
+            source_kind="chat_thread",
+            source_key="1",
+            processed_count=3,
+            observation_count=0,
+            cursor_value="3",
+            error="skipped_poison_batch_after_3_invalid_results",
+            skipped_poison_batch=True,
+        )
+
+        with (
+            patch("core.cli.sessions.observation_extractor.run_pending_observation_extractions_safely", return_value=[observation_result]),
+            patch("core.cli.sessions.reflector.preview_global_deep_reflection_scope", return_value=SimpleNamespace(post_ids=[])),
+            patch("core.cli.sessions.reflector.trigger_global_deep_reflection", return_value=None),
+            patch("core.cli.sessions.reflector.preview_soul_deep_reflection_scopes", return_value=[]),
+            patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[]),
+            patch(
+                "core.cli.sessions.observation_consolidation.run_observation_consolidation",
+                return_value=SimpleNamespace(
+                    bucket_count=0,
+                    merged_count=0,
+                    superseded_count=0,
+                    skipped_count=0,
+                    invalid_count=0,
+                ),
+            ),
+            redirect_stdout(output),
+        ):
+            sessions.run_deep_reflection_on_exit(object(), "model")
+
+        text = output.getvalue()
+        self.assertIn("已跳过 1 个连续解析失败的线程批次，原始消息仍保留", text)
+        self.assertNotIn("暂时提取失败", text)
+        self.assertIn("再见", text)
+
     def test_startup_orphan_cleanup_prints_and_logs_deleted_count(self) -> None:
         output = StringIO()
 

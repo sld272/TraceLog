@@ -39,6 +39,7 @@ def call_json_completion(
     timeout: int = 30,
     response_format: dict | None = None,
     trace_context: dict | None = None,
+    status_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict | None:
     """Call a JSON-mode chat completion and log the full lifecycle."""
     call_id = _new_call_id()
@@ -69,6 +70,8 @@ def call_json_completion(
         return None
     finally:
         duration_ms = int((perf_counter() - started) * 1000)
+        if status_callback is not None:
+            status_callback({"status": status, "error": error})
         logging_service.log_llm_call(
             call_id=call_id,
             operation=operation,
