@@ -24,6 +24,7 @@ sensitivity:
   关注的核心人际关系: normal
   性格与情绪倾向: normal
   长期目标与当前痛点: normal
+  近期主题与走向: normal
 ---
 
 # 用户档案
@@ -43,6 +44,8 @@ sensitivity:
 ## 性格与情绪倾向
 
 ## 长期目标与当前痛点
+
+## 近期主题与走向
 """
 
 ANCHOR_RE = re.compile(r"<!--\s*id:\s*([A-Za-z0-9_-]+)\s*-->")
@@ -57,6 +60,7 @@ SECTION_PREFIXES = {
     "关注的核心人际关系": "rel",
     "性格与情绪倾向": "tr",
     "长期目标与当前痛点": "gl",
+    "近期主题与走向": "trend",
 }
 
 THRESHOLDS = {
@@ -180,12 +184,13 @@ def _validate_patch_gate(patch: dict) -> str | None:
         if patch["confidence"] < min_confidence:
             return "low_confidence"
     bounds = _find_section_bounds(doc.lines, patch["section"])
-    if bounds is None:
+    if bounds is None and not _can_create_missing_section(patch):
         return "missing_section"
-    start, end = bounds
-    for op in patch["ops"]:
-        if op["op"] in ("update", "remove") and _find_anchor_line(doc.lines, start, end, op["anchor"]) is None:
-            return "invalid_anchor"
+    if bounds is not None:
+        start, end = bounds
+        for op in patch["ops"]:
+            if op["op"] in ("update", "remove") and _find_anchor_line(doc.lines, start, end, op["anchor"]) is None:
+                return "invalid_anchor"
     return None
 
 
@@ -238,7 +243,12 @@ def _apply_ops_to_doc(doc: UserMdDoc, patch: dict) -> str | None:
     for op in patch["ops"]:
         bounds = _find_section_bounds(lines, section)
         if bounds is None:
-            return None
+            if not _can_create_missing_section(patch):
+                return None
+            _append_missing_section(lines, section)
+            bounds = _find_section_bounds(lines, section)
+            if bounds is None:
+                return None
         start, end = bounds
         if op["op"] == "add":
             anchor = _new_anchor(section)
@@ -255,6 +265,16 @@ def _apply_ops_to_doc(doc: UserMdDoc, patch: dict) -> str | None:
                 return None
             del lines[index]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _can_create_missing_section(patch: dict) -> bool:
+    return patch["section"] in SECTION_PREFIXES and all(op["op"] == "add" for op in patch["ops"])
+
+
+def _append_missing_section(lines: list[str], section: str) -> None:
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines.extend(["", f"## {section}", ""])
 
 
 def _find_section_bounds(lines: list[str], section: str) -> tuple[int, int] | None:

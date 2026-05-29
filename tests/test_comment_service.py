@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import comment_service, db, logging_service, observation_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import comment_service, db, logging_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service
 from tests.helpers import require_not_none
 
 
@@ -43,7 +43,7 @@ class CommentServiceTest(unittest.TestCase):
         soul_service.SOULS_DIR = self.workspace / "souls"
         soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
-        retrieval.hybrid_search = lambda query, k=3: []
+        retrieval.hybrid_search = lambda query, k=3, **kwargs: []
 
         db.init_db()
         logging_service.init_logging({"enabled": True, "llm_payload": "off"})
@@ -103,7 +103,7 @@ class CommentServiceTest(unittest.TestCase):
             """,
             ("todo-1", "整理歌单", "未完成", 1.0, 1.0),
         )
-        retrieval.hybrid_search = lambda query, k=3: ["20260525-001", "20260524-001"]
+        retrieval.hybrid_search = lambda query, k=3, **kwargs: ["20260525-001", "20260524-001"]
 
         context = comment_service.build_comment_context(thread.id, "继续聊练歌")
 
@@ -134,8 +134,9 @@ class CommentServiceTest(unittest.TestCase):
         comment_service.append_user_message(thread.id, "第四条")
         captured: dict[str, str] = {}
 
-        def fake_search(query: str, k: int = 3) -> list[str]:
+        def fake_search(query: str, k: int = 3, **kwargs: object) -> list[str]:
             del k
+            del kwargs
             captured["query"] = query
             return []
 
@@ -153,8 +154,9 @@ class CommentServiceTest(unittest.TestCase):
         comment_service.append_user_message(thread.id, "最近用户消息")
         captured: dict[str, str] = {}
 
-        def fake_search(query: str, k: int = 3) -> list[str]:
+        def fake_search(query: str, k: int = 3, **kwargs: object) -> list[str]:
             del k
+            del kwargs
             captured["query"] = query
             return []
 
@@ -170,8 +172,9 @@ class CommentServiceTest(unittest.TestCase):
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
         captured: dict[str, str] = {}
 
-        def fake_search(query: str, k: int = 3) -> list[str]:
+        def fake_search(query: str, k: int = 3, **kwargs: object) -> list[str]:
             del k
+            del kwargs
             captured["query"] = query
             return []
 
@@ -183,47 +186,36 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("未落库当前消息", context.retrieval_query)
         self.assertEqual("未落库当前消息", captured["query"])
 
-    def test_build_comment_context_includes_current_soul_memory_only(self) -> None:
+    def test_build_comment_context_loads_current_soul_memory_only(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
-        user_message = comment_service.append_user_message(thread.id, "继续公开聊练歌")
-        self._insert_custom_post_and_comment("20260524-001", "默认", "其他 post", "其他回复")
-        self._create_comment_observation(
-            "默认",
-            "默认评论记忆",
-            "默认评论线程记忆：继续公开聊练歌。",
-            user_message.id,
-        )
-        self._create_comment_observation(
-            "毒舌好友",
-            "其他 SOUL 评论记忆",
-            "其他 SOUL 评论线程记忆：继续公开聊练歌。",
-            user_message.id,
-        )
+        soul_memory_service.write_soul_memory("默认", "# 默认的相处记忆\n\n## 对用户的理解\n默认评论记忆\n", source="user")
+        soul_memory_service.write_soul_memory("毒舌好友", "# 毒舌好友的相处记忆\n\n## 对用户的理解\n其他 SOUL 评论记忆\n", source="user")
 
         context = comment_service.build_comment_context(thread.id, "评论context词")
 
-        self.assertIn("# 相关记忆", context.context)
-        self.assertIn("L2", context.context)
-        self.assertIn("默认评论记忆", context.context)
-        self.assertNotIn("其他 SOUL 评论记忆", context.context)
-        self.assertIn("评论原文不该出现", context.context)
+        self.assertIn("默认评论记忆", context.soul.soul_memory)
+        self.assertNotIn("其他 SOUL 评论记忆", context.soul.soul_memory)
+        self.assertNotIn("# 相关记忆", context.context)
 
-    def test_build_comment_context_uses_query_rewrite_for_posts_and_memory(self) -> None:
+    def test_build_comment_context_uses_query_rewrite_for_related_posts(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
-        user_message = comment_service.append_user_message(thread.id, "继续聊图书馆学习效率")
-        self._create_comment_observation(
-            "默认",
-            "图书馆效率",
-            "用户在默认的评论线程提到图书馆学习效率更高。",
-            user_message.id,
-        )
+        comment_service.append_user_message(thread.id, "继续聊图书馆学习效率")
+        self._insert_custom_post_and_comment("20260524-001", "默认", "图书馆学习效率更高", "之前也聊过图书馆")
         captured: dict[str, object] = {}
 
-        def fake_search(query: str, k: int = 3, semantic_query: str | None = None, fts_keywords: list[str] | None = None) -> list[str]:
+        def fake_search(
+            query: str,
+            k: int = 3,
+            semantic_query: str | None = None,
+            fts_keywords: list[str] | None = None,
+            **kwargs: object,
+        ) -> list[str]:
+            del k
+            del kwargs
             captured["query"] = query
             captured["semantic_query"] = semantic_query
             captured["fts_keywords"] = fts_keywords
-            return []
+            return ["20260524-001"]
 
         retrieval.hybrid_search = fake_search
         rewritten = query_rewriter.RewrittenQuery(
@@ -233,13 +225,13 @@ class CommentServiceTest(unittest.TestCase):
             used_rewrite=True,
         )
 
-        with patch("core.comment_service.query_rewriter.rewrite_query", return_value=rewritten) as rewrite:
+        with patch("core.reply_context.query_rewriter.rewrite_query", return_value=rewritten) as rewrite:
             context = comment_service.build_comment_context(thread.id, "图书馆学习", FakeClient(), "fake-model")
 
         rewrite.assert_called_once()
         self.assertEqual("用户是否表达过图书馆学习效率更高", captured["semantic_query"])
         self.assertEqual(["图书馆", "学习效率"], captured["fts_keywords"])
-        self.assertIn("图书馆效率", context.context)
+        self.assertIn("图书馆学习效率更高", context.context)
         event = self._last_log_event("query_rewrite_result")
         self.assertEqual("comment_thread", event["channel"])
         self.assertTrue(event["used_rewrite"])
@@ -404,42 +396,6 @@ class CommentServiceTest(unittest.TestCase):
             VALUES (?, ?, ?, ?)
             """,
             (post_id, soul_name, comment, 2.0),
-        )
-
-    def _create_comment_observation(self, soul_name: str, title: str, narrative: str, message_id: int) -> int:
-        return observation_service.create_observation(
-            {
-                "type": "state",
-                "title": title,
-                "narrative": narrative,
-                "source_channel": "comment_thread",
-                "visibility_scope": "soul_scoped",
-                "scope_post_id": "20260525-001",
-                "scope_soul_name": soul_name,
-                "observed_at": 1.0,
-            },
-            [
-                {
-                    "source_type": "comment_message",
-                    "source_id": message_id,
-                    "excerpt": "评论原文不该出现",
-                    "evidence_access": "source_soul_only",
-                }
-            ],
-        )
-
-    def _create_soul_observation(self, title: str, narrative: str) -> int:
-        return observation_service.create_observation(
-            {
-                "type": "correction",
-                "title": title,
-                "narrative": narrative,
-                "source_channel": "chat",
-                "visibility_scope": "soul_scoped",
-                "scope_soul_name": "默认",
-                "observed_at": 1.0,
-            },
-            [{"source_type": "chat_message", "source_id": "1", "evidence_access": "source_soul_only"}],
         )
 
     def _last_log_event(self, event_name: str) -> dict:

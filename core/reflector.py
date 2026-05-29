@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from core import db, logging_service
-from core import observation_service
 from core import profile_service
 from core.llm import reflection_router
 from core.llm.types import LLMClient
@@ -20,7 +19,7 @@ from core import tool_config_service
 GLOBAL_DEEP_REFLECTION_TYPE = "global_deep"
 SOUL_DEEP_REFLECTION_TYPE = "soul_deep"
 PENDING_LIGHT_REFLECT_PREFIX = "pending_reflect:"
-SOUL_OBSERVATION_DEEP_CURSOR_PREFIX = "soul_observation_deep_cursor:"
+SOUL_THREAD_DEEP_CURSOR_PREFIX = "soul_thread_deep_cursor:"
 
 
 @dataclass(frozen=True)
@@ -47,7 +46,6 @@ class LightReflectionResult:
     emotions: list[dict]
     events: list[dict]
     relations: list[dict]
-    observations: list[dict]
     importance: float
 
 
@@ -99,7 +97,6 @@ def trigger_light_reflection(
         emotions=data["emotions"],
         events=data["events"],
         relations=data["relations"],
-        observations=data["observations"],
         importance=data["importance"],
     )
 
@@ -158,18 +155,18 @@ def preview_global_deep_reflection_scope(limit: int = 100) -> GlobalDeepReflecti
 
 
 def preview_soul_deep_reflection_scopes(limit_per_soul: int = 100) -> list[SoulDeepReflectionScope]:
-    """Preview SOUL observations that would be covered by the next SOUL deep reflection."""
+    """Preview SOUL thread messages that would be covered by the next SOUL deep reflection."""
     scopes: list[SoulDeepReflectionScope] = []
     for soul in soul_service.list_enabled_souls():
-        observations = _load_soul_observations_since_cursor(soul.name, limit_per_soul)
-        if not observations:
+        messages = _load_soul_thread_messages_since_cursor(soul.name, limit_per_soul)
+        if not messages:
             continue
         scopes.append(
             SoulDeepReflectionScope(
                 soul_name=soul.name,
-                interaction_count=len(observations),
-                scope_start=float(observations[0]["observed_at"]),
-                scope_end=float(max(item["observed_at"] for item in observations)),
+                interaction_count=len(messages),
+                scope_start=float(messages[0]["created_at"]),
+                scope_end=float(max(item["created_at"] for item in messages)),
             )
         )
     return scopes
@@ -190,22 +187,16 @@ def trigger_global_deep_reflection(
     profile = profile_service.read_profile()
     todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     related_post_ids = [row["id"] for row in posts]
-    observations = _load_global_observations_for_posts(related_post_ids)
-    observation_sources = _observation_sources_by_id(observations)
-    allowed_patch_evidence = _profile_observation_evidence_ids(observations, observation_sources)
     reflection_result = reflection_router.call_global_deep_reflection(
         client=client,
         model=model,
         profile=profile,
         posts=_format_posts(posts),
-        light_summary=_format_light_summary(related_post_ids),
-        observations=_format_observations_for_reflection(observations, observation_sources),
         todos=_format_todos(todos),
         trace_context={
             "trigger": trigger,
             "post_ids": related_post_ids,
             "post_count": len(related_post_ids),
-            "observation_ids": [int(row["id"]) for row in observations],
         },
     )
     if reflection_result is None or not _is_valid_reflection(reflection_result.get("reflection_md")):
@@ -214,7 +205,7 @@ def trigger_global_deep_reflection(
     content = reflection_result["reflection_md"].strip()
     patch_summary = _apply_profile_patches(
         reflection_result.get("patches", []),
-        allowed_evidence=allowed_patch_evidence,
+        allowed_evidence=related_post_ids,
     )
     reflection_id = _insert_reflection(
         content=content,
@@ -241,25 +232,23 @@ def trigger_soul_deep_reflections(
     trigger: str = "manual",
     limit_per_soul: int = 100,
 ) -> list[SoulDeepReflectionResult]:
-    """Generate SOUL-specific deep reflections from scoped observations."""
+    """Generate SOUL-specific deep reflections from raw thread messages."""
     results: list[SoulDeepReflectionResult] = []
     for soul in soul_service.list_enabled_souls():
-        observations = _load_soul_observations_since_cursor(soul.name, limit_per_soul)
-        if not observations:
+        messages = _load_soul_thread_messages_since_cursor(soul.name, limit_per_soul)
+        if not messages:
             continue
-        observation_sources = _observation_sources_by_id(observations)
-        formatted = _format_observations_for_reflection(observations, observation_sources)
-        evidence_ids = _soul_observation_evidence_ids(observations, observation_sources)
+        formatted = _format_soul_thread_messages(messages)
+        evidence_ids = _soul_thread_evidence_ids(messages)
         reflection_result = reflection_router.call_soul_deep_reflection(
             client=client,
             model=model,
             soul=soul,
-            observations=formatted,
+            interactions=formatted,
             trace_context={
                 "trigger": trigger,
                 "soul_name": soul.name,
-                "observation_count": len(observations),
-                "observation_ids": [int(row["id"]) for row in observations],
+                "message_count": len(messages),
                 "evidence_ids": evidence_ids,
             },
         )
@@ -269,7 +258,7 @@ def trigger_soul_deep_reflections(
                 level="WARNING",
                 soul_name=soul.name,
                 reason="invalid_json",
-                observation_count=len(observations),
+                message_count=len(messages),
             )
             continue
         if not _is_valid_soul_reflection(reflection_result.get("reflection_md")):
@@ -278,7 +267,7 @@ def trigger_soul_deep_reflections(
                 level="WARNING",
                 soul_name=soul.name,
                 reason="invalid_reflection",
-                observation_count=len(observations),
+                message_count=len(messages),
                 content_length=len(str(reflection_result.get("reflection_md") or "")),
             )
             continue
@@ -289,8 +278,8 @@ def trigger_soul_deep_reflections(
             reflection_result.get("patches", []),
             allowed_evidence=evidence_ids,
         )
-        scope_start = float(observations[0]["observed_at"])
-        scope_end = float(max(item["observed_at"] for item in observations))
+        scope_start = float(messages[0]["created_at"])
+        scope_end = float(max(item["created_at"] for item in messages))
         reflection_id = _insert_soul_reflection(
             soul_name=soul.name,
             content=content,
@@ -300,7 +289,7 @@ def trigger_soul_deep_reflections(
             trigger=trigger,
             patch_summary=patch_summary,
         )
-        _set_soul_observation_deep_cursor(soul.name, max(int(row["id"]) for row in observations))
+        _set_soul_thread_deep_cursor(soul.name, _max_soul_thread_cursor(messages))
         results.append(
             SoulDeepReflectionResult(
                 id=reflection_id,
@@ -308,7 +297,7 @@ def trigger_soul_deep_reflections(
                 content=content,
                 scope_start=scope_start,
                 scope_end=scope_end,
-                interaction_count=len(observations),
+                interaction_count=len(messages),
                 patch_summary=patch_summary,
             )
         )
@@ -392,140 +381,129 @@ def _format_posts(rows: list) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _load_global_observations_for_posts(post_ids: list[str]) -> list:
-    if not post_ids:
-        return []
-    placeholders = ",".join("?" for _ in post_ids)
-    return db.query_all(
-        f"""
-        SELECT DISTINCT observations.*
-        FROM observations
-        JOIN observation_sources
-          ON observation_sources.observation_id = observations.id
-        WHERE observations.status = 'active'
-          AND observations.visibility_scope = 'global'
-          AND observation_sources.source_type = 'post'
-          AND observation_sources.source_id IN ({placeholders})
-        ORDER BY observations.observed_at ASC, observations.id ASC
-        """,
-        tuple(post_ids),
-    )
-
-
-def _load_soul_observations_since_cursor(soul_name: str, limit: int) -> list:
+def _load_soul_thread_messages_since_cursor(soul_name: str, limit: int) -> list:
     if limit <= 0:
         return []
-    cursor = _get_soul_observation_deep_cursor(soul_name)
+    cursor = _get_soul_thread_deep_cursor(soul_name)
     return db.query_all(
         """
-        SELECT DISTINCT observations.*
-        FROM observations
-        WHERE observations.status = 'active'
-          AND observations.id > ?
-          AND observations.visibility_scope = 'soul_scoped'
-          AND observations.scope_soul_name = ?
-        ORDER BY observations.id ASC
+        SELECT *
+        FROM (
+            SELECT
+                'chat' AS channel,
+                chat_messages.id AS message_id,
+                chat_messages.thread_id AS thread_id,
+                NULL AS post_id,
+                chat_messages.role AS role,
+                chat_messages.content AS content,
+                chat_messages.created_at AS created_at
+            FROM chat_messages
+            JOIN chat_threads ON chat_threads.id = chat_messages.thread_id
+            WHERE chat_threads.soul_name = ?
+              AND chat_messages.id > ?
+
+            UNION ALL
+
+            SELECT
+                'comment_thread' AS channel,
+                comment_messages.id AS message_id,
+                comment_messages.thread_id AS thread_id,
+                comment_threads.post_id AS post_id,
+                comment_messages.role AS role,
+                comment_messages.content AS content,
+                comment_messages.created_at AS created_at
+            FROM comment_messages
+            JOIN comment_threads ON comment_threads.id = comment_messages.thread_id
+            WHERE comment_threads.soul_name = ?
+              AND comment_messages.id > ?
+        )
+        ORDER BY created_at ASC, channel ASC, message_id ASC
         LIMIT ?
         """,
-        (cursor, soul_name, limit),
+        (
+            soul_name,
+            cursor.get("chat_message_id", 0),
+            soul_name,
+            cursor.get("comment_message_id", 0),
+            limit,
+        ),
     )
 
 
-def _format_observations_for_reflection(rows: list, sources_by_observation_id: dict[int, list] | None = None) -> str:
+def _format_soul_thread_messages(rows: list) -> str:
     if not rows:
         return "（暂无）"
-    sources_by_observation_id = sources_by_observation_id or _observation_sources_by_id(rows)
     parts = []
     for row in rows:
-        sources = sources_by_observation_id.get(int(row["id"]), [])
-        evidence = ", ".join(f"{source['source_type']}:{source['source_id']}" for source in sources) or "none"
-        scope = row["visibility_scope"]
-        if row["scope_post_id"]:
-            scope += f":{row['scope_post_id']}"
-        if row["scope_soul_name"]:
-            scope += f":{row['scope_soul_name']}"
-        summary = f"\nsummary: {row['summary']}" if row["summary"] else ""
+        evidence_id = _soul_thread_evidence_id(row)
+        post_line = f"post_id: {row['post_id']}\n" if row["post_id"] else ""
         parts.append(
             "---\n"
-            f"observation_id: {row['id']}\n"
-            f"type: {row['type']}\n"
-            f"scope: {scope}\n"
-            f"title: {row['title']}{summary}\n"
-            f"importance: {float(row['importance']):.2f}\n"
-            f"confidence: {float(row['confidence']):.2f}\n"
-            f"evidence: {evidence}\n"
+            f"evidence: {evidence_id}\n"
+            f"channel: {row['channel']}\n"
+            f"thread_id: {row['thread_id']}\n"
+            f"{post_line}"
+            f"role: {row['role']}\n"
+            f"created_at: {row['created_at']}\n"
             "---\n\n"
-            f"{row['narrative']}"
+            f"{row['content']}"
         )
     return "\n\n".join(parts)
 
 
-def _profile_observation_evidence_ids(rows: list, sources_by_observation_id: dict[int, list] | None = None) -> list[str]:
-    """Return raw post ids because profile patches validate evidence against posts.id."""
-    sources_by_observation_id = sources_by_observation_id or _observation_sources_by_id(rows)
+def _soul_thread_evidence_ids(rows: list) -> list[str]:
     evidence: list[str] = []
     for row in rows:
-        for source in sources_by_observation_id.get(int(row["id"]), []):
-            if source["source_type"] != "post":
-                continue
-            item = str(source["source_id"])
-            if item not in evidence:
-                evidence.append(item)
+        item = _soul_thread_evidence_id(row)
+        if item not in evidence:
+            evidence.append(item)
     return evidence
 
 
-def _soul_observation_evidence_ids(rows: list, sources_by_observation_id: dict[int, list] | None = None) -> list[str]:
-    """Return typed ids because SOUL memory patches validate evidence by source kind."""
-    sources_by_observation_id = sources_by_observation_id or _observation_sources_by_id(rows)
-    evidence: list[str] = []
-    for row in rows:
-        for source in sources_by_observation_id.get(int(row["id"]), []):
-            item = f"{source['source_type']}:{source['source_id']}"
-            if item not in evidence:
-                evidence.append(item)
-    return evidence
+def _soul_thread_evidence_id(row) -> str:
+    prefix = "chat_message" if row["channel"] == "chat" else "comment_message"
+    return f"{prefix}:{row['message_id']}"
 
 
-def _observation_sources_by_id(rows: list) -> dict[int, list]:
-    observation_ids = []
-    for row in rows:
-        observation_id = int(row["id"])
-        if observation_id not in observation_ids:
-            observation_ids.append(observation_id)
-    if not observation_ids:
-        return {}
-    placeholders = ",".join("?" for _ in observation_ids)
-    source_rows = db.query_all(
-        f"""
-        SELECT observation_id, source_type, source_id
-        FROM observation_sources
-        WHERE observation_id IN ({placeholders})
-        ORDER BY observation_id, source_type, source_id
-        """,
-        tuple(observation_ids),
-    )
-    grouped: dict[int, list] = {observation_id: [] for observation_id in observation_ids}
-    for source in source_rows:
-        grouped.setdefault(int(source["observation_id"]), []).append(source)
-    return grouped
-
-
-def _get_soul_observation_deep_cursor(soul_name: str) -> int:
-    row = db.query_one("SELECT value FROM meta WHERE key = ?", (f"{SOUL_OBSERVATION_DEEP_CURSOR_PREFIX}{soul_name}",))
+def _get_soul_thread_deep_cursor(soul_name: str) -> dict[str, int]:
+    row = db.query_one("SELECT value FROM meta WHERE key = ?", (f"{SOUL_THREAD_DEEP_CURSOR_PREFIX}{soul_name}",))
     if row is None:
-        return 0
+        return {"chat_message_id": 0, "comment_message_id": 0}
     try:
-        return int(row["value"])
-    except (TypeError, ValueError):
-        return 0
+        data = json.loads(row["value"])
+    except (TypeError, json.JSONDecodeError):
+        return {"chat_message_id": 0, "comment_message_id": 0}
+    if not isinstance(data, dict):
+        return {"chat_message_id": 0, "comment_message_id": 0}
+    return {
+        "chat_message_id": _safe_int(data.get("chat_message_id")),
+        "comment_message_id": _safe_int(data.get("comment_message_id")),
+    }
 
 
-def _set_soul_observation_deep_cursor(soul_name: str, cursor: int) -> None:
+def _max_soul_thread_cursor(rows: list) -> dict[str, int]:
+    cursor = {"chat_message_id": 0, "comment_message_id": 0}
+    for row in rows:
+        if row["channel"] == "chat":
+            cursor["chat_message_id"] = max(cursor["chat_message_id"], int(row["message_id"]))
+        elif row["channel"] == "comment_thread":
+            cursor["comment_message_id"] = max(cursor["comment_message_id"], int(row["message_id"]))
+    return cursor
+
+
+def _set_soul_thread_deep_cursor(soul_name: str, cursor: dict[str, int]) -> None:
     with db.immediate_transaction() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            (f"{SOUL_OBSERVATION_DEEP_CURSOR_PREFIX}{soul_name}", str(cursor)),
+            (f"{SOUL_THREAD_DEEP_CURSOR_PREFIX}{soul_name}", json.dumps(cursor, ensure_ascii=False)),
         )
+
+
+def _safe_int(value) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _format_todos(todos: list) -> str:
@@ -533,66 +511,6 @@ def _format_todos(todos: list) -> str:
         return "（暂无）"
     lines = [todo_service.format_todo_for_context(item, include_status=True) for item in todos]
     return "\n".join(lines)
-
-
-def _format_light_summary(post_ids: list[str]) -> str:
-    if not post_ids:
-        return "（暂无）"
-    placeholders = ",".join("?" for _ in post_ids)
-    posts = db.query_all(
-        f"""
-        SELECT id, ts, importance
-        FROM posts
-        WHERE id IN ({placeholders})
-        ORDER BY julianday(ts) ASC, id ASC
-        """,
-        tuple(post_ids),
-    )
-    if not posts:
-        return "（暂无）"
-
-    parts = []
-    for post in posts:
-        entities = db.query_all(
-            """
-            SELECT e.type, e.name, pe.role
-            FROM post_entities pe
-            JOIN entities e ON e.id = pe.entity_id
-            WHERE pe.post_id = ?
-            ORDER BY e.type, e.name
-            """,
-            (post["id"],),
-        )
-        emotions = db.query_all(
-            """
-            SELECT label, intensity
-            FROM emotions
-            WHERE post_id = ?
-            ORDER BY intensity DESC, label
-            """,
-            (post["id"],),
-        )
-        events = db.query_all(
-            """
-            SELECT summary, category
-            FROM events
-            WHERE post_id = ?
-            ORDER BY id ASC
-            """,
-            (post["id"],),
-        )
-        entity_text = "、".join(f"{row['name']}({row['type']}/{row['role']})" for row in entities) or "无"
-        emotion_text = "、".join(f"{row['label']} {row['intensity']:.2f}" for row in emotions) or "无"
-        event_text = "、".join(f"{row['summary']}({row['category']})" for row in events) or "无"
-        importance = 0.5 if post["importance"] is None else float(post["importance"])
-        parts.append(
-            f"## {post['id']} {post['ts']}\n"
-            f"- importance: {importance:.2f}\n"
-            f"- entities: {entity_text}\n"
-            f"- emotions: {emotion_text}\n"
-            f"- events: {event_text}"
-        )
-    return "\n\n".join(parts)
 
 
 def _apply_light_reflection(post, data: dict) -> None:
@@ -649,27 +567,6 @@ def _apply_light_reflection(post, data: dict) -> None:
             "UPDATE posts SET importance = ?, updated_at = ? WHERE id = ?",
             (data.get("importance", 0.5), db.now_ts(), post_id),
         )
-        observation_service.replace_post_observations(
-            post_id,
-            data.get("observations", []),
-            observed_at=_post_observed_at(post),
-            excerpt=_post_excerpt(post["content"]),
-            conn=conn,
-        )
-
-
-def _post_observed_at(post) -> float:
-    try:
-        return float(post["created_at"])
-    except (IndexError, KeyError, TypeError, ValueError):
-        return db.now_ts()
-
-
-def _post_excerpt(content: str, limit: int = 500) -> str:
-    text = str(content or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit].rstrip()
 
 
 def _remove_old_light_rows(conn, post_id: str) -> None:

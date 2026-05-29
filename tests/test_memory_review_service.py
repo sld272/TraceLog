@@ -74,7 +74,7 @@ class MemoryReviewServiceTest(unittest.TestCase):
         memory_review_service.save_user_memory(updated)
 
         self.assertIn("姓名：用户自己写的", profile_service.read_profile())
-        self.assertEqual(1, db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions")["count"])
+        self.assertEqual(1, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions"))["count"])
 
     def test_save_soul_memory_writes_file_and_user_revision(self) -> None:
         updated = soul_memory("默认", "- 用户手动修正 SOUL 记忆")
@@ -90,25 +90,25 @@ class MemoryReviewServiceTest(unittest.TestCase):
         self.assertIn("overwrite_soul_memory", row["patch"])
 
     def test_invalid_user_memory_does_not_write_revision(self) -> None:
-        before = db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions")["count"]
+        before = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions"))["count"]
 
         with self.assertRaises(ValueError):
             memory_review_service.save_user_memory("# 错误标题\n")
         with self.assertRaises(ValueError):
             memory_review_service.save_user_memory("# 用户档案\n\x00")
 
-        after = db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions")["count"]
+        after = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions"))["count"]
         self.assertEqual(before, after)
         self.assertEqual(USER_MEMORY, profile_service.read_profile())
 
     def test_invalid_soul_memory_does_not_write_revision(self) -> None:
-        before = db.query_one("SELECT COUNT(*) AS count FROM soul_memory_revisions")["count"]
+        before = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM soul_memory_revisions"))["count"]
         original = soul_memory_service.read_soul_memory("默认")
 
         with self.assertRaises(ValueError):
             memory_review_service.save_soul_memory("默认", "# 默认的错误记忆\n")
 
-        after = db.query_one("SELECT COUNT(*) AS count FROM soul_memory_revisions")["count"]
+        after = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM soul_memory_revisions"))["count"]
         self.assertEqual(before, after)
         self.assertEqual(original, soul_memory_service.read_soul_memory("默认"))
 

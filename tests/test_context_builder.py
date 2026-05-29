@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import context_builder, db, logging_service, observation_service, profile_service, soul_memory_service, soul_service
+from core import context_builder, db, logging_service, profile_service, soul_memory_service, soul_service, tool_config_service
 
 
 class ContextBuilderTest(unittest.TestCase):
@@ -32,7 +32,6 @@ class ContextBuilderTest(unittest.TestCase):
         self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与现状\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
-        self._insert_post("p-1", "历史 post", created_at=10.0)
 
     def tearDown(self) -> None:
         logging_service.init_logging({"enabled": False})
@@ -44,96 +43,62 @@ class ContextBuilderTest(unittest.TestCase):
         soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         self.tmp.cleanup()
 
-    def test_public_post_context_includes_global_memory_only(self) -> None:
-        self._create_global("公开全局记忆", "用户公开偏好短回复。公开context词")
-        self._create_soul_scoped("SOUL 专属记忆", "默认知道的专属偏好。公开context词")
-
-        built = context_builder.build_context(relevant_post_ids=[], query="公开context词")
-
-        self.assertIn("# 相关记忆", built.shared_context)
-        self.assertIn("L1", built.shared_context)
-        self.assertIn("公开全局记忆", built.shared_context)
-        self.assertNotIn("SOUL 专属记忆", built.shared_context)
-        self.assertIn("SOUL 专属记忆", built.soul_memory_context_by_name["默认"])
-
-    def test_public_context_is_observation_first_and_suppresses_raw_related_posts(self) -> None:
-        self._seed_public_related_posts()
-        self._create_global("公开主链路记忆", "这是公开主链路接管词。")
-
-        built = context_builder.build_context(relevant_post_ids=["p-related"], query="公开主链路接管词")
-
-        self.assertIn("# 相关记忆", built.shared_context)
-        self.assertIn("# 近期帖子", built.shared_context)
-        self.assertNotIn("# 相关帖子", built.shared_context)
-        self.assertNotIn("raw related fallback content", built.shared_context)
-        self.assertLess(built.shared_context.index("# 相关记忆"), built.shared_context.index("# 近期帖子"))
-        self.assertEqual(["p-related"], built.relevant_post_ids)
-        event = self._last_event("context_assembly_result")
-        self.assertEqual("public_post", event["context_type"])
-        self.assertTrue(event["related_memory_present"])
-        self.assertTrue(event["memory_ids"])
-        self.assertFalse(event["raw_related_post_fallback_used"])
-        self.assertEqual(["p-related"], event["relevant_post_ids"])
-
-    def test_public_context_uses_raw_related_posts_as_cold_start_fallback(self) -> None:
-        self._seed_public_related_posts()
-
-        built = context_builder.build_context(relevant_post_ids=["p-related"], query="没有 observation 命中")
-
-        self.assertNotIn("# 相关记忆", built.shared_context)
-        self.assertIn("# 近期帖子", built.shared_context)
-        self.assertIn("# 相关帖子", built.shared_context)
-        self.assertIn("raw related fallback content", built.shared_context)
-        self.assertLess(built.shared_context.index("# 近期帖子"), built.shared_context.index("# 相关帖子"))
-        self.assertEqual(["p-related"], built.relevant_post_ids)
-        event = self._last_event("context_assembly_result")
-        self.assertFalse(event["related_memory_present"])
-        self.assertTrue(event["raw_related_post_fallback_used"])
-
-    def test_public_context_can_use_rewrite_keywords_for_memory(self) -> None:
-        self._create_global("图书馆效率", "用户提到晚上在图书馆学习效率更高。")
+    def test_public_context_uses_profile_raw_related_posts_and_todos(self) -> None:
+        self._insert_post("p-related", "raw related content one", created_at=5.0)
+        self._insert_post("p-related-2", "raw related content two", created_at=6.0)
+        db.execute(
+            """
+            INSERT INTO todos(id, task, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("todo-1", "整理比赛材料", "未完成", 1.0, 1.0),
+        )
 
         built = context_builder.build_context(
-            relevant_post_ids=[],
-            query="完全不相关的原始查询",
-            fts_keywords=["图书馆", "学习效率"],
+            relevant_post_ids=["p-related", "missing", "p-related-2", "p-related"],
+            query="这个参数保留兼容，但不再触发 memory retrieval",
+            fts_keywords=["不再使用"],
         )
 
-        self.assertIn("# 相关记忆", built.shared_context)
-        self.assertIn("图书馆效率", built.shared_context)
+        self.assertIn("# 用户档案", built.shared_context)
+        self.assertIn("测试用户", built.shared_context)
+        self.assertIn("# 相关帖子", built.shared_context)
+        self.assertEqual(1, built.shared_context.count("raw related content one"))
+        self.assertIn("raw related content two", built.shared_context)
+        self.assertIn("# 待办事项", built.shared_context)
+        self.assertIn("整理比赛材料", built.shared_context)
+        self.assertNotIn("# 相关记忆", built.shared_context)
+        self.assertNotIn("# 近期帖子", built.shared_context)
+        self.assertEqual(["p-related", "p-related-2"], built.relevant_post_ids)
 
-    def _create_global(self, title: str, narrative: str) -> int:
-        return observation_service.create_observation(
-            {
-                "type": "preference",
-                "title": title,
-                "narrative": narrative,
-                "source_channel": "post",
-                "visibility_scope": "global",
-                "observed_at": 1.0,
-            },
-            [{"source_type": "post", "source_id": "p-1", "evidence_access": "all"}],
+        event = self._last_event("context_assembly_result")
+        self.assertEqual("public_post", event["context_type"])
+        self.assertEqual(["p-related", "p-related-2"], event["relevant_post_ids"])
+        self.assertTrue(event["raw_related_posts_present"])
+        self.assertEqual(["# 用户档案", "# 相关帖子", "# 待办事项"], [item["title"] for item in event["sections"]])
+
+    def test_public_context_omits_related_posts_when_none_are_found(self) -> None:
+        built = context_builder.build_context(relevant_post_ids=["missing"])
+
+        self.assertIn("# 用户档案", built.shared_context)
+        self.assertNotIn("# 相关帖子", built.shared_context)
+        self.assertNotIn("# 近期帖子", built.shared_context)
+        self.assertEqual([], built.relevant_post_ids)
+
+    def test_public_context_omits_todos_when_tool_disabled(self) -> None:
+        tool_config_service.set_tool_enabled("todo", False)
+        db.execute(
+            """
+            INSERT INTO todos(id, task, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("todo-1", "不应进入上下文", "未完成", 1.0, 1.0),
         )
 
-    def _create_soul_scoped(self, title: str, narrative: str) -> int:
-        return observation_service.create_observation(
-            {
-                "type": "correction",
-                "title": title,
-                "narrative": narrative,
-                "source_channel": "chat",
-                "visibility_scope": "soul_scoped",
-                "scope_soul_name": "默认",
-                "observed_at": 1.0,
-            },
-            [{"source_type": "chat_message", "source_id": "1", "evidence_access": "source_soul_only"}],
-        )
+        built = context_builder.build_context()
 
-    def _seed_public_related_posts(self) -> None:
-        self._insert_post("p-2", "recent post two", created_at=20.0)
-        self._insert_post("p-3", "recent post three", created_at=30.0)
-        self._insert_post("p-4", "recent post four", created_at=40.0)
-        self._insert_post("p-related", "raw related fallback content", created_at=5.0)
+        self.assertNotIn("# 待办事项", built.shared_context)
+        self.assertNotIn("不应进入上下文", built.shared_context)
 
     def _insert_post(self, post_id: str, content: str, *, created_at: float = 1.0) -> None:
         db.execute(

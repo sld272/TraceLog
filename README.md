@@ -152,7 +152,7 @@ workspace/
 }
 ```
 
-LLM 调用会默认记录完整 prompt、response 与解析结果；query rewrite、FTS 构造、hybrid retrieval、observation memory retrieval 和上下文组装也会写入结构化 debug 事件。日志会尽量脱敏 API key/token 形态的字符串。需要排查“LLM call failed or returned invalid JSON”、embedding 初始化失败、向量检索失败、检索命中异常等问题时，优先查看 `workspace/logs/current.jsonl` 中的 `llm_call`、`query_rewrite_result`、`fts_query_built`、`hybrid_retrieval_result`、`memory_retrieval_result`、`context_assembly_result`、`external_api_error`、`vector_query_failed`、`post_index_failed` 等事件。
+LLM 调用会默认记录完整 prompt、response 与解析结果；query rewrite、FTS 构造、hybrid retrieval 和上下文组装也会写入结构化 debug 事件。日志会尽量脱敏 API key/token 形态的字符串。需要排查“LLM call failed or returned invalid JSON”、embedding 初始化失败、向量检索失败、检索命中异常等问题时，优先查看 `workspace/logs/current.jsonl` 中的 `llm_call`、`query_rewrite_result`、`fts_query_built`、`hybrid_retrieval_result`、`context_assembly_result`、`external_api_error`、`vector_query_failed`、`post_index_failed` 等事件。
 
 ## 配置注意事项
 

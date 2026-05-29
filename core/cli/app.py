@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from core import context_builder, logging_service, observation_extractor, observation_service, query_rewriter, record_service, reply_service, retrieval, todo_service, tool_config_service
+from core import context_builder, logging_service, query_rewriter, record_service, reply_service, retrieval, todo_service, tool_config_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
 from core.cli.config import load_config
@@ -60,9 +60,6 @@ def main() -> None:
         fixed_reflections = reflector.retry_pending_light_reflections(client, model)
         if fixed_reflections:
             print(f"[反思] 已处理 {fixed_reflections} 条待反思记录。")
-        _cleanup_orphan_observations_on_startup()
-        observation_results = observation_extractor.run_pending_observation_extractions_safely(client, model)
-        _print_startup_observation_results(observation_results)
         todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     except vectorstore.VectorStoreInitError as e:
         print(f"[向量存储] 初始化失败：{e}")
@@ -160,32 +157,3 @@ def main() -> None:
 
         if tool_config_service.is_tool_enabled("todo"):
             todos = todo_service.load_todos()
-
-
-def _cleanup_orphan_observations_on_startup() -> None:
-    try:
-        deleted = observation_service.cleanup_orphan_observations()
-    except Exception as exc:
-        logging_service.log_event(
-            "observation_orphan_cleanup_failed",
-            level="WARNING",
-            exception_type=type(exc).__name__,
-            exception_message=str(exc),
-        )
-        return
-    if deleted:
-        logging_service.log_event("observation_orphan_cleanup", deleted_count=deleted)
-        print(f"[Observation] 已清理 {deleted} 条孤儿 observation。")
-
-
-def _print_startup_observation_results(observation_results) -> None:
-    observation_count = sum(result.observation_count for result in observation_results if result.error is None)
-    processed_count = sum(result.processed_count for result in observation_results if result.error is None)
-    skipped_poison_count = sum(1 for result in observation_results if result.skipped_poison_batch)
-    failed_count = sum(1 for result in observation_results if result.error is not None and not result.skipped_poison_batch)
-    if processed_count:
-        print(f"[Observation] 已处理 {processed_count} 条待提取线程消息，新增 {observation_count} 条 observation。")
-    if failed_count:
-        print(f"[Observation] {failed_count} 个线程暂时提取失败，已保留待下次重试。")
-    if skipped_poison_count:
-        print(f"[Observation] 已跳过 {skipped_poison_count} 个连续解析失败的线程批次，原始消息仍保留。")

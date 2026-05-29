@@ -4,7 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db, observation_service
+from core import db
+from tests.helpers import require_not_none
 
 
 class DbTest(unittest.TestCase):
@@ -44,7 +45,7 @@ class DbTest(unittest.TestCase):
         self.assertIsNotNone(legacy)
         self.assertEqual([], generated)
 
-    def test_observation_schema_is_initialized(self) -> None:
+    def test_schema_version_is_current_and_observation_tables_are_absent(self) -> None:
         tables = {
             row["name"]
             for row in db.query_all(
@@ -55,68 +56,41 @@ class DbTest(unittest.TestCase):
                 """
             )
         }
-        version = db.query_one("SELECT value FROM meta WHERE key = ?", ("schema_version",))
+        version = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", ("schema_version",)))
 
-        self.assertIn("observations", tables)
-        self.assertIn("observation_sources", tables)
-        self.assertIn("observations_fts", tables)
-        self.assertIn("observation_cursors", tables)
-        self.assertEqual("1", version["value"])
+        self.assertNotIn("observations", tables)
+        self.assertNotIn("observation_sources", tables)
+        self.assertNotIn("observations_fts", tables)
+        self.assertNotIn("observation_cursors", tables)
+        self.assertEqual("2", version["value"])
 
-    def test_observations_fts_only_indexes_active_searchable_rows(self) -> None:
-        self._insert_post("p-1")
-        active_id = observation_service.create_observation(
-            {
-                "type": "preference",
-                "title": "简短回复",
-                "narrative": "用户偏好简短直接的回复。",
-                "source_channel": "post",
-                "visibility_scope": "global",
-                "observed_at": 1.0,
-            },
-            [{"source_type": "post", "source_id": "p-1", "evidence_access": "all"}],
-        )
-        blocked_id = observation_service.create_observation(
-            {
-                "type": "state",
-                "title": "隐藏短语",
-                "narrative": "这条不应该进入全文索引。",
-                "source_channel": "post",
-                "visibility_scope": "private_blocked",
-                "observed_at": 2.0,
-            },
-            [{"source_type": "post", "source_id": "p-1", "evidence_access": "none"}],
-        )
+    def test_init_db_drops_legacy_observation_tables_and_meta(self) -> None:
+        db.execute("CREATE TABLE observations(id INTEGER PRIMARY KEY, title TEXT)")
+        db.execute("CREATE TABLE observation_sources(observation_id INTEGER, source_id TEXT)")
+        db.execute("CREATE TABLE observation_cursors(source_kind TEXT PRIMARY KEY, cursor_value TEXT)")
+        db.execute("CREATE VIRTUAL TABLE observations_fts USING fts5(title)")
+        db.execute("INSERT INTO meta(key, value) VALUES (?, ?)", ("observation_consolidation_cursor:global", "1"))
+        db.execute("INSERT INTO meta(key, value) VALUES (?, ?)", ("soul_observation_deep_cursor:默认", "2"))
 
-        active = db.query_all("SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?", ("简短回复",))
-        blocked = db.query_all("SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?", ("隐藏短语",))
-        observation_service.mark_merged(active_id, blocked_id)
-        stale = db.query_all("SELECT rowid FROM observations_fts WHERE observations_fts MATCH ?", ("简短",))
+        db.init_db()
 
-        self.assertEqual([active_id], [row["rowid"] for row in active])
-        self.assertEqual([], blocked)
-        self.assertEqual([], stale)
+        tables = {
+            row["name"]
+            for row in db.query_all(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type IN ('table', 'virtual table')
+                """
+            )
+        }
+        stale_meta = db.query_all("SELECT key FROM meta WHERE key LIKE ? OR key LIKE ?", ("observation_%", "soul_observation_deep_cursor:%"))
 
-    def test_deleting_post_cleans_observation_sources_and_source_less_observation(self) -> None:
-        self._insert_post("p-1")
-        observation_id = observation_service.create_observation(
-            {
-                "type": "insight",
-                "title": "练歌洞察",
-                "narrative": "用户把练歌当成阶段目标。",
-                "source_channel": "post",
-                "visibility_scope": "global",
-            },
-            [{"source_type": "post", "source_id": "p-1", "evidence_access": "all"}],
-        )
-
-        db.execute("DELETE FROM posts WHERE id = ?", ("p-1",))
-
-        self.assertIsNone(db.query_one("SELECT id FROM observations WHERE id = ?", (observation_id,)))
-        self.assertEqual(
-            0,
-            db.query_one("SELECT COUNT(*) AS count FROM observation_sources")["count"],
-        )
+        self.assertNotIn("observations", tables)
+        self.assertNotIn("observation_sources", tables)
+        self.assertNotIn("observation_cursors", tables)
+        self.assertNotIn("observations_fts", tables)
+        self.assertEqual([], stale_meta)
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(

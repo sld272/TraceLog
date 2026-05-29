@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from core import db, evidence_service, logging_service, memory_retrieval, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import db, evidence_service, logging_service, profile_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
@@ -161,30 +161,25 @@ def build_comment_context(
         sections.append(f"# 原始 post\n\n[{post['id']}] {post['content']}")
 
     retrieval_query = _build_comment_retrieval_query(post, messages, user_message)
-    rewritten_query = _rewrite_for_retrieval(client, model, retrieval_query, "comment_thread", thread_id=thread_id, post_id=thread.post_id, soul_name=thread.soul_name)
+    rewritten_query = reply_context.rewrite_for_retrieval(client, model, retrieval_query, "comment_thread", thread_id=thread_id, post_id=thread.post_id, soul_name=thread.soul_name)
     relevant_post_ids = [
         post_id
-        for post_id in _hybrid_search_with_rewrite(retrieval_query, rewritten_query, k=COMMENT_RELATED_POST_LIMIT)
+        for post_id in reply_context.hybrid_search_with_rewrite(
+            retrieval_query,
+            rewritten_query,
+            k=COMMENT_RELATED_POST_LIMIT,
+            trace_context={
+                "channel": "comment_thread",
+                "thread_id": thread_id,
+                "post_id": thread.post_id,
+                "soul_name": thread.soul_name,
+            },
+        )
         if post_id != thread.post_id
     ]
     relevant_posts = evidence_service.read_posts_by_ids(relevant_post_ids)
     if relevant_posts:
         sections.append(f"# 相关帖子\n\n{relevant_posts}")
-
-    related_memory = memory_retrieval.search_comment_memory(
-        retrieval_query,
-        thread.soul_name,
-        relevant_post_ids,
-        fts_keywords=rewritten_query.keywords if rewritten_query.used_rewrite else None,
-        trace_context={
-            "channel": "comment_thread",
-            "thread_id": thread_id,
-            "post_id": thread.post_id,
-            "soul_name": thread.soul_name,
-        },
-    )
-    if related_memory:
-        sections.append(related_memory)
 
     related_comments = evidence_service.read_soul_comments(thread.soul_name, relevant_post_ids)
     if related_comments:
@@ -208,10 +203,7 @@ def build_comment_context(
         thread_id=thread_id,
         post_id=thread.post_id,
         soul_name=thread.soul_name,
-        sections=_section_summaries(sections),
-        memory_ids=_memory_ids_from_context(related_memory),
-        related_memory_present=bool(related_memory),
-        raw_related_post_fallback_used=False,
+        sections=reply_context.section_summaries(sections),
         relevant_post_ids=relevant_post_ids,
         context_length=len(context_text),
         message_count=len(messages),
@@ -430,59 +422,6 @@ def _build_comment_retrieval_query(post, messages: list[CommentMessage], user_me
     return user_message
 
 
-def _rewrite_for_retrieval(
-    client: LLMClient | None,
-    model: str | None,
-    retrieval_query: str,
-    channel: str,
-    **trace_context,
-) -> query_rewriter.RewrittenQuery:
-    if client is None or model is None:
-        return query_rewriter.RewrittenQuery(
-            raw_query=retrieval_query,
-            semantic_query=retrieval_query,
-            keywords=[],
-            used_rewrite=False,
-        )
-    rewritten = query_rewriter.rewrite_query(
-        client,
-        model,
-        retrieval_query,
-        channel,
-        trace_context={"channel": channel, **trace_context},
-    )
-    logging_service.log_event(
-        "query_rewrite_result",
-        **trace_context,
-        channel=channel,
-        raw_query=rewritten.raw_query,
-        semantic_query=rewritten.semantic_query,
-        keywords=rewritten.keywords,
-        used_rewrite=rewritten.used_rewrite,
-        keyword_count=len(rewritten.keywords),
-        semantic_query_length=len(rewritten.semantic_query),
-        raw_query_length=len(rewritten.raw_query),
-        rewrite_skipped_by_gate=rewritten.rewrite_skipped_by_gate,
-    )
-    return rewritten
-
-
-def _hybrid_search_with_rewrite(
-    retrieval_query: str,
-    rewritten_query: query_rewriter.RewrittenQuery,
-    *,
-    k: int,
-) -> list[str]:
-    if not rewritten_query.used_rewrite:
-        return retrieval.hybrid_search(retrieval_query, k=k)
-    return retrieval.hybrid_search(
-        retrieval_query,
-        k=k,
-        semantic_query=rewritten_query.semantic_query,
-        fts_keywords=rewritten_query.keywords,
-    )
-
-
 def _recent_user_message_contents(messages, limit: int) -> list[str]:
     contents = [
         message.content.strip()
@@ -490,30 +429,3 @@ def _recent_user_message_contents(messages, limit: int) -> list[str]:
         if message.role == "user" and message.content.strip()
     ]
     return contents[-limit:]
-
-
-def _section_summaries(sections: list[str]) -> list[dict]:
-    summaries = []
-    for section in sections:
-        first_line = section.splitlines()[0] if section.splitlines() else ""
-        summaries.append(
-            {
-                "title": first_line[:80],
-                "length": len(section),
-            }
-        )
-    return summaries
-
-
-def _memory_ids_from_context(value: str) -> list[int]:
-    ids: list[int] = []
-    for line in value.splitlines():
-        if not line.startswith("- ["):
-            continue
-        end = line.find("]")
-        if end <= 3:
-            continue
-        raw_id = line[3:end]
-        if raw_id.isdigit():
-            ids.append(int(raw_id))
-    return ids

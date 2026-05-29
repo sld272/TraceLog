@@ -2,24 +2,13 @@
 
 from __future__ import annotations
 
-from core import chat_service, comment_service, logging_service, observation_consolidation, observation_extractor, reflector, todo_service, tool_config_service
+from core import chat_service, comment_service, logging_service, reflector, todo_service, tool_config_service
 from core.cli_input import read_cli_input
 from core.llm.types import LLMClient
 
 
 def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
     print("\n\n[反思] 正在整理本次记录与 SOUL 互动，请稍候（请勿再次终止）...")
-    observation_results = observation_extractor.run_pending_observation_extractions_safely(client, model)
-    observation_count = sum(result.observation_count for result in observation_results if result.error is None)
-    processed_count = sum(result.processed_count for result in observation_results if result.error is None)
-    skipped_poison_count = sum(1 for result in observation_results if result.skipped_poison_batch)
-    failed_count = sum(1 for result in observation_results if result.error is not None and not result.skipped_poison_batch)
-    if processed_count:
-        print(f"[Observation] 已处理 {processed_count} 条线程消息，新增 {observation_count} 条 observation。")
-    if failed_count:
-        print(f"[Observation] {failed_count} 个线程暂时提取失败，已保留待下次重试。")
-    if skipped_poison_count:
-        print(f"[Observation] 已跳过 {skipped_poison_count} 个连续解析失败的线程批次，原始消息仍保留。")
     try:
         try:
             scope = reflector.preview_global_deep_reflection_scope()
@@ -88,30 +77,6 @@ def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
     except Exception as e:
         logging_service.log_event("deep_reflection_failed", level="ERROR", type="soul", error=str(e))
         print(f"[反思] SOUL 深反思失败：{e}，已有数据保持不变。")
-    try:
-        result = observation_consolidation.run_observation_consolidation(client, model)
-        if result.bucket_count:
-            logging_service.log_event(
-                "observation_consolidation_saved",
-                bucket_count=result.bucket_count,
-                merged_count=result.merged_count,
-                superseded_count=result.superseded_count,
-                skipped_count=result.skipped_count,
-                invalid_count=result.invalid_count,
-            )
-            print(
-                f"[Observation] Consolidation 已完成：处理 {result.bucket_count} 个 bucket，"
-                f"merged={result.merged_count} superseded={result.superseded_count} "
-                f"skipped={result.skipped_count} invalid={result.invalid_count}。"
-            )
-        else:
-            print("[Observation] 没有需要 consolidation 的 observation。")
-    except KeyboardInterrupt:
-        logging_service.log_event("observation_consolidation_interrupted", level="WARNING")
-        print("\n[警告] Observation consolidation 被强制中断，已有数据保持不变。")
-    except Exception as e:
-        logging_service.log_event("observation_consolidation_failed", level="WARNING", error=str(e))
-        print(f"[Observation] Consolidation 暂时失败：{e}，已保留待下次重试。")
     print("再见！\n")
 
 

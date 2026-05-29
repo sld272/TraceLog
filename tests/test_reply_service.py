@@ -31,15 +31,13 @@ class ReplyServiceTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
-    def test_fanout_appends_only_current_soul_memory_without_extra_llm_calls(self) -> None:
+    def test_fanout_passes_shared_context_to_each_soul_without_extra_llm_calls(self) -> None:
         soul_a = SoulContext("默认", None, 1, "默认人格", "")
         soul_b = SoulContext("毒舌好友", None, 2, "毒舌人格", "")
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul_a, soul_b],
-            recent_post_ids=set(),
             relevant_post_ids=[],
-            soul_memory_context_by_name={"默认": "默认专属记忆"},
         )
         captured_contexts: dict[str, str] = {}
 
@@ -53,10 +51,8 @@ class ReplyServiceTest(unittest.TestCase):
 
         self.assertEqual(2, call.call_count)
         self.assertEqual(["默认", "毒舌好友"], [result.soul_name for result in results])
-        self.assertIn("共享上下文", captured_contexts["默认"])
-        self.assertIn("默认专属记忆", captured_contexts["默认"])
-        self.assertIn("共享上下文", captured_contexts["毒舌好友"])
-        self.assertNotIn("默认专属记忆", captured_contexts["毒舌好友"])
+        self.assertEqual("共享上下文", captured_contexts["默认"])
+        self.assertEqual("共享上下文", captured_contexts["毒舌好友"])
         rows = db.query_all("SELECT soul_name, content FROM comments ORDER BY soul_name")
         self.assertEqual([("毒舌好友", "毒舌好友 回复"), ("默认", "默认 回复")], [(row["soul_name"], row["content"]) for row in rows])
 
