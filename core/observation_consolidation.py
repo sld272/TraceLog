@@ -118,24 +118,21 @@ def _all_active_buckets() -> list[ConsolidationScope]:
         """
         SELECT
             visibility_scope,
-            scope_post_id,
             scope_soul_name,
             COUNT(*) AS active_count,
             MAX(id) AS max_id
         FROM observations
         WHERE status = 'active'
-          AND visibility_scope IN ('global', 'post_visible', 'soul_scoped')
-        GROUP BY visibility_scope, scope_post_id, scope_soul_name
-        ORDER BY visibility_scope, scope_post_id, scope_soul_name
+          AND visibility_scope IN ('global', 'soul_scoped')
+        GROUP BY visibility_scope, scope_soul_name
+        ORDER BY visibility_scope, scope_soul_name
         """
     )
     scopes = []
     for row in rows:
         visibility = row["visibility_scope"]
         scope_value = None
-        if visibility == "post_visible":
-            scope_value = row["scope_post_id"]
-        elif visibility == "soul_scoped":
+        if visibility == "soul_scoped":
             scope_value = row["scope_soul_name"]
         bucket_key = _bucket_key(visibility, scope_value)
         cursor = _get_cursor(bucket_key)
@@ -167,18 +164,6 @@ def _pending_count(visibility_scope: str, scope_value: str | None, cursor: int) 
             """,
             (cursor,),
         )
-    elif visibility_scope == "post_visible":
-        row = db.query_one(
-            """
-            SELECT COUNT(*) AS count
-            FROM observations
-            WHERE status = 'active'
-              AND id > ?
-              AND visibility_scope = 'post_visible'
-              AND scope_post_id = ?
-            """,
-            (cursor, scope_value),
-        )
     elif visibility_scope == "soul_scoped":
         row = db.query_one(
             """
@@ -208,19 +193,6 @@ def _load_bucket_rows(scope: ConsolidationScope, limit: int) -> list[Any]:
             LIMIT ?
             """,
             (limit,),
-        )
-    if scope.visibility_scope == "post_visible":
-        return db.query_all(
-            """
-            SELECT *
-            FROM observations
-            WHERE status = 'active'
-              AND visibility_scope = 'post_visible'
-              AND scope_post_id = ?
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (scope.scope_value, limit),
         )
     if scope.visibility_scope == "soul_scoped":
         return db.query_all(

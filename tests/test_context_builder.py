@@ -46,16 +46,15 @@ class ContextBuilderTest(unittest.TestCase):
 
     def test_public_post_context_includes_global_memory_only(self) -> None:
         self._create_global("公开全局记忆", "用户公开偏好短回复。公开context词")
-        self._create_soul_scoped("私聊不该出现", "私聊偏好。公开context词")
-        self._create_post_visible("评论不该出现", "评论线程偏好。公开context词")
+        self._create_soul_scoped("SOUL 专属记忆", "默认知道的专属偏好。公开context词")
 
         built = context_builder.build_context(relevant_post_ids=[], query="公开context词")
 
         self.assertIn("# 相关记忆", built.shared_context)
         self.assertIn("L1", built.shared_context)
         self.assertIn("公开全局记忆", built.shared_context)
-        self.assertNotIn("私聊不该出现", built.shared_context)
-        self.assertNotIn("评论不该出现", built.shared_context)
+        self.assertNotIn("SOUL 专属记忆", built.shared_context)
+        self.assertIn("SOUL 专属记忆", built.soul_memory_context_by_name["默认"])
 
     def test_public_context_is_observation_first_and_suppresses_raw_related_posts(self) -> None:
         self._seed_public_related_posts()
@@ -128,20 +127,6 @@ class ContextBuilderTest(unittest.TestCase):
                 "observed_at": 1.0,
             },
             [{"source_type": "chat_message", "source_id": "1", "evidence_access": "source_soul_only"}],
-        )
-
-    def _create_post_visible(self, title: str, narrative: str) -> int:
-        return observation_service.create_observation(
-            {
-                "type": "state",
-                "title": title,
-                "narrative": narrative,
-                "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
-                "scope_post_id": "p-1",
-                "observed_at": 1.0,
-            },
-            [{"source_type": "comment_message", "source_id": "1", "evidence_access": "post_visible"}],
         )
 
     def _seed_public_related_posts(self) -> None:

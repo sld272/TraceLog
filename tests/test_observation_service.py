@@ -26,7 +26,7 @@ class ObservationServiceTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
-    def test_create_and_read_global_post_and_soul_scoped_observations(self) -> None:
+    def test_create_and_read_global_and_soul_scoped_observations(self) -> None:
         chat_message_id = self._insert_chat_message("默认", "私聊证据")
         global_id = observation_service.create_observation(
             {
@@ -42,17 +42,6 @@ class ObservationServiceTest(unittest.TestCase):
                 "metadata": {"kind": "test"},
             },
             [{"source_type": "post", "source_id": "p-1", "evidence_access": "all"}],
-        )
-        post_id = observation_service.create_observation(
-            {
-                "type": "insight",
-                "title": "评论线程洞察",
-                "narrative": "这条讨论属于公开 post 语境。",
-                "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
-                "scope_post_id": "p-1",
-            },
-            [{"source_type": "post", "source_id": "p-1", "evidence_access": "post_visible"}],
         )
         soul_id = observation_service.create_observation(
             {
@@ -73,28 +62,27 @@ class ObservationServiceTest(unittest.TestCase):
         )
 
         global_observation = require_not_none(observation_service.get_observation(global_id))
-        post_observation = require_not_none(observation_service.get_observation(post_id))
         soul_observation = require_not_none(observation_service.get_observation(soul_id))
 
         self.assertEqual("短回复偏好", global_observation["title"])
         self.assertEqual("global", global_observation["visibility_scope"])
-        self.assertEqual("post_visible", post_observation["visibility_scope"])
-        self.assertEqual("p-1", post_observation["scope_post_id"])
         self.assertEqual("soul_scoped", soul_observation["visibility_scope"])
         self.assertEqual("默认", soul_observation["scope_soul_name"])
         self.assertEqual("chat_message", soul_observation["sources"][0]["source_type"])
 
     def test_scope_validation_rejects_invalid_boundaries(self) -> None:
+        retired_scope = "post" + "_visible"
         with self.assertRaises(ValueError):
             observation_service.create_observation(
                 {
                     "type": "insight",
-                    "title": "缺少 post scope",
-                    "narrative": "缺少 scope_post_id。",
+                    "title": "旧 post visibility",
+                    "narrative": "旧的按 post 可见边界已不再是合法可见性。",
                     "source_channel": "comment_thread",
-                    "visibility_scope": "post_visible",
+                    "visibility_scope": retired_scope,
+                    "scope_post_id": "p-1",
                 },
-                [{"source_type": "post", "source_id": "p-1", "evidence_access": "post_visible"}],
+                [{"source_type": "post", "source_id": "p-1", "evidence_access": "source_soul_only"}],
             )
         with self.assertRaises(ValueError):
             observation_service.create_observation(
@@ -149,42 +137,26 @@ class ObservationServiceTest(unittest.TestCase):
         self._create_global("全局偏好", observed_at=1.0)
         observation_service.create_observation(
             {
-                "type": "insight",
-                "title": "公开评论",
-                "narrative": "公开评论线程观察。",
-                "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
-                "scope_post_id": "p-1",
-                "observed_at": 2.0,
-            },
-            [{"source_type": "post", "source_id": "p-1", "evidence_access": "post_visible"}],
-        )
-        observation_service.create_observation(
-            {
                 "type": "correction",
-                "title": "私聊纠正",
-                "narrative": "私聊纠正只属于默认。",
-                "source_channel": "chat",
+                "title": "SOUL 纠正",
+                "narrative": "私聊和评论线程纠正只属于默认。",
+                "source_channel": "comment_thread",
                 "visibility_scope": "soul_scoped",
+                "scope_post_id": "p-1",
                 "scope_soul_name": "默认",
-                "observed_at": 3.0,
+                "observed_at": 2.0,
             },
             [{"source_type": "post", "source_id": "p-1", "evidence_access": "source_soul_only"}],
         )
 
         global_rows = observation_service.list_active_observations(visibility_scope="global")
-        post_rows = observation_service.list_active_observations(
-            visibility_scope="post_visible",
-            scope_post_id="p-1",
-        )
         soul_rows = observation_service.list_active_observations(
             visibility_scope="soul_scoped",
             scope_soul_name="默认",
         )
 
         self.assertEqual(["全局偏好"], [row["title"] for row in global_rows])
-        self.assertEqual(["公开评论"], [row["title"] for row in post_rows])
-        self.assertEqual(["私聊纠正"], [row["title"] for row in soul_rows])
+        self.assertEqual(["SOUL 纠正"], [row["title"] for row in soul_rows])
 
     def test_status_updates_remove_observation_from_fts(self) -> None:
         target_id = self._create_global("保留目标")
@@ -298,16 +270,17 @@ class ObservationServiceTest(unittest.TestCase):
         self.assertIsNone(observation_service.get_observation(observation_id))
 
     def test_post_and_soul_delete_do_not_leave_orphan_observations(self) -> None:
-        post_observation = observation_service.create_observation(
+        comment_observation = observation_service.create_observation(
             {
                 "type": "insight",
                 "title": "公开来源",
                 "narrative": "这条跟 post 绑定。",
                 "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
+                "visibility_scope": "soul_scoped",
                 "scope_post_id": "p-1",
+                "scope_soul_name": "默认",
             },
-            [{"source_type": "post", "source_id": "p-1", "evidence_access": "post_visible"}],
+            [{"source_type": "post", "source_id": "p-1", "evidence_access": "source_soul_only"}],
         )
         soul_observation = observation_service.create_observation(
             {
@@ -324,7 +297,7 @@ class ObservationServiceTest(unittest.TestCase):
         db.execute("DELETE FROM posts WHERE id = ?", ("p-1",))
         db.execute("DELETE FROM souls WHERE name = ?", ("默认",))
 
-        self.assertIsNone(observation_service.get_observation(post_observation))
+        self.assertIsNone(observation_service.get_observation(comment_observation))
         self.assertIsNone(observation_service.get_observation(soul_observation))
         self.assertEqual(
             0,

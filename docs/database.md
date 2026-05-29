@@ -281,7 +281,7 @@ CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
 
 ## 5. Observation 数据底座
 
-本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入 `post_visible` / `soul_scoped` observation。Memory Retrieval v1 已接入 L1 narrative 层召回，并支持 L2 evidence excerpt 渐进展开；Deep Reflection 已消费 observation，Consolidation v1 已按 visibility boundary 执行 `merge` / `supersede`。
+本节描述当前已落入 `schema.sql` 的 Observation 数据底座。它提供存储、边界过滤、FTS、游标和证据清理能力；公开 post 轻反思已经会写入 `global` observation，评论线程与私聊也会通过 cursor 增量写入当前 SOUL 的 `soul_scoped` observation。Memory Retrieval v1 已接入 L1 narrative 层召回，并支持 L2 evidence excerpt 渐进展开；Deep Reflection 已消费 observation，Consolidation v1 已按 visibility boundary 执行 `merge` / `supersede`。
 
 Observation 是 raw evidence 与深反思之间的中层记忆单位。它只保存可检索、可过滤、可审计的信号；具体原始证据统一写入 `observation_sources`。
 
@@ -319,15 +319,13 @@ CREATE TABLE IF NOT EXISTS observations (
 );
 ```
 
-实际 schema 通过 `CHECK` 约束冻结 observation type、source channel、visibility、status、importance/confidence 范围和 scope 必填规则：`post_visible` 必须有 `scope_post_id`，`soul_scoped` 必须有 `scope_soul_name`，`global` 不能带 `scope_soul_name`。
+实际 schema 通过 `CHECK` 约束冻结 observation type、source channel、visibility、status、importance/confidence 范围和 scope 必填规则：`soul_scoped` 必须有 `scope_soul_name`，`global` 不能带 `scope_soul_name`。评论线程可保留 `scope_post_id` 作为来源上下文，但它不构成可见性边界。
 
 建议索引：
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_observations_status_time
     ON observations(status, observed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_observations_post_scope
-    ON observations(visibility_scope, scope_post_id, status, observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_observations_soul_scope
     ON observations(visibility_scope, scope_soul_name, status, observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_observations_type_time
@@ -384,7 +382,7 @@ Consolidation 与 SOUL observation deep reflection 不新增表，继续使用 `
 | `observation_consolidation_cursor:<bucket_key>` | 该 bucket 已成功 consolidation 到的最大 `observations.id` |
 | `soul_observation_deep_cursor:<soul_name>` | 该 SOUL 已成功深反思到的最大 `observations.id` |
 
-`bucket_key` 固定为 `global`、`post_visible:<post_id>` 或 `soul_scoped:<soul_name>`。Consolidation 写状态时只更新 `observations.status`、`merged_into`、`superseded_by` 与 `updated_at`；FTS trigger 会自动让 `merged` / `superseded` observation 从默认检索中消失。
+`bucket_key` 固定为 `global` 或 `soul_scoped:<soul_name>`。Consolidation 写状态时只更新 `observations.status`、`merged_into`、`superseded_by` 与 `updated_at`；FTS trigger 会自动让 `merged` / `superseded` observation 从默认检索中消失。
 
 Consolidation v1 不直接执行 `promote`。进入 `user.md` 或 `soul_memories/<name>.md` 的 promotion 由 global / SOUL deep reflection 的 patch 流程完成；consolidation 只负责同一 visibility boundary 内的 `merge` 与 `supersede` 状态整理。
 
@@ -408,7 +406,6 @@ todo_signal
 
 ```text
 global
-post_visible
 soul_scoped
 private_blocked
 ```
@@ -417,7 +414,6 @@ private_blocked
 
 ```text
 all
-post_visible
 source_soul_only
 none
 ```
@@ -436,8 +432,8 @@ archived
 | 来源 | `visibility_scope` | scope 字段 | `evidence_access` |
 | --- | --- | --- | --- |
 | 公开 post | `global` | 无 | `all` |
-| SOUL 首条公开评论 | `post_visible` | `scope_post_id` | `post_visible` |
-| 评论线程消息 | `post_visible` | `scope_post_id` | `post_visible` |
+| SOUL 首条公开评论 | 不单独提取 observation | 无 | 无 |
+| 评论线程消息 | `soul_scoped` | `scope_soul_name`；`scope_post_id` 仅作来源上下文 | `source_soul_only` |
 | 私聊消息 | `soul_scoped` | `scope_soul_name` | `source_soul_only` |
 | 不应记录内容 | `private_blocked` | 可选 | `none` |
 
@@ -448,7 +444,7 @@ archived
 评论线程与私聊 observation 的边界同样不由 LLM 决定。线程提取 parser 只接受 `type`、`title`、`summary`、`narrative`、`importance`、`confidence`、`source_message_ids`。`source_message_ids` 必须来自本批次 user messages；assistant messages 只作为理解语境，不作为证据源。写入时系统固定补齐：
 
 - 私聊：`source_channel='chat'`、`visibility_scope='soul_scoped'`、`scope_soul_name=<thread.soul_name>`、`source_type='chat_message'`、`evidence_access='source_soul_only'`
-- 评论线程：`source_channel='comment_thread'`、`visibility_scope='post_visible'`、`scope_post_id=<thread.post_id>`、`source_type='comment_message'`、`evidence_access='post_visible'`
+- 评论线程：`source_channel='comment_thread'`、`visibility_scope='soul_scoped'`、`scope_soul_name=<thread.soul_name>`、`scope_post_id=<thread.post_id>`、`source_type='comment_message'`、`evidence_access='source_soul_only'`
 
 ### 5.4 检索与向量化策略
 
@@ -459,23 +455,24 @@ Observation v1 使用：
 
 公开 post 回复已采用 observation-first 主链路：post FTS/ChromaDB 的主要职责不再是把 raw related posts 直接塞进 prompt，而是为 `search_public_post_memory()` 提供 `related_post_ids`，让系统通过 `observation_sources(source_type='post')` 反查 `global` observations。只有没有相关 observation 命中时，raw `# 相关帖子` 才作为冷启动兜底进入公开回复上下文。
 
-第一版不对所有 observation 建向量索引。若后续引入 observation 向量索引，默认只允许 `global` / `post_visible` observation 向量化；`soul_scoped` 默认不向量化，除非未来引入本地 embedding 并另行设计；`private_blocked` 永不向量化。
+第一版不对所有 observation 建向量索引。若后续引入 observation 向量索引，默认只允许 `global` observation 向量化；`soul_scoped` 默认不向量化，除非未来引入本地 embedding 并另行设计；`private_blocked` 永不向量化。
 
 FTS 查询必须 join `observations` 并先过滤：
 
 - `status = 'active'`
 - 当前场景允许的 `visibility_scope`
-- 当前 `scope_post_id` 或 `scope_soul_name`
+- 当前 `scope_soul_name`
 
-公开 post 回复和公开评论回复场景永远不能召回 `soul_scoped` observation，即使当前回复 SOUL 与 `scope_soul_name` 相同。
+公开 post 的共享上下文只召回 `global` observation；fanout 到单个 SOUL 时可以追加该 SOUL 自己的 `soul_scoped` narrative。该追加不展开私聊/评论原文 excerpt。
 
 当前 Memory Retrieval v1 的召回矩阵：
 
 | 场景 | FTS 允许范围 | 间接 post 语义范围 |
 | --- | --- | --- |
-| 公开 post 回复 | `global` | `global` |
+| 公开 post 共享上下文 | `global` | `global` |
+| 公开 post 单 SOUL fanout | 当前 `scope_soul_name` 的 `soul_scoped` | 无 |
 | 私聊 | `global` + 当前 `scope_soul_name` 的 `soul_scoped` | `global` |
-| 评论线程 | `global` + 当前 `scope_post_id` 的 `post_visible` | `global` |
+| 评论线程 | `global` + 当前 `scope_soul_name` 的 `soul_scoped` | `global` |
 
 Progressive Disclosure v1 在 `# 相关记忆` 中使用 L1/L2 分层：
 
@@ -489,6 +486,5 @@ L2 evidence access gate：
 | evidence_access | 展开规则 |
 | --- | --- |
 | `all` | 所有场景可展开 |
-| `post_visible` | 只在同一个 `scope_post_id` 的评论线程展开 |
-| `source_soul_only` | 只在同一个 `scope_soul_name` 的私聊展开 |
+| `source_soul_only` | 只在同一个 `scope_soul_name` 的私聊或评论线程展开 |
 | `none` | 永不展开 |

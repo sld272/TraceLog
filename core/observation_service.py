@@ -6,7 +6,7 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from core import db
+from core import db, observation_visibility
 
 OBSERVATION_TYPES = {
     "preference",
@@ -20,8 +20,16 @@ OBSERVATION_TYPES = {
     "todo_signal",
 }
 SOURCE_CHANNELS = {"post", "comment", "comment_thread", "chat", "reflection", "todo"}
-VISIBILITY_SCOPES = {"global", "post_visible", "soul_scoped", "private_blocked"}
-EVIDENCE_ACCESS = {"all", "post_visible", "source_soul_only", "none"}
+VISIBILITY_SCOPES = {
+    observation_visibility.GLOBAL,
+    observation_visibility.SOUL_SCOPED,
+    observation_visibility.PRIVATE_BLOCKED,
+}
+EVIDENCE_ACCESS = {
+    observation_visibility.EVIDENCE_ALL,
+    observation_visibility.EVIDENCE_SOURCE_SOUL_ONLY,
+    observation_visibility.EVIDENCE_NONE,
+}
 SOURCE_TYPES = {"post", "comment", "comment_message", "chat_message", "todo", "reflection"}
 
 
@@ -55,7 +63,7 @@ def replace_post_observations(
             {
                 **item,
                 "source_channel": "post",
-                "visibility_scope": "global",
+                "visibility_scope": observation_visibility.boundary_for_public_post().visibility_scope,
                 "observed_at": observed_at,
             }
         )
@@ -66,7 +74,7 @@ def replace_post_observations(
             "source_type": "post",
             "source_id": source_id,
             "excerpt": excerpt,
-            "evidence_access": "all",
+            "evidence_access": observation_visibility.boundary_for_public_post().evidence_access,
             "metadata": {"extractor": "light_reflection"},
         },
         "global",
@@ -430,8 +438,6 @@ def _normalize_source(source: dict[str, Any], visibility_scope: str) -> dict[str
 
 def _validate_scope(item: dict[str, Any]) -> None:
     visibility = item["visibility_scope"]
-    if visibility == "post_visible" and not item.get("scope_post_id"):
-        raise ValueError("post_visible observations require scope_post_id")
     if visibility == "soul_scoped" and not item.get("scope_soul_name"):
         raise ValueError("soul_scoped observations require scope_soul_name")
     if visibility == "global" and item.get("scope_soul_name"):

@@ -55,19 +55,19 @@ class ObservationConsolidationTest(unittest.TestCase):
 
     def test_same_text_in_different_buckets_does_not_merge(self) -> None:
         global_id = self._create_global("同文记忆", "同一段 narrative。")
-        post_id = self._create_post_visible("p-1", "同文记忆", "同一段 narrative。")
         soul_id = self._create_soul_scoped("默认", "同文记忆", "同一段 narrative。")
+        other_soul_id = self._create_soul_scoped("毒舌好友", "同文记忆", "同一段 narrative。")
 
         observation_consolidation.run_observation_consolidation(FakeClient(), "fake-model")
 
         self.assertEqual("active", require_not_none(observation_service.get_observation(global_id))["status"])
-        self.assertEqual("active", require_not_none(observation_service.get_observation(post_id))["status"])
         self.assertEqual("active", require_not_none(observation_service.get_observation(soul_id))["status"])
+        self.assertEqual("active", require_not_none(observation_service.get_observation(other_soul_id))["status"])
 
-    def test_post_visible_only_consolidates_inside_same_post(self) -> None:
-        kept = self._create_post_visible("p-1", "练歌状态", "用户在评论线程继续聊练歌卡住。", confidence=0.9)
-        merged = self._create_post_visible("p-1", "练歌状态", "用户在评论线程继续聊练歌卡住。", confidence=0.6)
-        other = self._create_post_visible("p-2", "练歌状态", "用户在评论线程继续聊练歌卡住。", confidence=0.5)
+    def test_comment_and_chat_observations_consolidate_inside_same_soul(self) -> None:
+        kept = self._create_soul_scoped("默认", "练歌状态", "用户在默认面前聊练歌卡住。", confidence=0.9, observation_type="state")
+        merged = self._create_comment_soul_scoped("默认", "p-1", "练歌状态", "用户在默认面前聊练歌卡住。", confidence=0.6)
+        other = self._create_comment_soul_scoped("毒舌好友", "p-1", "练歌状态", "用户在默认面前聊练歌卡住。", confidence=0.5)
 
         observation_consolidation.run_observation_consolidation(FakeClient(), "fake-model")
 
@@ -136,11 +136,10 @@ class ObservationConsolidationTest(unittest.TestCase):
         self.assertEqual("active", require_not_none(observation_service.get_observation(private_id))["status"])
 
     def test_preview_pending_counts_are_isolated_by_bucket_scope_type(self) -> None:
-        self._insert_post("shared")
         self._insert_soul("shared")
         self._create_global("全局 pending", "全局 pending narrative。")
-        self._create_post_visible("shared", "post pending", "post pending narrative。")
         self._create_soul_scoped("shared", "soul pending", "soul pending narrative。")
+        self._create_comment_soul_scoped("shared", "p-1", "comment pending", "comment pending narrative。")
 
         scopes = {
             scope.bucket_key: scope
@@ -148,9 +147,7 @@ class ObservationConsolidationTest(unittest.TestCase):
         }
 
         self.assertEqual(1, scopes["global"].pending_count)
-        self.assertEqual(1, scopes["post_visible:shared"].pending_count)
-        self.assertEqual(1, scopes["soul_scoped:shared"].pending_count)
-        self.assertEqual("shared", scopes["post_visible:shared"].scope_value)
+        self.assertEqual(2, scopes["soul_scoped:shared"].pending_count)
         self.assertEqual("shared", scopes["soul_scoped:shared"].scope_value)
 
     def test_successful_llm_result_applies_supersede_and_advances_cursor(self) -> None:
@@ -200,26 +197,41 @@ class ObservationConsolidationTest(unittest.TestCase):
             [{"source_type": "post", "source_id": "p-1", "evidence_access": "all"}],
         )
 
-    def _create_post_visible(self, post_id: str, title: str, narrative: str, confidence: float = 0.7) -> int:
+    def _create_comment_soul_scoped(
+        self,
+        soul_name: str,
+        post_id: str,
+        title: str,
+        narrative: str,
+        confidence: float = 0.7,
+    ) -> int:
         return observation_service.create_observation(
             {
                 "type": "state",
                 "title": title,
                 "narrative": narrative,
                 "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
+                "visibility_scope": "soul_scoped",
                 "scope_post_id": post_id,
+                "scope_soul_name": soul_name,
                 "importance": 0.7,
                 "confidence": confidence,
                 "observed_at": float(confidence * 10),
             },
-            [{"source_type": "comment_message", "source_id": "1", "evidence_access": "post_visible"}],
+            [{"source_type": "comment_message", "source_id": "1", "evidence_access": "source_soul_only"}],
         )
 
-    def _create_soul_scoped(self, soul_name: str, title: str, narrative: str, confidence: float = 0.7) -> int:
+    def _create_soul_scoped(
+        self,
+        soul_name: str,
+        title: str,
+        narrative: str,
+        confidence: float = 0.7,
+        observation_type: str = "correction",
+    ) -> int:
         return observation_service.create_observation(
             {
-                "type": "correction",
+                "type": observation_type,
                 "title": title,
                 "narrative": narrative,
                 "source_channel": "chat",

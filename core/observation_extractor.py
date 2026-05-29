@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from core import chat_service, comment_service, db, logging_service, observation_service
+from core import chat_service, comment_service, db, logging_service, observation_service, observation_visibility
 from core.llm import reflection_router
 from core.llm.types import LLMClient
 
@@ -137,16 +137,17 @@ def extract_chat_thread_observations(
             )
         observations = data["observations"]
 
+    boundary = observation_visibility.boundary_for_chat_thread(thread.soul_name)
     observation_ids = observation_service.save_extraction_batch(
         source_kind=CHAT_SOURCE_KIND,
         source_key=source_key,
         cursor_value=cursor_value,
         observations=observations,
         source_channel="chat",
-        visibility_scope="soul_scoped",
+        visibility_scope=boundary.visibility_scope,
         source_type="chat_message",
-        evidence_access="source_soul_only",
-        scope_soul_name=thread.soul_name,
+        evidence_access=boundary.evidence_access,
+        scope_soul_name=boundary.scope_soul_name,
         source_excerpt_by_id=_excerpt_by_id(user_messages),
         source_observed_at_by_id=_observed_at_by_id(user_messages),
         metadata={"thread_id": thread_id, "soul_name": thread.soul_name},
@@ -207,16 +208,18 @@ def extract_comment_thread_observations(
             )
         observations = data["observations"]
 
+    boundary = observation_visibility.boundary_for_comment_thread(thread.soul_name, thread.post_id)
     observation_ids = observation_service.save_extraction_batch(
         source_kind=COMMENT_SOURCE_KIND,
         source_key=source_key,
         cursor_value=cursor_value,
         observations=observations,
         source_channel="comment_thread",
-        visibility_scope="post_visible",
+        visibility_scope=boundary.visibility_scope,
         source_type="comment_message",
-        evidence_access="post_visible",
-        scope_post_id=thread.post_id,
+        evidence_access=boundary.evidence_access,
+        scope_post_id=boundary.scope_post_id,
+        scope_soul_name=boundary.scope_soul_name,
         source_excerpt_by_id=_excerpt_by_id(user_messages),
         source_observed_at_by_id=_observed_at_by_id(user_messages),
         metadata={"thread_id": thread_id, "post_id": thread.post_id, "soul_name": thread.soul_name},
@@ -462,8 +465,9 @@ def _format_comment_context(thread: comment_service.CommentThread) -> str:
         f"thread_id: {thread.id}",
         f"post_id: {thread.post_id}",
         f"soul_name: {thread.soul_name}",
-        "visibility_boundary: post_visible",
-        "evidence_access: post_visible",
+        "visibility_boundary: soul_scoped",
+        "evidence_access: source_soul_only",
+        "long_term_boundary: this comment thread can only create memory for the current SOUL",
     ]
     if post is not None:
         parts.append(f"original_post: [{post['id']}] {post['content']}")

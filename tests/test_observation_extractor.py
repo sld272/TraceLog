@@ -121,7 +121,7 @@ class ObservationExtractorTest(unittest.TestCase):
         self.assertEqual("source_soul_only", observation["sources"][0]["evidence_access"])
         self.assertEqual([], observation_service.list_active_observations(visibility_scope="global"))
 
-    def test_comment_thread_extraction_writes_post_visible_observation(self) -> None:
+    def test_comment_thread_extraction_writes_soul_scoped_observation(self) -> None:
         self._insert_post_and_comment("20260525-001", "默认", "我陪你拆一下。")
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
         user_message = comment_service.append_user_message(thread.id, "这条 post 下我想继续公开聊练歌卡住的事。")
@@ -150,17 +150,18 @@ class ObservationExtractorTest(unittest.TestCase):
         self.assertEqual(1, result.observation_count)
         self.assertEqual(str(user_message.id), observation_service.get_cursor("comment_thread", str(thread.id)))
         rows = observation_service.list_active_observations(
-            visibility_scope="post_visible",
-            scope_post_id="20260525-001",
+            visibility_scope="soul_scoped",
+            scope_soul_name="默认",
         )
         self.assertEqual(["练歌卡住"], [row["title"] for row in rows])
         observation = require_not_none(observation_service.get_observation(rows[0]["id"]))
         self.assertEqual("comment_thread", observation["source_channel"])
-        self.assertEqual("post_visible", observation["visibility_scope"])
+        self.assertEqual("soul_scoped", observation["visibility_scope"])
         self.assertEqual("20260525-001", observation["scope_post_id"])
+        self.assertEqual("默认", observation["scope_soul_name"])
         self.assertEqual("comment_message", observation["sources"][0]["source_type"])
         self.assertEqual(str(user_message.id), observation["sources"][0]["source_id"])
-        self.assertEqual("post_visible", observation["sources"][0]["evidence_access"])
+        self.assertEqual("source_soul_only", observation["sources"][0]["evidence_access"])
 
     def test_empty_valid_result_advances_cursor_and_does_not_repeat(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
@@ -275,7 +276,7 @@ class ObservationExtractorTest(unittest.TestCase):
 
         self.assertTrue(skipped.skipped_poison_batch)
         self.assertEqual(str(user_message.id), observation_service.get_cursor("comment_thread", str(thread.id)))
-        self.assertEqual([], observation_service.list_active_observations(visibility_scope="post_visible"))
+        self.assertEqual([], observation_service.list_active_observations(visibility_scope="soul_scoped"))
 
     def test_write_failure_does_not_advance_cursor_or_leave_observation(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
@@ -370,13 +371,9 @@ class ObservationExtractorTest(unittest.TestCase):
 
         self.assertEqual(2, len(results))
         self.assertEqual(2, sum(result.observation_count for result in results))
-        self.assertEqual(["私聊纠正"], [row["title"] for row in observation_service.list_active_observations(
+        self.assertEqual(["公开继续聊", "私聊纠正"], [row["title"] for row in observation_service.list_active_observations(
             visibility_scope="soul_scoped",
             scope_soul_name="默认",
-        )])
-        self.assertEqual(["公开继续聊"], [row["title"] for row in observation_service.list_active_observations(
-            visibility_scope="post_visible",
-            scope_post_id="20260525-001",
         )])
 
     def _append_chat_assistant(self, thread_id: int, content: str) -> int:

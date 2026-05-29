@@ -48,7 +48,10 @@ def fanout(
                 user_input,
                 client,
                 model,
-                built_context.shared_context,
+                _context_for_soul(
+                    built_context.shared_context,
+                    built_context.soul_memory_context_by_name.get(soul.name, ""),
+                ),
             ): soul
             for soul in souls
         }
@@ -114,6 +117,11 @@ def _call_one_soul(
         reply=reply.strip(),
         error=None,
     )
+
+
+def _context_for_soul(shared_context: str, soul_memory_context: str) -> str:
+    sections = [section for section in (shared_context, soul_memory_context) if section.strip()]
+    return "\n\n---\n\n".join(sections)
 
 
 def _failed_result(soul: SoulContext, error: str) -> SoulReplyResult:

@@ -296,12 +296,13 @@ class ReflectorTest(unittest.TestCase):
             {
                 "type": "state",
                 "title": "评论观察",
-                "narrative": "post_visible_marker",
+                "narrative": "comment_soul_marker",
                 "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
+                "visibility_scope": "soul_scoped",
                 "scope_post_id": "20260525-001",
+                "scope_soul_name": "默认",
             },
-            [{"source_type": "post", "source_id": "20260525-001", "evidence_access": "post_visible"}],
+            [{"source_type": "comment_message", "source_id": "1", "evidence_access": "source_soul_only"}],
         )
         client = FakeClient()
 
@@ -310,7 +311,7 @@ class ReflectorTest(unittest.TestCase):
 
         self.assertIn("global_observation_marker", prompt)
         self.assertNotIn("soul_scoped_marker", prompt)
-        self.assertNotIn("post_visible_marker", prompt)
+        self.assertNotIn("comment_soul_marker", prompt)
 
     def test_observation_sources_are_loaded_once_for_global_deep_reflection(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "第一条公开 post。")
@@ -591,7 +592,7 @@ class ReflectorTest(unittest.TestCase):
         comment_thread = comment_service.get_or_create_thread("20260525-001", "默认")
         comment_user = comment_service.append_user_message(comment_thread.id, "这条评论也只给默认看")
         self._create_soul_scoped_observation("默认", chat_user.id, "直接说累", "用户在默认面前会直接说累。")
-        self._create_post_visible_observation("20260525-001", comment_user.id, "评论限定可见", "用户在该 post 评论线程继续表达限定可见的想法。")
+        self._create_comment_soul_scoped_observation("默认", "20260525-001", comment_user.id, "评论限定可见", "用户在评论线程继续表达只给默认看的想法。")
         payload = {
             "reflection_md": "## SOUL 深反思\n\n用户在这个 SOUL 面前表达了更私人的疲惫与限定可见的评论。",
             "patches": [
@@ -752,8 +753,8 @@ class ReflectorTest(unittest.TestCase):
         comment_2 = comment_service.append_user_message(comment_thread.id, "comment observation 2")
         obs_1 = self._create_soul_scoped_observation("默认", chat_1.id, "chat early", "chat early narrative")
         obs_2 = self._create_soul_scoped_observation("默认", chat_2.id, "chat second", "chat second narrative")
-        obs_3 = self._create_post_visible_observation("20260525-root-001", comment_1.id, "comment early", "comment early narrative")
-        obs_4 = self._create_post_visible_observation("20260525-root-001", comment_2.id, "comment late", "comment late narrative")
+        obs_3 = self._create_comment_soul_scoped_observation("默认", "20260525-root-001", comment_1.id, "comment early", "comment early narrative")
+        obs_4 = self._create_comment_soul_scoped_observation("默认", "20260525-root-001", comment_2.id, "comment late", "comment late narrative")
 
         with patch("core.reflector.db.query_all", wraps=db.query_all) as query_all:
             observations = reflector._load_soul_observations_since_cursor("默认", 3)
@@ -856,20 +857,28 @@ class ReflectorTest(unittest.TestCase):
             [{"source_type": "chat_message", "source_id": str(message_id), "evidence_access": "source_soul_only"}],
         )
 
-    def _create_post_visible_observation(self, post_id: str, message_id: int, title: str, narrative: str) -> int:
+    def _create_comment_soul_scoped_observation(
+        self,
+        soul_name: str,
+        post_id: str,
+        message_id: int,
+        title: str,
+        narrative: str,
+    ) -> int:
         return observation_service.create_observation(
             {
                 "type": "state",
                 "title": title,
                 "narrative": narrative,
                 "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
+                "visibility_scope": "soul_scoped",
                 "scope_post_id": post_id,
+                "scope_soul_name": soul_name,
                 "importance": 0.7,
                 "confidence": 0.8,
                 "observed_at": float(message_id),
             },
-            [{"source_type": "comment_message", "source_id": str(message_id), "evidence_access": "post_visible"}],
+            [{"source_type": "comment_message", "source_id": str(message_id), "evidence_access": "source_soul_only"}],
         )
 
     def _light_payload(self, observations: list[dict] | None = None) -> dict:

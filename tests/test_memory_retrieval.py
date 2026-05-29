@@ -34,13 +34,11 @@ class MemoryRetrievalTest(unittest.TestCase):
     def test_public_post_memory_only_returns_global(self) -> None:
         self._create_global("全局短回复", "用户偏好短回复。检索边界词")
         self._create_soul_scoped("默认", "私聊短回复", "默认知道的私聊短回复。检索边界词")
-        self._create_post_visible("p-1", "评论短回复", "评论线程里的短回复。检索边界词")
 
         context = memory_retrieval.search_public_post_memory("检索边界词", [], limit=5)
 
         self.assertIn("全局短回复", context)
         self.assertNotIn("私聊短回复", context)
-        self.assertNotIn("评论短回复", context)
         event = self._last_event("memory_retrieval_result")
         self.assertEqual("public_post", event["channel"])
         self.assertEqual([{"visibility_scope": "global", "scope_value": None}], event["allowed_scopes"])
@@ -57,18 +55,16 @@ class MemoryRetrievalTest(unittest.TestCase):
         self.assertIn("默认私聊偏好", context)
         self.assertNotIn("毒舌私聊偏好", context)
 
-    def test_comment_memory_returns_global_and_same_post_visible_only(self) -> None:
+    def test_comment_memory_returns_global_and_current_soul_scoped_only(self) -> None:
         self._create_global("全局评论记忆", "全局评论可见。评论检索词")
-        self._create_post_visible("p-1", "当前 post 评论记忆", "当前 post 可见。评论检索词")
-        self._create_post_visible("p-2", "其他 post 评论记忆", "其他 post 可见。评论检索词")
-        self._create_soul_scoped("默认", "私聊不该进评论", "私聊不该进评论。评论检索词")
+        self._create_comment_soul_scoped("默认", "默认评论记忆", "默认 SOUL 评论线程可见。评论检索词")
+        self._create_comment_soul_scoped("毒舌好友", "其他 SOUL 评论记忆", "其他 SOUL 评论线程不可见。评论检索词")
 
-        context = memory_retrieval.search_comment_memory("评论检索词", "p-1", [], limit=5)
+        context = memory_retrieval.search_comment_memory("评论检索词", "默认", [], limit=5)
 
         self.assertIn("全局评论记忆", context)
-        self.assertIn("当前 post 评论记忆", context)
-        self.assertNotIn("其他 post 评论记忆", context)
-        self.assertNotIn("私聊不该进评论", context)
+        self.assertIn("默认评论记忆", context)
+        self.assertNotIn("其他 SOUL 评论记忆", context)
 
     def test_stale_observations_are_not_returned(self) -> None:
         active_id = self._create_global("活跃记忆", "活跃记忆 stale检索词")
@@ -174,8 +170,7 @@ class MemoryRetrievalTest(unittest.TestCase):
         self._create_global("全局图书馆", "用户提到晚上在图书馆学习效率更高。")
         self._create_soul_scoped("默认", "默认图书馆", "默认私聊：晚上在图书馆学习效率更高。")
         self._create_soul_scoped("毒舌好友", "毒舌图书馆", "毒舌私聊：晚上在图书馆学习效率更高。")
-        self._create_post_visible("p-1", "当前评论图书馆", "当前 post 评论：晚上在图书馆学习效率更高。")
-        self._create_post_visible("p-2", "其他评论图书馆", "其他 post 评论：晚上在图书馆学习效率更高。")
+        self._create_comment_soul_scoped("默认", "默认评论图书馆", "默认评论线程：晚上在图书馆学习效率更高。")
 
         public_context = memory_retrieval.search_public_post_memory(
             "不相关", [], fts_keywords=["图书馆", "学习效率"]
@@ -184,16 +179,15 @@ class MemoryRetrievalTest(unittest.TestCase):
             "不相关", "默认", [], fts_keywords=["图书馆", "学习效率"]
         )
         comment_context = memory_retrieval.search_comment_memory(
-            "不相关", "p-1", [], fts_keywords=["图书馆", "学习效率"]
+            "不相关", "默认", [], fts_keywords=["图书馆", "学习效率"]
         )
 
         self.assertIn("全局图书馆", public_context)
         self.assertNotIn("默认图书馆", public_context)
-        self.assertNotIn("当前评论图书馆", public_context)
         self.assertIn("默认图书馆", chat_context)
         self.assertNotIn("毒舌图书馆", chat_context)
-        self.assertIn("当前评论图书馆", comment_context)
-        self.assertNotIn("其他评论图书馆", comment_context)
+        self.assertIn("默认图书馆", comment_context)
+        self.assertIn("默认评论图书馆", comment_context)
 
     def test_empty_or_symbol_only_memory_query_returns_empty(self) -> None:
         self._create_global("符号不命中", "这条 observation 不该被符号 query 命中。")
@@ -235,12 +229,6 @@ class MemoryRetrievalTest(unittest.TestCase):
             "公开 evidence 可展开。公开证据词",
             excerpt="公开 post 摘录可以进入公开上下文",
         )
-        self._create_post_visible(
-            "p-1",
-            "评论不可公开展开",
-            "评论 evidence 不该进入公开 post。公开证据词",
-            excerpt="评论线程摘录不该进入公开 post",
-        )
         self._create_soul_scoped(
             "默认",
             "私聊不可公开展开",
@@ -252,7 +240,6 @@ class MemoryRetrievalTest(unittest.TestCase):
 
         self.assertIn("L2", context)
         self.assertIn("公开 post 摘录可以进入公开上下文", context)
-        self.assertNotIn("评论线程摘录不该进入公开 post", context)
         self.assertNotIn("私聊摘录不该进入公开 post", context)
 
     def test_chat_expands_current_soul_private_evidence_only(self) -> None:
@@ -274,24 +261,24 @@ class MemoryRetrievalTest(unittest.TestCase):
         self.assertIn("默认私聊摘录可以展开", context)
         self.assertNotIn("毒舌私聊摘录不该出现", context)
 
-    def test_comment_expands_same_post_visible_evidence_only(self) -> None:
-        self._create_post_visible(
-            "p-1",
-            "当前 post 可展开",
-            "当前 post 评论 evidence 可展开。评论证据词",
-            excerpt="当前 post 评论摘录可以展开",
+    def test_comment_expands_current_soul_evidence_only(self) -> None:
+        self._create_comment_soul_scoped(
+            "默认",
+            "默认评论可展开",
+            "默认评论 evidence 可展开。评论证据词",
+            excerpt="默认评论摘录可以展开",
         )
-        self._create_post_visible(
-            "p-2",
-            "其他 post 不可展开",
-            "其他 post 评论 evidence 不可展开。评论证据词",
-            excerpt="其他 post 评论摘录不该出现",
+        self._create_comment_soul_scoped(
+            "毒舌好友",
+            "其他 SOUL 不可展开",
+            "其他 SOUL 评论 evidence 不可展开。评论证据词",
+            excerpt="其他 SOUL 评论摘录不该出现",
         )
 
-        context = memory_retrieval.search_comment_memory("评论证据词", "p-1", [], limit=5)
+        context = memory_retrieval.search_comment_memory("评论证据词", "默认", [], limit=5)
 
-        self.assertIn("当前 post 评论摘录可以展开", context)
-        self.assertNotIn("其他 post 评论摘录不该出现", context)
+        self.assertIn("默认评论摘录可以展开", context)
+        self.assertNotIn("其他 SOUL 评论摘录不该出现", context)
 
     def test_evidence_access_none_never_expands(self) -> None:
         observation_service.create_observation(
@@ -406,15 +393,16 @@ class MemoryRetrievalTest(unittest.TestCase):
             ],
         )
 
-    def _create_post_visible(self, post_id: str, title: str, narrative: str, excerpt: str | None = None) -> int:
+    def _create_comment_soul_scoped(self, soul_name: str, title: str, narrative: str, excerpt: str | None = None) -> int:
         return observation_service.create_observation(
             {
                 "type": "state",
                 "title": title,
                 "narrative": narrative,
                 "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
-                "scope_post_id": post_id,
+                "visibility_scope": "soul_scoped",
+                "scope_post_id": "p-1",
+                "scope_soul_name": soul_name,
                 "importance": 0.7,
                 "confidence": 0.8,
                 "observed_at": 10.0,
@@ -424,7 +412,7 @@ class MemoryRetrievalTest(unittest.TestCase):
                     "source_type": "comment_message",
                     "source_id": "1",
                     "excerpt": excerpt,
-                    "evidence_access": "post_visible",
+                    "evidence_access": "source_soul_only",
                 }
             ],
         )

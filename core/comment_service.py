@@ -173,7 +173,7 @@ def build_comment_context(
 
     related_memory = memory_retrieval.search_comment_memory(
         retrieval_query,
-        thread.post_id,
+        thread.soul_name,
         relevant_post_ids,
         fts_keywords=rewritten_query.keywords if rewritten_query.used_rewrite else None,
         trace_context={

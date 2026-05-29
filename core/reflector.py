@@ -422,30 +422,12 @@ def _load_soul_observations_since_cursor(soul_name: str, limit: int) -> list:
         FROM observations
         WHERE observations.status = 'active'
           AND observations.id > ?
-          AND (
-              (
-                  observations.visibility_scope = 'soul_scoped'
-                  AND observations.scope_soul_name = ?
-              )
-              OR (
-                  observations.visibility_scope = 'post_visible'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM observation_sources
-                      JOIN comment_messages
-                        ON CAST(comment_messages.id AS TEXT) = observation_sources.source_id
-                      JOIN comment_threads
-                        ON comment_threads.id = comment_messages.thread_id
-                      WHERE observation_sources.observation_id = observations.id
-                        AND observation_sources.source_type = 'comment_message'
-                        AND comment_threads.soul_name = ?
-                  )
-              )
-          )
+          AND observations.visibility_scope = 'soul_scoped'
+          AND observations.scope_soul_name = ?
         ORDER BY observations.id ASC
         LIMIT ?
         """,
-        (cursor, soul_name, soul_name, limit),
+        (cursor, soul_name, limit),
     )
 
 

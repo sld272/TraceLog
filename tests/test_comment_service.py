@@ -183,40 +183,38 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("未落库当前消息", context.retrieval_query)
         self.assertEqual("未落库当前消息", captured["query"])
 
-    def test_build_comment_context_includes_same_post_memory_only(self) -> None:
+    def test_build_comment_context_includes_current_soul_memory_only(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
         user_message = comment_service.append_user_message(thread.id, "继续公开聊练歌")
         self._insert_custom_post_and_comment("20260524-001", "默认", "其他 post", "其他回复")
-        self._create_post_observation(
-            "20260525-001",
-            "当前 post 评论记忆",
-            "当前 post 评论线程记忆：继续公开聊练歌。",
+        self._create_comment_observation(
+            "默认",
+            "默认评论记忆",
+            "默认评论线程记忆：继续公开聊练歌。",
             user_message.id,
         )
-        self._create_post_observation(
-            "20260524-001",
-            "其他 post 评论记忆",
-            "其他 post 评论线程记忆：继续公开聊练歌。",
+        self._create_comment_observation(
+            "毒舌好友",
+            "其他 SOUL 评论记忆",
+            "其他 SOUL 评论线程记忆：继续公开聊练歌。",
             user_message.id,
         )
-        self._create_soul_observation("私聊不该进评论", "私聊记忆：继续公开聊练歌。")
 
         context = comment_service.build_comment_context(thread.id, "评论context词")
 
         self.assertIn("# 相关记忆", context.context)
         self.assertIn("L2", context.context)
-        self.assertIn("当前 post 评论记忆", context.context)
-        self.assertNotIn("其他 post 评论记忆", context.context)
-        self.assertNotIn("私聊不该进评论", context.context)
+        self.assertIn("默认评论记忆", context.context)
+        self.assertNotIn("其他 SOUL 评论记忆", context.context)
         self.assertIn("评论原文不该出现", context.context)
 
     def test_build_comment_context_uses_query_rewrite_for_posts_and_memory(self) -> None:
         thread = comment_service.get_or_create_thread("20260525-001", "默认")
         user_message = comment_service.append_user_message(thread.id, "继续聊图书馆学习效率")
-        self._create_post_observation(
-            "20260525-001",
+        self._create_comment_observation(
+            "默认",
             "图书馆效率",
-            "用户在该 post 评论线程提到图书馆学习效率更高。",
+            "用户在默认的评论线程提到图书馆学习效率更高。",
             user_message.id,
         )
         captured: dict[str, object] = {}
@@ -408,15 +406,16 @@ class CommentServiceTest(unittest.TestCase):
             (post_id, soul_name, comment, 2.0),
         )
 
-    def _create_post_observation(self, post_id: str, title: str, narrative: str, message_id: int) -> int:
+    def _create_comment_observation(self, soul_name: str, title: str, narrative: str, message_id: int) -> int:
         return observation_service.create_observation(
             {
                 "type": "state",
                 "title": title,
                 "narrative": narrative,
                 "source_channel": "comment_thread",
-                "visibility_scope": "post_visible",
-                "scope_post_id": post_id,
+                "visibility_scope": "soul_scoped",
+                "scope_post_id": "20260525-001",
+                "scope_soul_name": soul_name,
                 "observed_at": 1.0,
             },
             [
@@ -424,7 +423,7 @@ class CommentServiceTest(unittest.TestCase):
                     "source_type": "comment_message",
                     "source_id": message_id,
                     "excerpt": "评论原文不该出现",
-                    "evidence_access": "post_visible",
+                    "evidence_access": "source_soul_only",
                 }
             ],
         )

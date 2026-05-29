@@ -16,6 +16,7 @@ class BuiltContext:
     enabled_souls: list[SoulContext]
     recent_post_ids: set[str]
     relevant_post_ids: list[str]
+    soul_memory_context_by_name: dict[str, str]
 
 
 def build_context(
@@ -48,6 +49,20 @@ def build_context(
     if related_memory:
         sections.append(related_memory)
 
+    soul_memory_context_by_name = {
+        soul.name: memory_context
+        for soul in enabled_souls
+        if (
+            memory_context := memory_retrieval.search_soul_post_memory(
+                query or "",
+                soul.name,
+                effective_relevant_ids,
+                fts_keywords=fts_keywords,
+                trace_context={**(trace_context or {}), "channel": "public_post_soul", "soul_name": soul.name},
+            )
+        )
+    }
+
     recent_posts = record_service.read_recent_posts()
     if recent_posts:
         sections.append(f"# 近期帖子\n\n{recent_posts}")
@@ -69,6 +84,11 @@ def build_context(
         sections=_section_summaries(sections),
         memory_ids=_memory_ids_from_context(related_memory),
         related_memory_present=bool(related_memory),
+        soul_memory_present_by_name={name: bool(context) for name, context in soul_memory_context_by_name.items()},
+        soul_memory_ids_by_name={
+            name: _memory_ids_from_context(context)
+            for name, context in soul_memory_context_by_name.items()
+        },
         raw_related_post_fallback_used=bool(not related_memory and relevant_posts),
         recent_post_ids=sorted(recent_ids),
         relevant_post_ids=effective_relevant_ids,
@@ -79,6 +99,7 @@ def build_context(
         enabled_souls=enabled_souls,
         recent_post_ids=recent_ids,
         relevant_post_ids=effective_relevant_ids,
+        soul_memory_context_by_name=soul_memory_context_by_name,
     )
 
 
@@ -145,5 +166,3 @@ def _memory_ids_from_context(value: str) -> list[int]:
         if raw_id.isdigit():
             ids.append(int(raw_id))
     return ids
-
-

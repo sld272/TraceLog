@@ -268,7 +268,6 @@ CREATE TABLE IF NOT EXISTS observations (
     )),
     visibility_scope TEXT NOT NULL CHECK (visibility_scope IN (
         'global',
-        'post_visible',
         'soul_scoped',
         'private_blocked'
     )),
@@ -288,15 +287,12 @@ CREATE TABLE IF NOT EXISTS observations (
     created_at       REAL NOT NULL,
     updated_at       REAL NOT NULL,
     metadata         TEXT,
-    CHECK (visibility_scope != 'post_visible' OR scope_post_id IS NOT NULL),
     CHECK (visibility_scope != 'soul_scoped' OR scope_soul_name IS NOT NULL),
     CHECK (visibility_scope != 'global' OR scope_soul_name IS NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_observations_status_time
     ON observations(status, observed_at DESC);
-CREATE INDEX IF NOT EXISTS idx_observations_post_scope
-    ON observations(visibility_scope, scope_post_id, status, observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_observations_soul_scope
     ON observations(visibility_scope, scope_soul_name, status, observed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_observations_type_time
@@ -353,7 +349,6 @@ CREATE TABLE IF NOT EXISTS observation_sources (
     excerpt         TEXT,
     evidence_access TEXT NOT NULL CHECK (evidence_access IN (
         'all',
-        'post_visible',
         'source_soul_only',
         'none'
     )),

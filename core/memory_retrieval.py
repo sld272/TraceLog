@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import sqlite3
 from typing import Any
 
-from core import db
+from core import db, observation_visibility
 from core import fts_query
 from core import logging_service
 
@@ -56,7 +56,7 @@ def search_public_post_memory(
     hits = _search_memory(
         query=query,
         related_post_ids=related_post_ids,
-        allowed_scopes=[("global", None)],
+        allowed_scopes=observation_visibility.allowed_memory_scopes("public_post"),
         retrieval_scope=RetrievalScope(channel="public_post"),
         limit=limit,
         fts_keywords=fts_keywords,
@@ -77,7 +77,7 @@ def search_chat_memory(
     hits = _search_memory(
         query=query,
         related_post_ids=related_post_ids,
-        allowed_scopes=[("global", None), ("soul_scoped", soul_name)],
+        allowed_scopes=observation_visibility.allowed_memory_scopes("chat", soul_name),
         retrieval_scope=RetrievalScope(channel="chat", soul_name=soul_name),
         limit=limit,
         fts_keywords=fts_keywords,
@@ -88,21 +88,43 @@ def search_chat_memory(
 
 def search_comment_memory(
     query: str,
-    post_id: str,
+    soul_name: str,
     related_post_ids: list[str],
     limit: int = 5,
     fts_keywords: list[str] | None = None,
     trace_context: dict | None = None,
 ) -> str:
-    """Return formatted global + same-post visible memory for comment threads."""
+    """Return formatted global + current SOUL scoped memory for comment threads."""
     hits = _search_memory(
         query=query,
         related_post_ids=related_post_ids,
-        allowed_scopes=[("global", None), ("post_visible", post_id)],
-        retrieval_scope=RetrievalScope(channel="comment_thread", post_id=post_id),
+        allowed_scopes=observation_visibility.allowed_memory_scopes("comment_thread", soul_name),
+        retrieval_scope=RetrievalScope(channel="comment_thread", soul_name=soul_name),
         limit=limit,
         fts_keywords=fts_keywords,
         trace_context=trace_context,
+    )
+    return _format_memory_context(hits)
+
+
+def search_soul_post_memory(
+    query: str,
+    soul_name: str,
+    related_post_ids: list[str],
+    limit: int = 5,
+    fts_keywords: list[str] | None = None,
+    trace_context: dict | None = None,
+) -> str:
+    """Return current SOUL scoped memory for public post replies."""
+    hits = _search_memory(
+        query=query,
+        related_post_ids=related_post_ids,
+        allowed_scopes=[(observation_visibility.SOUL_SCOPED, soul_name)],
+        retrieval_scope=RetrievalScope(channel="public_post_soul", soul_name=soul_name),
+        limit=limit,
+        fts_keywords=fts_keywords,
+        trace_context=trace_context,
+        include_related_post_observations=False,
     )
     return _format_memory_context(hits)
 
@@ -116,6 +138,7 @@ def _search_memory(
     limit: int,
     fts_keywords: list[str] | None = None,
     trace_context: dict | None = None,
+    include_related_post_observations: bool = True,
 ) -> list[MemoryHit]:
     if limit <= 0:
         return []
@@ -129,7 +152,7 @@ def _search_memory(
     )
     for rank, row in enumerate(fts_rows, start=1):
         _merge_candidate(candidates, row, source="fts", base_score=_position_score(rank, max(limit * 4, 10)))
-    indirect_rows = _indirect_observation_rows(related_post_ids)
+    indirect_rows = _indirect_observation_rows(related_post_ids) if include_related_post_observations else []
     for rank, row in enumerate(indirect_rows, start=1):
         _merge_candidate(candidates, row, source="post_semantic", base_score=0.72 * _position_score(rank, max(len(related_post_ids), 1)))
 
@@ -258,11 +281,8 @@ def _scope_filter_sql(allowed_scopes: list[tuple[str, str | None]]) -> tuple[str
     for visibility_scope, scope_value in allowed_scopes:
         if visibility_scope == "global":
             clauses.append("observations.visibility_scope = 'global'")
-        elif visibility_scope == "soul_scoped":
+        elif visibility_scope == observation_visibility.SOUL_SCOPED:
             clauses.append("(observations.visibility_scope = 'soul_scoped' AND observations.scope_soul_name = ?)")
-            params.append(scope_value)
-        elif visibility_scope == "post_visible":
-            clauses.append("(observations.visibility_scope = 'post_visible' AND observations.scope_post_id = ?)")
             params.append(scope_value)
     if not clauses:
         return "0", []
@@ -373,21 +393,7 @@ def _allowed_evidence_snippets(hit: MemoryHit, retrieval_scope: RetrievalScope) 
 
 
 def _can_expand_evidence(hit: MemoryHit, evidence_access: str, retrieval_scope: RetrievalScope) -> bool:
-    if evidence_access == "all":
-        return True
-    if evidence_access == "post_visible":
-        return (
-            retrieval_scope.channel == "comment_thread"
-            and hit.scope_post_id is not None
-            and hit.scope_post_id == retrieval_scope.post_id
-        )
-    if evidence_access == "source_soul_only":
-        return (
-            retrieval_scope.channel == "chat"
-            and hit.scope_soul_name is not None
-            and hit.scope_soul_name == retrieval_scope.soul_name
-        )
-    return False
+    return observation_visibility.can_expand_evidence(hit, evidence_access, retrieval_scope)
 
 
 def _format_memory_context(hits: list[MemoryHit]) -> str:
@@ -408,12 +414,10 @@ def _format_memory_context(hits: list[MemoryHit]) -> str:
 
 
 def _scope_label(hit: MemoryHit) -> str:
-    if hit.visibility_scope == "global":
+    if hit.visibility_scope == observation_visibility.GLOBAL:
         return "global"
-    if hit.visibility_scope == "soul_scoped":
+    if hit.visibility_scope == observation_visibility.SOUL_SCOPED:
         return f"soul:{hit.scope_soul_name}"
-    if hit.visibility_scope == "post_visible":
-        return f"post:{hit.scope_post_id}"
     return hit.visibility_scope
 
 

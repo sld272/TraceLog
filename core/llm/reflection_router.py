@@ -333,8 +333,10 @@ THREAD_OBSERVATION_PROMPT = """\
 1. observations 最多输出 5 条；没有值得沉淀的信号时输出 []。
 2. source_message_ids 必须只包含输入批次中 role=user 的真实 message id。
 3. 不要输出 visibility、scope、source_type 或 evidence_access；这些边界由系统固定。
-4. 私聊中的内容绝对不要写成跨 SOUL 共享记忆；你只负责抽取内容，边界由系统保证。
-5. 如果用户明确表达"不要记住/不要记录"，或内容不适合沉淀为记忆，observations 输出 []。
+4. 私聊和评论线程中的内容绝对不要写成跨 SOUL 共享记忆；你只负责抽取内容，边界由系统保证。
+5. 评论线程只是当前 SOUL 关系中的一个发生场景，不是长期可见性边界；当前 post 的局部澄清、一次性解释、指代修正不要生成 observation，留给 multi-message 上下文。
+6. 只有跨场景仍有价值的用户偏好、互动约定、稳定状态、关系模式、明确决定，才生成 observation。
+7. 如果用户明确表达"不要记住/不要记录"，或内容不适合沉淀为记忆，observations 输出 []。
 
 ## 当前时间
 {current_datetime}
