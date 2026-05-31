@@ -214,3 +214,10 @@ workspace/
 *.db-wal
 .DS_Store
 pyrightconfig.json
+
+# Frontend (Node/Vite)
+frontend/node_modules/
+frontend/dist/
+frontend/.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo
