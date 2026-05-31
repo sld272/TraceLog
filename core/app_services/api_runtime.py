@@ -66,3 +66,5 @@ class JobWorker:
                 )
             else:
                 job_service.mark_succeeded(int(job["id"]))
+            # Emit pipeline_done if this was the last job for its post
+            await asyncio.to_thread(public_post_pipeline.maybe_emit_pipeline_done_for_job, job)

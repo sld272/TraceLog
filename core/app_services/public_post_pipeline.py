@@ -206,6 +206,33 @@ def _run_maybe_global_deep_reflection(job_id: int, payload: dict[str, Any], clie
     )
 
 
+def maybe_emit_pipeline_done_for_job(job: dict[str, Any]) -> None:
+    """Check if a completed job was the last one for its post; emit pipeline_done if so."""
+    payload = job.get("payload") or {}
+    post_id = payload.get("post_id")
+    if not isinstance(post_id, str) or not post_id.strip():
+        return
+    _maybe_emit_pipeline_done(post_id.strip())
+
+
+def _maybe_emit_pipeline_done(post_id: str) -> None:
+    """Emit pipeline_done when no pending/running jobs remain for this post."""
+    jobs = job_service.list_jobs_for_post(post_id)
+    if not jobs:
+        return
+    has_unfinished = any(
+        job["status"] in (job_service.STATUS_PENDING, job_service.STATUS_RUNNING)
+        for job in jobs
+    )
+    if has_unfinished:
+        return
+    # Avoid duplicate pipeline_done events
+    existing_events = event_service.list_post_events(post_id)
+    if any(event["event_type"] == "pipeline_done" for event in existing_events):
+        return
+    event_service.append_post_event(post_id, "pipeline_done", {"post_id": post_id})
+
+
 def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClient, model: str) -> None:
     limit = _payload_int(payload, "limit", 100)
     trigger = str(payload.get("trigger") or "api_manual")

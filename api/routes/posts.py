@@ -145,14 +145,21 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
     }
 
 
+SSE_TIMEOUT_SECONDS = 120
+
+
 async def _event_stream(post_id: str, after_id: int):
     current_id = after_id
-    while True:
+    elapsed = 0.0
+    while elapsed < SSE_TIMEOUT_SECONDS:
         events = await run_sync(event_service.list_post_events, post_id, after_id=current_id)
         for event in events:
             current_id = int(event["id"])
             yield _format_sse(event)
+            if event["event_type"] == "pipeline_done":
+                return
         await asyncio.sleep(1.0)
+        elapsed += 1.0
 
 
 def _format_sse(event: dict[str, Any]) -> str:
