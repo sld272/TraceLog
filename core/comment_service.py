@@ -134,6 +134,22 @@ def list_thread_messages(thread_id: int, limit: int = COMMENT_HISTORY_LIMIT) -> 
     return [_message_from_row(row) for row in reversed(rows)]
 
 
+def list_thread_messages_after(thread_id: int, after_id: int, limit: int = 100) -> list[CommentMessage]:
+    """List comment thread messages after a message id for API event streams."""
+    get_thread(thread_id)
+    rows = db.query_all(
+        """
+        SELECT id, thread_id, role, content, created_at
+        FROM comment_messages
+        WHERE thread_id = ? AND id > ?
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (thread_id, max(0, int(after_id)), max(1, min(int(limit), 100))),
+    )
+    return [_message_from_row(row) for row in rows]
+
+
 def append_user_message(thread_id: int, content: str) -> CommentMessage:
     thread = get_thread(thread_id)
     _assert_soul_writable(thread.soul_name)

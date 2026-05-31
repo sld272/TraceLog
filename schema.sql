@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '2');
+INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '3');
 
 CREATE TABLE IF NOT EXISTS souls (
     name        TEXT PRIMARY KEY,
@@ -241,3 +241,34 @@ CREATE TABLE IF NOT EXISTS soul_memory_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
     ON soul_memory_revisions(soul_name, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS jobs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    type          TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    payload_json  TEXT NOT NULL,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    max_attempts  INTEGER NOT NULL DEFAULT 1,
+    error         TEXT,
+    created_at    REAL NOT NULL,
+    updated_at    REAL NOT NULL,
+    started_at    REAL,
+    finished_at   REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_status_created
+    ON jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_type_status
+    ON jobs(type, status);
+
+CREATE TABLE IF NOT EXISTS post_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id       TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    job_id        INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    event_type    TEXT NOT NULL,
+    payload_json  TEXT NOT NULL,
+    created_at    REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_post_events_post_id
+    ON post_events(post_id, id);

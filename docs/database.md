@@ -10,7 +10,7 @@
 - 执行 `schema.sql`。
 - 校验 FTS5 trigram tokenizer 可用。
 - 清理旧版中间层表和旧 cursor/meta key。
-- 在 `meta.schema_version` 写入当前版本 `2`。
+- 在 `meta.schema_version` 写入当前版本 `3`。
 
 旧版中间层已经从当前 schema 中移除。新 workspace 不会创建这些表；已有 workspace 在下一次 `init_db()` 时会删除旧表、旧 trigger 和旧 meta cursor。
 
@@ -56,6 +56,14 @@
 - `souls`：SOUL 文件路径、启用状态、排序、描述。
 - `todos`：公开 post 抽取出的待办。
 - `meta`：schema version、pending embedding、pending light reflection、deep reflection cursor 等系统状态。
+
+### 2.6 API 后台任务与事件
+
+- `jobs`：API 公开发帖 pipeline 的后台任务状态，字段包括 `type`、`status`、`payload_json`、`attempts`、`error` 与执行时间戳。
+- `post_events`：面向前端和 SSE 的公开 post 事件流，记录 post 创建、embedding、SOUL 回复、TodoTool、轻反思和深反思触发状态。
+
+`jobs.status` 当前使用 `pending` / `running` / `succeeded` / `failed` / `cancelled`。第一版 API worker 单并发领取 pending job，SOUL fanout 内部仍可并发调用多个 SOUL。
+P1 以后手动全局/SOUL 深反思也复用 `jobs`，但不一定产生 `post_events`，因为它们不绑定单条公开 post。
 
 当前 SOUL 深反思 cursor 使用 `meta.soul_thread_deep_cursor:<soul_name>`，value 是 JSON：
 

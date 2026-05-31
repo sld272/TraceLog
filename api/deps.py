@@ -1,0 +1,112 @@
+"""API runtime dependencies."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+from openai import OpenAI
+from starlette.concurrency import run_in_threadpool
+
+from core import db, logging_service, vectorstore, workspace_service
+from core.app_services import job_service
+from core.app_services.api_runtime import ApiRuntime, JobWorker
+from core.cli.config import CONFIG_FILE
+from core.logging_service import normalize_config as normalize_logging_settings
+
+T = TypeVar("T")
+
+_runtime: ApiRuntime | None = None
+
+
+async def run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """Run synchronous core work outside the event loop."""
+    return await run_in_threadpool(func, *args, **kwargs)
+
+
+def get_runtime() -> ApiRuntime:
+    if _runtime is None:
+        raise RuntimeError("API runtime is not initialized")
+    return _runtime
+
+
+async def init_runtime() -> ApiRuntime:
+    """Initialize workspace, vectorstore, LLM client, and the API worker."""
+    global _runtime
+    config = _load_api_config()
+    logging_service.init_logging(config.get("logging"))
+    workspace_service.init_workspace()
+    vectorstore_initialized = False
+    try:
+        vectorstore.init_vectorstore(
+            config["api_key"],
+            config["base_url"],
+            config["embedding_model"],
+            config.get("embedding_base_url"),
+            config.get("embedding_api_key"),
+        )
+        vectorstore_initialized = True
+    except vectorstore.VectorStoreInitError as exc:
+        logging_service.log_event("vectorstore_init_failed", level="ERROR", error=str(exc))
+
+    client = OpenAI(api_key=config["api_key"], base_url=config.get("base_url", "https://api.openai.com/v1"))
+    worker = JobWorker(client, config["model"], concurrency=_job_worker_concurrency(config))
+    _runtime = ApiRuntime(
+        config=config,
+        client=client,
+        model=config["model"],
+        worker=worker,
+        vectorstore_initialized=vectorstore_initialized,
+    )
+    _enqueue_startup_retries()
+    worker.start()
+    return _runtime
+
+
+async def shutdown_runtime() -> None:
+    global _runtime
+    if _runtime is not None:
+        await _runtime.worker.stop()
+    _runtime = None
+
+
+def _load_api_config() -> dict:
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"API 模式需要先配置 {CONFIG_FILE}") from exc
+
+    required_keys = ("api_key", "base_url", "model", "embedding_model")
+    missing = [key for key in required_keys if not config.get(key)]
+    if missing:
+        raise RuntimeError(f"{CONFIG_FILE} 缺少必要配置：{', '.join(missing)}")
+    config.setdefault("embedding_api_key", None)
+    config.setdefault("embedding_base_url", None)
+    config["logging"] = normalize_logging_settings(config.get("logging"))
+    return config
+
+
+def _job_worker_concurrency(config: dict) -> int:
+    try:
+        value = int(config.get("job_worker_concurrency", 1))
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(value, 4))
+
+
+def _enqueue_startup_retries() -> None:
+    for row in db.query_all("SELECT key, value FROM meta WHERE key LIKE ? ORDER BY key", ("pending_embedding:%",)):
+        try:
+            payload = json.loads(row["value"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        post_id = payload.get("post_id")
+        if isinstance(post_id, str) and post_id:
+            job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": post_id})
+
+    for row in db.query_all("SELECT key FROM meta WHERE key LIKE ? ORDER BY key", ("pending_reflect:%",)):
+        post_id = str(row["key"])[len("pending_reflect:"):]
+        if post_id:
+            job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id})

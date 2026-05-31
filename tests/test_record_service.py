@@ -66,6 +66,19 @@ class RecordServiceTest(unittest.TestCase):
         self.assertEqual("embedding failed", payload["error"])
         self.assertIsNotNone(db.query_one("SELECT content FROM posts WHERE id = ?", (post_id,)))
 
+    def test_save_post_can_defer_embedding_for_api_pipeline(self) -> None:
+        fake_vectorstore = FakeVectorStore()
+        record_service._vectorstore = lambda: fake_vectorstore
+
+        post_id = record_service.save_post("今天想练歌", index_immediately=False)
+        pending = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_embedding:{post_id}",)))
+        payload = json.loads(pending["value"])
+
+        self.assertEqual([], fake_vectorstore.indexed)
+        self.assertEqual(post_id, payload["post_id"])
+        self.assertEqual("今天想练歌", payload["content"])
+        self.assertEqual("pending before embedding", payload["error"])
+
     def test_save_post_preserves_pending_embedding_and_reraises_keyboard_interrupt(self) -> None:
         fake_vectorstore = FakeVectorStore(error=KeyboardInterrupt())
         record_service._vectorstore = lambda: fake_vectorstore

@@ -1,0 +1,250 @@
+"""Public post API pipeline orchestration and job handlers."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from core import context_builder, db, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service
+from core.app_services import event_service, job_service
+from core.llm.types import LLMClient
+
+DEEP_REFLECTION_POST_THRESHOLD = 5
+
+
+@dataclass(frozen=True)
+class CreatedPost:
+    post_id: str
+    job_ids: list[int]
+
+
+def create_post(content: str) -> CreatedPost:
+    """Persist one public post and enqueue its API background pipeline."""
+    body = content.strip()
+    if not body:
+        raise ValueError("content 不能为空")
+    if len(body) > 20_000:
+        raise ValueError("content 不能超过 20000 字符")
+
+    post_id = record_service.save_post(body, index_immediately=False)
+    event_service.append_post_event(post_id, "post_created", {"post_id": post_id})
+
+    job_ids = [
+        job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": post_id}),
+        job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id, "content": body}),
+    ]
+    if tool_config_service.is_tool_enabled("todo"):
+        job_ids.append(job_service.enqueue(job_service.TYPE_RUN_TODO_TOOL, {"post_id": post_id}))
+    job_ids.extend(
+        [
+            job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id}),
+            job_service.enqueue(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, {"post_id": post_id}),
+        ]
+    )
+    return CreatedPost(post_id=post_id, job_ids=job_ids)
+
+
+def execute_job(job: dict[str, Any], client: LLMClient, model: str) -> None:
+    """Execute one claimed job."""
+    job_type = job["type"]
+    payload = job.get("payload") or {}
+    job_id = int(job["id"])
+    if job_type == job_service.TYPE_INDEX_POST_EMBEDDING:
+        _run_index_post_embedding(job_id, payload)
+    elif job_type == job_service.TYPE_GENERATE_POST_REPLIES:
+        _run_generate_post_replies(job_id, payload, client, model)
+    elif job_type == job_service.TYPE_RUN_TODO_TOOL:
+        _run_todo_tool(job_id, payload, client, model)
+    elif job_type == job_service.TYPE_RUN_LIGHT_REFLECTION:
+        _run_light_reflection(job_id, payload, client, model)
+    elif job_type == job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION:
+        _run_maybe_global_deep_reflection(job_id, payload, client, model)
+    elif job_type == job_service.TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION:
+        _run_trigger_global_deep_reflection(payload, client, model)
+    elif job_type == job_service.TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS:
+        _run_trigger_soul_deep_reflections(payload, client, model)
+    else:
+        raise ValueError(f"unsupported job type: {job_type}")
+
+
+def _run_index_post_embedding(job_id: int, payload: dict[str, Any]) -> None:
+    post_id = _required_post_id(payload)
+    event_service.append_post_event(post_id, "embedding_started", {"post_id": post_id}, job_id=job_id)
+    try:
+        record_service.index_post_embedding(post_id)
+    except Exception as exc:
+        event_service.append_post_event(post_id, "embedding_failed", {"error": str(exc)}, job_id=job_id)
+        raise
+    event_service.append_post_event(post_id, "embedding_succeeded", {"post_id": post_id}, job_id=job_id)
+
+
+def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
+    post_id = _required_post_id(payload)
+    content = _post_content(post_id)
+    rewritten_query = query_rewriter.rewrite_query(
+        client,
+        model,
+        content,
+        "public_post",
+        trace_context={"channel": "public_post", "post_id": post_id},
+    )
+    relevant_ids = retrieval.hybrid_search(
+        content,
+        k=3,
+        semantic_query=rewritten_query.semantic_query,
+        fts_keywords=rewritten_query.keywords,
+        trace_context={"channel": "public_post", "post_id": post_id},
+    )
+    built_context = context_builder.build_context(
+        relevant_post_ids=relevant_ids,
+        query=content,
+        fts_keywords=rewritten_query.keywords,
+        trace_context={"channel": "public_post", "post_id": post_id},
+    )
+
+    if not built_context.enabled_souls:
+        event_service.append_post_event(post_id, "reply_started", {"soul_count": 0}, job_id=job_id)
+        event_service.append_post_event(post_id, "reply_succeeded", {"soul_count": 0}, job_id=job_id)
+        return
+
+    for soul in built_context.enabled_souls:
+        event_service.append_post_event(post_id, "reply_started", {"soul_name": soul.name}, job_id=job_id)
+    results = reply_service.fanout(post_id, content, client, model, built_context)
+    for result in results:
+        event_type = "reply_succeeded" if result.ok else "reply_failed"
+        event_service.append_post_event(
+            post_id,
+            event_type,
+            {
+                "soul_name": result.soul_name,
+                "reply": result.reply,
+                "error": result.error,
+            },
+            job_id=job_id,
+        )
+
+
+def _run_todo_tool(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
+    post_id = _required_post_id(payload)
+    event_service.append_post_event(post_id, "todo_started", {"post_id": post_id}, job_id=job_id)
+    result = todo_service.run_for_post_safely(post_id, client, model)
+    if result.error:
+        event_service.append_post_event(post_id, "todo_failed", {"error": result.error}, job_id=job_id)
+        raise RuntimeError(result.error)
+    event_service.append_post_event(
+        post_id,
+        "todo_succeeded",
+        {
+            "applied": result.applied,
+            "upserted": result.upserted,
+            "deleted": result.deleted,
+            "skipped": result.skipped,
+        },
+        job_id=job_id,
+    )
+
+
+def _run_light_reflection(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
+    post_id = _required_post_id(payload)
+    event_service.append_post_event(post_id, "light_reflection_started", {"post_id": post_id}, job_id=job_id)
+    result = reflector.run_light_reflection_safely(post_id, client, model)
+    if result is None:
+        event_service.append_post_event(post_id, "light_reflection_failed", {"pending_retry": True}, job_id=job_id)
+        raise RuntimeError("light reflection failed")
+    event_service.append_post_event(
+        post_id,
+        "light_reflection_succeeded",
+        {
+            "entities": len(result.entities),
+            "emotions": len(result.emotions),
+            "events": len(result.events),
+            "relations": len(result.relations),
+            "importance": result.importance,
+        },
+        job_id=job_id,
+    )
+
+
+def _run_maybe_global_deep_reflection(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
+    post_id = _required_post_id(payload)
+    scope = reflector.preview_global_deep_reflection_scope(limit=DEEP_REFLECTION_POST_THRESHOLD)
+    if len(scope.post_ids) < DEEP_REFLECTION_POST_THRESHOLD:
+        event_service.append_post_event(
+            post_id,
+            "deep_reflection_succeeded",
+            {"skipped": True, "pending_post_count": len(scope.post_ids)},
+            job_id=job_id,
+        )
+        return
+
+    event_service.append_post_event(
+        post_id,
+        "deep_reflection_queued",
+        {"pending_post_count": len(scope.post_ids)},
+        job_id=job_id,
+    )
+    try:
+        result = reflector.trigger_global_deep_reflection(
+            client,
+            model,
+            trigger="api_threshold",
+            limit=100,
+        )
+    except Exception as exc:
+        event_service.append_post_event(post_id, "deep_reflection_failed", {"error": str(exc)}, job_id=job_id)
+        raise
+    event_service.append_post_event(
+        post_id,
+        "deep_reflection_succeeded",
+        {
+            "skipped": result is None,
+            "reflection_id": result.id if result is not None else None,
+            "related_post_ids": result.related_post_ids if result is not None else [],
+            "patch_summary": result.patch_summary if result is not None else None,
+        },
+        job_id=job_id,
+    )
+
+
+def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClient, model: str) -> None:
+    limit = _payload_int(payload, "limit", 100)
+    trigger = str(payload.get("trigger") or "api_manual")
+    reflector.trigger_global_deep_reflection(
+        client,
+        model,
+        trigger=trigger,
+        limit=limit,
+    )
+
+
+def _run_trigger_soul_deep_reflections(payload: dict[str, Any], client: LLMClient, model: str) -> None:
+    limit_per_soul = _payload_int(payload, "limit_per_soul", 100)
+    trigger = str(payload.get("trigger") or "api_manual")
+    reflector.trigger_soul_deep_reflections(
+        client,
+        model,
+        trigger=trigger,
+        limit_per_soul=limit_per_soul,
+    )
+
+
+def _required_post_id(payload: dict[str, Any]) -> str:
+    post_id = payload.get("post_id")
+    if not isinstance(post_id, str) or not post_id.strip():
+        raise ValueError("job payload missing post_id")
+    return post_id.strip()
+
+
+def _post_content(post_id: str) -> str:
+    row = db.query_one("SELECT content FROM posts WHERE id = ?", (post_id,))
+    if row is None:
+        raise ValueError(f"post 不存在：{post_id}")
+    return str(row["content"])
+
+
+def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
+    try:
+        value = int(payload.get(key, default))
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(value, 500))

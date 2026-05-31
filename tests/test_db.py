@@ -62,7 +62,9 @@ class DbTest(unittest.TestCase):
         self.assertNotIn("observation_sources", tables)
         self.assertNotIn("observations_fts", tables)
         self.assertNotIn("observation_cursors", tables)
-        self.assertEqual("2", version["value"])
+        self.assertEqual("3", version["value"])
+        self.assertIn("jobs", tables)
+        self.assertIn("post_events", tables)
 
     def test_init_db_drops_legacy_observation_tables_and_meta(self) -> None:
         db.execute("CREATE TABLE observations(id INTEGER PRIMARY KEY, title TEXT)")

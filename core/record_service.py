@@ -8,7 +8,7 @@ from datetime import datetime
 from core import db, logging_service
 
 
-def save_post(content: str) -> str:
+def save_post(content: str, *, index_immediately: bool = True) -> str:
     """Save a post to SQLite, then try to index it in ChromaDB."""
     now = datetime.now().astimezone()
     post_id = _next_post_id(now.strftime("%Y%m%d"))
@@ -30,6 +30,26 @@ def save_post(content: str) -> str:
             ),
         )
 
+    if index_immediately:
+        try:
+            index_post_embedding(post_id)
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            pass
+
+    return post_id
+
+
+def index_post_embedding(post_id: str) -> None:
+    """Index one saved post into ChromaDB and clear its pending marker."""
+    row = db.query_one(
+        "SELECT content FROM posts WHERE id = ?",
+        (post_id,),
+    )
+    if row is None:
+        raise ValueError(f"post 不存在：{post_id}")
+    body = row["content"]
     try:
         vectorstore = _vectorstore()
         if not vectorstore.is_initialized():
@@ -48,8 +68,7 @@ def save_post(content: str) -> str:
             error=str(exc),
             **_external_api_error_fields(exc, operation="vector_index_post"),
         )
-
-    return post_id
+        raise
 
 
 def format_post(row) -> str:
