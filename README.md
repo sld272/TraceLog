@@ -64,13 +64,17 @@ python main.py
 
 ### Web 前端和 API
 
-后端 API 使用 FastAPI，前端使用 Vite。开发时先启动 API：
+后端 API 使用 FastAPI，前端使用 Vite。开发时可以一键启动：
+
+```bash
+conda run --no-capture-output -n tracelog python start_web.py
+```
+
+默认会启动 API `http://127.0.0.1:8000/health` 和前端 `http://127.0.0.1:5173/`，并在退出脚本时同时停止两个服务。也可以分别启动：
 
 ```bash
 conda run -n tracelog uvicorn api.app:app --reload --port 8000
 ```
-
-再启动前端：
 
 ```bash
 cd frontend
@@ -78,7 +82,7 @@ npm install
 npm run dev
 ```
 
-前端默认运行在 `http://127.0.0.1:5173/`，并通过 Vite proxy 把 `/api` 转发到 `http://127.0.0.1:8000`。公开发帖会调用 `/posts`，随后通过 `/posts/{post_id}/events` 的 SSE 流接收 SOUL 回复、Todo、轻反思和完成状态。
+前端通过 Vite proxy 把 `/api` 转发到 `http://127.0.0.1:8000`。公开发帖会调用 `/posts`，随后通过 `/posts/{post_id}/events` 的 SSE 流接收 SOUL 回复、Todo、轻反思和完成状态。待办、反思预览/触发和 SOUL 私聊也已经接入后端 API。
 
 ## CLI 命令
 
@@ -184,7 +188,7 @@ LLM 调用会默认记录完整 prompt、response 与解析结果；query rewrit
 
 ## 当前限制
 
-- Web 界面仍是早期原型，目前重点覆盖首页时间线、发帖、SOUL 回复流、画像和 SOUL 列表。
+- Web 界面仍是早期原型，目前重点覆盖首页时间线、发帖、SOUL 回复流、待办、反思触发、SOUL 私聊、画像和 SOUL 列表。
 - 数据导出命令尚未实现；临时备份请直接复制 `workspace/`。
 - 反思和 TodoTool 仍同步跑在 CLI 主线程，公开 post 流程可能被 LLM 调用阻塞。
 - SOUL 独立记忆只在 SOUL 深反思时更新，不会在每次私聊或评论后即时写入。

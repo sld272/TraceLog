@@ -3,7 +3,10 @@ import { type Soul, listSouls, getProfile } from '@/api/client'
 import { AppShell } from '@/components/AppShell'
 import { LeftNav } from '@/components/LeftNav'
 import { RightPanel } from '@/components/RightPanel'
+import { ChatPage } from '@/pages/ChatPage'
+import { ReflectionsPage } from '@/pages/ReflectionsPage'
 import { Timeline } from '@/pages/Timeline'
+import { TodosPage } from '@/pages/TodosPage'
 
 export function App() {
   const [activePage, setActivePage] = useState('home')
@@ -38,13 +41,13 @@ export function App() {
       case 'home':
         return <Timeline />
       case 'todos':
-        return <PlaceholderPage title="待办" description="待办功能即将上线" />
+        return <TodosPage />
       case 'reflections':
-        return <PlaceholderPage title="反思" description="反思功能即将上线" />
+        return <ReflectionsPage />
       default:
         if (activePage.startsWith('chat:')) {
           const soulName = activePage.replace('chat:', '')
-          return <PlaceholderPage title={`与 ${soulName} 私聊`} description="私聊功能即将上线" />
+          return <ChatPage soulName={soulName} />
         }
         return <Timeline />
     }
@@ -67,23 +70,5 @@ export function App() {
         />
       }
     />
-  )
-}
-
-function PlaceholderPage({ title, description }: { title: string; description: string }) {
-  return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '4rem 1rem',
-      color: 'var(--color-text-tertiary)',
-    }}>
-      <h2 style={{ fontSize: 'var(--text-xl)', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>
-        {title}
-      </h2>
-      <p style={{ fontSize: 'var(--text-sm)' }}>{description}</p>
-    </div>
   )
 }

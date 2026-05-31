@@ -66,14 +66,18 @@ export interface Todo {
   end_time: string | null
   status: string
   source_post: string | null
+  created_at?: number
+  updated_at?: number
+  completed_at?: number | null
 }
 
 export interface ChatThread {
   id: number
   soul_name: string
+  title: string | null
   created_at: number
   updated_at: number
-  message_count: number
+  last_message_at: number | null
 }
 
 export interface ChatMessage {
@@ -110,6 +114,34 @@ export interface PostEvent {
   event_type: PostEventType
   payload: unknown
   created_at: number
+}
+
+export interface ChatReplyResult {
+  thread_id: number
+  soul_name: string
+  ok: boolean
+  reply: string
+  user_message_id: number
+  assistant_message_id: number | null
+  error: string | null
+}
+
+export interface ReflectionScope {
+  post_ids: string[]
+  scope_start: string | null
+  scope_end: string | null
+}
+
+export interface SoulReflectionScope {
+  soul_name: string
+  interaction_count: number
+  scope_start: number
+  scope_end: number
+}
+
+export interface JobQueued {
+  job_id: number
+  status: string
 }
 
 /* Posts */
@@ -208,10 +240,35 @@ export function getChatThread(threadId: number, limit = 30) {
 }
 
 export function sendChatMessage(soulName: string, content: string) {
-  return request<{ thread: ChatThread; result: unknown; messages: ChatMessage[] }>(
+  return request<{ thread: ChatThread; result: ChatReplyResult; messages: ChatMessage[] }>(
     `/chat/${soulName}/messages`,
     { method: 'POST', body: JSON.stringify({ content }) },
   )
+}
+
+/* Reflections */
+export function previewGlobalReflection(limit = 100) {
+  return request<ReflectionScope>(`/reflections/global/preview?limit=${limit}`)
+}
+
+export function triggerGlobalReflection(limit = 100) {
+  return request<JobQueued>('/reflections/global', {
+    method: 'POST',
+    body: JSON.stringify({ limit }),
+  })
+}
+
+export function previewSoulReflections(limitPerSoul = 100) {
+  return request<SoulReflectionScope[]>(
+    `/reflections/souls/preview?limit_per_soul=${limitPerSoul}`,
+  )
+}
+
+export function triggerSoulReflections(limitPerSoul = 100) {
+  return request<JobQueued>('/reflections/souls', {
+    method: 'POST',
+    body: JSON.stringify({ limit_per_soul: limitPerSoul }),
+  })
 }
 
 /* Comment threads */
