@@ -56,13 +56,15 @@ class ReflectorTest(unittest.TestCase):
             "schema: tracelog/user.md@v1\n"
             "sensitivity:\n"
             "  基本信息: high\n"
-            "  身份与现状: normal\n"
+            "  身份与角色: high\n"
+            "  当前状态与关注: low\n"
             "---\n\n"
             "# 用户档案\n\n"
             "## 基本信息\n"
             "- （暂无） <!-- id: bf-empty -->\n\n"
-            "## 身份与现状\n"
-            "- 测试用户 <!-- id: status-user -->\n",
+            "## 身份与角色\n"
+            "- 测试用户 <!-- id: role-user -->\n\n"
+            "## 当前状态与关注\n",
             encoding="utf-8",
         )
 
@@ -122,6 +124,13 @@ class ReflectorTest(unittest.TestCase):
         self.assertIn("对账", prompt)
         self.assertIn("confirm / revise / retract", prompt)
         self.assertIn("不是只追加事实", prompt)
+        self.assertIn("当前状态与关注", prompt)
+        self.assertIn("快进快删", prompt)
+        self.assertIn("不超过 10 条", prompt)
+        self.assertNotIn("关键身份", prompt)
+        self.assertNotIn("身份与现状", prompt)
+        self.assertNotIn("长期目标与当前痛点", prompt)
+        self.assertNotIn("近期主题与走向", prompt)
         self.assertNotIn("observations", prompt)
 
     def test_trigger_global_deep_reflection_skips_when_no_new_posts(self) -> None:
@@ -183,10 +192,10 @@ class ReflectorTest(unittest.TestCase):
             "reflection_md": "## 深反思\n\n你开始把比赛准备推进成具体行动。",
             "patches": [
                 {
-                    "section": "身份与现状",
+                    "section": "当前状态与关注",
                     "ops": [{"op": "add", "value": "正在准备比赛"}],
                     "evidence": ["20260525-001"],
-                    "confidence": 0.8,
+                    "confidence": 0.5,
                 }
             ],
         }
@@ -197,7 +206,7 @@ class ReflectorTest(unittest.TestCase):
         metadata = json.loads(row["metadata"])
 
         self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, result.patch_summary)
-        self.assertIn("正在准备比赛 <!-- id: status-", profile_service.read_profile())
+        self.assertIn("正在准备比赛 <!-- id: current-", profile_service.read_profile())
         self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, metadata["profile_patch_summary"])
 
     def test_global_deep_reflection_applies_update_remove_and_skips_placeholder_patch(self) -> None:
@@ -206,10 +215,10 @@ class ReflectorTest(unittest.TestCase):
             "reflection_md": "## 深反思\n\n你在修正对自己当前身份的描述。",
             "patches": [
                 {
-                    "section": "身份与现状",
-                    "ops": [{"op": "update", "anchor": "status-user", "value": "比赛项目参与者"}],
+                    "section": "身份与角色",
+                    "ops": [{"op": "update", "anchor": "role-user", "value": "比赛项目参与者"}],
                     "evidence": ["20260525-001"],
-                    "confidence": 0.7,
+                    "confidence": 0.88,
                 },
                 {
                     "section": "基本信息",
@@ -218,7 +227,7 @@ class ReflectorTest(unittest.TestCase):
                     "confidence": 0.95,
                 },
                 {
-                    "section": "身份与现状",
+                    "section": "当前状态与关注",
                     "ops": [{"op": "add", "value": "暂无"}],
                     "evidence": ["20260525-001"],
                     "confidence": 0.9,
@@ -233,7 +242,7 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual(2, result.patch_summary["applied"])
         self.assertEqual(1, result.patch_summary["skipped"])
         self.assertEqual("invalid_value", result.patch_summary["skipped_details"][0]["reason"])
-        self.assertIn("比赛项目参与者 <!-- id: status-user -->", content)
+        self.assertIn("比赛项目参与者 <!-- id: role-user -->", content)
         self.assertNotIn("bf-empty", content)
         self.assertNotIn("- 暂无", content)
 

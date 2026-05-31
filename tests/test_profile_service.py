@@ -13,9 +13,10 @@ USER_MD = """---
 schema: tracelog/user.md@v1
 sensitivity:
   基本信息: high
-  关键身份: high
+  身份与角色: high
+  当前状态与关注: low
   技能与专长: normal
-  性格与情绪倾向: normal
+  性格与倾向: normal
 ---
 
 # 用户档案
@@ -23,14 +24,17 @@ sensitivity:
 ## 基本信息
 - （暂无） <!-- id: bf-empty -->
 
-## 关键身份
-- 高一学生 <!-- id: ki-student -->
+## 身份与角色
+- 高一学生 <!-- id: role-student -->
+
+## 当前状态与关注
+- 下周三数学期末考，正在复习 <!-- id: current-exam -->
 
 ## 技能与专长
 - Python 后端 <!-- id: sk-py -->
 
-## 性格与情绪倾向
-- 容易焦虑 <!-- id: tr-anxious -->
+## 性格与倾向
+- 容易焦虑 <!-- id: trait-anxious -->
 """
 
 
@@ -73,7 +77,7 @@ class ProfileServiceTest(unittest.TestCase):
         row = db.query_one("SELECT patch, source FROM user_md_revisions ORDER BY id DESC LIMIT 1")
 
         self.assertEqual("applied", result["status"])
-        self.assertIn("熟悉 ChromaDB <!-- id: sk-", content)
+        self.assertIn("熟悉 ChromaDB <!-- id: skill-", content)
         row = require_not_none(row)
         self.assertIn("熟悉 ChromaDB", row["patch"])
         self.assertEqual("reflector", row["source"])
@@ -96,7 +100,13 @@ class ProfileServiceTest(unittest.TestCase):
 
     def test_default_user_md_has_empty_sections_without_placeholders(self) -> None:
         self.assertNotIn("暂无", profile_service.DEFAULT_USER_MD)
-        self.assertIn("## 基本信息\n\n## 关键身份", profile_service.DEFAULT_USER_MD)
+        self.assertIn("schema: tracelog/user.md@v1", profile_service.DEFAULT_USER_MD)
+        self.assertIn("## 基本信息\n\n## 身份与角色", profile_service.DEFAULT_USER_MD)
+        self.assertIn("## 当前状态与关注", profile_service.DEFAULT_USER_MD)
+        self.assertNotIn("## 关键身份", profile_service.DEFAULT_USER_MD)
+        self.assertNotIn("## 身份与现状", profile_service.DEFAULT_USER_MD)
+        self.assertNotIn("## 长期目标与当前痛点", profile_service.DEFAULT_USER_MD)
+        self.assertNotIn("## 近期主题与走向", profile_service.DEFAULT_USER_MD)
 
     def test_high_add_with_one_evidence_writes_user_md_and_leaves_legacy_placeholder(self) -> None:
         result = profile_service.apply_patch(
@@ -135,32 +145,32 @@ class ProfileServiceTest(unittest.TestCase):
     def test_high_update_and_remove_thresholds(self) -> None:
         low_update = profile_service.apply_patch(
             {
-                "section": "关键身份",
-                "ops": [{"op": "update", "anchor": "ki-student", "value": "高中一年级学生"}],
+                "section": "身份与角色",
+                "ops": [{"op": "update", "anchor": "role-student", "value": "高中一年级学生"}],
                 "evidence": ["20260525-001"],
                 "confidence": 0.87,
             }
         )
         update = profile_service.apply_patch(
             {
-                "section": "关键身份",
-                "ops": [{"op": "update", "anchor": "ki-student", "value": "高中一年级学生"}],
+                "section": "身份与角色",
+                "ops": [{"op": "update", "anchor": "role-student", "value": "高中一年级学生"}],
                 "evidence": ["20260525-001"],
                 "confidence": 0.88,
             }
         )
         low_remove = profile_service.apply_patch(
             {
-                "section": "关键身份",
-                "ops": [{"op": "remove", "anchor": "ki-student"}],
+                "section": "身份与角色",
+                "ops": [{"op": "remove", "anchor": "role-student"}],
                 "evidence": ["20260525-001"],
                 "confidence": 0.94,
             }
         )
         remove = profile_service.apply_patch(
             {
-                "section": "关键身份",
-                "ops": [{"op": "remove", "anchor": "ki-student"}],
+                "section": "身份与角色",
+                "ops": [{"op": "remove", "anchor": "role-student"}],
                 "evidence": ["20260525-001"],
                 "confidence": 0.95,
             }
@@ -175,6 +185,50 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertEqual("low_confidence", low_remove["reason"])
         self.assertEqual("applied", remove["status"])
         self.assertNotIn("高中一年级学生", content)
+
+    def test_low_current_status_thresholds_are_fast_moving(self) -> None:
+        add = profile_service.apply_patch(
+            {
+                "section": "当前状态与关注",
+                "ops": [{"op": "add", "value": "最近在准备数学期末考"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.50,
+            }
+        )
+        update = profile_service.apply_patch(
+            {
+                "section": "当前状态与关注",
+                "ops": [{"op": "update", "anchor": "current-exam", "value": "数学期末考已进入最后复习阶段"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.50,
+            }
+        )
+        low_remove = profile_service.apply_patch(
+            {
+                "section": "当前状态与关注",
+                "ops": [{"op": "remove", "anchor": "current-exam"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.59,
+            }
+        )
+        remove = profile_service.apply_patch(
+            {
+                "section": "当前状态与关注",
+                "ops": [{"op": "remove", "anchor": "current-exam"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.60,
+            }
+        )
+
+        content = profile_service.read_profile()
+
+        self.assertEqual("applied", add["status"])
+        self.assertEqual("applied", update["status"])
+        self.assertEqual("skipped", low_remove["status"])
+        self.assertEqual("low_confidence", low_remove["reason"])
+        self.assertEqual("applied", remove["status"])
+        self.assertIn("最近在准备数学期末考 <!-- id: current-", content)
+        self.assertNotIn("数学期末考已进入最后复习阶段", content)
 
     def test_invalid_evidence_is_skipped(self) -> None:
         result = profile_service.apply_patch(
@@ -237,8 +291,8 @@ class ProfileServiceTest(unittest.TestCase):
         )
         remove = profile_service.apply_patch(
             {
-                "section": "性格与情绪倾向",
-                "ops": [{"op": "remove", "anchor": "tr-anxious"}],
+                "section": "性格与倾向",
+                "ops": [{"op": "remove", "anchor": "trait-anxious"}],
                 "evidence": ["20260525-002"],
                 "confidence": 0.9,
             }

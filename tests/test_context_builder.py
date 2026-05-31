@@ -30,7 +30,7 @@ class ContextBuilderTest(unittest.TestCase):
         db.init_db()
         logging_service.init_logging({"enabled": True})
         self.workspace.mkdir(parents=True, exist_ok=True)
-        (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与现状\n测试用户\n", encoding="utf-8")
+        (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与角色\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
 
     def tearDown(self) -> None:

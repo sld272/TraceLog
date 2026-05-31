@@ -123,7 +123,7 @@ content='posts', content_rowid='rowid'
 - 可能的 `user.md` patch
 - `user_md_revisions`
 
-profile patch 的 evidence 必须是本次输入中真实存在的 post id。高敏章节由 `profile_service` 使用更严格阈值控制。
+profile patch 的 evidence 必须是本次输入中真实存在的 post id。`profile_service` 按 user.md frontmatter 中的 sensitivity 控制阈值：高敏章节更保守，`当前状态与关注` 可用 low 门槛更积极地增删。
 
 ### 5.3 SOUL 深反思
 

@@ -17,35 +17,32 @@ DEFAULT_USER_MD = """---
 schema: tracelog/user.md@v1
 sensitivity:
   基本信息: high
-  关键身份: high
-  身份与现状: normal
+  身份与角色: high
+  性格与倾向: normal
   技能与专长: normal
   兴趣与习惯: normal
-  关注的核心人际关系: normal
-  性格与情绪倾向: normal
-  长期目标与当前痛点: normal
-  近期主题与走向: normal
+  核心人际关系: normal
+  长期目标: normal
+  当前状态与关注: low
 ---
 
 # 用户档案
 
 ## 基本信息
 
-## 关键身份
+## 身份与角色
 
-## 身份与现状
+## 性格与倾向
 
 ## 技能与专长
 
 ## 兴趣与习惯
 
-## 关注的核心人际关系
+## 核心人际关系
 
-## 性格与情绪倾向
+## 长期目标
 
-## 长期目标与当前痛点
-
-## 近期主题与走向
+## 当前状态与关注
 """
 
 ANCHOR_RE = re.compile(r"<!--\s*id:\s*([A-Za-z0-9_-]+)\s*-->")
@@ -53,17 +50,19 @@ SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 
 SECTION_PREFIXES = {
     "基本信息": "bf",
-    "关键身份": "ki",
-    "身份与现状": "status",
-    "技能与专长": "sk",
-    "兴趣与习惯": "hb",
-    "关注的核心人际关系": "rel",
-    "性格与情绪倾向": "tr",
-    "长期目标与当前痛点": "gl",
-    "近期主题与走向": "trend",
+    "身份与角色": "role",
+    "性格与倾向": "trait",
+    "技能与专长": "skill",
+    "兴趣与习惯": "habit",
+    "核心人际关系": "rel",
+    "长期目标": "goal",
+    "当前状态与关注": "current",
 }
 
 THRESHOLDS = {
+    ("low", "add"): (1, 0.50),
+    ("low", "update"): (1, 0.50),
+    ("low", "remove"): (1, 0.60),
     ("normal", "add"): (1, 0.60),
     ("normal", "update"): (1, 0.65),
     ("normal", "remove"): (1, 0.85),
@@ -232,7 +231,7 @@ def _parse_user_md(text: str) -> UserMdDoc:
                         continue
                     key, value = stripped.split(":", 1)
                     level = value.strip()
-                    if level in ("high", "normal"):
+                    if level in ("high", "normal", "low"):
                         sensitivity[key.strip()] = level
     return UserMdDoc(lines=lines, sensitivity=sensitivity)
 
