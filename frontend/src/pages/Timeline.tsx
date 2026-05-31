@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { type Post, type Comment, listPosts, createPost, getPost, streamPostEvents } from '@/api/client'
+import { type Post, type Comment, type PostEvent, listPosts, createPost, getPost, streamPostEvents } from '@/api/client'
 import { Composer } from '@/components/Composer'
 import { PostCard } from '@/components/PostCard'
 import styles from './Timeline.module.css'
@@ -43,22 +43,16 @@ export function Timeline() {
     streamPostEvents(
       result.post_id,
       (event) => {
-        if (event.event_type === 'comment_generated') {
-          /* Refresh post detail to get comments */
-          getPost(result.post_id).then((detail) => {
-            setPostComments((prev) => ({
-              ...prev,
-              [result.post_id]: detail.comments,
-            }))
-            /* Update comment count */
-            setPosts((prev) =>
-              prev.map((p) =>
-                p.post_id === result.post_id
-                  ? { ...p, comment_count: detail.comments.length, latest_event_type: event.event_type }
-                  : p,
-              ),
-            )
-          })
+        setPosts((prev) =>
+          prev.map((p) =>
+            p.post_id === result.post_id
+              ? { ...p, latest_event_type: event.event_type }
+              : p,
+          ),
+        )
+
+        if (shouldRefreshPostDetail(event)) {
+          refreshPostDetail(result.post_id, event.event_type)
         }
       },
       () => {
@@ -72,6 +66,30 @@ export function Timeline() {
         )
       },
     )
+  }
+
+  const refreshPostDetail = async (postId: string, eventType?: string) => {
+    try {
+      const detail = await getPost(postId)
+      setPostComments((prev) => ({
+        ...prev,
+        [postId]: detail.comments,
+      }))
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.post_id === postId
+            ? {
+                ...p,
+                importance: detail.post.importance,
+                comment_count: detail.comments.length,
+                latest_event_type: eventType ?? p.latest_event_type,
+              }
+            : p,
+        ),
+      )
+    } catch {
+      /* keep the optimistic post visible if detail refresh fails */
+    }
   }
 
   const handleExpand = async (postId: string) => {
@@ -130,6 +148,15 @@ export function Timeline() {
       )}
     </div>
   )
+}
+
+function shouldRefreshPostDetail(event: PostEvent): boolean {
+  return [
+    'reply_succeeded',
+    'reply_failed',
+    'light_reflection_succeeded',
+    'pipeline_done',
+  ].includes(event.event_type)
 }
 
 function EmptyIcon() {

@@ -4,7 +4,7 @@
 
 TraceLog 是一个本地优先的个人成长 AI 伴侣。你可以像发动态一样写下日常碎片，让多个 SOUL 以不同人格回应你；系统会把公开记录、待办、反思、画像和 SOUL 相处记忆沉淀到本地 `workspace/`，并用 SQLite + ChromaDB 支撑检索与后续反思。
 
-当前版本是 CLI 原型，重点是跑通“记录 -> 检索上下文 -> 回应 -> 待办 -> 轻反思 -> 深反思 -> 画像/记忆更新”这条主链路。
+当前版本包含 CLI 主流程、FastAPI 后端和 Vite Web 前端原型，重点是跑通“记录 -> 检索上下文 -> 回应 -> 待办 -> 轻反思 -> 深反思 -> 画像/记忆更新”这条主链路。
 
 ## 当前功能
 
@@ -37,6 +37,8 @@ pip install -r requirements.txt
 
 ## 运行
 
+### CLI
+
 ```bash
 python main.py
 ```
@@ -59,6 +61,24 @@ python main.py
 ```
 
 会退出程序，并依次尝试全局深反思和 SOUL 深反思。若检测到新内容但本次 SOUL 深反思没有生成有效结果，会保留游标，下次退出时继续重试。
+
+### Web 前端和 API
+
+后端 API 使用 FastAPI，前端使用 Vite。开发时先启动 API：
+
+```bash
+conda run -n tracelog uvicorn api.app:app --reload --port 8000
+```
+
+再启动前端：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+前端默认运行在 `http://127.0.0.1:5173/`，并通过 Vite proxy 把 `/api` 转发到 `http://127.0.0.1:8000`。公开发帖会调用 `/posts`，随后通过 `/posts/{post_id}/events` 的 SSE 流接收 SOUL 回复、Todo、轻反思和完成状态。
 
 ## CLI 命令
 
@@ -164,7 +184,7 @@ LLM 调用会默认记录完整 prompt、response 与解析结果；query rewrit
 
 ## 当前限制
 
-- 目前仍是 CLI 原型，没有 Web 界面。
+- Web 界面仍是早期原型，目前重点覆盖首页时间线、发帖、SOUL 回复流、画像和 SOUL 列表。
 - 数据导出命令尚未实现；临时备份请直接复制 `workspace/`。
 - 反思和 TodoTool 仍同步跑在 CLI 主线程，公开 post 流程可能被 LLM 调用阻塞。
 - SOUL 独立记忆只在 SOUL 深反思时更新，不会在每次私聊或评论后即时写入。

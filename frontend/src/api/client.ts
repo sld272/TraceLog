@@ -84,6 +84,34 @@ export interface ChatMessage {
   created_at: number
 }
 
+export type PostEventType =
+  | 'post_created'
+  | 'embedding_started'
+  | 'embedding_succeeded'
+  | 'embedding_failed'
+  | 'reply_started'
+  | 'reply_succeeded'
+  | 'reply_failed'
+  | 'todo_started'
+  | 'todo_succeeded'
+  | 'todo_failed'
+  | 'light_reflection_started'
+  | 'light_reflection_succeeded'
+  | 'light_reflection_failed'
+  | 'deep_reflection_queued'
+  | 'deep_reflection_succeeded'
+  | 'deep_reflection_failed'
+  | 'pipeline_done'
+
+export interface PostEvent {
+  id: number
+  post_id: string
+  job_id: number | null
+  event_type: PostEventType
+  payload: unknown
+  created_at: number
+}
+
 /* Posts */
 export function listPosts(limit = 20, offset = 0) {
   return request<Post[]>(`/posts?limit=${limit}&offset=${offset}`)
@@ -101,30 +129,42 @@ export function createPost(content: string) {
 }
 
 /* SSE stream for post events */
+const POST_EVENT_TYPES: PostEventType[] = [
+  'post_created',
+  'embedding_started',
+  'embedding_succeeded',
+  'embedding_failed',
+  'reply_started',
+  'reply_succeeded',
+  'reply_failed',
+  'todo_started',
+  'todo_succeeded',
+  'todo_failed',
+  'light_reflection_started',
+  'light_reflection_succeeded',
+  'light_reflection_failed',
+  'deep_reflection_queued',
+  'deep_reflection_succeeded',
+  'deep_reflection_failed',
+  'pipeline_done',
+]
+
 export function streamPostEvents(
   postId: string,
-  onEvent: (event: { event_type: string; payload: unknown }) => void,
+  onEvent: (event: PostEvent) => void,
   onDone?: () => void,
 ): () => void {
   const es = new EventSource(`${BASE}/posts/${postId}/events`)
 
-  es.addEventListener('pipeline_done', (e) => {
-    const data = JSON.parse(e.data)
-    onEvent(data)
-    onDone?.()
-    es.close()
-  })
-
-  es.addEventListener('comment_generated', (e) => {
-    onEvent(JSON.parse(e.data))
-  })
-
-  es.addEventListener('todo_extracted', (e) => {
-    onEvent(JSON.parse(e.data))
-  })
-
-  es.addEventListener('light_reflection_done', (e) => {
-    onEvent(JSON.parse(e.data))
+  POST_EVENT_TYPES.forEach((type) => {
+    es.addEventListener(type, (e) => {
+      const data = JSON.parse(e.data) as PostEvent
+      onEvent(data)
+      if (data.event_type === 'pipeline_done') {
+        onDone?.()
+        es.close()
+      }
+    })
   })
 
   es.onerror = () => {
