@@ -221,3 +221,8 @@ frontend/dist/
 frontend/.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
 frontend/tsconfig.node.tsbuildinfo
+
+
+#Agent
+AGENTS.md
+CLAUDE.md
