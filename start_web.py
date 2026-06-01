@@ -24,7 +24,6 @@ def main() -> int:
     parser.add_argument("--skip-install", action="store_true")
     args = parser.parse_args()
 
-    _require_command("conda")
     _require_command("npm")
     if not args.skip_install:
         _ensure_frontend_dependencies()
@@ -32,36 +31,14 @@ def main() -> int:
     processes: list[subprocess.Popen] = []
     try:
         backend = _start(
-            [
-                "conda",
-                "run",
-                "--no-capture-output",
-                "-n",
-                "tracelog",
-                "uvicorn",
-                "api.app:app",
-                "--reload",
-                "--host",
-                args.host,
-                "--port",
-                str(args.backend_port),
-            ],
+            _backend_command(args),
             cwd=ROOT,
             name="api",
         )
         processes.append(backend)
 
         frontend = _start(
-            [
-                "npm",
-                "run",
-                "dev",
-                "--",
-                "--host",
-                args.host,
-                "--port",
-                str(args.frontend_port),
-            ],
+            _frontend_command(args),
             cwd=FRONTEND_DIR,
             name="frontend",
         )
@@ -94,6 +71,33 @@ def _ensure_frontend_dependencies() -> None:
     subprocess.run(["npm", "install"], cwd=FRONTEND_DIR, check=True)
 
 
+def _backend_command(args: argparse.Namespace) -> list[str]:
+    return [
+        sys.executable,
+        "-m",
+        "uvicorn",
+        "api.app:app",
+        "--reload",
+        "--host",
+        args.host,
+        "--port",
+        str(args.backend_port),
+    ]
+
+
+def _frontend_command(args: argparse.Namespace) -> list[str]:
+    return [
+        "npm",
+        "run",
+        "dev",
+        "--",
+        "--host",
+        args.host,
+        "--port",
+        str(args.frontend_port),
+    ]
+
+
 def _start(command: list[str], *, cwd: Path, name: str) -> subprocess.Popen:
     print(f"Starting {name}: {' '.join(command)}", flush=True)
     kwargs: dict = {"cwd": cwd}
@@ -107,13 +111,52 @@ def _start(command: list[str], *, cwd: Path, name: str) -> subprocess.Popen:
 def _stop(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
+    if os.name == "posix":
+        _stop_posix_process_group(process)
+        return
+    if os.name == "nt":
+        _stop_windows_process(process)
+        return
+    _stop_plain_process(process)
+
+
+def _stop_posix_process_group(process: subprocess.Popen) -> None:
     try:
-        if os.name == "posix":
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-        elif os.name == "nt":
-            process.send_signal(signal.CTRL_BREAK_EVENT)
-        else:
-            process.terminate()
+        pgid = os.getpgid(process.pid)
+    except ProcessLookupError:
+        return
+
+    for sig, timeout in (
+        (signal.SIGINT, 8),
+        (signal.SIGTERM, 3),
+        (signal.SIGKILL, 1),
+    ):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=timeout)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _stop_windows_process(process: subprocess.Popen) -> None:
+    try:
+        process.send_signal(signal.CTRL_BREAK_EVENT)
+        process.wait(timeout=8)
+    except Exception:
+        process.terminate()
+        try:
+            process.wait(timeout=3)
+        except Exception:
+            process.kill()
+
+
+def _stop_plain_process(process: subprocess.Popen) -> None:
+    try:
+        process.terminate()
         process.wait(timeout=8)
     except Exception:
         process.kill()

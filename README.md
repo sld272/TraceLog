@@ -67,7 +67,8 @@ python main.py
 后端 API 使用 FastAPI，前端使用 Vite。开发时可以一键启动：
 
 ```bash
-conda run --no-capture-output -n tracelog python start_web.py
+conda activate tracelog
+python start_web.py
 ```
 
 默认会启动 API `http://127.0.0.1:8000/health` 和前端 `http://127.0.0.1:5173/`，并在退出脚本时同时停止两个服务。也可以分别启动：
