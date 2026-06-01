@@ -133,6 +133,14 @@ class ReflectorTest(unittest.TestCase):
         self.assertNotIn("近期主题与走向", prompt)
         self.assertNotIn("observations", prompt)
 
+    def test_soul_deep_reflection_prompt_excludes_assistant_improvisation_from_memory(self) -> None:
+        prompt = reflection_router.SOUL_DEEP_REFLECTION_PROMPT
+
+        self.assertIn("SOUL/assistant 自己生成的玩笑", prompt)
+        self.assertIn("比喻、小剧场", prompt)
+        self.assertIn("不能作为用户事实", prompt)
+        self.assertIn("用户事实只能来自用户消息", prompt)
+
     def test_trigger_global_deep_reflection_skips_when_no_new_posts(self) -> None:
         self._insert_post("20260525-001", "2026-05-25T10:00:00+08:00", "今天完成了比赛计划。")
         client = FakeClient()

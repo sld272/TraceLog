@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,8 +10,24 @@ from unittest.mock import patch
 
 from core import db, reply_service
 from core.context_builder import BuiltContext
+from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
+
+
+class FakeClient:
+    def __init__(self, payload: dict | None = None) -> None:
+        self.payload = payload or {"reply": "我在。"}
+        self.calls: list[dict] = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(message=SimpleNamespace(content=json.dumps(self.payload, ensure_ascii=False)))
+            ]
+        )
 
 
 class ReplyServiceTest(unittest.TestCase):
@@ -55,6 +72,20 @@ class ReplyServiceTest(unittest.TestCase):
         self.assertEqual("共享上下文", captured_contexts["毒舌好友"])
         rows = db.query_all("SELECT soul_name, content FROM comments ORDER BY soul_name")
         self.assertEqual([("毒舌好友", "毒舌好友 回复"), ("默认", "默认 回复")], [(row["soul_name"], row["content"]) for row in rows])
+
+    def test_soul_post_reply_prompt_includes_virtual_friend_boundaries(self) -> None:
+        soul = SoulContext("默认", None, 0, "默认人格", "")
+        client = FakeClient()
+
+        reply_router.call_soul_post_reply("今天好累", client, "fake-model", "共享上下文", soul)
+        prompt = client.calls[-1]["messages"][0]["content"]
+
+        self.assertIn("比喻、场景感、小剧场和幽默想象", prompt)
+        self.assertIn("不能伪造事实", prompt)
+        self.assertIn("听起来像", prompt)
+        self.assertIn("没有证据时", prompt)
+        self.assertIn("不要说“我记得你", prompt)
+        self.assertIn("其他 SOUL", prompt)
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(
