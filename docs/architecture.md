@@ -185,7 +185,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 
 ### 5.2 全局深反思
 
-触发：CLI 退出或手动触发。
+触发：CLI 退出、API 手动触发或 Web 反思入口。
 
 输入：
 
@@ -211,7 +211,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 
 ### 5.3 SOUL 深反思
 
-触发：CLI 退出或手动触发。
+触发：CLI 退出、API 手动触发或 Web 反思入口。
 
 输入：
 
