@@ -12,17 +12,17 @@ import time
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = ROOT / "frontend"
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Start TraceLog Web development servers.")
     parser.add_argument("--backend-port", type=int, default=8000)
     parser.add_argument("--frontend-port", type=int, default=5173)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--skip-install", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     _require_command("npm")
     if not args.skip_install:
@@ -166,7 +166,3 @@ def _stop_plain_process(process: subprocess.Popen) -> None:
 def _require_command(command: str) -> None:
     if shutil.which(command) is None:
         raise SystemExit(f"Missing required command: {command}")
-
-
-if __name__ == "__main__":
-    sys.exit(main())
