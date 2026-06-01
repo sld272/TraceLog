@@ -33,6 +33,17 @@ class StartWebTest(unittest.TestCase):
         killpg.assert_called_once_with(54321, signal.SIGINT)
         process.wait.assert_called_once_with(timeout=8)
 
+    def test_windows_stop_uses_ctrl_break_when_available(self) -> None:
+        process = Mock()
+        process.wait.return_value = 0
+        ctrl_break = 1
+
+        with patch("start_web.signal.CTRL_BREAK_EVENT", ctrl_break, create=True):
+            start_web._stop_windows_process(process)
+
+        process.send_signal.assert_called_once_with(ctrl_break)
+        process.wait.assert_called_once_with(timeout=8)
+
 
 if __name__ == "__main__":
     unittest.main()

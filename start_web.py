@@ -144,7 +144,8 @@ def _stop_posix_process_group(process: subprocess.Popen) -> None:
 
 def _stop_windows_process(process: subprocess.Popen) -> None:
     try:
-        process.send_signal(signal.CTRL_BREAK_EVENT)
+        ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
+        process.send_signal(ctrl_break)
         process.wait(timeout=8)
     except Exception:
         process.terminate()
