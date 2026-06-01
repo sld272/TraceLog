@@ -13,9 +13,15 @@ export function PostCard({ post, comments = [], onExpand }: PostCardProps) {
   return (
     <article className={styles.card}>
       <div className={styles.header}>
-        <time className={styles.time} dateTime={post.ts} title={post.ts}>
-          {timeAgo}
-        </time>
+        <div className={styles.author}>
+          <span className={styles.userAvatar}>我</span>
+          <div>
+            <span className={styles.userName}>你</span>
+            <time className={styles.time} dateTime={post.ts} title={post.ts}>
+              {timeAgo}
+            </time>
+          </div>
+        </div>
         {post.importance > 0.7 && (
           <span className={styles.importanceBadge} title={`重要性: ${post.importance.toFixed(2)}`}>
             <StarIcon />
@@ -38,7 +44,7 @@ export function PostCard({ post, comments = [], onExpand }: PostCardProps) {
       {post.comment_count > 0 && comments.length === 0 && (
         <button className={styles.expandBtn} onClick={onExpand}>
           <ChatIcon />
-          <span>{post.comment_count} 条回应</span>
+          <span>查看 {post.comment_count} 条回应</span>
         </button>
       )}
 

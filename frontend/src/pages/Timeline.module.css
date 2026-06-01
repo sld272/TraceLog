@@ -2,12 +2,34 @@
   width: 100%;
 }
 
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  padding: 0 var(--space-1);
+}
+
+.header h1 {
+  color: var(--color-text-primary);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.header p {
+  margin-top: var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+}
+
 .feed {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
 }
 
-/* Loading skeleton */
 .loading {
   display: flex;
   flex-direction: column;
@@ -15,64 +37,71 @@
 }
 
 .skeleton {
-  height: 120px;
-  background: var(--color-bg-secondary);
-  border-radius: var(--radius-lg);
+  height: 132px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.62);
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
 @keyframes shimmer {
-  0% { opacity: 0.6; }
+  0% { opacity: 0.55; }
   50% { opacity: 1; }
-  100% { opacity: 0.6; }
+  100% { opacity: 0.55; }
 }
 
-/* Error state */
 .error {
-  text-align: center;
-  padding: var(--space-12) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.76);
   color: var(--color-text-secondary);
+  padding: var(--space-12) var(--space-4);
+  text-align: center;
 }
 
 .errorDetail {
-  font-size: var(--text-sm);
-  color: var(--color-error);
   margin-top: var(--space-2);
+  color: var(--color-error);
+  font-size: var(--text-sm);
 }
 
 .retryBtn {
+  min-height: 42px;
   margin-top: var(--space-4);
-  padding: var(--space-2) var(--space-5);
+  padding: 0 var(--space-5);
   border-radius: var(--radius-full);
   background: var(--color-accent);
   color: var(--color-text-inverse);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  transition: background var(--transition-fast);
-  min-height: 44px;
+  transition: background var(--transition-fast), transform var(--transition-fast);
 }
 
 .retryBtn:hover {
   background: var(--color-accent-hover);
+  transform: translateY(-1px);
 }
 
-/* Empty state */
 .empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: var(--space-16) var(--space-4);
+  margin-top: var(--space-4);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.54);
   color: var(--color-text-tertiary);
+  padding: var(--space-16) var(--space-4);
 }
 
 .emptyTitle {
+  margin-top: var(--space-4);
+  color: var(--color-text-secondary);
   font-size: var(--text-lg);
   font-weight: var(--weight-medium);
-  color: var(--color-text-secondary);
-  margin-top: var(--space-4);
 }
 
 .emptyHint {
-  font-size: var(--text-sm);
   margin-top: var(--space-2);
+  font-size: var(--text-sm);
 }

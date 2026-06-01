@@ -103,29 +103,29 @@ export function Timeline() {
 
   if (loading) {
     return (
-      <div className={styles.loading}>
-        <div className={styles.skeleton} />
-        <div className={styles.skeleton} />
-        <div className={styles.skeleton} />
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className={styles.error}>
-        <p>无法加载时间线</p>
-        <p className={styles.errorDetail}>{error}</p>
-        <button className={styles.retryBtn} onClick={fetchPosts}>重试</button>
+      <div className={styles.timeline}>
+        <TimelineHeader />
+        <div className={styles.loading}>
+          <div className={styles.skeleton} />
+          <div className={styles.skeleton} />
+          <div className={styles.skeleton} />
+        </div>
       </div>
     )
   }
 
   return (
     <div className={styles.timeline}>
+      <TimelineHeader />
       <Composer onSubmit={handleSubmit} />
 
-      {posts.length === 0 ? (
+      {error ? (
+        <div className={styles.error}>
+          <p>无法加载时间线</p>
+          <p className={styles.errorDetail}>{error}</p>
+          <button className={styles.retryBtn} onClick={fetchPosts}>重试</button>
+        </div>
+      ) : posts.length === 0 ? (
         <div className={styles.empty}>
           <EmptyIcon />
           <p className={styles.emptyTitle}>还没有记录</p>
@@ -147,6 +147,17 @@ export function Timeline() {
         </div>
       )}
     </div>
+  )
+}
+
+function TimelineHeader() {
+  return (
+    <header className={styles.header}>
+      <div>
+        <h1>首页</h1>
+        <p>记录、回应、反思都流回这里</p>
+      </div>
+    </header>
   )
 }
 

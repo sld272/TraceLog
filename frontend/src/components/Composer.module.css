@@ -1,25 +1,28 @@
 .composer {
-  background: var(--color-bg-card);
+  position: relative;
+  margin-bottom: var(--space-4);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.84);
   padding: var(--space-4);
-  margin-bottom: var(--space-6);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 
 .composer:focus-within {
   border-color: var(--color-accent-border);
-  box-shadow: 0 0 0 3px var(--color-accent-subtle);
+  box-shadow: 0 16px 42px rgba(47, 139, 125, 0.1);
+  transform: translateY(-1px);
 }
 
 .textarea {
   width: 100%;
-  resize: none;
-  font-size: var(--text-base);
-  line-height: var(--leading-normal);
-  color: var(--color-text-primary);
-  min-height: 48px;
+  min-height: 68px;
   max-height: 200px;
+  resize: none;
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
 }
 
 .textarea::placeholder {
@@ -34,46 +37,53 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-3);
   margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border);
 }
 
 .hint {
-  font-size: var(--text-xs);
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-soft);
   color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
 }
 
 .submitBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border-radius: var(--radius-full);
   background: var(--color-accent);
   color: var(--color-text-inverse);
-  transition: background var(--transition-fast), transform var(--transition-fast);
+  box-shadow: 0 10px 22px rgba(47, 139, 125, 0.22);
+  transition: background var(--transition-fast), transform var(--transition-fast), opacity var(--transition-fast);
 }
 
 .submitBtn:hover:not(:disabled) {
   background: var(--color-accent-hover);
+  transform: translateY(-1px);
 }
 
 .submitBtn:active:not(:disabled) {
-  transform: scale(0.95);
+  transform: scale(0.96);
 }
 
 .submitBtn:disabled {
-  opacity: 0.4;
   cursor: not-allowed;
+  opacity: 0.42;
+  box-shadow: none;
 }
 
-/* Loading dots animation */
 .dots {
   display: flex;
-  gap: 3px;
   align-items: center;
+  gap: 3px;
 }
 
 .dot {
