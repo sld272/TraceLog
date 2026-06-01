@@ -231,12 +231,7 @@ def _evidence_exists(name: str, evidence: list[str]) -> bool:
             except ValueError:
                 return False
             row = db.query_one(
-                """
-                SELECT 1
-                FROM comment_messages
-                JOIN comment_threads ON comment_threads.id = comment_messages.thread_id
-                WHERE comment_messages.id = ? AND comment_threads.soul_name = ?
-                """,
+                "SELECT 1 FROM comments WHERE id = ? AND soul_name = ? AND seq > 0",
                 (message_id, name),
             )
         else:

@@ -28,8 +28,9 @@ export interface Comment {
   id: number
   post_id: string
   soul_name: string
+  role: string
   content: string
-  is_main: number
+  seq: number
   metadata: string | null
   created_at: number
 }
@@ -88,21 +89,22 @@ export interface ChatMessage {
   created_at: number
 }
 
-export interface CommentThread {
-  id: number
+export interface CommentConversation {
   post_id: string
   soul_name: string
-  root_comment_id: number
-  created_at: number
-  updated_at: number
+  root_comment_id: number | null
+  created_at: number | null
+  updated_at: number | null
   last_message_at: number | null
 }
 
 export interface CommentMessage {
   id: number
-  thread_id: number
+  post_id: string
+  soul_name: string
   role: string
   content: string
+  seq: number
   created_at: number
 }
 
@@ -145,7 +147,6 @@ export interface ChatReplyResult {
 }
 
 export interface CommentReplyResult {
-  thread_id: number
   post_id: string
   soul_name: string
   ok: boolean
@@ -300,24 +301,26 @@ export function triggerSoulReflections(limitPerSoul = 100) {
   })
 }
 
-/* Comment threads */
-export function listCommentThreads(postId: string) {
-  return request<CommentThread[]>(`/comments/posts/${encodeURIComponent(postId)}/threads`)
+/* Comment conversations */
+export function listCommentConversations(postId: string) {
+  return request<CommentConversation[]>(
+    `/comments/posts/${encodeURIComponent(postId)}/conversations`,
+  )
 }
 
-export function getCommentThread(threadId: number, limit = 30) {
-  return request<{ thread: CommentThread; messages: CommentMessage[] }>(
-    `/comments/threads/${threadId}?limit=${limit}`,
+export function getCommentConversation(postId: string, soulName: string, limit = 30) {
+  return request<{ conversation: CommentConversation; messages: CommentMessage[] }>(
+    `/comments/posts/${encodeURIComponent(postId)}/souls/${encodeURIComponent(soulName)}?limit=${limit}`,
   )
 }
 
 export function sendCommentMessage(postId: string, soulName: string, content: string) {
   return request<{
-    thread: CommentThread
+    conversation: CommentConversation
     result: CommentReplyResult
     messages: CommentMessage[]
   }>(
-    `/comments/${encodeURIComponent(postId)}/${encodeURIComponent(soulName)}/messages`,
+    `/comments/posts/${encodeURIComponent(postId)}/souls/${encodeURIComponent(soulName)}/messages`,
     { method: 'POST', body: JSON.stringify({ content }) },
   )
 }

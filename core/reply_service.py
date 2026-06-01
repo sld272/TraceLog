@@ -6,7 +6,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from core import db, logging_service
+from core import db, logging_service, record_service
 from core.context_builder import BuiltContext
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -132,21 +132,32 @@ def _save_comment(post_id: str, result: SoulReplyResult, model: str) -> None:
         "error": result.error,
     }
     now = db.now_ts()
-    db.execute(
-        """
-        INSERT INTO comments(post_id, soul_name, content, is_main, metadata, created_at)
-        VALUES (?, ?, ?, 0, ?, ?)
-        ON CONFLICT(post_id, soul_name) DO UPDATE SET
-            content = excluded.content,
-            is_main = excluded.is_main,
-            metadata = excluded.metadata,
-            created_at = excluded.created_at
-        """,
-        (
-            post_id,
-            result.soul_name,
-            result.reply,
-            json.dumps(metadata, ensure_ascii=False),
-            now,
-        ),
-    )
+    with db.immediate_transaction() as conn:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM comments
+            WHERE post_id = ? AND soul_name = ? AND seq = 0
+            """,
+            (post_id, result.soul_name),
+        ).fetchone()
+        if existing is None:
+            cursor = conn.execute(
+                """
+                INSERT INTO comments(post_id, soul_name, role, content, seq, metadata, created_at)
+                VALUES (?, ?, 'assistant', ?, 0, ?, ?)
+                """,
+                (post_id, result.soul_name, result.reply, json.dumps(metadata, ensure_ascii=False), now),
+            )
+            comment_id = db.require_lastrowid(cursor, "root comment insert")
+        else:
+            comment_id = int(existing["id"])
+            conn.execute(
+                """
+                UPDATE comments
+                SET role = 'assistant', content = ?, metadata = ?, created_at = ?
+                WHERE id = ?
+                """,
+                (result.reply, json.dumps(metadata, ensure_ascii=False), now, comment_id),
+            )
+    record_service.index_comment_embedding(comment_id, post_id, result.soul_name, "assistant", 0, result.reply)

@@ -28,12 +28,32 @@ class VectorHit:
     distance: float | None
 
 
+@dataclass(frozen=True)
+class VectorDocHit:
+    doc_id: str
+    type: str
+    source_id: str
+    rank: int
+    distance: float | None
+    metadata: dict
+    document: str | None = None
+
+
 class VectorStoreInitError(RuntimeError):
     """Raised when the vector store cannot be initialized."""
 
 
 def is_initialized() -> bool:
     return _collection is not None
+
+
+def indexed_count() -> int:
+    if _collection is None:
+        return 0
+    try:
+        return int(_collection.count())
+    except Exception:
+        return 0
 
 
 def init_vectorstore(
@@ -70,7 +90,7 @@ def init_vectorstore(
         )
         client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
         _collection = client.get_or_create_collection(
-            name="posts",
+            name="tracelog",
             embedding_function=cast(EmbeddingFunction[Embeddable], embed_fn),
         )
     except Exception as e:
@@ -79,7 +99,7 @@ def init_vectorstore(
         logging_service.log_event("external_api_error", level="ERROR", **error_fields)
         raise VectorStoreInitError(_format_diagnostic_message(error_fields)) from e
     return VectorStoreInitResult(
-        collection_name="posts",
+        collection_name="tracelog",
         indexed_count=int(_collection.count()),
         path=CHROMA_DB_DIR,
     )
@@ -87,12 +107,57 @@ def init_vectorstore(
 
 def index_post(post_id: str, content: str):
     """将帖子正文写入向量索引。"""
+    _index_document(
+        doc_id=f"post-{post_id}",
+        content=content,
+        metadata={"type": "post", "post_id": post_id},
+    )
+
+
+def index_comment(comment_id: int, post_id: str, soul_name: str, role: str, seq: int, content: str) -> None:
+    """Index one public comment or comment follow-up message."""
+    _index_document(
+        doc_id=f"comment-{comment_id}",
+        content=content,
+        metadata={
+            "type": "comment",
+            "comment_id": int(comment_id),
+            "post_id": post_id,
+            "soul_name": soul_name,
+            "role": role,
+            "seq": int(seq),
+        },
+    )
+
+
+def index_chat_message(message_id: int, thread_id: int, soul_name: str, role: str, content: str) -> None:
+    """Index one private chat message."""
+    _index_document(
+        doc_id=f"chat-{message_id}",
+        content=content,
+        metadata={
+            "type": "chat",
+            "message_id": int(message_id),
+            "thread_id": int(thread_id),
+            "soul_name": soul_name,
+            "role": role,
+        },
+    )
+
+
+def delete_document(doc_id: str) -> None:
+    if _collection is None:
+        return
+    _collection.delete(ids=[doc_id])
+
+
+def _index_document(doc_id: str, content: str, metadata: dict) -> None:
     if _collection is None:
         return
     body = content.strip()
     if not body:
         return
-    _collection.upsert(ids=[post_id], documents=[body])
+    _collection.upsert(ids=[doc_id], documents=[body], metadatas=[metadata])
 
 
 def search_relevant_posts(query: str, n_results: int = 3) -> list[str]:
@@ -107,6 +172,24 @@ def query_post_ids(query: str, n_results: int = 20) -> list[str]:
 
 def query_post_hits(query: str, n_results: int = 20) -> list[VectorHit]:
     """语义检索相关帖子，返回排序与可选 distance 信号。"""
+    hits = query_documents(query, n_results=n_results, where={"type": {"$eq": "post"}})
+    return [
+        VectorHit(
+            post_id=str(hit.metadata.get("post_id") or hit.source_id),
+            rank=hit.rank,
+            distance=hit.distance,
+        )
+        for hit in hits
+        if hit.type == "post"
+    ]
+
+
+def query_documents(
+    query: str,
+    n_results: int = 20,
+    where: dict | None = None,
+) -> list[VectorDocHit]:
+    """Semantic search over all TraceLog vector documents."""
     if _collection is None:
         return []
     try:
@@ -117,21 +200,41 @@ def query_post_hits(query: str, n_results: int = 20) -> list[VectorHit]:
     if count == 0:
         return []
     n = min(n_results, count)
+    query_kwargs = {"query_texts": [query], "n_results": n}
+    if where:
+        query_kwargs["where"] = where
     try:
-        results = _collection.query(query_texts=[query], n_results=n, include=["distances"])
+        results = _collection.query(**query_kwargs, include=["distances", "metadatas", "documents"])
     except Exception as first_exc:
         try:
-            results = _collection.query(query_texts=[query], n_results=n)
+            results = _collection.query(**query_kwargs)
         except Exception as exc:
             _log_vector_query_failed(exc, first_exception=first_exc)
             return []
     if results and results.get("ids") and len(results["ids"]) > 0:
         ids = results["ids"][0]
         distances = _first_result_list(results.get("distances"))
-        hits: list[VectorHit] = []
-        for index, post_id in enumerate(ids):
+        metadatas = _first_result_list_any(results.get("metadatas"))
+        documents = _first_result_list_any(results.get("documents"))
+        hits: list[VectorDocHit] = []
+        for index, doc_id in enumerate(ids):
             distance = distances[index] if distances is not None and index < len(distances) else None
-            hits.append(VectorHit(post_id=str(post_id), rank=index + 1, distance=distance))
+            raw_metadata = metadatas[index] if metadatas is not None and index < len(metadatas) else None
+            metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+            doc_type = str(metadata.get("type") or _infer_doc_type(str(doc_id)))
+            source_id = _source_id(str(doc_id), doc_type, metadata)
+            document = documents[index] if documents is not None and index < len(documents) else None
+            hits.append(
+                VectorDocHit(
+                    doc_id=str(doc_id),
+                    type=doc_type,
+                    source_id=source_id,
+                    rank=index + 1,
+                    distance=distance,
+                    metadata=metadata,
+                    document=str(document) if document is not None else None,
+                )
+            )
         return hits
     return []
 
@@ -140,6 +243,30 @@ def _first_result_list(value) -> list[float] | None:
     if not value or len(value) == 0:
         return None
     return value[0]
+
+
+def _first_result_list_any(value) -> list | None:
+    if not value or len(value) == 0:
+        return None
+    return value[0]
+
+
+def _infer_doc_type(doc_id: str) -> str:
+    if doc_id.startswith("comment-"):
+        return "comment"
+    if doc_id.startswith("chat-"):
+        return "chat"
+    return "post"
+
+
+def _source_id(doc_id: str, doc_type: str, metadata: dict) -> str:
+    if doc_type == "post":
+        return str(metadata.get("post_id") or doc_id.removeprefix("post-"))
+    if doc_type == "comment":
+        return str(metadata.get("comment_id") or doc_id.removeprefix("comment-"))
+    if doc_type == "chat":
+        return str(metadata.get("message_id") or doc_id.removeprefix("chat-"))
+    return doc_id
 
 
 def _normalize_configured_base_url(base_url: str | None) -> str:

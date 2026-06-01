@@ -62,37 +62,9 @@ class DbTest(unittest.TestCase):
         self.assertNotIn("observation_sources", tables)
         self.assertNotIn("observations_fts", tables)
         self.assertNotIn("observation_cursors", tables)
-        self.assertEqual("3", version["value"])
+        self.assertEqual("1", version["value"])
         self.assertIn("jobs", tables)
         self.assertIn("post_events", tables)
-
-    def test_init_db_drops_legacy_observation_tables_and_meta(self) -> None:
-        db.execute("CREATE TABLE observations(id INTEGER PRIMARY KEY, title TEXT)")
-        db.execute("CREATE TABLE observation_sources(observation_id INTEGER, source_id TEXT)")
-        db.execute("CREATE TABLE observation_cursors(source_kind TEXT PRIMARY KEY, cursor_value TEXT)")
-        db.execute("CREATE VIRTUAL TABLE observations_fts USING fts5(title)")
-        db.execute("INSERT INTO meta(key, value) VALUES (?, ?)", ("observation_consolidation_cursor:global", "1"))
-        db.execute("INSERT INTO meta(key, value) VALUES (?, ?)", ("soul_observation_deep_cursor:默认", "2"))
-
-        db.init_db()
-
-        tables = {
-            row["name"]
-            for row in db.query_all(
-                """
-                SELECT name
-                FROM sqlite_master
-                WHERE type IN ('table', 'virtual table')
-                """
-            )
-        }
-        stale_meta = db.query_all("SELECT key FROM meta WHERE key LIKE ? OR key LIKE ?", ("observation_%", "soul_observation_deep_cursor:%"))
-
-        self.assertNotIn("observations", tables)
-        self.assertNotIn("observation_sources", tables)
-        self.assertNotIn("observation_cursors", tables)
-        self.assertNotIn("observations_fts", tables)
-        self.assertEqual([], stale_meta)
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(

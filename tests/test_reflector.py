@@ -322,8 +322,7 @@ class ReflectorTest(unittest.TestCase):
         chat_user = chat_service.append_user_message(chat_thread.id, "我在默认面前会直接说累")
         self._append_chat_assistant(chat_thread.id, "我听见了。")
         self._insert_comment_seed()
-        comment_thread = comment_service.get_or_create_thread("20260525-001", "默认")
-        comment_user = comment_service.append_user_message(comment_thread.id, "这条评论也只给默认看")
+        comment_user = comment_service.append_comment("20260525-001", "默认", "user", "这条评论也只给默认看")
         payload = {
             "reflection_md": "## SOUL 深反思\n\n用户在这个 SOUL 面前表达了更私人的疲惫与限定可见的评论。",
             "patches": [
@@ -443,9 +442,8 @@ class ReflectorTest(unittest.TestCase):
         self._set_chat_message_time(chat_1.id, 1.0)
         self._set_chat_message_time(chat_2.id, 2.0)
         self._insert_comment_seed("20260525-root-001")
-        comment_thread = comment_service.get_or_create_thread("20260525-root-001", "默认")
-        comment_1 = comment_service.append_user_message(comment_thread.id, "comment message 1")
-        comment_2 = comment_service.append_user_message(comment_thread.id, "comment message 2")
+        comment_1 = comment_service.append_comment("20260525-root-001", "默认", "user", "comment message 1")
+        comment_2 = comment_service.append_comment("20260525-root-001", "默认", "user", "comment message 2")
         self._set_comment_message_time(comment_1.id, 3.0)
         self._set_comment_message_time(comment_2.id, 4.0)
 
@@ -505,8 +503,8 @@ class ReflectorTest(unittest.TestCase):
         self._insert_post(post_id, "2026-05-25T10:00:00+08:00", "今天想认真练歌。")
         db.execute(
             """
-            INSERT INTO comments(post_id, soul_name, content, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+            VALUES (?, ?, 'assistant', ?, 0, ?)
             """,
             (post_id, "默认", "我陪你继续练。", 2.0),
         )
@@ -515,7 +513,7 @@ class ReflectorTest(unittest.TestCase):
         db.execute("UPDATE chat_messages SET created_at = ? WHERE id = ?", (created_at, message_id))
 
     def _set_comment_message_time(self, message_id: int, created_at: float) -> None:
-        db.execute("UPDATE comment_messages SET created_at = ? WHERE id = ?", (created_at, message_id))
+        db.execute("UPDATE comments SET created_at = ? WHERE id = ?", (created_at, message_id))
 
     def _light_payload(self) -> dict:
         return {

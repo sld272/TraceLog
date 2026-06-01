@@ -6,7 +6,7 @@
 
 ## 1. 总体架构
 
-TraceLog 是“向内的 AI 社交媒体”：用户用公开 post、评论线程和私聊表达自己；系统用多个 SOUL 回应，并把长期有价值的线索沉淀进 `user.md` 与 `soul_memories/<name>.md`。
+TraceLog 是“向内的 AI 社交媒体”：用户用公开 post、post 下的 SOUL 评论对话和私聊表达自己；系统用多个 SOUL 回应，并把长期有价值的线索沉淀进 `user.md` 与 `soul_memories/<name>.md`。
 
 当前主链路刻意保持简单：
 
@@ -19,7 +19,7 @@ raw evidence
   -> long-term memory
 ```
 
-这里没有可检索中间层记忆。公开回复上下文直接使用 raw related posts；深反思直接读取 raw posts 或 raw thread messages，对长期 Markdown 记忆做 confirm / revise / retract / add。后续如果重新引入中间层，需要重新设计为真正可更新、可删除、可去重、可审计的 memory unit。
+这里没有可检索中间层记忆。公开回复上下文直接使用 raw related posts；私聊和评论对话使用统一检索池命中的 raw evidence；深反思直接读取 raw posts 或 raw SOUL interaction messages，对长期 Markdown 记忆做 confirm / revise / retract / add。后续如果重新引入中间层，需要重新设计为真正可更新、可删除、可去重、可审计的 memory unit。
 
 ## 2. 记忆分层
 
@@ -37,7 +37,7 @@ raw evidence
 - `souls/*.md` 定义每个 AI 好友的语气、边界和人格。
 - `soul_memories/<name>.md` 记录该 SOUL 对用户的独立理解和互动约定。
 - 每个 SOUL 被调用时注入自己的人格与相处记忆。
-- SOUL 记忆只由该 SOUL 的评论线程和私聊深反思更新。
+- SOUL 记忆只由该 SOUL 的评论对话和私聊深反思更新。
 
 ### 2.2 User Profile
 
@@ -51,7 +51,7 @@ raw evidence
 - 存储用户长期画像、身份、偏好、长期目标和当前状态。
 - 章节按 sensitivity 分级：`high` 更保守，`low` 用于「当前状态与关注」这类需要快进快删的短期上下文。
 - 全局深反思维护它，用户也可以直接覆盖编辑。
-- 全局深反思只读取公开 posts，不读取私聊和评论线程。
+- 全局深反思只读取公开 posts，不读取私聊和评论对话。
 
 ### 2.3 Structured Evidence
 
@@ -59,7 +59,6 @@ raw evidence
 
 - `posts` / `comments`
 - `chat_threads` / `chat_messages`
-- `comment_threads` / `comment_messages`
 - `entities` / `post_entities`
 - `emotions`
 - `events`
@@ -71,8 +70,8 @@ raw evidence
 职责：
 
 - `posts` 是公开表达和全局反思的主要证据。
-- `comments` 是每个 SOUL 对公开 post 的首条回复。
-- thread messages 是私聊/评论线程的局部对话证据，只服务当前线程和 SOUL 深反思。
+- `comments` 是 post 下按 `(post_id, soul_name, seq)` 分组的扁平评论会话流；`seq=0` 是 SOUL 首评，后续 `seq>0` 是用户追问和 SOUL 回复。
+- `chat_messages` 是私聊的局部对话证据；`comments(seq>0)` 和 `chat_messages` 共同服务当前对话和 SOUL 深反思。
 - entities/emotions/events/relations 是轻反思从公开 post 派生的结构化信号。
 - todos 只从公开 post 抽取。
 
@@ -97,9 +96,8 @@ workspace/
 | SOUL 相处记忆 | `soul_memories/<name>.md` | 该 SOUL 被调用时注入 | SoulMemoryService / 用户 / SOUL 深反思 |
 | 用户档案 | `user.md` | 回复与深反思上下文 | ProfileService / 用户 / 全局深反思 |
 | 公开 post | `posts` + FTS5 + ChromaDB | 按检索结果注入 | RecordService |
-| 首条 AI 评论 | `comments` | 按相关帖子和 SOUL 注入 | ReplyService |
+| 评论会话 | `comments` | 私聊/评论追问中作为相关记忆注入 | ReplyService / CommentService |
 | 私聊消息 | `chat_messages` | 当前线程消息序列 | ChatService |
-| 评论线程消息 | `comment_messages` | 当前线程消息序列 | CommentService |
 | 轻反思信号 | entities / emotions / events / relations | 不直接注入 | Reflector |
 | 深反思记录 | `reflections` | 不默认注入 | Reflector |
 | 待办 | `todos` | TodoTool 开启时注入活跃项 | TodoService |
@@ -139,24 +137,22 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 
 - 当前 SOUL 人格与相处记忆。
 - `user.md`。
-- hybrid search 命中的 raw related posts。
-- 当前 SOUL 对相关 posts 的历史评论。
+- unified retrieval 命中的相关记忆：公开 posts、公开评论对话、当前 SOUL 的私聊片段。
 - 当前 thread 的最近消息序列。
 - 活跃 todos（工具开启时）。
 
-私聊消息不写 posts，不进 FTS/ChromaDB，不触发轻反思，不直接更新全局 `user.md`。
+私聊消息不写 posts，不进 FTS5，不触发轻反思，不直接更新全局 `user.md`；但会进入 ChromaDB 统一检索池，并且只允许当前 SOUL 检索自己的私聊。
 
-### 4.3 评论线程回复
+### 4.3 评论对话回复
 
-评论线程上下文包含：
+评论对话使用 `(post_id, soul_name)` 作为会话键，没有独立 `comment_threads` 表。上下文包含：
 
 - 当前 SOUL 人格与相处记忆。
 - `user.md`。
 - 原始 post。
-- hybrid search 命中的其他 raw related posts。
-- 当前 SOUL 对相关 posts 的历史评论。
+- unified retrieval 命中的相关记忆：公开 posts、公开评论对话、当前 SOUL 的私聊片段。
 - 当前 SOUL 的首条回复。
-- 当前 comment thread 的最近消息序列。
+- 当前评论会话的最近追问/回复消息序列。
 - 活跃 todos（工具开启时）。
 
 当前 post 本身会从 related post ids 中排除，避免重复注入。
@@ -217,7 +213,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 
 - 当前 SOUL 的 persona。
 - 当前 `soul_memories/<name>.md`。
-- 该 SOUL cursor 之后的 raw chat/comment thread messages。
+- 该 SOUL cursor 之后的 raw chat/comment messages。
 
 输出：
 
@@ -233,15 +229,15 @@ SOUL 深反思只更新当前 SOUL 的相处记忆，不推断其他 SOUL 也知
 | 来源 | 可进入全局 `user.md` | 可进入 SOUL 记忆 | 可进入检索池 |
 | --- | --- | --- | --- |
 | 公开 post | 是，经全局深反思 patch gate | 间接可作为公开背景 | 是，FTS5 + ChromaDB |
-| 首条 AI 评论 | 否 | 可作为相关评论背景 | 否 |
-| 评论线程消息 | 否 | 仅对应 SOUL | 否 |
-| 私聊消息 | 否 | 仅对应 SOUL | 否 |
+| 首条 AI 评论 | 否 | 可作为相关评论背景 | 是，ChromaDB |
+| 评论追问消息 | 否 | 仅对应 SOUL | 是，ChromaDB |
+| 私聊消息 | 否 | 仅对应 SOUL | 是，仅当前 SOUL 可检索 |
 | todos | 可作为全局深反思背景 | 不直接写 SOUL 记忆 | 否 |
 
 这个边界保证：
 
 - 私聊不会污染全局画像。
-- 评论线程的局部上下文不会被误当成公开事实。
+- 评论对话的局部上下文不会被误当成公开事实。
 - SOUL 之间不会自动共享私密理解。
 - 公开回复不会执行历史证据中的 prompt injection。
 
@@ -249,13 +245,13 @@ SOUL 深反思只更新当前 SOUL 的相处记忆，不推断其他 SOUL 也知
 
 | 模块 | 职责 |
 | --- | --- |
-| `core/record_service.py` | 保存公开 post、维护 pending embedding、格式化 post |
-| `core/retrieval.py` | FTS5 + ChromaDB hybrid search |
+| `core/record_service.py` | 保存公开 post、维护 pending vector doc、格式化 post |
+| `core/retrieval.py` | FTS5 + ChromaDB unified retrieval |
 | `core/reply_context.py` | query rewrite + hybrid search 的回复上下文共用 helper |
 | `core/context_builder.py` | 公开 post 共享上下文组装 |
 | `core/reply_service.py` | 多 SOUL fanout 与首条评论落库 |
 | `core/chat_service.py` | 私聊 thread、消息与回复上下文 |
-| `core/comment_service.py` | 评论 thread、消息与回复上下文 |
+| `core/comment_service.py` | `(post_id, soul_name)` 评论会话、消息与回复上下文 |
 | `core/reflector.py` | 轻反思、全局深反思、SOUL 深反思 |
 | `core/profile_service.py` | `user.md` 初始化、解析、patch gate、revision |
 | `core/soul_memory_service.py` | SOUL 相处记忆初始化、patch、revision |
@@ -268,7 +264,7 @@ SOUL 深反思只更新当前 SOUL 的相处记忆，不推断其他 SOUL 也知
 
 - 单位清晰：到底是 fact、pattern、preference、relationship、episode 还是 hypothesis。
 - 可更新：不是只 append；必须能 merge、revise、retract、archive。
-- 证据明确：每个条目能追溯到 raw evidence，并能区分公开、私聊、评论线程边界。
+- 证据明确：每个条目能追溯到 raw evidence，并能区分公开、私聊、评论对话边界。
 - 生命周期明确：短期信号、长期记忆、趋势观察不能混成一种表。
 - 读路径明确：回复、全局深反思、SOUL 深反思分别允许读取哪些层。
 - 用户控制明确：用户编辑长期 Markdown 记忆时，系统如何处理冲突和旧条目。

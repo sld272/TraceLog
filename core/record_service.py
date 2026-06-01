@@ -55,12 +55,19 @@ def index_post_embedding(post_id: str) -> None:
         if not vectorstore.is_initialized():
             raise RuntimeError("vectorstore is not initialized")
         vectorstore.index_post(post_id, body)
+        _clear_pending_vector_doc(f"post-{post_id}")
         _clear_pending_embedding(post_id)
         logging_service.log_event("post_indexed", post_id=post_id, content_length=len(body))
     except KeyboardInterrupt:
         raise
     except Exception as exc:
         _mark_pending_embedding(post_id, body, str(exc))
+        _mark_pending_vector_doc(
+            f"post-{post_id}",
+            body,
+            {"type": "post", "post_id": post_id},
+            str(exc),
+        )
         logging_service.log_event(
             "post_index_failed",
             level="WARNING",
@@ -69,6 +76,71 @@ def index_post_embedding(post_id: str) -> None:
             **_external_api_error_fields(exc, operation="vector_index_post"),
         )
         raise
+
+
+def index_comment_embedding(comment_id: int, post_id: str, soul_name: str, role: str, seq: int, content: str) -> None:
+    body = content.strip()
+    if not body:
+        return
+    doc_id = f"comment-{comment_id}"
+    metadata = {
+        "type": "comment",
+        "comment_id": int(comment_id),
+        "post_id": post_id,
+        "soul_name": soul_name,
+        "role": role,
+        "seq": int(seq),
+    }
+    try:
+        vectorstore = _vectorstore()
+        if not vectorstore.is_initialized():
+            raise RuntimeError("vectorstore is not initialized")
+        vectorstore.index_comment(comment_id, post_id, soul_name, role, seq, body)
+        _clear_pending_vector_doc(doc_id)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        _mark_pending_vector_doc(doc_id, body, metadata, str(exc))
+        logging_service.log_event(
+            "vector_doc_index_failed",
+            level="WARNING",
+            doc_id=doc_id,
+            type="comment",
+            error=str(exc),
+            **_external_api_error_fields(exc, operation="vector_index_comment"),
+        )
+
+
+def index_chat_message_embedding(message_id: int, thread_id: int, soul_name: str, role: str, content: str) -> None:
+    body = content.strip()
+    if not body:
+        return
+    doc_id = f"chat-{message_id}"
+    metadata = {
+        "type": "chat",
+        "message_id": int(message_id),
+        "thread_id": int(thread_id),
+        "soul_name": soul_name,
+        "role": role,
+    }
+    try:
+        vectorstore = _vectorstore()
+        if not vectorstore.is_initialized():
+            raise RuntimeError("vectorstore is not initialized")
+        vectorstore.index_chat_message(message_id, thread_id, soul_name, role, body)
+        _clear_pending_vector_doc(doc_id)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        _mark_pending_vector_doc(doc_id, body, metadata, str(exc))
+        logging_service.log_event(
+            "vector_doc_index_failed",
+            level="WARNING",
+            doc_id=doc_id,
+            type="chat",
+            error=str(exc),
+            **_external_api_error_fields(exc, operation="vector_index_chat"),
+        )
 
 
 def format_post(row) -> str:
@@ -124,6 +196,133 @@ def retry_pending_embeddings(limit: int | None = None) -> int:
     return fixed
 
 
+def retry_pending_vector_docs(limit: int | None = None) -> int:
+    vectorstore = _vectorstore()
+    if not vectorstore.is_initialized():
+        return 0
+
+    sql = """
+        SELECT key, value
+        FROM meta
+        WHERE key LIKE 'pending_vector_doc:%'
+        ORDER BY key
+    """
+    params: tuple = ()
+    if limit is not None:
+        sql += " LIMIT ?"
+        params = (limit,)
+
+    fixed = 0
+    for row in db.query_all(sql, params):
+        try:
+            payload = json.loads(row["value"])
+            metadata = payload["metadata"]
+            doc_type = metadata.get("type")
+            if doc_type == "post":
+                vectorstore.index_post(metadata["post_id"], payload["content"])
+            elif doc_type == "comment":
+                vectorstore.index_comment(
+                    int(metadata["comment_id"]),
+                    metadata["post_id"],
+                    metadata["soul_name"],
+                    metadata["role"],
+                    int(metadata["seq"]),
+                    payload["content"],
+                )
+            elif doc_type == "chat":
+                vectorstore.index_chat_message(
+                    int(metadata["message_id"]),
+                    int(metadata["thread_id"]),
+                    metadata["soul_name"],
+                    metadata["role"],
+                    payload["content"],
+                )
+            else:
+                continue
+            db.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
+            fixed += 1
+        except Exception as exc:
+            logging_service.log_event(
+                "vector_doc_index_failed",
+                level="WARNING",
+                retry=True,
+                key=row["key"],
+                error=str(exc),
+                **_external_api_error_fields(exc, operation="vector_index_retry"),
+            )
+    return fixed
+
+
+def reindex_all_vector_docs() -> int:
+    """Rebuild the live vector collection from SQLite facts."""
+    vectorstore = _vectorstore()
+    if not vectorstore.is_initialized():
+        return 0
+    indexed = 0
+    for row in db.query_all("SELECT id, content FROM posts ORDER BY created_at ASC, id ASC"):
+        try:
+            vectorstore.index_post(row["id"], row["content"])
+            indexed += 1
+        except Exception as exc:
+            _mark_pending_vector_doc(
+                f"post-{row['id']}",
+                row["content"],
+                {"type": "post", "post_id": row["id"]},
+                str(exc),
+            )
+    for row in db.query_all(
+        """
+        SELECT id, post_id, soul_name, role, seq, content
+        FROM comments
+        ORDER BY post_id ASC, soul_name ASC, seq ASC
+        """
+    ):
+        try:
+            vectorstore.index_comment(int(row["id"]), row["post_id"], row["soul_name"], row["role"], int(row["seq"]), row["content"])
+            indexed += 1
+        except Exception as exc:
+            _mark_pending_vector_doc(
+                f"comment-{row['id']}",
+                row["content"],
+                {
+                    "type": "comment",
+                    "comment_id": int(row["id"]),
+                    "post_id": row["post_id"],
+                    "soul_name": row["soul_name"],
+                    "role": row["role"],
+                    "seq": int(row["seq"]),
+                },
+                str(exc),
+            )
+    for row in db.query_all(
+        """
+        SELECT chat_messages.id, chat_messages.thread_id, chat_threads.soul_name,
+               chat_messages.role, chat_messages.content
+        FROM chat_messages
+        JOIN chat_threads ON chat_threads.id = chat_messages.thread_id
+        ORDER BY chat_messages.thread_id ASC, chat_messages.id ASC
+        """
+    ):
+        try:
+            vectorstore.index_chat_message(int(row["id"]), int(row["thread_id"]), row["soul_name"], row["role"], row["content"])
+            indexed += 1
+        except Exception as exc:
+            _mark_pending_vector_doc(
+                f"chat-{row['id']}",
+                row["content"],
+                {
+                    "type": "chat",
+                    "message_id": int(row["id"]),
+                    "thread_id": int(row["thread_id"]),
+                    "soul_name": row["soul_name"],
+                    "role": row["role"],
+                },
+                str(exc),
+            )
+    logging_service.log_event("vector_docs_reindexed", indexed=indexed)
+    return indexed
+
+
 def _next_post_id(today: str) -> str:
     row = db.query_one(
         """
@@ -151,6 +350,22 @@ def _mark_pending_embedding(post_id: str, content: str, error: str) -> None:
     )
 
 
+def _mark_pending_vector_doc(doc_id: str, content: str, metadata: dict, error: str) -> None:
+    payload = {
+        "doc_id": doc_id,
+        "type": metadata.get("type"),
+        "source_id": metadata.get("post_id") or metadata.get("comment_id") or metadata.get("message_id"),
+        "content": content,
+        "metadata": metadata,
+        "error": error,
+        "updated_at": db.now_ts(),
+    }
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+        (f"pending_vector_doc:{doc_id}", json.dumps(payload, ensure_ascii=False)),
+    )
+
+
 def _pending_embedding_payload(post_id: str, content: str, error: str) -> str:
     payload = {
         "post_id": post_id,
@@ -163,6 +378,10 @@ def _pending_embedding_payload(post_id: str, content: str, error: str) -> str:
 
 def _clear_pending_embedding(post_id: str) -> None:
     db.execute("DELETE FROM meta WHERE key = ?", (f"pending_embedding:{post_id}",))
+
+
+def _clear_pending_vector_doc(doc_id: str) -> None:
+    db.execute("DELETE FROM meta WHERE key = ?", (f"pending_vector_doc:{doc_id}",))
 
 
 def _external_api_error_fields(exc: Exception, *, operation: str) -> dict:

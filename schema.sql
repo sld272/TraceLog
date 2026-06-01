@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
-INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '3');
+INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '1');
 
 CREATE TABLE IF NOT EXISTS souls (
     name        TEXT PRIMARY KEY,
@@ -71,39 +71,19 @@ CREATE TABLE IF NOT EXISTS comments (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     post_id     TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
     soul_name   TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
+    role        TEXT NOT NULL DEFAULT 'assistant' CHECK(role IN ('assistant', 'user')),
     content     TEXT NOT NULL,
-    is_main     INTEGER NOT NULL DEFAULT 0,
+    seq         INTEGER NOT NULL DEFAULT 0,
     metadata    TEXT,
-    created_at  REAL NOT NULL,
-    UNIQUE(post_id, soul_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_comments_soul ON comments(soul_name, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS comment_threads (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    post_id         TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    soul_name       TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
-    root_comment_id INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
-    created_at      REAL NOT NULL,
-    updated_at      REAL NOT NULL,
-    last_message_at REAL,
-    UNIQUE(post_id, soul_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_comment_threads_post ON comment_threads(post_id, soul_name);
-CREATE INDEX IF NOT EXISTS idx_comment_threads_soul ON comment_threads(soul_name, last_message_at DESC);
-
-CREATE TABLE IF NOT EXISTS comment_messages (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    thread_id   INTEGER NOT NULL REFERENCES comment_threads(id) ON DELETE CASCADE,
-    role        TEXT NOT NULL,
-    content     TEXT NOT NULL,
     created_at  REAL NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_comment_messages_thread ON comment_messages(thread_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_conversation_seq
+    ON comments(post_id, soul_name, seq);
+CREATE INDEX IF NOT EXISTS idx_comments_post_soul
+    ON comments(post_id, soul_name, seq);
+CREATE INDEX IF NOT EXISTS idx_comments_soul_created
+    ON comments(soul_name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS entities (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,

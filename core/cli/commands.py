@@ -64,14 +64,14 @@ def handle_comment_command(
         return True, todos, False
 
     try:
-        thread = comment_service.get_or_create_thread(post_id, soul_name)
+        conversation = comment_service.get_conversation(post_id, soul_name)
     except ValueError as exc:
         print(f"[评论] {exc}\n")
         return True, todos, False
 
     if client is None:
         raise ValueError("LLM client is required for comment commands")
-    updated_todos, quit_requested = sessions.run_comment_session(thread, client, model, todos)
+    updated_todos, quit_requested = sessions.run_comment_session(conversation, client, model, todos)
     return True, updated_todos, quit_requested
 
 
@@ -154,7 +154,7 @@ def print_comment_help() -> None:
     print(
         "[评论] 可用命令：\n"
         "  /comment <post_id> <soul>\n"
-        "评论线程中输入 /back 返回发帖模式，/quit 退出。\n"
+        "评论对话中输入 /back 返回发帖模式，/quit 退出。\n"
     )
 
 

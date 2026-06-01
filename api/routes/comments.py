@@ -1,4 +1,4 @@
-"""Post comment thread routes."""
+"""Post comment conversation routes."""
 
 from __future__ import annotations
 
@@ -21,32 +21,37 @@ class SendCommentMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
 
 
-@router.get("/posts/{post_id}/threads")
-async def list_comment_threads(post_id: str):
+@router.get("/posts/{post_id}/conversations")
+async def list_comment_conversations(post_id: str):
     try:
-        threads = await run_sync(comment_service.list_post_threads, post_id)
+        conversations = await run_sync(comment_service.list_post_conversations, post_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return [asdict(thread) for thread in threads]
+    return [asdict(conversation) for conversation in conversations]
 
 
-@router.get("/threads/{thread_id}")
-async def get_comment_thread(thread_id: int, limit: int = Query(default=30, ge=1, le=100)):
+@router.get("/posts/{post_id}/souls/{soul_name}")
+async def get_comment_conversation(
+    post_id: str,
+    soul_name: str,
+    limit: int = Query(default=30, ge=1, le=100),
+):
     try:
-        thread = await run_sync(comment_service.get_thread, thread_id)
-        messages = await run_sync(comment_service.list_thread_messages, thread_id, limit)
+        conversation = await run_sync(comment_service.get_conversation, post_id, soul_name)
+        messages = await run_sync(comment_service.list_conversation_messages, post_id, soul_name, limit)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"thread": asdict(thread), "messages": [asdict(message) for message in messages]}
+    return {"conversation": asdict(conversation), "messages": [asdict(message) for message in messages]}
 
 
-@router.get("/threads/{thread_id}/events")
-async def stream_comment_thread_events(
-    thread_id: int,
+@router.get("/posts/{post_id}/souls/{soul_name}/events")
+async def stream_comment_conversation_events(
+    post_id: str,
+    soul_name: str,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ):
     try:
-        await run_sync(comment_service.get_thread, thread_id)
+        await run_sync(comment_service.get_conversation, post_id, soul_name)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     try:
@@ -54,35 +59,35 @@ async def stream_comment_thread_events(
     except ValueError:
         after_id = 0
     return StreamingResponse(
-        _message_stream(thread_id, after_id),
+        _message_stream(post_id, soul_name, after_id),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
 
 
-@router.post("/{post_id}/{soul_name}/messages")
+@router.post("/posts/{post_id}/souls/{soul_name}/messages")
 async def send_comment_message(post_id: str, soul_name: str, request: SendCommentMessageRequest):
     body = request.content.strip()
     if not body:
         raise HTTPException(status_code=422, detail="content 不能为空")
     runtime = get_runtime()
     try:
-        thread = await run_sync(comment_service.get_or_create_thread, post_id, soul_name)
-        result = await run_sync(comment_service.call_comment_reply, thread.id, body, runtime.client, runtime.model)
-        messages = await run_sync(comment_service.list_thread_messages, thread.id)
+        result = await run_sync(comment_service.call_comment_reply, post_id, soul_name, body, runtime.client, runtime.model)
+        conversation = await run_sync(comment_service.get_conversation, post_id, soul_name)
+        messages = await run_sync(comment_service.list_conversation_messages, post_id, soul_name)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
-        "thread": asdict(thread),
+        "conversation": asdict(conversation),
         "result": asdict(result),
         "messages": [asdict(message) for message in messages],
     }
 
 
-async def _message_stream(thread_id: int, after_id: int):
+async def _message_stream(post_id: str, soul_name: str, after_id: int):
     current_id = after_id
     while True:
-        messages = await run_sync(comment_service.list_thread_messages_after, thread_id, current_id)
+        messages = await run_sync(comment_service.list_conversation_messages_after, post_id, soul_name, current_id)
         for message in messages:
             current_id = int(message.id)
             yield _format_message_sse(asdict(message))

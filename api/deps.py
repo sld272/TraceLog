@@ -9,7 +9,7 @@ from typing import Any, TypeVar
 from openai import OpenAI
 from starlette.concurrency import run_in_threadpool
 
-from core import db, logging_service, vectorstore, workspace_service
+from core import db, logging_service, record_service, vectorstore, workspace_service
 from core.app_services import job_service
 from core.app_services.api_runtime import ApiRuntime, JobWorker
 from core.cli.config import CONFIG_FILE
@@ -39,7 +39,7 @@ async def init_runtime() -> ApiRuntime:
     workspace_service.init_workspace()
     vectorstore_initialized = False
     try:
-        vectorstore.init_vectorstore(
+        init_result = vectorstore.init_vectorstore(
             config["api_key"],
             config["base_url"],
             config["embedding_model"],
@@ -47,6 +47,10 @@ async def init_runtime() -> ApiRuntime:
             config.get("embedding_api_key"),
         )
         vectorstore_initialized = True
+        if init_result.indexed_count == 0:
+            record_service.reindex_all_vector_docs()
+        else:
+            record_service.retry_pending_vector_docs()
     except vectorstore.VectorStoreInitError as exc:
         logging_service.log_event("vectorstore_init_failed", level="ERROR", error=str(exc))
 
@@ -97,6 +101,7 @@ def _job_worker_concurrency(config: dict) -> int:
 
 
 def _enqueue_startup_retries() -> None:
+    record_service.retry_pending_vector_docs()
     for row in db.query_all("SELECT key, value FROM meta WHERE key LIKE ? ORDER BY key", ("pending_embedding:%",)):
         try:
             payload = json.loads(row["value"])

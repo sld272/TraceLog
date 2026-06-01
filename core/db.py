@@ -36,7 +36,6 @@ def init_db() -> None:
     conn = connect()
     try:
         conn.executescript(sql)
-        _drop_legacy_memory_schema(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         if str(mode).lower() != "wal":
@@ -44,7 +43,7 @@ def init_db() -> None:
         _validate_fts5_trigram(conn)
         conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            ("schema_version", "3"),
+            ("schema_version", "1"),
         )
         conn.commit()
     except sqlite3.Error as exc:
@@ -64,37 +63,6 @@ def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM posts WHERE id = ?", (probe_id,))
     except sqlite3.Error as exc:
         raise RuntimeError("SQLite FTS5 trigram support is required but unavailable") from exc
-
-
-def _drop_legacy_memory_schema(conn: sqlite3.Connection) -> None:
-    """Remove the retired intermediate memory layer from existing workspaces."""
-    for trigger in (
-        "observations_ai",
-        "observations_ad",
-        "observations_au_delete",
-        "observations_au_insert",
-        "observation_sources_posts_ad",
-        "observation_sources_comments_ad",
-        "observation_sources_comment_messages_ad",
-        "observation_sources_chat_messages_ad",
-        "observation_sources_todos_ad",
-        "observation_sources_reflections_ad",
-    ):
-        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-    for table in (
-        "observation_sources",
-        "observation_cursors",
-        "observations_fts",
-        "observations",
-    ):
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
-    conn.execute(
-        """
-        DELETE FROM meta
-        WHERE key LIKE 'observation_%'
-           OR key LIKE 'soul_observation_deep_cursor:%'
-        """
-    )
 
 
 @contextmanager

@@ -1,14 +1,14 @@
 import { useState, type KeyboardEvent } from 'react'
 import {
   type Comment,
+  type CommentConversation,
   type CommentMessage,
-  type CommentThread,
   type Post,
 } from '@/api/client'
 import styles from './PostCard.module.css'
 
-export interface CommentThreadState {
-  thread?: CommentThread
+export interface CommentConversationState {
+  conversation?: CommentConversation
   messages: CommentMessage[]
   sending?: boolean
   error?: string | null
@@ -17,7 +17,7 @@ export interface CommentThreadState {
 interface PostCardProps {
   post: Post
   comments?: Comment[]
-  commentThreads?: Record<string, CommentThreadState>
+  commentConversations?: Record<string, CommentConversationState>
   onExpand?: () => void
   onReply?: (soulName: string, content: string) => Promise<void>
 }
@@ -25,7 +25,7 @@ interface PostCardProps {
 export function PostCard({
   post,
   comments = [],
-  commentThreads = {},
+  commentConversations = {},
   onExpand,
   onReply,
 }: PostCardProps) {
@@ -60,7 +60,7 @@ export function PostCard({
             <CommentPreview
               key={comment.id}
               comment={comment}
-              thread={commentThreads[comment.soul_name]}
+              conversation={commentConversations[comment.soul_name]}
               onReply={onReply}
             />
           ))}
@@ -86,11 +86,11 @@ export function PostCard({
 
 function CommentPreview({
   comment,
-  thread,
+  conversation,
   onReply,
 }: {
   comment: Comment
-  thread?: CommentThreadState
+  conversation?: CommentConversationState
   onReply?: (soulName: string, content: string) => Promise<void>
 }) {
   const [reply, setReply] = useState('')
@@ -99,7 +99,7 @@ function CommentPreview({
   const trimmed = reply.trim()
 
   const handleSubmit = async () => {
-    if (!trimmed || thread?.sending || !onReply) return
+    if (!trimmed || conversation?.sending || !onReply) return
     await onReply(soulName, trimmed)
     setReply('')
   }
@@ -126,9 +126,9 @@ function CommentPreview({
         </div>
       </div>
 
-      {thread?.messages && thread.messages.length > 0 && (
+      {conversation?.messages && conversation.messages.some((message) => message.seq > 0) && (
         <div className={styles.threadMessages}>
-          {thread.messages.map((message) => (
+          {conversation.messages.filter((message) => message.seq > 0).map((message) => (
             <ThreadMessage key={message.id} message={message} soulName={soulName} />
           ))}
         </div>
@@ -142,19 +142,19 @@ function CommentPreview({
           onKeyDown={handleKeyDown}
           placeholder={`回复 ${soulName}...`}
           rows={1}
-          disabled={thread?.sending}
+          disabled={conversation?.sending}
           aria-label={`回复 ${soulName}`}
         />
         <button
           className={styles.replyButton}
           onClick={handleSubmit}
-          disabled={!trimmed || thread?.sending || !onReply}
+          disabled={!trimmed || conversation?.sending || !onReply}
           aria-label={`发送给 ${soulName}`}
         >
-          {thread?.sending ? <LoadingIndicator /> : <SendIcon />}
+          {conversation?.sending ? <LoadingIndicator /> : <SendIcon />}
         </button>
       </div>
-      {thread?.error && <p className={styles.threadError}>{thread.error}</p>}
+      {conversation?.error && <p className={styles.threadError}>{conversation.error}</p>}
     </div>
   )
 }

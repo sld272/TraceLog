@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from core import db, evidence_service, logging_service, profile_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import db, evidence_service, logging_service, profile_service, record_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
@@ -177,19 +177,18 @@ def build_chat_context(
         sections.append(f"# 用户档案\n\n{profile}")
 
     rewritten_query = reply_context.rewrite_for_retrieval(client, model, retrieval_query, "chat", thread_id=thread_id, soul_name=thread.soul_name)
-    relevant_post_ids = reply_context.hybrid_search_with_rewrite(
+    retrieval_hits = reply_context.hybrid_search_documents_with_rewrite(
         retrieval_query,
         rewritten_query,
         k=RELATED_POST_LIMIT,
+        channel="chat",
+        soul_name=thread.soul_name,
         trace_context={"channel": "chat", "thread_id": thread_id, "soul_name": thread.soul_name},
     )
-    relevant_posts = evidence_service.read_posts_by_ids(relevant_post_ids)
-    if relevant_posts:
-        sections.append(f"# 相关帖子\n\n{relevant_posts}")
-
-    related_comments = evidence_service.read_soul_comments(thread.soul_name, relevant_post_ids)
-    if related_comments:
-        sections.append(f"# 该 SOUL 对相关帖子的历史评论\n\n{related_comments}")
+    relevant_post_ids = _post_ids_from_hits(retrieval_hits)
+    related_memory = evidence_service.format_retrieval_hits(retrieval_hits, current_soul=thread.soul_name)
+    if related_memory:
+        sections.append(f"# 相关记忆\n\n{related_memory}")
 
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()
@@ -282,6 +281,7 @@ def call_chat_reply(
 
 
 def _append_message(thread_id: int, role: str, content: str) -> ChatMessage:
+    thread = get_thread(thread_id)
     body = content.strip()
     if not body:
         raise ValueError("私聊消息不能为空")
@@ -303,7 +303,9 @@ def _append_message(thread_id: int, role: str, content: str) -> ChatMessage:
             """,
             (now, now, thread_id),
         )
-    return get_message(message_id)
+    message = get_message(message_id)
+    record_service.index_chat_message_embedding(message.id, message.thread_id, thread.soul_name, message.role, message.content)
+    return message
 
 
 def get_message(message_id: int) -> ChatMessage:
@@ -356,6 +358,20 @@ def _recent_user_message_contents(messages, limit: int) -> list[str]:
         if message.role == "user" and message.content.strip()
     ]
     return contents[-limit:]
+
+
+def _post_ids_from_hits(hits: list) -> list[str]:
+    post_ids: list[str] = []
+    for hit in hits:
+        post_id = None
+        if getattr(hit, "type", None) == "post":
+            post_id = str(getattr(hit, "source_id", ""))
+        else:
+            metadata = getattr(hit, "metadata", {}) or {}
+            post_id = metadata.get("post_id")
+        if post_id and post_id not in post_ids:
+            post_ids.append(post_id)
+    return post_ids
 
 
 

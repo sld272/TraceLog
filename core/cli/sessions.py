@@ -104,19 +104,19 @@ def run_todo_tool_for_post(post_id: str, client: LLMClient, model: str) -> None:
 
 
 def run_comment_session(
-    thread: comment_service.CommentThread,
+    conversation: comment_service.CommentConversation,
     client: LLMClient,
     model: str,
     todos: list,
 ) -> tuple[list, bool]:
     print(
-        f"\n[评论] 已进入 post {thread.post_id} 下与 {thread.soul_name} 的评论线程。"
+        f"\n[评论] 已进入 post {conversation.post_id} 下与 {conversation.soul_name} 的评论对话。"
         "输入 /back 返回发帖模式，/quit 退出。\n"
     )
     current_todos = todos
     while True:
         try:
-            raw_input = read_cli_input(f"[{thread.soul_name} 评论] 你: ")
+            raw_input = read_cli_input(f"[{conversation.soul_name} 评论] 你: ")
         except (KeyboardInterrupt, EOFError):
             return current_todos, True
         user_message = raw_input.strip()
@@ -130,7 +130,7 @@ def run_comment_session(
 
         print(f"\n[{thread.soul_name} 正在回复评论...]\n")
         try:
-            result = comment_service.call_comment_reply(thread.id, user_message, client, model)
+            result = comment_service.call_comment_reply(conversation.post_id, conversation.soul_name, user_message, client, model)
         except ValueError as exc:
             print(f"[评论] {exc}\n")
             return current_todos, False

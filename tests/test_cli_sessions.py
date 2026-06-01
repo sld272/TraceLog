@@ -132,9 +132,8 @@ def _chat_thread() -> chat_service.ChatThread:
     )
 
 
-def _comment_thread() -> comment_service.CommentThread:
-    return comment_service.CommentThread(
-        id=1,
+def _comment_thread() -> comment_service.CommentConversation:
+    return comment_service.CommentConversation(
         post_id="20260525-001",
         soul_name="默认",
         root_comment_id=1,

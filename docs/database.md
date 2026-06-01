@@ -1,6 +1,6 @@
 # TraceLog 数据库设计
 
-本文档描述当前 `schema.sql` 的主要数据结构、索引策略和迁移约束。SQLite 是 TraceLog 的事实源；ChromaDB 只保存公开 posts 的语义向量索引。
+本文档描述当前 `schema.sql` 的主要数据结构、索引策略和初始化约束。SQLite 是 TraceLog 的事实源；ChromaDB 保存统一检索池中的 post、comment 和 chat message 向量索引。
 
 ## 1. 初始化与版本
 
@@ -9,10 +9,9 @@
 - 开启 WAL 与 foreign keys。
 - 执行 `schema.sql`。
 - 校验 FTS5 trigram tokenizer 可用。
-- 清理旧版中间层表和旧 cursor/meta key。
-- 在 `meta.schema_version` 写入当前版本 `3`。
+- 在 `meta.schema_version` 写入当前版本 `1`。
 
-旧版中间层已经从当前 schema 中移除。新 workspace 不会创建这些表；已有 workspace 在下一次 `init_db()` 时会删除旧表、旧 trigger 和旧 meta cursor。
+项目尚未发布，不保留旧 schema 兼容。开发期旧数据如果不符合当前 schema，直接删除 `workspace/state.db` 和 `workspace/chroma_db/` 后重新初始化。
 
 ## 2. 核心表分组
 
@@ -21,16 +20,16 @@
 - `posts`：公开 post 原文，字段包括 `id`、`ts`、`content`、`importance`、`created_at`、`updated_at`。
 - `posts_fts`：unicode61 tokenizer，用于英文、数字和一般文本关键词检索。
 - `posts_fts_trigram`：trigram tokenizer，用于中文模糊检索。
-- `comments`：每个启用 SOUL 对公开 post 的首条评论。
+- `comments`：post 下某个 SOUL 的扁平评论会话流。`seq=0` 是首评，`seq>0` 是用户追问和 SOUL 回复。
 
 公开 post 是全局检索、轻反思、TodoTool 和全局深反思的主要证据来源。
 
-### 2.2 评论线程与私聊
+### 2.2 评论会话与私聊
 
-- `comment_threads` / `comment_messages`：绑定到某条 post 与某个 SOUL 的后续评论线程。
+- `comments(post_id, soul_name, seq)`：绑定到某条 post 与某个 SOUL 的后续评论会话，不再有独立 thread 容器。
 - `chat_threads` / `chat_messages`：某个 SOUL 的一对一私聊。
 
-线程消息不进入 FTS5 / ChromaDB。它们只在当前线程回复时按顺序加载，并在 SOUL 深反思时作为该 SOUL 的 raw evidence 读取。
+评论会话和私聊消息不进入 FTS5，但会进入 ChromaDB 统一检索池。私聊消息只允许当前 SOUL 检索；公开评论对话可以作为所有 SOUL 的公开背景，但 prompt 中必须标注说话人。
 
 ### 2.3 派生结构化信号
 
@@ -55,7 +54,7 @@
 
 - `souls`：SOUL 文件路径、启用状态、排序、描述。
 - `todos`：公开 post 抽取出的待办。
-- `meta`：schema version、pending embedding、pending light reflection、deep reflection cursor 等系统状态。
+- `meta`：schema version、pending vector docs、pending light reflection、deep reflection cursor 等系统状态。
 
 ### 2.6 API 后台任务与事件
 
@@ -74,7 +73,7 @@ P1 以后手动全局/SOUL 深反思也复用 `jobs`，但不一定产生 `post_
 }
 ```
 
-这使同一个 SOUL 的私聊消息与评论线程消息可以用各自自增 id 独立推进，失败时不会丢失待处理消息。
+这使同一个 SOUL 的私聊消息与评论追问消息可以用各自自增 id 独立推进，失败时不会丢失待处理消息。`comment_message_id` 指向 `comments.id` 中 `seq>0` 的记录。
 
 ## 3. FTS5 external content
 
@@ -92,16 +91,16 @@ content='posts', content_rowid='rowid'
 
 删除或更新 external content 索引时，trigger 必须向 FTS 表插入特殊的 `'delete'` 指令，并带上旧正文；不能把 FTS 表当普通表直接 `DELETE`。
 
-## 4. 为什么线程消息不进检索池
+## 4. 检索池边界
 
-私聊与评论线程包含大量寒暄、追问、局部上下文和 SOUL 自身话术。如果混入公开 post 的 FTS/ChromaDB，会污染“我过去发过什么”的检索语义。
+FTS5 仍只索引公开 post，确保关键词检索代表“用户公开写过什么”。ChromaDB 是统一语义检索池，保存 post、公开评论会话和私聊消息。
 
 当前规则：
 
-- 公开 post：进入 SQLite、FTS5、ChromaDB，可被回复上下文和全局深反思检索/读取。
-- 评论线程和私聊：只保留在线程表中；回复时读取当前线程消息；SOUL 深反思读取该 SOUL 的 raw thread messages。
-- 全局 `user.md` 深反思不读取私聊或评论线程。
-- SOUL 记忆只由该 SOUL 自己的线程消息更新。
+- 公开 post：进入 SQLite、FTS5、ChromaDB，可被公开回复、私聊、评论追问和全局深反思读取。
+- 公开评论会话：进入 SQLite 和 ChromaDB，可被私聊/评论追问作为公开背景检索；不进入全局 `user.md` 深反思。
+- 私聊：进入 SQLite 和 ChromaDB，只允许当前 SOUL 检索；不进入公开 post 回复和全局 `user.md` 深反思。
+- SOUL 记忆只由该 SOUL 自己的私聊和评论追问消息更新。
 
 ## 5. 反思相关持久化
 
@@ -135,7 +134,7 @@ profile patch 的 evidence 必须是本次输入中真实存在的 post id。`pr
 
 ### 5.3 SOUL 深反思
 
-SOUL 深反思按 SOUL 独立读取 cursor 之后的 raw thread messages，生成：
+SOUL 深反思按 SOUL 独立读取 cursor 之后的 raw chat/comment messages，生成：
 
 - `reflections(type='soul_deep')`
 - 可能的 `soul_memories/<name>.md` patch
@@ -148,8 +147,8 @@ patch evidence 必须是本次输入中的 `chat_message:<id>` 或 `comment_mess
 
 Schema 使用外键和 trigger 保持主要数据一致性：
 
-- 删除 SOUL 会级联删除该 SOUL 的 comments、chat/comment threads 和 SOUL memory revisions。
-- 删除 post 会级联删除 comments、comment_threads、todo source 关联和 FTS 索引。
+- 删除 SOUL 会级联删除该 SOUL 的 comments、chat threads 和 SOUL memory revisions。
+- 删除 post 会级联删除 comments、todo source 关联和 FTS 索引。
 - FTS trigger 负责公开 post 正文索引同步。
 
-线程消息本身不会被自动提升为全局画像；只有深反思成功并通过 patch gate 后，才会写入长期 Markdown 记忆。
+私聊和评论追问消息本身不会被自动提升为全局画像；只有 SOUL 深反思成功并通过 patch gate 后，才会写入对应 SOUL 的长期 Markdown 记忆。

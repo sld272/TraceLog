@@ -179,7 +179,7 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("event: chat_message\n", payload)
         self.assertIn('"content": "我在。"', payload)
 
-    def test_comment_route_sends_thread_message_to_selected_soul(self) -> None:
+    def test_comment_route_sends_message_to_selected_soul_conversation(self) -> None:
         post_id = "20260531-001"
         now = db.now_ts()
         db.execute(
@@ -200,21 +200,30 @@ class ApiManagementTest(unittest.TestCase):
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value={"reply": "继续说。"}):
             with self._client() as client:
                 response = client.post(
-                    f"/comments/{post_id}/{quote('默认')}/messages",
+                    f"/comments/posts/{post_id}/souls/{quote('默认')}/messages",
                     json={"content": "卡在副歌了"},
                 )
 
         self.assertEqual(200, response.status_code, response.text)
         data = response.json()
         self.assertTrue(data["result"]["ok"])
-        self.assertEqual(post_id, data["thread"]["post_id"])
-        self.assertEqual(["user", "assistant"], [message["role"] for message in data["messages"]])
+        self.assertEqual(post_id, data["conversation"]["post_id"])
+        self.assertEqual(["assistant", "user", "assistant"], [message["role"] for message in data["messages"]])
+        self.assertEqual([0, 1, 2], [message["seq"] for message in data["messages"]])
 
     def test_comment_message_sse_format(self) -> None:
         from api.routes.comments import _format_message_sse
 
         payload = _format_message_sse(
-            {"id": 1, "thread_id": 2, "role": "assistant", "content": "继续说。", "created_at": 1.0}
+            {
+                "id": 1,
+                "post_id": "p-1",
+                "soul_name": "默认",
+                "role": "assistant",
+                "content": "继续说。",
+                "seq": 2,
+                "created_at": 1.0,
+            }
         )
 
         self.assertIn("id: 1\n", payload)

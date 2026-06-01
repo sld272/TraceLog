@@ -1,26 +1,26 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   type Comment,
+  type CommentConversation,
   type CommentMessage,
-  type CommentThread,
   type Post,
   type PostEvent,
   createPost,
-  getCommentThread,
+  getCommentConversation,
   getPost,
-  listCommentThreads,
+  listCommentConversations,
   listPosts,
   sendCommentMessage,
   streamPostEvents,
 } from '@/api/client'
 import { Composer } from '@/components/Composer'
-import { type CommentThreadState, PostCard } from '@/components/PostCard'
+import { type CommentConversationState, PostCard } from '@/components/PostCard'
 import styles from './Timeline.module.css'
 
 export function Timeline() {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
-  const [postCommentThreads, setPostCommentThreads] = useState<Record<string, Record<string, CommentThreadState>>>({})
+  const [postCommentConversations, setPostCommentConversations] = useState<Record<string, Record<string, CommentConversationState>>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -89,7 +89,7 @@ export function Timeline() {
         ...prev,
         [postId]: detail.comments,
       }))
-      await refreshCommentThreads(postId)
+      await refreshCommentConversations(postId)
       setPosts((prev) =>
         prev.map((p) =>
           p.post_id === postId
@@ -111,22 +111,22 @@ export function Timeline() {
     try {
       const detail = await getPost(postId)
       setPostComments((prev) => ({ ...prev, [postId]: detail.comments }))
-      await refreshCommentThreads(postId)
+      await refreshCommentConversations(postId)
     } catch {
       /* silently fail for now */
     }
   }
 
-  const refreshCommentThreads = async (postId: string) => {
+  const refreshCommentConversations = async (postId: string) => {
     try {
-      const threads = await listCommentThreads(postId)
+      const conversations = await listCommentConversations(postId)
       const details = await Promise.all(
-        threads.map(async (thread) => {
-          const detail = await getCommentThread(thread.id)
-          return [thread.soul_name, toThreadState(detail.thread, detail.messages)] as const
+        conversations.map(async (conversation) => {
+          const detail = await getCommentConversation(postId, conversation.soul_name)
+          return [conversation.soul_name, toConversationState(detail.conversation, detail.messages)] as const
         }),
       )
-      setPostCommentThreads((prev) => ({
+      setPostCommentConversations((prev) => ({
         ...prev,
         [postId]: Object.fromEntries(details),
       }))
@@ -138,12 +138,14 @@ export function Timeline() {
   const handleCommentReply = async (postId: string, soulName: string, content: string) => {
     const optimisticMessage: CommentMessage = {
       id: -Date.now(),
-      thread_id: 0,
+      post_id: postId,
+      soul_name: soulName,
       role: 'user',
       content,
+      seq: Number.MAX_SAFE_INTEGER,
       created_at: Date.now() / 1000,
     }
-    setPostCommentThreads((prev) => ({
+    setPostCommentConversations((prev) => ({
       ...prev,
       [postId]: {
         ...(prev[postId] ?? {}),
@@ -158,15 +160,15 @@ export function Timeline() {
 
     try {
       const response = await sendCommentMessage(postId, soulName, content)
-      setPostCommentThreads((prev) => ({
+      setPostCommentConversations((prev) => ({
         ...prev,
         [postId]: {
           ...(prev[postId] ?? {}),
-          [soulName]: toThreadState(response.thread, response.messages),
+          [soulName]: toConversationState(response.conversation, response.messages),
         },
       }))
     } catch (err) {
-      setPostCommentThreads((prev) => ({
+      setPostCommentConversations((prev) => ({
         ...prev,
         [postId]: {
           ...(prev[postId] ?? {}),
@@ -217,7 +219,7 @@ export function Timeline() {
               key={post.post_id}
               post={post}
               comments={postComments[post.post_id]}
-              commentThreads={postCommentThreads[post.post_id]}
+              commentConversations={postCommentConversations[post.post_id]}
               onExpand={() => handleExpand(post.post_id)}
               onReply={(soulName, content) => handleCommentReply(post.post_id, soulName, content)}
             />
@@ -228,9 +230,9 @@ export function Timeline() {
   )
 }
 
-function toThreadState(thread: CommentThread, messages: CommentMessage[]): CommentThreadState {
+function toConversationState(conversation: CommentConversation, messages: CommentMessage[]): CommentConversationState {
   return {
-    thread,
+    conversation,
     messages,
     sending: false,
     error: null,

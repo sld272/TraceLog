@@ -405,17 +405,17 @@ def _load_soul_thread_messages_since_cursor(soul_name: str, limit: int) -> list:
             UNION ALL
 
             SELECT
-                'comment_thread' AS channel,
-                comment_messages.id AS message_id,
-                comment_messages.thread_id AS thread_id,
-                comment_threads.post_id AS post_id,
-                comment_messages.role AS role,
-                comment_messages.content AS content,
-                comment_messages.created_at AS created_at
-            FROM comment_messages
-            JOIN comment_threads ON comment_threads.id = comment_messages.thread_id
-            WHERE comment_threads.soul_name = ?
-              AND comment_messages.id > ?
+                'comment' AS channel,
+                comments.id AS message_id,
+                NULL AS thread_id,
+                comments.post_id AS post_id,
+                comments.role AS role,
+                comments.content AS content,
+                comments.created_at AS created_at
+            FROM comments
+            WHERE comments.soul_name = ?
+              AND comments.seq > 0
+              AND comments.id > ?
         )
         ORDER BY created_at ASC, channel ASC, message_id ASC
         LIMIT ?
@@ -486,7 +486,7 @@ def _max_soul_thread_cursor(rows: list) -> dict[str, int]:
     for row in rows:
         if row["channel"] == "chat":
             cursor["chat_message_id"] = max(cursor["chat_message_id"], int(row["message_id"]))
-        elif row["channel"] == "comment_thread":
+        elif row["channel"] == "comment":
             cursor["comment_message_id"] = max(cursor["comment_message_id"], int(row["message_id"]))
     return cursor
 

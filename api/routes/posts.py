@@ -91,7 +91,7 @@ def _list_posts(limit: int, offset: int) -> list[dict[str, Any]]:
         SELECT posts.id, posts.ts, posts.content, posts.importance,
                COUNT(comments.id) AS comment_count
         FROM posts
-        LEFT JOIN comments ON comments.post_id = posts.id
+        LEFT JOIN comments ON comments.post_id = posts.id AND comments.seq = 0
         GROUP BY posts.id
         ORDER BY julianday(posts.ts) DESC, posts.id DESC
         LIMIT ? OFFSET ?
@@ -122,9 +122,9 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
         dict(row)
         for row in db.query_all(
             """
-            SELECT id, post_id, soul_name, content, is_main, metadata, created_at
+            SELECT id, post_id, soul_name, role, content, seq, metadata, created_at
             FROM comments
-            WHERE post_id = ?
+            WHERE post_id = ? AND seq = 0
             ORDER BY created_at ASC, id ASC
             """,
             (post_id,),

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import sqlite3
+from typing import Any
 
 from core import db
 from core import fts_query
@@ -27,6 +28,18 @@ class HybridHit:
     score: float
     fts_score: float
     vector_score: float
+    sources: list[str]
+    reasons: list[str]
+
+
+@dataclass(frozen=True)
+class RetrievalDocHit:
+    doc_id: str
+    type: str
+    source_id: str
+    score: float
+    rank: int
+    metadata: dict[str, Any]
     sources: list[str]
     reasons: list[str]
 
@@ -158,6 +171,58 @@ def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
             )
             for hit in vectorstore.query_post_hits(query, n_results=k)
         ]
+    except Exception:
+        return []
+
+
+def build_retrieval_filter(channel: str, soul_name: str | None = None) -> dict | None:
+    """Build a Chroma metadata filter for one reply context."""
+    if channel == "public_post":
+        return {"type": {"$eq": "post"}}
+    if channel in {"chat", "comment", "comment_thread"} and soul_name:
+        return {
+            "$or": [
+                {"type": {"$eq": "post"}},
+                {"type": {"$eq": "comment"}},
+                {
+                    "$and": [
+                        {"type": {"$eq": "chat"}},
+                        {"soul_name": {"$eq": soul_name}},
+                    ]
+                },
+            ]
+        }
+    return {"type": {"$eq": "post"}}
+
+
+def hybrid_search_documents(
+    query: str,
+    k: int = 5,
+    semantic_query: str | None = None,
+    fts_keywords: list[str] | None = None,
+    trace_context: dict | None = None,
+    filter_dict: dict | None = None,
+) -> list[RetrievalDocHit]:
+    """Return mixed post/comment/chat retrieval hits."""
+    fts_hits = (
+        fts_search_scored(query, k=k, fts_keywords=fts_keywords, trace_context=trace_context)
+        if fts_keywords is not None
+        else fts_search_scored(query, k=k, trace_context=trace_context)
+    )
+    vector_query = semantic_query or query
+    vector_hits = vector_search_documents_scored(vector_query, k=k, filter_dict=filter_dict)
+    return _merge_document_hits(query, fts_hits, vector_hits, k)
+
+
+def vector_search_documents_scored(
+    query: str,
+    k: int = 20,
+    filter_dict: dict | None = None,
+) -> list:
+    try:
+        from core import vectorstore
+
+        return vectorstore.query_documents(query, n_results=k, where=filter_dict)
     except Exception:
         return []
 
@@ -321,6 +386,88 @@ def _like_search_scored(query: str, k: int) -> list[RetrievalHit]:
         RetrievalHit(post_id=row["id"], source="like_fallback", rank=index + 1)
         for index, row in enumerate(rows)
     ]
+
+
+def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: list, k: int) -> list[RetrievalDocHit]:
+    fts_scores = _score_fts_hits(fts_hits)
+    vector_scores = _score_vector_doc_hits(vector_hits)
+    by_doc: dict[str, RetrievalDocHit] = {}
+
+    for hit in fts_hits:
+        doc_id = f"post-{hit.post_id}"
+        base_score = fts_scores.get(hit.post_id, 0.0)
+        bonus_score, bonus_reasons = _content_bonus(query, _read_post_content(hit.post_id))
+        by_doc[doc_id] = RetrievalDocHit(
+            doc_id=doc_id,
+            type="post",
+            source_id=hit.post_id,
+            score=round(min(base_score + bonus_score, 1.0), 6),
+            rank=hit.rank,
+            metadata={"type": "post", "post_id": hit.post_id},
+            sources=[hit.source],
+            reasons=[f"{hit.source}:rank={hit.rank}", *bonus_reasons],
+        )
+
+    for hit in vector_hits:
+        doc_id = str(hit.doc_id)
+        doc_type = str(hit.type)
+        raw_score = vector_scores.get(doc_id, 0.0) * _type_weight(doc_type)
+        existing = by_doc.get(doc_id)
+        if existing is not None:
+            sources = _ordered_unique([*existing.sources, "vector"])
+            reasons = [*existing.reasons, f"vector:rank={hit.rank}", "agreement"]
+            by_doc[doc_id] = RetrievalDocHit(
+                doc_id=existing.doc_id,
+                type=existing.type,
+                source_id=existing.source_id,
+                score=round(max(existing.score, raw_score), 6),
+                rank=min(existing.rank, int(hit.rank)),
+                metadata={**dict(hit.metadata), **existing.metadata},
+                sources=sources,
+                reasons=reasons,
+            )
+            continue
+        by_doc[doc_id] = RetrievalDocHit(
+            doc_id=doc_id,
+            type=doc_type,
+            source_id=str(hit.source_id),
+            score=round(raw_score, 6),
+            rank=int(hit.rank),
+            metadata=dict(hit.metadata),
+            sources=["vector"],
+            reasons=[f"vector:rank={hit.rank}"],
+        )
+
+    return sorted(by_doc.values(), key=lambda hit: (hit.score, -hit.rank, hit.doc_id), reverse=True)[:k]
+
+
+def _score_vector_doc_hits(hits: list) -> dict[str, float]:
+    distances = [hit.distance for hit in hits if hit.distance is not None]
+    min_distance = min(distances) if distances else None
+    max_distance = max(distances) if distances else None
+    scores: dict[str, float] = {}
+    total = len(hits)
+    for hit in hits:
+        rank_score = _position_score(int(hit.rank), total)
+        if hit.distance is None or min_distance is None or max_distance is None or max_distance == min_distance:
+            distance_score = rank_score
+        else:
+            distance_score = 1.0 - ((hit.distance - min_distance) / (max_distance - min_distance))
+        scores[str(hit.doc_id)] = 0.7 * distance_score + 0.3 * rank_score
+    return scores
+
+
+def _type_weight(doc_type: str) -> float:
+    if doc_type == "comment":
+        return 0.85
+    if doc_type == "chat":
+        return 0.75
+    return 1.0
+
+
+def _read_post_content(post_id: str) -> str:
+    row = db.query_one("SELECT content FROM posts WHERE id = ?", (post_id,))
+    return str(row["content"]) if row is not None else ""
 
 
 def _score_fts_hits(hits: list[RetrievalHit]) -> dict[str, float]:

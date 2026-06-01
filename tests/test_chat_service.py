@@ -40,6 +40,7 @@ class ChatServiceTest(unittest.TestCase):
         self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
         self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
         self.old_hybrid_search = retrieval.hybrid_search
+        self.old_hybrid_docs = retrieval.hybrid_search_documents
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
@@ -48,6 +49,7 @@ class ChatServiceTest(unittest.TestCase):
         soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         retrieval.hybrid_search = lambda query, k=3, **kwargs: []
+        retrieval.hybrid_search_documents = lambda *args, **kwargs: []
 
         db.init_db()
         logging_service.init_logging({"enabled": True, "llm_payload": "off"})
@@ -64,6 +66,7 @@ class ChatServiceTest(unittest.TestCase):
         soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
         soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         retrieval.hybrid_search = self.old_hybrid_search
+        retrieval.hybrid_search_documents = self.old_hybrid_docs
         self.tmp.cleanup()
 
     def test_get_or_create_thread_creates_and_reuses_enabled_soul_thread(self) -> None:
@@ -127,7 +130,28 @@ class ChatServiceTest(unittest.TestCase):
             """,
             ("todo-1", "复习数学", "未完成", 1.0, 1.0),
         )
-        retrieval.hybrid_search = lambda query, k=3, **kwargs: ["20260525-001"]
+        retrieval.hybrid_search_documents = lambda *args, **kwargs: [
+            retrieval.RetrievalDocHit(
+                doc_id="post-20260525-001",
+                type="post",
+                source_id="20260525-001",
+                score=1.0,
+                rank=1,
+                metadata={"type": "post", "post_id": "20260525-001"},
+                sources=["test"],
+                reasons=[],
+            ),
+            retrieval.RetrievalDocHit(
+                doc_id="comment-1",
+                type="comment",
+                source_id="1",
+                score=0.9,
+                rank=2,
+                metadata={"type": "comment", "post_id": "20260525-001", "soul_name": "默认"},
+                sources=["test"],
+                reasons=[],
+            ),
+        ]
 
         context = chat_service.build_chat_context(thread.id, "考试怎么办")
 
@@ -155,13 +179,12 @@ class ChatServiceTest(unittest.TestCase):
         chat_service.append_user_message(thread.id, "第四条")
         captured: dict[str, str] = {}
 
-        def fake_search(query: str, k: int = 3, **kwargs: object) -> list[str]:
-            del k
+        def fake_search(query: str, **kwargs: object) -> list:
             del kwargs
             captured["query"] = query
             return []
 
-        retrieval.hybrid_search = fake_search
+        retrieval.hybrid_search_documents = fake_search
 
         context = chat_service.build_chat_context(thread.id, "第四条")
 
@@ -173,13 +196,12 @@ class ChatServiceTest(unittest.TestCase):
         thread = chat_service.get_or_create_thread("默认")
         captured: dict[str, str] = {}
 
-        def fake_search(query: str, k: int = 3, **kwargs: object) -> list[str]:
-            del k
+        def fake_search(query: str, **kwargs: object) -> list:
             del kwargs
             captured["query"] = query
             return []
 
-        retrieval.hybrid_search = fake_search
+        retrieval.hybrid_search_documents = fake_search
 
         context = chat_service.build_chat_context(thread.id, "没有落库的当前消息")
 
@@ -212,19 +234,28 @@ class ChatServiceTest(unittest.TestCase):
 
         def fake_search(
             query: str,
-            k: int = 3,
             semantic_query: str | None = None,
             fts_keywords: list[str] | None = None,
             **kwargs: object,
-        ) -> list[str]:
-            del k
+        ) -> list:
             del kwargs
             captured["query"] = query
             captured["semantic_query"] = semantic_query
             captured["fts_keywords"] = fts_keywords
-            return ["20260525-001"]
+            return [
+                retrieval.RetrievalDocHit(
+                    doc_id="post-20260525-001",
+                    type="post",
+                    source_id="20260525-001",
+                    score=1.0,
+                    rank=1,
+                    metadata={"type": "post", "post_id": "20260525-001"},
+                    sources=["test"],
+                    reasons=[],
+                )
+            ]
 
-        retrieval.hybrid_search = fake_search
+        retrieval.hybrid_search_documents = fake_search
         rewritten = query_rewriter.RewrittenQuery(
             raw_query="raw",
             semantic_query="用户是否表达过图书馆学习效率更高",
