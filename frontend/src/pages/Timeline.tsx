@@ -1,12 +1,26 @@
 import { useCallback, useEffect, useState } from 'react'
-import { type Post, type Comment, type PostEvent, listPosts, createPost, getPost, streamPostEvents } from '@/api/client'
+import {
+  type Comment,
+  type CommentMessage,
+  type CommentThread,
+  type Post,
+  type PostEvent,
+  createPost,
+  getCommentThread,
+  getPost,
+  listCommentThreads,
+  listPosts,
+  sendCommentMessage,
+  streamPostEvents,
+} from '@/api/client'
 import { Composer } from '@/components/Composer'
-import { PostCard } from '@/components/PostCard'
+import { type CommentThreadState, PostCard } from '@/components/PostCard'
 import styles from './Timeline.module.css'
 
 export function Timeline() {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
+  const [postCommentThreads, setPostCommentThreads] = useState<Record<string, Record<string, CommentThreadState>>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -75,6 +89,7 @@ export function Timeline() {
         ...prev,
         [postId]: detail.comments,
       }))
+      await refreshCommentThreads(postId)
       setPosts((prev) =>
         prev.map((p) =>
           p.post_id === postId
@@ -96,8 +111,72 @@ export function Timeline() {
     try {
       const detail = await getPost(postId)
       setPostComments((prev) => ({ ...prev, [postId]: detail.comments }))
+      await refreshCommentThreads(postId)
     } catch {
       /* silently fail for now */
+    }
+  }
+
+  const refreshCommentThreads = async (postId: string) => {
+    try {
+      const threads = await listCommentThreads(postId)
+      const details = await Promise.all(
+        threads.map(async (thread) => {
+          const detail = await getCommentThread(thread.id)
+          return [thread.soul_name, toThreadState(detail.thread, detail.messages)] as const
+        }),
+      )
+      setPostCommentThreads((prev) => ({
+        ...prev,
+        [postId]: Object.fromEntries(details),
+      }))
+    } catch {
+      /* Keep root comments visible even if thread history is unavailable. */
+    }
+  }
+
+  const handleCommentReply = async (postId: string, soulName: string, content: string) => {
+    const optimisticMessage: CommentMessage = {
+      id: -Date.now(),
+      thread_id: 0,
+      role: 'user',
+      content,
+      created_at: Date.now() / 1000,
+    }
+    setPostCommentThreads((prev) => ({
+      ...prev,
+      [postId]: {
+        ...(prev[postId] ?? {}),
+        [soulName]: {
+          ...(prev[postId]?.[soulName] ?? { messages: [] }),
+          messages: [...(prev[postId]?.[soulName]?.messages ?? []), optimisticMessage],
+          sending: true,
+          error: null,
+        },
+      },
+    }))
+
+    try {
+      const response = await sendCommentMessage(postId, soulName, content)
+      setPostCommentThreads((prev) => ({
+        ...prev,
+        [postId]: {
+          ...(prev[postId] ?? {}),
+          [soulName]: toThreadState(response.thread, response.messages),
+        },
+      }))
+    } catch (err) {
+      setPostCommentThreads((prev) => ({
+        ...prev,
+        [postId]: {
+          ...(prev[postId] ?? {}),
+          [soulName]: {
+            ...(prev[postId]?.[soulName] ?? { messages: [] }),
+            sending: false,
+            error: err instanceof Error ? err.message : '发送失败',
+          },
+        },
+      }))
     }
   }
 
@@ -137,17 +216,25 @@ export function Timeline() {
             <PostCard
               key={post.post_id}
               post={post}
-              comments={postComments[post.post_id]?.map((c) => ({
-                soul_name: c.soul_name,
-                content: c.content,
-              }))}
+              comments={postComments[post.post_id]}
+              commentThreads={postCommentThreads[post.post_id]}
               onExpand={() => handleExpand(post.post_id)}
+              onReply={(soulName, content) => handleCommentReply(post.post_id, soulName, content)}
             />
           ))}
         </div>
       )}
     </div>
   )
+}
+
+function toThreadState(thread: CommentThread, messages: CommentMessage[]): CommentThreadState {
+  return {
+    thread,
+    messages,
+    sending: false,
+    error: null,
+  }
 }
 
 function TimelineHeader() {

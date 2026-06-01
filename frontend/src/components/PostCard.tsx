@@ -1,13 +1,34 @@
-import { type Post } from '@/api/client'
+import { useState, type KeyboardEvent } from 'react'
+import {
+  type Comment,
+  type CommentMessage,
+  type CommentThread,
+  type Post,
+} from '@/api/client'
 import styles from './PostCard.module.css'
+
+export interface CommentThreadState {
+  thread?: CommentThread
+  messages: CommentMessage[]
+  sending?: boolean
+  error?: string | null
+}
 
 interface PostCardProps {
   post: Post
-  comments?: Array<{ soul_name: string; content: string }>
+  comments?: Comment[]
+  commentThreads?: Record<string, CommentThreadState>
   onExpand?: () => void
+  onReply?: (soulName: string, content: string) => Promise<void>
 }
 
-export function PostCard({ post, comments = [], onExpand }: PostCardProps) {
+export function PostCard({
+  post,
+  comments = [],
+  commentThreads = {},
+  onExpand,
+  onReply,
+}: PostCardProps) {
   const timeAgo = formatRelativeTime(post.ts)
 
   return (
@@ -35,8 +56,13 @@ export function PostCard({ post, comments = [], onExpand }: PostCardProps) {
 
       {comments.length > 0 && (
         <div className={styles.comments}>
-          {comments.map((comment, i) => (
-            <CommentPreview key={i} soulName={comment.soul_name} content={comment.content} />
+          {comments.map((comment) => (
+            <CommentPreview
+              key={comment.id}
+              comment={comment}
+              thread={commentThreads[comment.soul_name]}
+              onReply={onReply}
+            />
           ))}
         </div>
       )}
@@ -58,20 +84,87 @@ export function PostCard({ post, comments = [], onExpand }: PostCardProps) {
   )
 }
 
-function CommentPreview({ soulName, content }: { soulName: string; content: string }) {
+function CommentPreview({
+  comment,
+  thread,
+  onReply,
+}: {
+  comment: Comment
+  thread?: CommentThreadState
+  onReply?: (soulName: string, content: string) => Promise<void>
+}) {
+  const [reply, setReply] = useState('')
+  const soulName = comment.soul_name
   const hue = soulName.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
+  const trimmed = reply.trim()
+
+  const handleSubmit = async () => {
+    if (!trimmed || thread?.sending || !onReply) return
+    await onReply(soulName, trimmed)
+    setReply('')
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      handleSubmit()
+    }
+  }
+
   return (
-    <div className={styles.comment} style={{ backgroundColor: `hsl(${hue}, 30%, 97%)` }}>
-      <span
-        className={styles.soulBadge}
-        style={{ backgroundColor: `hsl(${hue}, 35%, 88%)`, color: `hsl(${hue}, 40%, 35%)` }}
-      >
-        {soulName.charAt(0).toUpperCase()}
-      </span>
-      <div className={styles.commentBody}>
-        <span className={styles.soulName}>{soulName}</span>
-        <p className={styles.commentText}>{content}</p>
+    <div className={styles.commentThread}>
+      <div className={styles.comment} style={{ backgroundColor: `hsl(${hue}, 30%, 97%)` }}>
+        <span
+          className={styles.soulBadge}
+          style={{ backgroundColor: `hsl(${hue}, 35%, 88%)`, color: `hsl(${hue}, 40%, 35%)` }}
+        >
+          {soulName.charAt(0).toUpperCase()}
+        </span>
+        <div className={styles.commentBody}>
+          <span className={styles.soulName}>{soulName}</span>
+          <p className={styles.commentText}>{comment.content}</p>
+        </div>
       </div>
+
+      {thread?.messages && thread.messages.length > 0 && (
+        <div className={styles.threadMessages}>
+          {thread.messages.map((message) => (
+            <ThreadMessage key={message.id} message={message} soulName={soulName} />
+          ))}
+        </div>
+      )}
+
+      <div className={styles.replyBox}>
+        <textarea
+          className={styles.replyInput}
+          value={reply}
+          onChange={(event) => setReply(event.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={`回复 ${soulName}...`}
+          rows={1}
+          disabled={thread?.sending}
+          aria-label={`回复 ${soulName}`}
+        />
+        <button
+          className={styles.replyButton}
+          onClick={handleSubmit}
+          disabled={!trimmed || thread?.sending || !onReply}
+          aria-label={`发送给 ${soulName}`}
+        >
+          {thread?.sending ? <LoadingIndicator /> : <SendIcon />}
+        </button>
+      </div>
+      {thread?.error && <p className={styles.threadError}>{thread.error}</p>}
+    </div>
+  )
+}
+
+function ThreadMessage({ message, soulName }: { message: CommentMessage; soulName: string }) {
+  const isUser = message.role === 'user'
+  return (
+    <div className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
+      <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
+      <p>{message.content}</p>
     </div>
   )
 }
@@ -88,6 +181,15 @@ function ChatIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+  )
+}
+
+function SendIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="22" y1="2" x2="11" y2="13" />
+      <polygon points="22 2 15 22 11 13 2 9 22 2" />
     </svg>
   )
 }

@@ -106,6 +106,12 @@
   animation: fadeInLeft 200ms ease-out both;
 }
 
+.commentThread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 @keyframes fadeInLeft {
   from {
     opacity: 0;
@@ -149,6 +155,106 @@
   line-height: var(--leading-normal);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.threadMessages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-left: 42px;
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--color-border);
+}
+
+.threadMessage {
+  width: fit-content;
+  max-width: min(100%, 540px);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.threadMessage p {
+  color: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.threadMessageUser {
+  align-self: flex-end;
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+
+.threadMessageSoul {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+}
+
+.threadRole {
+  display: block;
+  margin-bottom: 2px;
+  color: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  opacity: 0.68;
+}
+
+.replyBox {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin-left: 42px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.replyInput {
+  min-height: 34px;
+  max-height: 120px;
+  flex: 1;
+  resize: none;
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.replyInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.replyButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+  transition: background var(--transition-fast), opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.replyButton:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  transform: translateY(-1px);
+}
+
+.replyButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.threadError {
+  margin-left: 42px;
+  color: var(--color-error);
+  font-size: var(--text-xs);
 }
 
 .expandBtn {

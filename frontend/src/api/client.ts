@@ -88,6 +88,24 @@ export interface ChatMessage {
   created_at: number
 }
 
+export interface CommentThread {
+  id: number
+  post_id: string
+  soul_name: string
+  root_comment_id: number
+  created_at: number
+  updated_at: number
+  last_message_at: number | null
+}
+
+export interface CommentMessage {
+  id: number
+  thread_id: number
+  role: string
+  content: string
+  created_at: number
+}
+
 export type PostEventType =
   | 'post_created'
   | 'embedding_started'
@@ -118,6 +136,17 @@ export interface PostEvent {
 
 export interface ChatReplyResult {
   thread_id: number
+  soul_name: string
+  ok: boolean
+  reply: string
+  user_message_id: number
+  assistant_message_id: number | null
+  error: string | null
+}
+
+export interface CommentReplyResult {
+  thread_id: number
+  post_id: string
   soul_name: string
   ok: boolean
   reply: string
@@ -273,12 +302,22 @@ export function triggerSoulReflections(limitPerSoul = 100) {
 
 /* Comment threads */
 export function listCommentThreads(postId: string) {
-  return request<unknown[]>(`/comments/posts/${postId}/threads`)
+  return request<CommentThread[]>(`/comments/posts/${encodeURIComponent(postId)}/threads`)
+}
+
+export function getCommentThread(threadId: number, limit = 30) {
+  return request<{ thread: CommentThread; messages: CommentMessage[] }>(
+    `/comments/threads/${threadId}?limit=${limit}`,
+  )
 }
 
 export function sendCommentMessage(postId: string, soulName: string, content: string) {
-  return request<unknown>(
-    `/comments/${postId}/${soulName}/messages`,
+  return request<{
+    thread: CommentThread
+    result: CommentReplyResult
+    messages: CommentMessage[]
+  }>(
+    `/comments/${encodeURIComponent(postId)}/${encodeURIComponent(soulName)}/messages`,
     { method: 'POST', body: JSON.stringify({ content }) },
   )
 }
