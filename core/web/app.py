@@ -24,9 +24,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-install", action="store_true")
     args = parser.parse_args(argv)
 
-    _require_command("npm")
+    npm = _require_command("npm")
     if not args.skip_install:
-        _ensure_frontend_dependencies()
+        _ensure_frontend_dependencies(npm)
 
     processes: list[subprocess.Popen] = []
     try:
@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
         processes.append(backend)
 
         frontend = _start(
-            _frontend_command(args),
+            _frontend_command(args, npm),
             cwd=FRONTEND_DIR,
             name="frontend",
         )
@@ -64,11 +64,11 @@ def main(argv: list[str] | None = None) -> int:
             _stop(process)
 
 
-def _ensure_frontend_dependencies() -> None:
+def _ensure_frontend_dependencies(npm: str) -> None:
     if (FRONTEND_DIR / "node_modules").exists():
         return
     print("Installing frontend dependencies...", flush=True)
-    subprocess.run(["npm", "install"], cwd=FRONTEND_DIR, check=True)
+    subprocess.run([npm, "install"], cwd=FRONTEND_DIR, check=True)
 
 
 def _backend_command(args: argparse.Namespace) -> list[str]:
@@ -85,9 +85,9 @@ def _backend_command(args: argparse.Namespace) -> list[str]:
     ]
 
 
-def _frontend_command(args: argparse.Namespace) -> list[str]:
+def _frontend_command(args: argparse.Namespace, npm: str) -> list[str]:
     return [
-        "npm",
+        npm,
         "run",
         "dev",
         "--",
@@ -163,6 +163,8 @@ def _stop_plain_process(process: subprocess.Popen) -> None:
         process.kill()
 
 
-def _require_command(command: str) -> None:
-    if shutil.which(command) is None:
+def _require_command(command: str) -> str:
+    resolved = shutil.which(command)
+    if resolved is None:
         raise SystemExit(f"Missing required command: {command}")
+    return resolved
