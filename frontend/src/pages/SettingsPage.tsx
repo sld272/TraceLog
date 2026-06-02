@@ -517,17 +517,11 @@ function DataSettingsPanel({ status }: { status: WorkspaceStatus | null }) {
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
-            <h2 className={styles.sectionTitle}>日志</h2>
-            <p className={styles.sectionMeta}>用于排查模型调用、索引和后台任务。</p>
+            <h2 className={styles.sectionTitle}>存储</h2>
+            <p className={styles.sectionMeta}>本地数据库当前占用。</p>
           </div>
         </div>
-        <div className={styles.pathGrid}>
-          <PathRow label="当前日志" value={status.logs.current_log_path} />
-          <PathRow label="历史日志" value={status.logs.history_dir} />
-        </div>
         <div className={styles.statGrid}>
-          <Stat label="当前日志大小" value={formatBytes(status.logs.current_log_size_bytes)} />
-          <Stat label="历史日志数" value={status.logs.history_count} />
           <Stat label="数据库大小" value={formatBytes(status.db_size_bytes)} />
         </div>
       </section>
