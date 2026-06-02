@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
   type ChatMessage,
   type ChatThread,
@@ -20,6 +20,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const submitShortcutTitle = getSubmitShortcutTitle()
 
   const fetchThread = useCallback(async () => {
@@ -48,6 +49,14 @@ export function ChatPage({ soulName }: ChatPageProps) {
     setDraft('')
     fetchThread()
   }, [fetchThread])
+
+  useEffect(() => {
+    const el = chatInputRef.current
+    if (el) {
+      el.style.height = 'auto'
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+    }
+  }, [draft])
 
   const submitDraft = async () => {
     const body = draft.trim()
@@ -110,6 +119,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
 
         <form className={styles.chatForm} onSubmit={handleSubmit}>
           <textarea
+            ref={chatInputRef}
             className={styles.chatInput}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -125,13 +135,32 @@ export function ChatPage({ soulName }: ChatPageProps) {
             aria-label="私聊消息"
           />
           <span className={styles.buttonTooltipWrap} title={submitShortcutTitle}>
-            <button className={styles.button} disabled={!draft.trim() || sending}>
-              {sending ? '发送中...' : '发送'}
+            <button className={styles.chatSubmitButton} disabled={!draft.trim() || sending} aria-label="发送">
+              {sending ? <LoadingDots /> : <SendIcon />}
             </button>
           </span>
         </form>
       </div>
     </div>
+  )
+}
+
+function SendIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="22" y1="2" x2="11" y2="13" />
+      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+    </svg>
+  )
+}
+
+function LoadingDots() {
+  return (
+    <span className={styles.loadingDots}>
+      <span className={styles.dot} />
+      <span className={styles.dot} />
+      <span className={styles.dot} />
+    </span>
   )
 }
 
