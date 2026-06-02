@@ -26,6 +26,7 @@ export function App() {
   const [todos, setTodos] = useState<Todo[]>([])
   const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
   const [soulReflections, setSoulReflections] = useState<SoulReflectionScope[]>([])
+  const showRightPanel = activePage === 'home'
 
   const fetchSouls = useCallback(async () => {
     try {
@@ -95,14 +96,14 @@ export function App() {
         />
       }
       main={renderMain()}
-      panel={
+      panel={showRightPanel ? (
         <RightPanel
           profileContent={profileContent}
           todos={todos}
           globalReflection={globalReflection}
           soulReflections={soulReflections}
         />
-      }
+      ) : undefined}
     />
   )
 }

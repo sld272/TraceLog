@@ -4,7 +4,7 @@ import styles from './AppShell.module.css'
 interface AppShellProps {
   nav: ReactNode
   main: ReactNode
-  panel: ReactNode
+  panel?: ReactNode
 }
 
 export function AppShell({ nav, main, panel }: AppShellProps) {
@@ -24,9 +24,11 @@ export function AppShell({ nav, main, panel }: AppShellProps) {
         <main className={styles.main}>
           {main}
         </main>
-        <aside className={styles.panel} aria-label="信息面板">
-          {panel}
-        </aside>
+        {panel && (
+          <aside className={styles.panel} aria-label="信息面板">
+            {panel}
+          </aside>
+        )}
       </div>
     </div>
   )
