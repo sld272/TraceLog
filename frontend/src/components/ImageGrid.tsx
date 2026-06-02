@@ -12,13 +12,8 @@ export function ImageGrid({ attachments, compact = false }: ImageGridProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
   if (attachments.length === 0) return null
 
-  const layout = attachments.length === 1
-    ? styles.single
-    : attachments.length <= 3
-      ? styles.row
-      : attachments.length <= 6
-        ? styles.grid2
-        : styles.grid3
+  const visibleCount = Math.min(attachments.length, 9)
+  const layout = getLayoutClass(visibleCount)
 
   return (
     <>
@@ -44,4 +39,12 @@ export function ImageGrid({ attachments, compact = false }: ImageGridProps) {
       )}
     </>
   )
+}
+
+function getLayoutClass(count: number): string {
+  if (count === 1) return styles.single ?? ''
+  if (count === 2) return styles.row2 ?? ''
+  if (count === 3) return styles.row3 ?? ''
+  if (count === 4) return styles.grid2 ?? ''
+  return styles.grid3 ?? ''
 }

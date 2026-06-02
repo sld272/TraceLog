@@ -17,11 +17,21 @@
   max-width: min(260px, 100%);
 }
 
-.row {
-  grid-template-columns: repeat(auto-fit, minmax(96px, 120px));
+.row2 {
+  max-width: 248px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.grid2,
+.row3 {
+  max-width: 380px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.grid2 {
+  max-width: 260px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .grid3 {
   max-width: 380px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -43,7 +53,8 @@
   max-height: 260px;
 }
 
-.row .item,
+.row2 .item,
+.row3 .item,
 .grid2 .item,
 .grid3 .item {
   aspect-ratio: 1;
