@@ -155,7 +155,7 @@ class ChatServiceTest(unittest.TestCase):
 
         context = chat_service.build_chat_context(thread.id, "考试怎么办")
 
-        self.assertIn("你是 TraceLog 默认的 AI 好友", context.soul.persona)
+        self.assertIn("你是 TraceLog 默认的 AI 好友", context.soul.soul)
         self.assertIn("# 默认的相处记忆", context.soul.soul_memory)
         self.assertIn("测试用户", context.context)
         self.assertIn("考试压力很大", context.context)

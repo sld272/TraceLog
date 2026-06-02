@@ -1,4 +1,4 @@
-"""LLM generation for SOUL persona Markdown files."""
+"""LLM generation for SOUL Markdown files."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ SYSTEM_PROMPT = """\
 
 JSON 格式：
 {
-  "persona": "完整 Markdown 文本"
+  "soul": "完整 Markdown 文本"
 }
 
 Markdown 必须满足：
@@ -40,7 +40,7 @@ SOUL 名称：{name}
 """
 
 
-def generate_soul_persona(
+def generate_soul(
     *,
     name: str,
     inspiration: str,
@@ -61,21 +61,21 @@ def generate_soul_persona(
     return call_json_completion(
         client=client,
         model=model,
-        operation="generate_soul_persona",
+        operation="generate_soul",
         messages=messages,
-        parser=_parse_persona,
+        parser=_parse_soul,
         timeout=45,
         response_format={"type": "json_object"},
         trace_context={"soul_name": name},
     )
 
 
-def _parse_persona(content: str | None) -> dict | None:
+def _parse_soul(content: str | None) -> dict | None:
     try:
         data = json.loads(clean_json_content(content))
     except json.JSONDecodeError:
         return None
-    persona = data.get("persona")
-    if not isinstance(persona, str) or not persona.strip():
+    soul = data.get("soul")
+    if not isinstance(soul, str) or not soul.strip():
         return None
-    return {"persona": persona.strip()}
+    return {"soul": soul.strip()}

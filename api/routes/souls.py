@@ -11,25 +11,25 @@ from pydantic import BaseModel, Field
 from api import deps
 from api.deps import run_sync
 from core import memory_review_service, soul_service
-from core.llm import soul_persona_router
+from core.llm import soul_router
 
 router = APIRouter(prefix="/souls", tags=["souls"])
 
 
 class CreateSoulRequest(BaseModel):
     name: str = Field(min_length=1)
-    persona: str | None = None
+    soul: str | None = None
     description: str | None = None
     enabled: bool = True
 
 
-class GenerateSoulPersonaRequest(BaseModel):
+class GenerateSoulRequest(BaseModel):
     name: str = Field(min_length=1)
     inspiration: str = Field(min_length=1)
 
 
 class UpdateSoulRequest(BaseModel):
-    persona: str | None = None
+    soul: str | None = None
     description: str | None = None
     enabled: bool | None = None
     order: list[str] | None = None
@@ -51,7 +51,7 @@ async def create_soul(request: CreateSoulRequest):
         record = await run_sync(
             soul_service.create_soul,
             request.name,
-            request.persona,
+            request.soul,
             request.description,
             request.enabled,
         )
@@ -60,11 +60,11 @@ async def create_soul(request: CreateSoulRequest):
     return _record(record)
 
 
-@router.post("/generate-persona")
-async def generate_soul_persona(request: GenerateSoulPersonaRequest):
+@router.post("/generate-soul")
+async def generate_soul(request: GenerateSoulRequest):
     runtime = deps.get_runtime()
     result = await run_sync(
-        soul_persona_router.generate_soul_persona,
+        soul_router.generate_soul,
         name=request.name,
         inspiration=request.inspiration,
         client=runtime.client,
@@ -81,8 +81,8 @@ async def update_soul(name: str, request: UpdateSoulRequest):
         if request.order is not None:
             records = await run_sync(soul_service.reorder_souls, request.order)
             return {"souls": [_record(record) for record in records]}
-        if request.persona is not None or request.description is not None:
-            await run_sync(soul_service.update_soul, name, request.persona, request.description)
+        if request.soul is not None or request.description is not None:
+            await run_sync(soul_service.update_soul, name, request.soul, request.description)
         if request.enabled is True:
             record = await run_sync(soul_service.enable_soul, name)
         elif request.enabled is False:

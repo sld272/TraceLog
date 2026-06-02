@@ -326,19 +326,19 @@ def _assert_soul_writable(soul_name: str) -> None:
     record = soul_service.get_soul(soul_name)
     if not record.enabled:
         raise ValueError(f"SOUL 已禁用，旧线程只读：{soul_name}")
-    if not record.persona_exists:
+    if not record.soul_exists:
         raise ValueError(f"SOUL 人格文件不存在，无法私聊：{soul_name}")
 
 
 def _load_soul_context(soul_name: str) -> SoulContext:
     record = soul_service.get_soul(soul_name)
-    persona = (db.WORKSPACE_DIR / record.file_path).read_text(encoding="utf-8")
+    soul = (db.WORKSPACE_DIR / record.file_path).read_text(encoding="utf-8")
     soul_memory = soul_memory_service.read_soul_memory(soul_name)
     return SoulContext(
         name=record.name,
         description=record.description,
         sort_order=record.sort_order,
-        persona=persona,
+        soul=soul,
         soul_memory=soul_memory,
     )
 

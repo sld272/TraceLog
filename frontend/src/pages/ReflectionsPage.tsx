@@ -55,7 +55,7 @@ export function ReflectionsPage() {
     setRunning('souls')
     try {
       const result = await triggerSoulReflections()
-      setNotice(`SOUL 反思已加入队列：#${result.job_id}`)
+      setNotice(`人格反思已加入队列：#${result.job_id}`)
       await fetchPreview()
     } catch (err) {
       setError(err instanceof Error ? err.message : '触发失败')
@@ -72,7 +72,7 @@ export function ReflectionsPage() {
       <header className={styles.header}>
         <div className={styles.titleGroup}>
           <h1 className={styles.title}>反思</h1>
-          <p className={styles.subtitle}>全局画像与 SOUL 独立记忆</p>
+          <p className={styles.subtitle}>全局画像与人格独立记忆</p>
         </div>
         <button className={styles.ghostButton} onClick={fetchPreview} disabled={loading}>
           刷新
@@ -102,7 +102,7 @@ export function ReflectionsPage() {
 
           <section className={styles.card}>
             <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>SOUL 深反思</h2>
+              <h2 className={styles.cardTitle}>人格深反思</h2>
               <button className={styles.button} onClick={runSouls} disabled={running !== null || soulInteractionCount === 0}>
                 {running === 'souls' ? '排队中...' : '触发'}
               </button>

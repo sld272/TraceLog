@@ -16,7 +16,7 @@ DEFAULT_SOULS = {
     "默认": {
         "sort_order": 0,
         "description": "温暖共情型，默认启用",
-        "persona": """---
+        "soul": """---
 name: 默认
 version: 1
 description: 温暖共情型，默认启用
@@ -41,7 +41,7 @@ tags: [温暖, 共情, 成长]
     "毒舌好友": {
         "sort_order": 1,
         "description": "直白吐槽型，习惯戳破自我安慰，但底色是关心",
-        "persona": """---
+        "soul": """---
 name: 毒舌好友
 version: 1
 description: 直白吐槽型，习惯戳破自我安慰，但底色是关心
@@ -72,7 +72,7 @@ class SoulContext:
     name: str
     description: str | None
     sort_order: int
-    persona: str
+    soul: str
     soul_memory: str
 
 
@@ -85,21 +85,21 @@ class SoulRecord:
     description: str | None
     created_at: float
     updated_at: float
-    persona_exists: bool
+    soul_exists: bool
     memory_exists: bool
 
 
 def sync_souls() -> None:
-    """Sync persona files, memory files, and the souls registry."""
+    """Sync soul files, memory files, and the souls registry."""
     from core import soul_memory_service
 
     SOULS_DIR.mkdir(parents=True, exist_ok=True)
     SOUL_MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
 
     for name, spec in DEFAULT_SOULS.items():
-        path = _persona_path(name)
+        path = _soul_path(name)
         if not path.exists():
-            _write_text_atomic(path, spec["persona"])
+            _write_text_atomic(path, spec["soul"])
 
     rows = []
     now = db.now_ts()
@@ -182,7 +182,7 @@ def get_soul(name: str) -> SoulRecord:
 
 
 def list_enabled_souls() -> list[SoulContext]:
-    """Load enabled SOUL persona and memory files in display order."""
+    """Load enabled SOUL files and memory files in display order."""
     rows = db.query_all(
         """
         SELECT name, file_path, sort_order, description
@@ -194,9 +194,9 @@ def list_enabled_souls() -> list[SoulContext]:
 
     souls: list[SoulContext] = []
     for row in rows:
-        persona_path = db.WORKSPACE_DIR / row["file_path"]
-        persona = _read_optional_text(persona_path)
-        if persona is None:
+        soul_path = db.WORKSPACE_DIR / row["file_path"]
+        soul = _read_optional_text(soul_path)
+        if soul is None:
             continue
 
         soul_memory = _read_optional_text(SOUL_MEMORIES_DIR / f"{row['name']}.md")
@@ -205,7 +205,7 @@ def list_enabled_souls() -> list[SoulContext]:
                 name=row["name"],
                 description=row["description"],
                 sort_order=row["sort_order"],
-                persona=persona,
+                soul=soul,
                 soul_memory=soul_memory or "",
             )
         )
@@ -214,24 +214,24 @@ def list_enabled_souls() -> list[SoulContext]:
 
 def create_soul(
     name: str,
-    persona: str | None = None,
+    soul: str | None = None,
     description: str | None = None,
     enabled: bool = True,
 ) -> SoulRecord:
-    """Create a new SOUL persona file, registry row, and memory file."""
+    """Create a new SOUL file, registry row, and memory file."""
     from core import soul_memory_service
 
     validate_soul_name(name)
     if db.query_one("SELECT 1 FROM souls WHERE name = ?", (name,)) is not None:
         raise ValueError(f"SOUL 已存在：{name}")
 
-    path = _persona_path(name)
+    path = _soul_path(name)
     if path.exists():
         raise ValueError(f"SOUL 文件已存在：{path.name}")
 
     SOULS_DIR.mkdir(parents=True, exist_ok=True)
     SOUL_MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
-    body = persona if persona is not None else _new_soul_persona(name, description)
+    body = soul if soul is not None else _new_soul(name, description)
     _write_text_atomic(path, body)
 
     now = db.now_ts()
@@ -265,16 +265,16 @@ def create_soul(
 
 def update_soul(
     name: str,
-    persona: str | None = None,
+    soul: str | None = None,
     description: str | None = None,
 ) -> SoulRecord:
-    """Update a SOUL persona file and/or registry description."""
+    """Update a SOUL file and/or registry description."""
     record = get_soul(name)
     path = db.WORKSPACE_DIR / record.file_path
-    if persona is not None:
-        _write_text_atomic(path, persona)
+    if soul is not None:
+        _write_text_atomic(path, soul)
     effective_description = (
-        _read_soul_description(path, description) if persona is not None else description
+        _read_soul_description(path, description) if soul is not None else description
     )
     if effective_description is not None:
         db.execute(
@@ -285,7 +285,7 @@ def update_soul(
             """,
             (effective_description, db.now_ts(), name),
         )
-    elif persona is not None:
+    elif soul is not None:
         db.execute("UPDATE souls SET updated_at = ? WHERE name = ?", (db.now_ts(), name))
     return get_soul(name)
 
@@ -293,7 +293,7 @@ def update_soul(
 def enable_soul(name: str) -> SoulRecord:
     """Enable a SOUL for future public post replies."""
     record = get_soul(name)
-    if not record.persona_exists:
+    if not record.soul_exists:
         raise ValueError(f"SOUL 人格文件不存在，无法启用：{name}")
     db.execute(
         "UPDATE souls SET enabled = 1, updated_at = ? WHERE name = ?",
@@ -361,12 +361,12 @@ def _row_to_record(row) -> SoulRecord:
         description=row["description"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
-        persona_exists=(db.WORKSPACE_DIR / row["file_path"]).exists(),
+        soul_exists=(db.WORKSPACE_DIR / row["file_path"]).exists(),
         memory_exists=(SOUL_MEMORIES_DIR / f"{row['name']}.md").exists(),
     )
 
 
-def _persona_path(name: str) -> Path:
+def _soul_path(name: str) -> Path:
     return SOULS_DIR / f"{name}.md"
 
 
@@ -381,7 +381,7 @@ def _next_sort_order() -> int:
     return int(row["max_sort_order"]) + 1
 
 
-def _new_soul_persona(name: str, description: str | None) -> str:
+def _new_soul(name: str, description: str | None) -> str:
     now = datetime.now().astimezone().date().isoformat()
     clean_description = description or "用户自定义 SOUL"
     return f"""---

@@ -23,7 +23,7 @@ raw evidence
 
 ## 2. 记忆分层
 
-### 2.1 Persona & Soul Memory
+### 2.1 Soul & Soul Memory
 
 存储：
 
@@ -217,7 +217,7 @@ SOUL 是虚拟好友，不是事实复读机。回复时允许使用比喻、场
 
 输入：
 
-- 当前 SOUL 的 persona。
+- 当前 SOUL 的 soul Markdown。
 - 当前 `soul_memories/<name>.md`。
 - 该 SOUL cursor 之后的 raw chat/comment messages。
 

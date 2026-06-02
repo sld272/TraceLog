@@ -126,20 +126,20 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("API 里写入的记忆", memory_response.json()["content"])
         self.assertIn("测试好友", [item["name"] for item in list_response.json()])
 
-    def test_generate_soul_persona_route_returns_markdown(self) -> None:
+    def test_generate_soul_route_returns_markdown(self) -> None:
         generated = {
-            "persona": "---\nname: 测试好友\nversion: 1\ndescription: 测试\n---\n\n# 测试好友\n\n## 人格定位\n测试",
+            "soul": "---\nname: 测试好友\nversion: 1\ndescription: 测试\n---\n\n# 测试好友\n\n## 人格定位\n测试",
         }
 
-        with patch("core.llm.soul_persona_router.generate_soul_persona", return_value=generated):
+        with patch("core.llm.soul_router.generate_soul", return_value=generated):
             with self._client() as client:
                 response = client.post(
-                    "/souls/generate-persona",
+                    "/souls/generate-soul",
                     json={"name": "测试好友", "inspiration": "温柔但不纵容"},
                 )
 
         self.assertEqual(200, response.status_code)
-        self.assertIn("## 人格定位", response.json()["persona"])
+        self.assertIn("## 人格定位", response.json()["soul"])
 
     def test_settings_routes_read_save_config_and_workspace_status(self) -> None:
         with self._client() as client:

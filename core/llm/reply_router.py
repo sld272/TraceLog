@@ -140,7 +140,7 @@ def call_soul_post_reply(
     """Call one SOUL for a public post reply."""
     soul_memory = soul.soul_memory.strip() or "（暂无）"
     system_msg = (
-        f"## SOUL 人格\n{soul.persona.strip()}\n\n"
+        f"## SOUL 人格\n{soul.soul.strip()}\n\n"
         f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
         f"---\n\n{_post_reply_task_prompt()}"
     )
@@ -166,7 +166,7 @@ def call_soul_chat_reply(
     """Call one SOUL for a private chat reply."""
     soul_memory = soul.soul_memory.strip() or "（暂无）"
     system_msg = (
-        f"## SOUL 人格\n{soul.persona.strip()}\n\n"
+        f"## SOUL 人格\n{soul.soul.strip()}\n\n"
         f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
         f"---\n\n{_chat_reply_task_prompt()}"
     )
@@ -193,7 +193,7 @@ def call_soul_comment_reply(
     """Call one SOUL for a post comment thread reply."""
     soul_memory = soul.soul_memory.strip() or "（暂无）"
     system_msg = (
-        f"## SOUL 人格\n{soul.persona.strip()}\n\n"
+        f"## SOUL 人格\n{soul.soul.strip()}\n\n"
         f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
         f"---\n\n{_comment_reply_task_prompt()}"
     )

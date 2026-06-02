@@ -394,7 +394,7 @@ def call_soul_deep_reflection(
 ) -> dict | None:
     """Generate one SOUL-specific deep reflection plus soul memory patches."""
     user_content = (
-        f"## SOUL 人格\n\n{soul.persona.strip() or '（暂无）'}\n\n"
+        f"## SOUL 人格\n\n{soul.soul.strip() or '（暂无）'}\n\n"
         "---\n\n"
         f"## 当前 SOUL 相处记忆\n\n{soul.soul_memory.strip() or '（暂无）'}\n\n"
         "---\n\n"

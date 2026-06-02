@@ -32,7 +32,7 @@ export function LeftNav({ souls, activePage, onNavigate }: LeftNavProps) {
       </section>
 
       <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>SOUL</h3>
+        <h3 className={styles.sectionTitle}>人格</h3>
         {souls.map((soul) => (
           <NavItem
             key={soul.name}
@@ -43,7 +43,7 @@ export function LeftNav({ souls, activePage, onNavigate }: LeftNavProps) {
           />
         ))}
         {souls.length === 0 && (
-          <p className={styles.emptySoul}>暂无活跃 SOUL</p>
+          <p className={styles.emptySoul}>暂无活跃人格</p>
         )}
       </section>
 

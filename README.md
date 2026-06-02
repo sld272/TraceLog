@@ -116,7 +116,7 @@ Web 与 CLI 最终共用同一组 core service。公开 post 的主链路是：
 3. 如果 TodoTool 启用，抽取或更新明确待办。
 4. 对用户输入执行 query rewrite + FTS5 / ChromaDB hybrid search，找出 raw 相关 posts。
 5. `context_builder.build_context()` 组装共享上下文：`user.md`、raw 相关 posts、活跃 todos。
-6. `reply_service.fanout()` 让启用的 SOUL 并发生成首条评论；每个 SOUL 的 persona 和 `soul_memories/<name>.md` 在对应 SOUL 调用时注入。
+6. `reply_service.fanout()` 让启用的 SOUL 并发生成首条评论；每个 SOUL 的 soul Markdown 和 `soul_memories/<name>.md` 在对应 SOUL 调用时注入。
 7. 对该 post 执行轻反思，写入 entities / emotions / events / relations / importance。
 
 私聊和评论线程使用独立消息表与原生 multi-message 历史，不会保存为公开 post，也不会触发 TodoTool 或轻反思。

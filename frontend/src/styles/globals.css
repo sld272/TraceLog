@@ -31,7 +31,7 @@
   --color-error: #c44040;
   --color-warning: #b8860b;
 
-  /* SOUL palette — very subtle tints for comment backgrounds */
+  /* soul palette - very subtle tints for comment backgrounds */
   --soul-color-1: rgba(194, 112, 58, 0.04);
   --soul-color-2: rgba(88, 140, 126, 0.04);
   --soul-color-3: rgba(120, 100, 160, 0.04);

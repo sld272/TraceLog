@@ -210,7 +210,7 @@ export function Timeline() {
         <div className={styles.empty}>
           <EmptyIcon />
           <p className={styles.emptyTitle}>还没有记录</p>
-          <p className={styles.emptyHint}>写下你的第一条想法，SOUL 们会回应你</p>
+          <p className={styles.emptyHint}>写下你的第一条想法，人格会回应你</p>
         </div>
       ) : (
         <div className={styles.feed}>

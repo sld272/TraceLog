@@ -5,7 +5,7 @@ import {
   type Soul,
   type WorkspaceStatus,
   createSoul,
-  generateSoulPersona,
+  generateSoul,
   getModelSettings,
   getWorkspaceStatus,
   listSouls,
@@ -61,7 +61,7 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   },
 }
 
-const AI_SOUL_PLACEHOLDER = '写下你想要的 SOUL。可以描述性格、语气、相处方式、边界、适合的场景，或任何灵感。系统会把它整理成完整的 SOUL Markdown 文件。'
+const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语气、相处方式、边界、适合的场景，或任何灵感。系统会把它整理成完整的人格 Markdown 文件。'
 
 export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('model')
@@ -81,7 +81,7 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
   const tabs = useMemo(
     () => [
       { id: 'model' as const, label: '模型' },
-      { id: 'souls' as const, label: 'SOUL' },
+      { id: 'souls' as const, label: '人格' },
       { id: 'data' as const, label: '数据' },
     ],
     [],
@@ -137,7 +137,7 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
       setSouls((items) => items.map((item) => item.name === soul.name ? updated : item))
       onSoulsChanged?.()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '更新 SOUL 失败')
+      setError(err instanceof Error ? err.message : '更新人格失败')
     } finally {
       setSavingSoul(null)
     }
@@ -159,7 +159,7 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
       setSouls(response.souls)
       onSoulsChanged?.()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '调整 SOUL 排序失败')
+      setError(err instanceof Error ? err.message : '调整人格排序失败')
     } finally {
       setSavingSoul(null)
     }
@@ -175,10 +175,10 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
     setNotice(null)
     setError(null)
     try {
-      const persona = createSoulMode === 'ai'
-        ? (await generateSoulPersona(name, content)).persona
+      const soul = createSoulMode === 'ai'
+        ? (await generateSoul(name, content)).soul
         : content
-      const created = await createSoul(name, null, true, persona)
+      const created = await createSoul(name, null, true, soul)
       setSouls((items) => [...items, created].sort((a, b) => a.sort_order - b.sort_order))
       if (createSoulMode === 'ai') {
         setAiSoulDraft({ name: '', inspiration: '' })
@@ -188,7 +188,7 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
       setNotice(`已创建 ${created.name}`)
       onSoulsChanged?.()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '创建 SOUL 失败')
+      setError(err instanceof Error ? err.message : '创建人格失败')
     } finally {
       setSavingSoul(null)
     }
@@ -230,7 +230,7 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
       <header className={workspaceStyles.header}>
         <div className={workspaceStyles.titleGroup}>
           <h1 className={workspaceStyles.title}>设置</h1>
-          <p className={workspaceStyles.subtitle}>模型、SOUL 与本地数据</p>
+          <p className={workspaceStyles.subtitle}>模型、人格与本地数据</p>
         </div>
         <button className={workspaceStyles.ghostButton} onClick={refreshSettings} disabled={loading}>
           刷新
@@ -465,7 +465,7 @@ function SoulSettingsPanel({
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
-            <h2 className={styles.sectionTitle}>SOUL 列表</h2>
+            <h2 className={styles.sectionTitle}>人格列表</h2>
             <p className={styles.sectionMeta}>排序决定首页并发回应顺序；禁用后不会出现在导航和回应队列里。</p>
           </div>
           <span className={styles.countBadge}>{souls.filter((soul) => soul.enabled).length}/{souls.length} 启用</span>
@@ -512,19 +512,19 @@ function SoulSettingsPanel({
               </div>
             </div>
           ))}
-          {souls.length === 0 && <div className={workspaceStyles.empty}>暂无 SOUL</div>}
+          {souls.length === 0 && <div className={workspaceStyles.empty}>暂无人格</div>}
         </div>
       </section>
 
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
-            <h2 className={styles.sectionTitle}>新建 SOUL</h2>
+            <h2 className={styles.sectionTitle}>新建人格</h2>
             <p className={styles.sectionMeta}>用 AI 整理成 Markdown，或自己写完整 Markdown。</p>
           </div>
         </div>
         <form className={styles.createSoulForm} onSubmit={onCreateSoul}>
-          <div className={styles.modeTabs} role="tablist" aria-label="新建 SOUL 方式">
+          <div className={styles.modeTabs} role="tablist" aria-label="新建人格方式">
             <button
               className={`${styles.modeTab} ${isAiMode ? styles.modeTabActive : ''}`}
               type="button"
@@ -556,14 +556,14 @@ function SoulSettingsPanel({
           </label>
           <div className={styles.formActions}>
             <span className={styles.saveHint}>
-              {isAiMode ? '系统会把你的描述整理成完整 SOUL Markdown 文件。' : '内容会直接保存为 SOUL Markdown 文件。'}
+              {isAiMode ? '系统会把你的描述整理成完整人格 Markdown 文件。' : '内容会直接保存为人格 Markdown 文件。'}
             </span>
             <button
               className={workspaceStyles.button}
               type="submit"
               disabled={!newSoulName.trim() || !newSoulContent.trim() || savingSoul !== null}
             >
-              {savingSoul === 'new' ? (isAiMode ? '生成中...' : '创建中...') : (isAiMode ? '生成并创建' : '创建 SOUL')}
+              {savingSoul === 'new' ? (isAiMode ? '生成中...' : '创建中...') : (isAiMode ? '生成并创建' : '创建人格')}
             </button>
           </div>
         </form>
@@ -588,11 +588,10 @@ function DataSettingsPanel({ status }: { status: WorkspaceStatus | null }) {
           <StatusPill ok={status.workspace_exists && status.db_exists} label={status.db_exists ? '可用' : '缺失'} />
         </div>
         <div className={styles.pathGrid}>
-          <PathRow label="Workspace" value={status.workspace_path} />
           <PathRow label="SQLite" value={status.db_path} />
-          <PathRow label="user.md" value={status.user_memory_path} />
-          <PathRow label="SOUL" value={status.souls_dir} />
-          <PathRow label="SOUL 记忆" value={status.soul_memories_dir} />
+          <PathRow label="用户画像" value={status.user_memory_path} />
+          <PathRow label="人格" value={status.souls_dir} />
+          <PathRow label="人格记忆" value={status.soul_memories_dir} />
         </div>
       </section>
 
@@ -606,8 +605,8 @@ function DataSettingsPanel({ status }: { status: WorkspaceStatus | null }) {
         <div className={styles.statGrid}>
           <Stat label="动态" value={status.counts.posts} />
           <Stat label="回应" value={status.counts.comments} />
-          <Stat label="SOUL" value={status.counts.souls} />
-          <Stat label="启用 SOUL" value={status.counts.enabled_souls} />
+          <Stat label="人格" value={status.counts.souls} />
+          <Stat label="启用人格" value={status.counts.enabled_souls} />
           <Stat label="待办" value={status.counts.todos} />
           <Stat label="任务" value={status.counts.jobs} />
         </div>

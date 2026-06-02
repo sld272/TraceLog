@@ -77,7 +77,7 @@ class SoulServiceTest(unittest.TestCase):
         self.assertEqual("测试描述", record.description)
         self.assertTrue(record.memory_exists)
 
-    def test_sync_souls_disables_missing_persona_file(self) -> None:
+    def test_sync_souls_disables_missing_soul_file(self) -> None:
         soul_service.sync_souls()
         soul_service.create_soul("测试好友", description="测试描述")
         (self.workspace / "souls" / "测试好友.md").unlink()

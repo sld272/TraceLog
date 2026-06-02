@@ -201,12 +201,12 @@ def print_souls() -> None:
     print("\n[SOUL 库]")
     for record in records:
         status = "启用" if record.enabled else "禁用"
-        persona_status = "" if record.persona_exists else "（人格文件缺失）"
+        soul_status = "" if record.soul_exists else "（人格文件缺失）"
         memory_status = "" if record.memory_exists else "（记忆文件缺失）"
         description = f" - {record.description}" if record.description else ""
         print(
             f"{record.sort_order:02d}. [{status}] {record.name}"
-            f"{description}{persona_status}{memory_status}"
+            f"{description}{soul_status}{memory_status}"
         )
     print()
 
