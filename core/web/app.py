@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND_DIR = ROOT / "frontend"
+VITE_ENTRYPOINT = FRONTEND_DIR / "node_modules" / "vite" / "bin" / "vite.js"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     npm = _require_command("npm")
+    node = _require_command("node")
     if not args.skip_install:
         _ensure_frontend_dependencies(npm)
 
@@ -38,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         processes.append(backend)
 
         frontend = _start(
-            _frontend_command(args, npm),
+            _frontend_command(args, node),
             cwd=FRONTEND_DIR,
             name="frontend",
         )
@@ -60,8 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\nStopping TraceLog Web...", flush=True)
         return 0
     finally:
-        for process in reversed(processes):
-            _stop(process)
+        _stop_all(processes)
 
 
 def _ensure_frontend_dependencies(npm: str) -> None:
@@ -77,7 +78,6 @@ def _backend_command(args: argparse.Namespace) -> list[str]:
         "-m",
         "uvicorn",
         "api.app:app",
-        "--reload",
         "--host",
         args.host,
         "--port",
@@ -85,12 +85,10 @@ def _backend_command(args: argparse.Namespace) -> list[str]:
     ]
 
 
-def _frontend_command(args: argparse.Namespace, npm: str) -> list[str]:
+def _frontend_command(args: argparse.Namespace, node: str) -> list[str]:
     return [
-        npm,
-        "run",
-        "dev",
-        "--",
+        node,
+        str(VITE_ENTRYPOINT),
         "--host",
         args.host,
         "--port",
@@ -120,6 +118,20 @@ def _stop(process: subprocess.Popen) -> None:
     _stop_plain_process(process)
 
 
+def _stop_all(processes: list[subprocess.Popen]) -> None:
+    interrupted = False
+    for process in reversed(processes):
+        try:
+            _stop(process)
+        except KeyboardInterrupt:
+            interrupted = True
+            _kill(process)
+    if interrupted:
+        print("Forced TraceLog Web shutdown.", flush=True)
+    for process in reversed(processes):
+        _kill(process)
+
+
 def _stop_posix_process_group(process: subprocess.Popen) -> None:
     try:
         pgid = os.getpgid(process.pid)
@@ -129,7 +141,7 @@ def _stop_posix_process_group(process: subprocess.Popen) -> None:
     for sig, timeout in (
         (signal.SIGINT, 8),
         (signal.SIGTERM, 3),
-        (signal.SIGKILL, 1),
+        (getattr(signal, "SIGKILL", signal.SIGTERM), 1),
     ):
         try:
             os.killpg(pgid, sig)
@@ -147,12 +159,10 @@ def _stop_windows_process(process: subprocess.Popen) -> None:
         ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
         process.send_signal(ctrl_break)
         process.wait(timeout=8)
+    except KeyboardInterrupt:
+        raise
     except Exception:
-        process.terminate()
-        try:
-            process.wait(timeout=3)
-        except Exception:
-            process.kill()
+        _kill_windows_process_tree(process)
 
 
 def _stop_plain_process(process: subprocess.Popen) -> None:
@@ -161,6 +171,40 @@ def _stop_plain_process(process: subprocess.Popen) -> None:
         process.wait(timeout=8)
     except Exception:
         process.kill()
+
+
+def _kill(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        _kill_windows_process_tree(process)
+        return
+    try:
+        process.kill()
+    except Exception:
+        return
+    try:
+        process.wait(timeout=3)
+    except Exception:
+        pass
+
+
+def _kill_windows_process_tree(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    subprocess.run(
+        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    try:
+        process.wait(timeout=3)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            pass
 
 
 def _require_command(command: str) -> str:
