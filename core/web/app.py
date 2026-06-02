@@ -6,6 +6,7 @@ import argparse
 import os
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -29,6 +30,7 @@ def main(argv: list[str] | None = None) -> int:
     node = _require_command("node")
     if not args.skip_install:
         _ensure_frontend_dependencies(npm)
+    _assign_ports(args)
 
     processes: list[subprocess.Popen] = []
     try:
@@ -43,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
             _frontend_command(args, node),
             cwd=FRONTEND_DIR,
             name="frontend",
+            env={"TRACELOG_BACKEND_URL": _backend_url(args)},
         )
         processes.append(frontend)
 
@@ -72,6 +75,51 @@ def _ensure_frontend_dependencies(npm: str) -> None:
     subprocess.run([npm, "install"], cwd=FRONTEND_DIR, check=True)
 
 
+def _assign_ports(args: argparse.Namespace) -> None:
+    requested_backend_port = args.backend_port
+    requested_frontend_port = args.frontend_port
+    used_ports: set[int] = set()
+    args.backend_port = _find_available_port(args.host, requested_backend_port, used_ports)
+    used_ports.add(args.backend_port)
+    args.frontend_port = _find_available_port(args.host, requested_frontend_port, used_ports)
+
+    if args.backend_port != requested_backend_port:
+        print(
+            f"TraceLog API port {requested_backend_port} is in use; using {args.backend_port}.",
+            flush=True,
+        )
+    if args.frontend_port != requested_frontend_port:
+        print(
+            f"TraceLog Web port {requested_frontend_port} is in use; using {args.frontend_port}.",
+            flush=True,
+        )
+
+
+def _find_available_port(host: str, preferred_port: int, used_ports: set[int] | None = None) -> int:
+    used_ports = used_ports or set()
+    port = preferred_port
+    while port < 65536:
+        if port not in used_ports and _can_bind(host, port):
+            return port
+        port += 1
+    raise SystemExit(f"No available port found starting at {preferred_port}")
+
+
+def _can_bind(host: str, port: int) -> bool:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
+def _backend_url(args: argparse.Namespace) -> str:
+    host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
+    return f"http://{host}:{args.backend_port}"
+
+
 def _backend_command(args: argparse.Namespace) -> list[str]:
     return [
         sys.executable,
@@ -93,12 +141,23 @@ def _frontend_command(args: argparse.Namespace, node: str) -> list[str]:
         args.host,
         "--port",
         str(args.frontend_port),
+        "--strictPort",
     ]
 
 
-def _start(command: list[str], *, cwd: Path, name: str) -> subprocess.Popen:
+def _start(
+    command: list[str],
+    *,
+    cwd: Path,
+    name: str,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen:
     print(f"Starting {name}: {' '.join(command)}", flush=True)
     kwargs: dict = {"cwd": cwd}
+    if env is not None:
+        process_env = os.environ.copy()
+        process_env.update(env)
+        kwargs["env"] = process_env
     if os.name == "posix":
         kwargs["preexec_fn"] = os.setsid
     elif os.name == "nt":

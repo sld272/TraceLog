@@ -1,5 +1,6 @@
 import argparse
 import signal
+import socket
 import subprocess
 import sys
 import unittest
@@ -34,6 +35,47 @@ class StartWebTest(unittest.TestCase):
         self.assertIn("127.0.0.1", command)
         self.assertIn("--port", command)
         self.assertIn("5173", command)
+        self.assertIn("--strictPort", command)
+
+    def test_find_available_port_skips_occupied_port(self) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.listen()
+            occupied_port = sock.getsockname()[1]
+
+            port = web_app._find_available_port("127.0.0.1", occupied_port)
+
+        self.assertNotEqual(occupied_port, port)
+
+    def test_assign_ports_keeps_backend_and_frontend_distinct(self) -> None:
+        backend_port = _free_port()
+        args = argparse.Namespace(
+            host="127.0.0.1",
+            backend_port=backend_port,
+            frontend_port=backend_port,
+        )
+
+        web_app._assign_ports(args)
+
+        self.assertEqual(backend_port, args.backend_port)
+        self.assertNotEqual(args.backend_port, args.frontend_port)
+
+    def test_backend_url_uses_loopback_for_wildcard_host(self) -> None:
+        args = argparse.Namespace(host="0.0.0.0", backend_port=8000)
+
+        self.assertEqual("http://127.0.0.1:8000", web_app._backend_url(args))
+
+    def test_start_merges_extra_environment(self) -> None:
+        with patch("core.web.app.subprocess.Popen") as popen:
+            web_app._start(
+                ["server"],
+                cwd=web_app.ROOT,
+                name="server",
+                env={"TRACELOG_BACKEND_URL": "http://127.0.0.1:8010"},
+            )
+
+        kwargs = popen.call_args.kwargs
+        self.assertEqual("http://127.0.0.1:8010", kwargs["env"]["TRACELOG_BACKEND_URL"])
 
     def test_posix_stop_sends_sigint_before_sigterm(self) -> None:
         process = Mock()
@@ -82,6 +124,12 @@ class StartWebTest(unittest.TestCase):
             stderr=subprocess.DEVNULL,
             check=False,
         )
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 if __name__ == "__main__":
