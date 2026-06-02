@@ -174,6 +174,65 @@ export interface JobQueued {
   status: string
 }
 
+export interface ModelSettings {
+  configured: boolean
+  has_api_key: boolean
+  api_key_masked: string | null
+  base_url: string
+  model: string
+  embedding_model: string
+  has_embedding_api_key: boolean
+  embedding_api_key_masked: string | null
+  embedding_base_url: string | null
+  reuse_embedding_config: boolean
+  job_worker_concurrency: number
+  logging: {
+    enabled: boolean
+    level: string
+    history_retention: number
+  }
+  config_path: string
+  restart_required?: boolean
+}
+
+export interface ModelSettingsUpdate {
+  api_key?: string
+  base_url: string
+  model: string
+  embedding_model: string
+  embedding_api_key?: string
+  embedding_base_url?: string | null
+  reuse_embedding_config: boolean
+  job_worker_concurrency: number
+  logging: ModelSettings['logging']
+}
+
+export interface WorkspaceStatus {
+  workspace_path: string
+  workspace_exists: boolean
+  db_path: string
+  db_exists: boolean
+  db_size_bytes: number
+  souls_dir: string
+  soul_memories_dir: string
+  user_memory_path: string
+  counts: {
+    posts: number
+    comments: number
+    souls: number
+    enabled_souls: number
+    todos: number
+    jobs: number
+  }
+  logs: {
+    current_log_path: string
+    current_log_exists: boolean
+    current_log_size_bytes: number
+    history_dir: string
+    history_count: number
+  }
+}
+
 /* Posts */
 export function listPosts(limit = 20, offset = 0) {
   return request<Post[]>(`/posts?limit=${limit}&offset=${offset}`)
@@ -239,6 +298,28 @@ export function streamPostEvents(
 /* Souls */
 export function listSouls(enabledOnly = false) {
   return request<Soul[]>(`/souls?enabled_only=${enabledOnly}`)
+}
+
+export function createSoul(name: string, description: string, enabled = true) {
+  return request<Soul>('/souls', {
+    method: 'POST',
+    body: JSON.stringify({ name, description, enabled }),
+  })
+}
+
+export function updateSoul(name: string, changes: { enabled?: boolean; description?: string }) {
+  return request<Soul>(`/souls/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+}
+
+export function reorderSouls(order: string[]) {
+  const name = order[0] ?? '_'
+  return request<{ souls: Soul[] }>(`/souls/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ order }),
+  })
 }
 
 /* Profile */
@@ -323,4 +404,20 @@ export function sendCommentMessage(postId: string, soulName: string, content: st
     `/comments/posts/${encodeURIComponent(postId)}/souls/${encodeURIComponent(soulName)}/messages`,
     { method: 'POST', body: JSON.stringify({ content }) },
   )
+}
+
+/* Settings */
+export function getModelSettings() {
+  return request<ModelSettings>('/settings/model')
+}
+
+export function saveModelSettings(settings: ModelSettingsUpdate) {
+  return request<ModelSettings>('/settings/model', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  })
+}
+
+export function getWorkspaceStatus() {
+  return request<WorkspaceStatus>('/settings/workspace')
 }

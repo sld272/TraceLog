@@ -25,6 +25,7 @@ class ApiManagementTest(unittest.TestCase):
         self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
         self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
         self.old_hybrid_search = retrieval.hybrid_search
+        self.config_path = Path(self.tmp.name) / "config.json"
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
@@ -39,6 +40,18 @@ class ApiManagementTest(unittest.TestCase):
         self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与角色\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
+        self.config_path.write_text(
+            json.dumps(
+                {
+                    "api_key": "sk-test-secret-123456",
+                    "base_url": "https://example.invalid/v1",
+                    "model": "test-model",
+                    "embedding_model": "test-embedding",
+                    "logging": {"enabled": False, "level": "INFO", "history_retention": 3},
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         logging_service.init_logging({"enabled": False})
@@ -71,10 +84,13 @@ class ApiManagementTest(unittest.TestCase):
 
         self.init_patch = patch("api.deps.init_runtime", fake_init_runtime)
         self.shutdown_patch = patch("api.deps.shutdown_runtime", fake_shutdown_runtime)
+        self.config_patch = patch("api.routes.settings.CONFIG_FILE", str(self.config_path))
         self.init_patch.start()
         self.shutdown_patch.start()
+        self.config_patch.start()
         self.addCleanup(self.init_patch.stop)
         self.addCleanup(self.shutdown_patch.stop)
+        self.addCleanup(self.config_patch.stop)
         return TestClient(create_app())
 
     def test_profile_routes_read_update_and_list_revisions(self) -> None:
@@ -109,6 +125,42 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, memory_response.status_code)
         self.assertIn("API 里写入的记忆", memory_response.json()["content"])
         self.assertIn("测试好友", [item["name"] for item in list_response.json()])
+
+    def test_settings_routes_read_save_config_and_workspace_status(self) -> None:
+        with self._client() as client:
+            get_response = client.get("/settings/model")
+            put_response = client.put(
+                "/settings/model",
+                json={
+                    "api_key": "",
+                    "base_url": "https://updated.invalid/v1",
+                    "model": "updated-model",
+                    "embedding_model": "updated-embedding",
+                    "reuse_embedding_config": False,
+                    "embedding_base_url": "https://embeddings.invalid/v1",
+                    "job_worker_concurrency": 2,
+                    "logging": {"enabled": True, "level": "DEBUG", "history_retention": 7},
+                },
+            )
+            workspace_response = client.get("/settings/workspace")
+
+        self.assertEqual(200, get_response.status_code)
+        self.assertTrue(get_response.json()["has_api_key"])
+        self.assertNotIn("sk-test-secret", json.dumps(get_response.json()))
+
+        self.assertEqual(200, put_response.status_code)
+        updated = put_response.json()
+        self.assertEqual("updated-model", updated["model"])
+        self.assertTrue(updated["restart_required"])
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual("sk-test-secret-123456", saved["api_key"])
+        self.assertEqual("https://updated.invalid/v1", saved["base_url"])
+        self.assertEqual(2, saved["job_worker_concurrency"])
+
+        self.assertEqual(200, workspace_response.status_code)
+        status = workspace_response.json()
+        self.assertTrue(status["db_exists"])
+        self.assertGreaterEqual(status["counts"]["souls"], 1)
 
     def test_todo_routes_list_and_patch_status(self) -> None:
         db.execute(

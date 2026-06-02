@@ -15,9 +15,9 @@ import { LeftNav } from '@/components/LeftNav'
 import { RightPanel } from '@/components/RightPanel'
 import { ChatPage } from '@/pages/ChatPage'
 import { ReflectionsPage } from '@/pages/ReflectionsPage'
+import { SettingsPage } from '@/pages/SettingsPage'
 import { Timeline } from '@/pages/Timeline'
 import { TodosPage } from '@/pages/TodosPage'
-import workspaceStyles from '@/pages/WorkspacePages.module.css'
 
 export function App() {
   const [activePage, setActivePage] = useState('home')
@@ -76,7 +76,7 @@ export function App() {
       case 'reflections':
         return <ReflectionsPage />
       case 'settings':
-        return <SettingsPlaceholder />
+        return <SettingsPage onSoulsChanged={fetchSouls} />
       default:
         if (activePage.startsWith('chat:')) {
           const soulName = activePage.replace('chat:', '')
@@ -105,21 +105,5 @@ export function App() {
         />
       ) : undefined}
     />
-  )
-}
-
-function SettingsPlaceholder() {
-  return (
-    <div className={workspaceStyles.page}>
-      <header className={workspaceStyles.header}>
-        <div className={workspaceStyles.titleGroup}>
-          <h1 className={workspaceStyles.title}>设置</h1>
-          <p className={workspaceStyles.subtitle}>配置入口已预留</p>
-        </div>
-      </header>
-      <section className={workspaceStyles.card}>
-        <p className={workspaceStyles.meta}>这里之后可以接入模型、工作区和 SOUL 配置。</p>
-      </section>
-    </div>
   )
 }
