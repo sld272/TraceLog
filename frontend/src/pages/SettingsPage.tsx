@@ -5,6 +5,7 @@ import {
   type Soul,
   type WorkspaceStatus,
   createSoul,
+  generateSoulPersona,
   getModelSettings,
   getWorkspaceStatus,
   listSouls,
@@ -16,6 +17,7 @@ import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
 type SettingsTab = 'model' | 'souls' | 'data'
+type CreateSoulMode = 'ai' | 'markdown'
 
 interface SettingsPageProps {
   onSoulsChanged?: () => void
@@ -49,14 +51,17 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   },
 }
 
+const AI_SOUL_PLACEHOLDER = '写下你想要的 SOUL。可以描述性格、语气、相处方式、边界、适合的场景，或任何灵感。系统会把它整理成完整的 SOUL Markdown 文件。'
+
 export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('model')
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null)
   const [modelForm, setModelForm] = useState<ModelForm>(DEFAULT_MODEL_FORM)
   const [souls, setSouls] = useState<Soul[]>([])
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null)
+  const [createSoulMode, setCreateSoulMode] = useState<CreateSoulMode>('ai')
   const [newSoulName, setNewSoulName] = useState('')
-  const [newSoulDescription, setNewSoulDescription] = useState('')
+  const [newSoulContent, setNewSoulContent] = useState('')
   const [loading, setLoading] = useState(true)
   const [savingModel, setSavingModel] = useState(false)
   const [savingSoul, setSavingSoul] = useState<string | null>(null)
@@ -153,21 +158,39 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
   const handleCreateSoul = async (event: FormEvent) => {
     event.preventDefault()
     const name = newSoulName.trim()
-    if (!name) return
+    const content = newSoulContent.trim()
+    if (!name || !content) return
     setSavingSoul('new')
     setNotice(null)
     setError(null)
     try {
-      const created = await createSoul(name, newSoulDescription.trim(), true)
+      const persona = createSoulMode === 'ai'
+        ? (await generateSoulPersona(name, content)).persona
+        : content
+      const created = await createSoul(name, null, true, persona)
       setSouls((items) => [...items, created].sort((a, b) => a.sort_order - b.sort_order))
       setNewSoulName('')
-      setNewSoulDescription('')
+      setNewSoulContent('')
       setNotice(`已创建 ${created.name}`)
       onSoulsChanged?.()
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建 SOUL 失败')
     } finally {
       setSavingSoul(null)
+    }
+  }
+
+  const handleCreateSoulModeChange = (mode: CreateSoulMode) => {
+    setCreateSoulMode(mode)
+    if (mode === 'markdown' && !newSoulContent.trim()) {
+      setNewSoulContent(newSoulMarkdownTemplate(newSoulName))
+    }
+  }
+
+  const handleNewSoulNameChange = (name: string) => {
+    setNewSoulName(name)
+    if (createSoulMode === 'markdown' && isDefaultSoulTemplate(newSoulContent, newSoulName)) {
+      setNewSoulContent(newSoulMarkdownTemplate(name))
     }
   }
 
@@ -218,10 +241,12 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
             <SoulSettingsPanel
               souls={souls}
               savingSoul={savingSoul}
+              createSoulMode={createSoulMode}
               newSoulName={newSoulName}
-              newSoulDescription={newSoulDescription}
-              onNewSoulNameChange={setNewSoulName}
-              onNewSoulDescriptionChange={setNewSoulDescription}
+              newSoulContent={newSoulContent}
+              onCreateSoulModeChange={handleCreateSoulModeChange}
+              onNewSoulNameChange={handleNewSoulNameChange}
+              onNewSoulContentChange={setNewSoulContent}
               onCreateSoul={handleCreateSoul}
               onToggleSoul={handleToggleSoul}
               onMoveSoul={handleMoveSoul}
@@ -380,24 +405,30 @@ function ModelSettingsPanel({
 function SoulSettingsPanel({
   souls,
   savingSoul,
+  createSoulMode,
   newSoulName,
-  newSoulDescription,
+  newSoulContent,
+  onCreateSoulModeChange,
   onNewSoulNameChange,
-  onNewSoulDescriptionChange,
+  onNewSoulContentChange,
   onCreateSoul,
   onToggleSoul,
   onMoveSoul,
 }: {
   souls: Soul[]
   savingSoul: string | null
+  createSoulMode: CreateSoulMode
   newSoulName: string
-  newSoulDescription: string
+  newSoulContent: string
+  onCreateSoulModeChange: (value: CreateSoulMode) => void
   onNewSoulNameChange: (value: string) => void
-  onNewSoulDescriptionChange: (value: string) => void
+  onNewSoulContentChange: (value: string) => void
   onCreateSoul: (event: FormEvent) => void
   onToggleSoul: (soul: Soul) => void
   onMoveSoul: (index: number, direction: -1 | 1) => void
 }) {
+  const isAiMode = createSoulMode === 'ai'
+
   return (
     <div className={styles.settingsStack}>
       <section className={styles.section}>
@@ -458,15 +489,52 @@ function SoulSettingsPanel({
         <div className={styles.sectionHeader}>
           <div>
             <h2 className={styles.sectionTitle}>新建 SOUL</h2>
-            <p className={styles.sectionMeta}>第一版先创建基础文件；人格正文后续可在文件里细改。</p>
+            <p className={styles.sectionMeta}>用 AI 整理成 Markdown，或自己写完整 Markdown。</p>
           </div>
         </div>
-        <form className={styles.inlineForm} onSubmit={onCreateSoul}>
+        <form className={styles.createSoulForm} onSubmit={onCreateSoul}>
+          <div className={styles.modeTabs} role="tablist" aria-label="新建 SOUL 方式">
+            <button
+              className={`${styles.modeTab} ${isAiMode ? styles.modeTabActive : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={isAiMode}
+              onClick={() => onCreateSoulModeChange('ai')}
+            >
+              AI 生成 Markdown
+            </button>
+            <button
+              className={`${styles.modeTab} ${!isAiMode ? styles.modeTabActive : ''}`}
+              type="button"
+              role="tab"
+              aria-selected={!isAiMode}
+              onClick={() => onCreateSoulModeChange('markdown')}
+            >
+              手写 Markdown
+            </button>
+          </div>
           <TextField label="名称" value={newSoulName} onChange={onNewSoulNameChange} />
-          <TextField label="描述" value={newSoulDescription} onChange={onNewSoulDescriptionChange} />
-          <button className={workspaceStyles.button} type="submit" disabled={!newSoulName.trim() || savingSoul !== null}>
-            新建
-          </button>
+          <label className={styles.textareaField}>
+            <span>{isAiMode ? '灵感描述' : 'Markdown 全文'}</span>
+            <textarea
+              value={newSoulContent}
+              onChange={(event) => onNewSoulContentChange(event.target.value)}
+              placeholder={isAiMode ? AI_SOUL_PLACEHOLDER : newSoulMarkdownTemplate(newSoulName)}
+              rows={isAiMode ? 7 : 11}
+            />
+          </label>
+          <div className={styles.formActions}>
+            <span className={styles.saveHint}>
+              {isAiMode ? '系统会把你的描述整理成完整 SOUL Markdown 文件。' : '内容会直接保存为 SOUL Markdown 文件。'}
+            </span>
+            <button
+              className={workspaceStyles.button}
+              type="submit"
+              disabled={!newSoulName.trim() || !newSoulContent.trim() || savingSoul !== null}
+            >
+              {savingSoul === 'new' ? (isAiMode ? '生成中...' : '创建中...') : (isAiMode ? '生成并创建' : '创建 SOUL')}
+            </button>
+          </div>
         </form>
       </section>
     </div>
@@ -653,6 +721,39 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
     job_worker_concurrency: form.job_worker_concurrency,
     logging: form.logging,
   }
+}
+
+function newSoulMarkdownTemplate(name: string): string {
+  const soulName = name.trim()
+  return `---
+name: ${soulName}
+version: 1
+description: 简短描述
+created_at: ${todayDate()}
+author: TraceLog 用户
+tags: []
+---
+
+你是......
+
+## 语气特征
+- ...
+
+## 边界
+- ...
+`
+}
+
+function isDefaultSoulTemplate(content: string, name: string): boolean {
+  return content === newSoulMarkdownTemplate(name)
+}
+
+function todayDate(): string {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, '0')
+  const day = String(now.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function formatBytes(bytes: number): string {

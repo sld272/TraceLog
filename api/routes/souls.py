@@ -8,8 +8,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from api import deps
 from api.deps import run_sync
 from core import memory_review_service, soul_service
+from core.llm import soul_persona_router
 
 router = APIRouter(prefix="/souls", tags=["souls"])
 
@@ -19,6 +21,11 @@ class CreateSoulRequest(BaseModel):
     persona: str | None = None
     description: str | None = None
     enabled: bool = True
+
+
+class GenerateSoulPersonaRequest(BaseModel):
+    name: str = Field(min_length=1)
+    inspiration: str = Field(min_length=1)
 
 
 class UpdateSoulRequest(BaseModel):
@@ -51,6 +58,21 @@ async def create_soul(request: CreateSoulRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _record(record)
+
+
+@router.post("/generate-persona")
+async def generate_soul_persona(request: GenerateSoulPersonaRequest):
+    runtime = deps.get_runtime()
+    result = await run_sync(
+        soul_persona_router.generate_soul_persona,
+        name=request.name,
+        inspiration=request.inspiration,
+        client=runtime.client,
+        model=runtime.model,
+    )
+    if result is None:
+        raise HTTPException(status_code=502, detail="SOUL Markdown 生成失败")
+    return result
 
 
 @router.patch("/{name}")

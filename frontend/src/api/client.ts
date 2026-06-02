@@ -300,10 +300,17 @@ export function listSouls(enabledOnly = false) {
   return request<Soul[]>(`/souls?enabled_only=${enabledOnly}`)
 }
 
-export function createSoul(name: string, description: string, enabled = true) {
+export function createSoul(name: string, description: string | null, enabled = true, persona?: string) {
   return request<Soul>('/souls', {
     method: 'POST',
-    body: JSON.stringify({ name, description, enabled }),
+    body: JSON.stringify({ name, description, enabled, persona }),
+  })
+}
+
+export function generateSoulPersona(name: string, inspiration: string) {
+  return request<{ persona: string }>('/souls/generate-persona', {
+    method: 'POST',
+    body: JSON.stringify({ name, inspiration }),
   })
 }
 
