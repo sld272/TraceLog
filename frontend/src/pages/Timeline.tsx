@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
+  type Attachment,
   type Comment,
   type CommentConversation,
   type CommentMessage,
@@ -40,8 +41,8 @@ export function Timeline() {
     fetchPosts()
   }, [fetchPosts])
 
-  const handleSubmit = async (content: string) => {
-    const result = await createPost(content)
+  const handleSubmit = async (content: string, attachments: Attachment[]) => {
+    const result = await createPost(content, attachments.map((attachment) => attachment.id))
     /* Optimistically add the post to the top */
     const newPost: Post = {
       post_id: result.post_id,
@@ -50,6 +51,7 @@ export function Timeline() {
       importance: 0.5,
       comment_count: 0,
       latest_event_type: 'queued',
+      attachments,
     }
     setPosts((prev) => [newPost, ...prev])
 
@@ -98,6 +100,7 @@ export function Timeline() {
                 importance: detail.post.importance,
                 comment_count: detail.comments.length,
                 latest_event_type: eventType ?? p.latest_event_type,
+                attachments: detail.post.attachments,
               }
             : p,
         ),
@@ -135,7 +138,7 @@ export function Timeline() {
     }
   }
 
-  const handleCommentReply = async (postId: string, soulName: string, content: string) => {
+  const handleCommentReply = async (postId: string, soulName: string, content: string, attachments: Attachment[]) => {
     const optimisticMessage: CommentMessage = {
       id: -Date.now(),
       post_id: postId,
@@ -144,6 +147,7 @@ export function Timeline() {
       content,
       seq: Number.MAX_SAFE_INTEGER,
       created_at: Date.now() / 1000,
+      attachments,
     }
     setPostCommentConversations((prev) => ({
       ...prev,
@@ -159,7 +163,7 @@ export function Timeline() {
     }))
 
     try {
-      const response = await sendCommentMessage(postId, soulName, content)
+      const response = await sendCommentMessage(postId, soulName, content, attachments.map((attachment) => attachment.id))
       setPostCommentConversations((prev) => ({
         ...prev,
         [postId]: {
@@ -221,7 +225,7 @@ export function Timeline() {
               comments={postComments[post.post_id]}
               commentConversations={postCommentConversations[post.post_id]}
               onExpand={() => handleExpand(post.post_id)}
-              onReply={(soulName, content) => handleCommentReply(post.post_id, soulName, content)}
+              onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
             />
           ))}
         </div>

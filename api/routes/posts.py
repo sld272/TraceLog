@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -11,14 +12,15 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from api.deps import get_runtime, run_sync
-from core import db, vectorstore
+from core import attachment_service, db, vectorstore
 from core.app_services import event_service, job_service, public_post_pipeline
 
 router = APIRouter(tags=["posts"])
 
 
 class CreatePostRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=20_000)
+    content: str = Field(default="", max_length=20_000)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=9)
 
 
 @router.get("/health")
@@ -35,9 +37,12 @@ async def health():
 @router.post("/posts")
 async def create_post(request: CreatePostRequest):
     content = request.content.strip()
-    if not content:
+    if not content and not request.attachment_ids:
         raise HTTPException(status_code=422, detail="content 不能为空")
-    created = await run_sync(public_post_pipeline.create_post, content)
+    try:
+        created = await run_sync(public_post_pipeline.create_post, content, request.attachment_ids)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"post_id": created.post_id, "status": "queued", "job_ids": created.job_ids}
 
 
@@ -106,6 +111,7 @@ def _list_posts(limit: int, offset: int) -> list[dict[str, Any]]:
             "importance": row["importance"],
             "comment_count": row["comment_count"],
             "latest_event_type": event_service.latest_event_type(row["id"]),
+            "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(row["id"])],
         }
         for row in rows
     ]
@@ -119,7 +125,7 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
     if post is None:
         return None
     comments = [
-        dict(row)
+        _comment_row_to_dict(row)
         for row in db.query_all(
             """
             SELECT id, post_id, soul_name, role, content, seq, metadata, created_at
@@ -138,11 +144,18 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
             "importance": post["importance"],
             "created_at": post["created_at"],
             "updated_at": post["updated_at"],
+            "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(post_id)],
         },
         "comments": comments,
         "jobs": job_service.list_jobs_for_post(post_id),
         "events": event_service.list_post_events(post_id),
     }
+
+
+def _comment_row_to_dict(row) -> dict[str, Any]:
+    item = dict(row)
+    item["attachments"] = [asdict(attachment) for attachment in attachment_service.list_comment_attachments(int(row["id"]))]
+    return item
 
 
 SSE_TIMEOUT_SECONDS = 120

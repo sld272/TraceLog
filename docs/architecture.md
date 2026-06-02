@@ -59,6 +59,7 @@ raw evidence
 
 - `posts` / `comments`
 - `chat_threads` / `chat_messages`
+- `attachments` 及 `post_attachments` / `comment_attachments` / `chat_message_attachments`
 - `entities` / `post_entities`
 - `emotions`
 - `events`
@@ -72,6 +73,7 @@ raw evidence
 - `posts` 是公开表达和全局反思的主要证据。
 - `comments` 是 post 下按 `(post_id, soul_name, seq)` 分组的扁平评论会话流；`seq=0` 是 SOUL 首评，后续 `seq>0` 是用户追问和 SOUL 回复。
 - `chat_messages` 是私聊的局部对话证据；`comments(seq>0)` 和 `chat_messages` 共同服务当前对话和 SOUL 深反思。
+- `attachments` 保存本地图片元信息；关联表把图片挂到公开 post、评论消息或私聊消息。当前附件只进入 UI 展示，不进入 FTS5/ChromaDB，也不被 LLM 直接读取。
 - entities/emotions/events/relations 是轻反思从公开 post 派生的结构化信号。
 - todos 只从公开 post 抽取。
 
@@ -82,6 +84,8 @@ workspace/
 ├── state.db
 ├── chroma_db/
 ├── user.md
+├── attachments/
+│   └── images/
 ├── souls/
 │   ├── 默认.md
 │   └── 毒舌好友.md
@@ -98,6 +102,7 @@ workspace/
 | 公开 post | `posts` + FTS5 + ChromaDB | 按检索结果注入 | RecordService |
 | 评论会话 | `comments` | 私聊/评论追问中作为相关记忆注入 | ReplyService / CommentService |
 | 私聊消息 | `chat_messages` | 当前线程消息序列 | ChatService |
+| 图片附件 | `attachments` + attachment link tables | UI 展示；当前不注入图片内容 | AttachmentService |
 | 轻反思信号 | entities / emotions / events / relations | 不直接注入 | Reflector |
 | 深反思记录 | `reflections` | 不默认注入 | Reflector |
 | 待办 | `todos` | TodoTool 开启时注入活跃项 | TodoService |
@@ -140,6 +145,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 - unified retrieval 命中的相关记忆：公开 posts、公开评论对话、当前 SOUL 的私聊片段。
 - 当前 thread 的最近消息序列。
 - 活跃 todos（工具开启时）。
+- 如果当前消息带图片且未启用识图，消息文本中只追加“有图但不能查看内容”的边界提示，避免模型假装看图。
 
 私聊消息不写 posts，不进 FTS5，不触发轻反思，不直接更新全局 `user.md`；但会进入 ChromaDB 统一检索池，并且只允许当前 SOUL 检索自己的私聊。
 
@@ -154,6 +160,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 - 当前 SOUL 的首条回复。
 - 当前评论会话的最近追问/回复消息序列。
 - 活跃 todos（工具开启时）。
+- 如果当前消息带图片且未启用识图，消息文本中只追加“有图但不能查看内容”的边界提示，避免模型假装看图。
 
 当前 post 本身会从 related post ids 中排除，避免重复注入。
 

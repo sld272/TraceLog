@@ -18,7 +18,8 @@ router = APIRouter(prefix="/comments", tags=["comments"])
 
 
 class SendCommentMessageRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=20_000)
+    content: str = Field(default="", max_length=20_000)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=9)
 
 
 @router.get("/posts/{post_id}/conversations")
@@ -68,11 +69,11 @@ async def stream_comment_conversation_events(
 @router.post("/posts/{post_id}/souls/{soul_name}/messages")
 async def send_comment_message(post_id: str, soul_name: str, request: SendCommentMessageRequest):
     body = request.content.strip()
-    if not body:
+    if not body and not request.attachment_ids:
         raise HTTPException(status_code=422, detail="content 不能为空")
     runtime = get_runtime()
     try:
-        result = await run_sync(comment_service.call_comment_reply, post_id, soul_name, body, runtime.client, runtime.model)
+        result = await run_sync(comment_service.call_comment_reply, post_id, soul_name, body, runtime.client, runtime.model, request.attachment_ids)
         conversation = await run_sync(comment_service.get_conversation, post_id, soul_name)
         messages = await run_sync(comment_service.list_conversation_messages, post_id, soul_name)
     except ValueError as exc:

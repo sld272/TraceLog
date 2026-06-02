@@ -8,7 +8,7 @@ from datetime import datetime
 from core import db, logging_service
 
 
-def save_post(content: str, *, index_immediately: bool = True) -> str:
+def save_post(content: str, *, index_immediately: bool = True, track_embedding: bool = True) -> str:
     """Save a post to SQLite, then try to index it in ChromaDB."""
     now = datetime.now().astimezone()
     post_id = _next_post_id(now.strftime("%Y%m%d"))
@@ -22,15 +22,16 @@ def save_post(content: str, *, index_immediately: bool = True) -> str:
             """,
             (post_id, now.isoformat(), body, now.timestamp(), now.timestamp()),
         )
-        conn.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            (
-                f"pending_embedding:{post_id}",
-                _pending_embedding_payload(post_id, body, "pending before embedding"),
-            ),
-        )
+        if track_embedding:
+            conn.execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+                (
+                    f"pending_embedding:{post_id}",
+                    _pending_embedding_payload(post_id, body, "pending before embedding"),
+                ),
+            )
 
-    if index_immediately:
+    if index_immediately and track_embedding:
         try:
             index_post_embedding(post_id)
         except KeyboardInterrupt:

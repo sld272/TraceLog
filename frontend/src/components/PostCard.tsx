@@ -1,10 +1,13 @@
 import { useState, type KeyboardEvent } from 'react'
 import {
+  type Attachment,
   type Comment,
   type CommentConversation,
   type CommentMessage,
   type Post,
 } from '@/api/client'
+import { ImageGrid } from './ImageGrid'
+import { ImageUploader } from './ImageUploader'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './PostCard.module.css'
 
@@ -20,7 +23,7 @@ interface PostCardProps {
   comments?: Comment[]
   commentConversations?: Record<string, CommentConversationState>
   onExpand?: () => void
-  onReply?: (soulName: string, content: string) => Promise<void>
+  onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
 }
 
 export function PostCard({
@@ -51,9 +54,8 @@ export function PostCard({
         )}
       </div>
 
-      <div className={styles.content}>
-        {post.content}
-      </div>
+      {post.content && <div className={styles.content}>{post.content}</div>}
+      <ImageGrid attachments={post.attachments ?? []} />
 
       {comments.length > 0 && (
         <div className={styles.comments}>
@@ -92,18 +94,20 @@ function CommentPreview({
 }: {
   comment: Comment
   conversation?: CommentConversationState
-  onReply?: (soulName: string, content: string) => Promise<void>
+  onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
 }) {
   const [reply, setReply] = useState('')
+  const [attachments, setAttachments] = useState<Attachment[]>([])
   const soulName = comment.soul_name
   const hue = soulName.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
   const trimmed = reply.trim()
   const submitShortcutTitle = getSubmitShortcutTitle()
 
   const handleSubmit = async () => {
-    if (!trimmed || conversation?.sending || !onReply) return
-    await onReply(soulName, trimmed)
+    if ((!trimmed && attachments.length === 0) || conversation?.sending || !onReply) return
+    await onReply(soulName, trimmed, attachments)
     setReply('')
+    setAttachments([])
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -124,7 +128,8 @@ function CommentPreview({
         </span>
         <div className={styles.commentBody}>
           <span className={styles.soulName}>{soulName}</span>
-          <p className={styles.commentText}>{comment.content}</p>
+          {comment.content && <p className={styles.commentText}>{comment.content}</p>}
+          <ImageGrid attachments={comment.attachments ?? []} />
         </div>
       </div>
 
@@ -137,21 +142,29 @@ function CommentPreview({
       )}
 
       <div className={styles.replyBox}>
-        <textarea
-          className={styles.replyInput}
-          value={reply}
-          onChange={(event) => setReply(event.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={`回复 ${soulName}...`}
-          rows={1}
-          disabled={conversation?.sending}
-          aria-label={`回复 ${soulName}`}
-        />
+        <div className={styles.replyInputGroup}>
+          <textarea
+            className={styles.replyInput}
+            value={reply}
+            onChange={(event) => setReply(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={`回复 ${soulName}...`}
+            rows={1}
+            disabled={conversation?.sending}
+            aria-label={`回复 ${soulName}`}
+          />
+          <ImageUploader
+            attachments={attachments}
+            compact
+            disabled={conversation?.sending}
+            onChange={setAttachments}
+          />
+        </div>
         <span className={styles.replyButtonWrap} title={submitShortcutTitle}>
           <button
             className={styles.replyButton}
             onClick={handleSubmit}
-            disabled={!trimmed || conversation?.sending || !onReply}
+            disabled={(!trimmed && attachments.length === 0) || conversation?.sending || !onReply}
             aria-label={`发送给 ${soulName}`}
           >
             {conversation?.sending ? <LoadingIndicator /> : <SendIcon />}
@@ -168,7 +181,8 @@ function ThreadMessage({ message, soulName }: { message: CommentMessage; soulNam
   return (
     <div className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
       <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
-      <p>{message.content}</p>
+      {message.content && <p>{message.content}</p>}
+      <ImageGrid attachments={message.attachments ?? []} />
     </div>
   )
 }

@@ -18,7 +18,8 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 class SendChatMessageRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=20_000)
+    content: str = Field(default="", max_length=20_000)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=9)
 
 
 @router.get("/threads/{thread_id}")
@@ -63,12 +64,12 @@ async def list_chat_threads(soul_name: str, all_souls: bool = False):
 @router.post("/{soul_name}/messages")
 async def send_chat_message(soul_name: str, request: SendChatMessageRequest):
     body = request.content.strip()
-    if not body:
+    if not body and not request.attachment_ids:
         raise HTTPException(status_code=422, detail="content 不能为空")
     runtime = get_runtime()
     try:
         thread = await run_sync(chat_service.get_or_create_thread, soul_name)
-        result = await run_sync(chat_service.call_chat_reply, thread.id, body, runtime.client, runtime.model)
+        result = await run_sync(chat_service.call_chat_reply, thread.id, body, runtime.client, runtime.model, request.attachment_ids)
         messages = await run_sync(chat_service.list_thread_messages, thread.id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -1,13 +1,16 @@
 import { useState, useRef, useEffect } from 'react'
+import { type Attachment } from '@/api/client'
+import { ImageUploader } from './ImageUploader'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './Composer.module.css'
 
 interface ComposerProps {
-  onSubmit: (content: string) => Promise<void>
+  onSubmit: (content: string, attachments: Attachment[]) => Promise<void>
 }
 
 export function Composer({ onSubmit }: ComposerProps) {
   const [content, setContent] = useState('')
+  const [attachments, setAttachments] = useState<Attachment[]>([])
   const [submitting, setSubmitting] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const submitShortcutTitle = getSubmitShortcutTitle()
@@ -23,11 +26,12 @@ export function Composer({ onSubmit }: ComposerProps) {
 
   const handleSubmit = async () => {
     const trimmed = content.trim()
-    if (!trimmed || submitting) return
+    if ((!trimmed && attachments.length === 0) || submitting) return
     setSubmitting(true)
     try {
-      await onSubmit(trimmed)
+      await onSubmit(trimmed, attachments)
       setContent('')
+      setAttachments([])
     } finally {
       setSubmitting(false)
     }
@@ -53,15 +57,22 @@ export function Composer({ onSubmit }: ComposerProps) {
         disabled={submitting}
         aria-label="发帖内容"
       />
+      <ImageUploader
+        attachments={attachments}
+        disabled={submitting}
+        onChange={setAttachments}
+      />
       <div className={styles.footer}>
-        {content.length > 0 && (
-          <span className={styles.hint}>{content.length} 字</span>
+        {(content.length > 0 || attachments.length > 0) && (
+          <span className={styles.hint}>
+            {content.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
+          </span>
         )}
         <span className={styles.submitWrap} title={submitShortcutTitle}>
           <button
             className={styles.submitBtn}
             onClick={handleSubmit}
-            disabled={!content.trim() || submitting}
+            disabled={(!content.trim() && attachments.length === 0) || submitting}
             aria-label="发布"
           >
             {submitting ? (

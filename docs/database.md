@@ -21,6 +21,8 @@
 - `posts_fts`：unicode61 tokenizer，用于英文、数字和一般文本关键词检索。
 - `posts_fts_trigram`：trigram tokenizer，用于中文模糊检索。
 - `comments`：post 下某个 SOUL 的扁平评论会话流。`seq=0` 是首评，`seq>0` 是用户追问和 SOUL 回复。
+- `attachments`：本地图片附件元信息，包括路径、MIME、尺寸、大小、sha256 和链接时间。
+- `post_attachments` / `comment_attachments` / `chat_message_attachments`：把附件分别挂到公开 post、评论消息和私聊消息。
 
 公开 post 是全局检索、轻反思、TodoTool 和全局深反思的主要证据来源。
 
@@ -30,6 +32,8 @@
 - `chat_threads` / `chat_messages`：某个 SOUL 的一对一私聊。
 
 评论会话和私聊消息不进入 FTS5，但会进入 ChromaDB 统一检索池。私聊消息只允许当前 SOUL 检索；公开评论对话可以作为所有 SOUL 的公开背景，但 prompt 中必须标注说话人。
+
+图片附件当前不进入 FTS5 或 ChromaDB；未启用识图时，只在 LLM 上下文中保留“有图片但不能查看内容”的边界提示。
 
 ### 2.3 派生结构化信号
 
@@ -148,7 +152,7 @@ patch evidence 必须是本次输入中的 `chat_message:<id>` 或 `comment_mess
 Schema 使用外键和 trigger 保持主要数据一致性：
 
 - 删除 SOUL 会级联删除该 SOUL 的 comments、chat threads 和 SOUL memory revisions。
-- 删除 post 会级联删除 comments、todo source 关联和 FTS 索引。
+- 删除 post 会级联删除 comments、post attachment links、todo source 关联和 FTS 索引；附件文件本身仍由孤儿附件清理逻辑处理。
 - FTS trigger 负责公开 post 正文索引同步。
 
 私聊和评论追问消息本身不会被自动提升为全局画像；只有 SOUL 深反思成功并通过 patch gate 后，才会写入对应 SOUL 的长期 Markdown 记忆。

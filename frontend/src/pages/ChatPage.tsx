@@ -1,11 +1,14 @@
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
+  type Attachment,
   type ChatMessage,
   type ChatThread,
   getChatThread,
   listChatThreads,
   sendChatMessage,
 } from '@/api/client'
+import { ImageGrid } from '@/components/ImageGrid'
+import { ImageUploader } from '@/components/ImageUploader'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './WorkspacePages.module.css'
 
@@ -17,6 +20,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
   const [thread, setThread] = useState<ChatThread | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
+  const [attachments, setAttachments] = useState<Attachment[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -47,6 +51,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
 
   useEffect(() => {
     setDraft('')
+    setAttachments([])
     fetchThread()
   }, [fetchThread])
 
@@ -60,7 +65,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
 
   const submitDraft = async () => {
     const body = draft.trim()
-    if (!body || sending) return
+    if ((!body && attachments.length === 0) || sending) return
 
     const optimistic: ChatMessage = {
       id: Date.now() * -1,
@@ -68,12 +73,14 @@ export function ChatPage({ soulName }: ChatPageProps) {
       role: 'user',
       content: body,
       created_at: Date.now() / 1000,
+      attachments,
     }
     setMessages((prev) => [...prev, optimistic])
     setDraft('')
+    setAttachments([])
     setSending(true)
     try {
-      const response = await sendChatMessage(soulName, body)
+      const response = await sendChatMessage(soulName, body, attachments.map((attachment) => attachment.id))
       setThread(response.thread)
       setMessages(response.messages)
       setError(response.result.ok ? null : response.result.error ?? '回复失败')
@@ -118,24 +125,35 @@ export function ChatPage({ soulName }: ChatPageProps) {
         </div>
 
         <form className={styles.chatForm} onSubmit={handleSubmit}>
-          <textarea
-            ref={chatInputRef}
-            className={styles.chatInput}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault()
-                submitDraft()
-              }
-            }}
-            placeholder={`和 ${soulName} 说点什么...`}
-            disabled={sending}
-            rows={2}
-            aria-label="私聊消息"
-          />
+          <div className={styles.chatInputGroup}>
+            <textarea
+              ref={chatInputRef}
+              className={styles.chatInput}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault()
+                  submitDraft()
+                }
+              }}
+              placeholder={`和 ${soulName} 说点什么...`}
+              disabled={sending}
+              rows={2}
+              aria-label="私聊消息"
+            />
+            <ImageUploader
+              attachments={attachments}
+              disabled={sending}
+              onChange={setAttachments}
+            />
+          </div>
           <span className={styles.buttonTooltipWrap} title={submitShortcutTitle}>
-            <button className={styles.chatSubmitButton} disabled={!draft.trim() || sending} aria-label="发送">
+            <button
+              className={styles.chatSubmitButton}
+              disabled={(!draft.trim() && attachments.length === 0) || sending}
+              aria-label="发送"
+            >
               {sending ? <LoadingDots /> : <SendIcon />}
             </button>
           </span>
@@ -170,6 +188,7 @@ function MessageBubble({ soulName, message }: { soulName: string; message: ChatM
     <article className={`${styles.message} ${isUser ? styles.messageUser : styles.messageAssistant}`}>
       <span className={styles.messageRole}>{isUser ? '我' : soulName}</span>
       {message.content}
+      <ImageGrid attachments={message.attachments ?? []} />
     </article>
   )
 }

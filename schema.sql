@@ -85,6 +85,52 @@ CREATE INDEX IF NOT EXISTS idx_comments_post_soul
 CREATE INDEX IF NOT EXISTS idx_comments_soul_created
     ON comments(soul_name, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS attachments (
+    id                TEXT PRIMARY KEY,
+    file_path         TEXT NOT NULL,
+    mime_type         TEXT NOT NULL CHECK(mime_type IN ('image/jpeg', 'image/png')),
+    file_size         INTEGER NOT NULL,
+    width             INTEGER NOT NULL,
+    height            INTEGER NOT NULL,
+    sha256            TEXT NOT NULL,
+    original_filename TEXT,
+    linked_at         REAL,
+    created_at        REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachments_sha256 ON attachments(sha256);
+CREATE INDEX IF NOT EXISTS idx_attachments_linked_created ON attachments(linked_at, created_at);
+
+CREATE TABLE IF NOT EXISTS post_attachments (
+    post_id       TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (post_id, attachment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_post_attachments_post
+    ON post_attachments(post_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS comment_attachments (
+    comment_id    INTEGER NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+    attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (comment_id, attachment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comment_attachments_comment
+    ON comment_attachments(comment_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS chat_message_attachments (
+    message_id    INTEGER NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+    attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+    sort_order    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (message_id, attachment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_message_attachments_message
+    ON chat_message_attachments(message_id, sort_order);
+
 CREATE TABLE IF NOT EXISTS entities (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     type          TEXT NOT NULL,

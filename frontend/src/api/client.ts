@@ -22,6 +22,7 @@ export interface Post {
   importance: number
   comment_count: number
   latest_event_type: string | null
+  attachments: Attachment[]
 }
 
 export interface Comment {
@@ -33,6 +34,7 @@ export interface Comment {
   seq: number
   metadata: string | null
   created_at: number
+  attachments: Attachment[]
 }
 
 export interface PostDetail {
@@ -43,10 +45,25 @@ export interface PostDetail {
     importance: number
     created_at: number
     updated_at: number
+    attachments: Attachment[]
   }
   comments: Comment[]
   jobs: unknown[]
   events: unknown[]
+}
+
+export interface Attachment {
+  id: string
+  file_path: string
+  mime_type: string
+  file_size: number
+  width: number
+  height: number
+  sha256: string
+  original_filename: string | null
+  linked_at: number | null
+  created_at: number
+  url: string
 }
 
 export interface Soul {
@@ -87,6 +104,7 @@ export interface ChatMessage {
   role: string
   content: string
   created_at: number
+  attachments: Attachment[]
 }
 
 export interface CommentConversation {
@@ -106,6 +124,7 @@ export interface CommentMessage {
   content: string
   seq: number
   created_at: number
+  attachments: Attachment[]
 }
 
 export type PostEventType =
@@ -242,11 +261,29 @@ export function getPost(postId: string) {
   return request<PostDetail>(`/posts/${postId}`)
 }
 
-export function createPost(content: string) {
+export function createPost(content: string, attachmentIds: string[] = []) {
   return request<{ post_id: string; status: string; job_ids: number[] }>(
     '/posts',
-    { method: 'POST', body: JSON.stringify({ content }) },
+    { method: 'POST', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
   )
+}
+
+export async function uploadAttachment(file: File): Promise<Attachment> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${BASE}/attachments/upload`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail || `HTTP ${res.status}`)
+  }
+  return res.json()
+}
+
+export function attachmentUrl(attachment: Attachment): string {
+  return `${BASE}${attachment.url}`
 }
 
 /* SSE stream for post events */
@@ -357,10 +394,10 @@ export function getChatThread(threadId: number, limit = 30) {
   )
 }
 
-export function sendChatMessage(soulName: string, content: string) {
+export function sendChatMessage(soulName: string, content: string, attachmentIds: string[] = []) {
   return request<{ thread: ChatThread; result: ChatReplyResult; messages: ChatMessage[] }>(
     `/chat/${soulName}/messages`,
-    { method: 'POST', body: JSON.stringify({ content }) },
+    { method: 'POST', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
   )
 }
 
@@ -402,14 +439,14 @@ export function getCommentConversation(postId: string, soulName: string, limit =
   )
 }
 
-export function sendCommentMessage(postId: string, soulName: string, content: string) {
+export function sendCommentMessage(postId: string, soulName: string, content: string, attachmentIds: string[] = []) {
   return request<{
     conversation: CommentConversation
     result: CommentReplyResult
     messages: CommentMessage[]
   }>(
     `/comments/posts/${encodeURIComponent(postId)}/souls/${encodeURIComponent(soulName)}/messages`,
-    { method: 'POST', body: JSON.stringify({ content }) },
+    { method: 'POST', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
   )
 }
 

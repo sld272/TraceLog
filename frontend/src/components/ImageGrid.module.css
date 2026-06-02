@@ -1,0 +1,55 @@
+.grid {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.compact {
+  margin-top: 0;
+  max-width: 320px;
+}
+
+.single {
+  max-width: min(420px, 100%);
+}
+
+.row {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 120px));
+}
+
+.grid2,
+.grid3 {
+  max-width: 380px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.item {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-soft);
+}
+
+.single .item {
+  max-height: 420px;
+}
+
+.row .item,
+.grid2 .item,
+.grid3 .item {
+  aspect-ratio: 1;
+}
+
+.item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.single .item img {
+  height: auto;
+  max-height: 420px;
+  object-fit: contain;
+}

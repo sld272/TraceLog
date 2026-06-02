@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import context_builder, db, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service
+from core import attachment_service, context_builder, db, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
@@ -18,29 +18,32 @@ class CreatedPost:
     job_ids: list[int]
 
 
-def create_post(content: str) -> CreatedPost:
+def create_post(content: str, attachment_ids: list[str] | None = None) -> CreatedPost:
     """Persist one public post and enqueue its API background pipeline."""
     body = content.strip()
-    if not body:
+    attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    if not body and not attachment_ids:
         raise ValueError("content 不能为空")
     if len(body) > 20_000:
         raise ValueError("content 不能超过 20000 字符")
 
-    post_id = record_service.save_post(body, index_immediately=False)
+    post_id = record_service.save_post(body, index_immediately=False, track_embedding=bool(body))
+    attachment_service.attach_to_post(post_id, attachment_ids)
     event_service.append_post_event(post_id, "post_created", {"post_id": post_id})
 
-    job_ids = [
-        job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": post_id}),
-        job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id, "content": body}),
-    ]
-    if tool_config_service.is_tool_enabled("todo"):
+    job_ids = []
+    if body:
+        job_ids.append(job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": post_id}))
+    job_ids.append(job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id, "content": body}))
+    if body and tool_config_service.is_tool_enabled("todo"):
         job_ids.append(job_service.enqueue(job_service.TYPE_RUN_TODO_TOOL, {"post_id": post_id}))
-    job_ids.extend(
-        [
-            job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id}),
-            job_service.enqueue(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, {"post_id": post_id}),
-        ]
-    )
+    if body:
+        job_ids.extend(
+            [
+                job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id}),
+                job_service.enqueue(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, {"post_id": post_id}),
+            ]
+        )
     return CreatedPost(post_id=post_id, job_ids=job_ids)
 
 
@@ -81,15 +84,17 @@ def _run_index_post_embedding(job_id: int, payload: dict[str, Any]) -> None:
 def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
     post_id = _required_post_id(payload)
     content = _post_content(post_id)
+    attachment_count = len(attachment_service.list_post_attachments(post_id))
+    llm_content = attachment_service.content_for_llm(content, attachment_count)
     rewritten_query = query_rewriter.rewrite_query(
         client,
         model,
-        content,
+        llm_content,
         "public_post",
         trace_context={"channel": "public_post", "post_id": post_id},
     )
     relevant_ids = retrieval.hybrid_search(
-        content,
+        llm_content,
         k=3,
         semantic_query=rewritten_query.semantic_query,
         fts_keywords=rewritten_query.keywords,
@@ -97,7 +102,7 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
     )
     built_context = context_builder.build_context(
         relevant_post_ids=relevant_ids,
-        query=content,
+        query=llm_content,
         fts_keywords=rewritten_query.keywords,
         trace_context={"channel": "public_post", "post_id": post_id},
     )
@@ -109,7 +114,7 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
 
     for soul in built_context.enabled_souls:
         event_service.append_post_event(post_id, "reply_started", {"soul_name": soul.name}, job_id=job_id)
-    results = reply_service.fanout(post_id, content, client, model, built_context)
+    results = reply_service.fanout(post_id, llm_content, client, model, built_context)
     for result in results:
         event_type = "reply_succeeded" if result.ok else "reply_failed"
         event_service.append_post_event(

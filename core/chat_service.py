@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from core import db, evidence_service, logging_service, profile_service, record_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service
+from dataclasses import dataclass, replace
+from core import attachment_service, db, evidence_service, logging_service, profile_service, record_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service
+from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
@@ -30,6 +31,7 @@ class ChatMessage:
     role: str
     content: str
     created_at: float
+    attachments: list[Attachment]
 
 
 @dataclass(frozen=True)
@@ -152,11 +154,11 @@ def list_thread_messages_after(thread_id: int, after_id: int, limit: int = 100) 
     return [_message_from_row(row) for row in rows]
 
 
-def append_user_message(thread_id: int, content: str) -> ChatMessage:
+def append_user_message(thread_id: int, content: str, attachment_ids: list[str] | None = None) -> ChatMessage:
     """Append a user message to a writable chat thread."""
     thread = get_thread(thread_id)
     _assert_soul_writable(thread.soul_name)
-    return _append_message(thread_id, "user", content)
+    return _append_message(thread_id, "user", content, attachment_ids=attachment_ids)
 
 
 def build_chat_context(
@@ -169,6 +171,7 @@ def build_chat_context(
     thread = get_thread(thread_id)
     soul = _load_soul_context(thread.soul_name)
     messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT)
+    llm_messages = [_message_for_llm(message) for message in messages]
     retrieval_query = _build_retrieval_query(user_message, messages)
     sections: list[str] = []
 
@@ -212,7 +215,7 @@ def build_chat_context(
         thread=thread,
         soul=soul,
         context=context_text,
-        messages=messages,
+        messages=llm_messages,
         retrieval_query=retrieval_query,
         relevant_post_ids=relevant_post_ids,
     )
@@ -223,10 +226,13 @@ def call_chat_reply(
     user_message: str,
     client: LLMClient,
     model: str,
+    attachment_ids: list[str] | None = None,
 ) -> ChatReplyResult:
     """Append user input, call one SOUL, and persist the assistant reply."""
-    user_message_row = append_user_message(thread_id, user_message)
-    chat_context = build_chat_context(thread_id, user_message, client, model)
+    attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    user_message_row = append_user_message(thread_id, user_message, attachment_ids=attachment_ids)
+    llm_user_message = attachment_service.content_for_llm(user_message, len(user_message_row.attachments))
+    chat_context = build_chat_context(thread_id, llm_user_message, client, model)
     data = reply_router.call_soul_chat_reply(
         client,
         model,
@@ -280,10 +286,17 @@ def call_chat_reply(
     )
 
 
-def _append_message(thread_id: int, role: str, content: str) -> ChatMessage:
+def _append_message(
+    thread_id: int,
+    role: str,
+    content: str,
+    *,
+    attachment_ids: list[str] | None = None,
+) -> ChatMessage:
     thread = get_thread(thread_id)
     body = content.strip()
-    if not body:
+    attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    if not body and not attachment_ids:
         raise ValueError("私聊消息不能为空")
     now = db.now_ts()
     with db.transaction() as conn:
@@ -303,6 +316,8 @@ def _append_message(thread_id: int, role: str, content: str) -> ChatMessage:
             """,
             (now, now, thread_id),
         )
+    message = get_message(message_id)
+    attachment_service.attach_to_chat_message(message.id, attachment_ids)
     message = get_message(message_id)
     record_service.index_chat_message_embedding(message.id, message.thread_id, thread.soul_name, message.role, message.content)
     return message
@@ -400,10 +415,17 @@ def _thread_from_row(row) -> ChatThread:
 
 
 def _message_from_row(row) -> ChatMessage:
+    message_id = int(row["id"])
     return ChatMessage(
-        id=row["id"],
+        id=message_id,
         thread_id=row["thread_id"],
         role=row["role"],
         content=row["content"],
         created_at=row["created_at"],
+        attachments=attachment_service.list_chat_message_attachments(message_id),
     )
+
+
+def _message_for_llm(message: ChatMessage) -> ChatMessage:
+    content = attachment_service.content_for_llm(message.content, len(message.attachments))
+    return replace(message, content=content)

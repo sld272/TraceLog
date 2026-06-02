@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import io
 from pathlib import Path
 
-from core import db, query_rewriter, record_service, retrieval, tool_config_service
+from PIL import Image
+
+from core import attachment_service, db, query_rewriter, record_service, retrieval, tool_config_service
 from core.app_services import event_service, job_service, public_post_pipeline
 from tests.helpers import require_not_none
 
@@ -68,6 +71,15 @@ class PublicPostPipelineTest(unittest.TestCase):
 
         self.assertNotIn("run_todo_tool", [job["type"] for job in jobs])
 
+    def test_image_only_post_enqueues_reply_without_text_indexing_jobs(self) -> None:
+        attachment = attachment_service.upload_image(_image_bytes(), content_type="image/png")
+
+        created = public_post_pipeline.create_post("", [attachment.id])
+        jobs = job_service.list_jobs_for_post(created.post_id)
+
+        self.assertEqual(["generate_post_replies"], [job["type"] for job in jobs])
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_embedding:{created.post_id}",)))
+
     def test_index_post_embedding_job_indexes_and_emits_events(self) -> None:
         fake_vectorstore = FakeVectorStore()
         record_service._vectorstore = lambda: fake_vectorstore
@@ -104,3 +116,10 @@ class PublicPostPipelineTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _image_bytes() -> bytes:
+    image = Image.new("RGB", (8, 8), color=(10, 20, 30))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()

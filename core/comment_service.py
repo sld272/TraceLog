@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from core import (
     db,
+    attachment_service,
     evidence_service,
     logging_service,
     profile_service,
@@ -16,6 +17,7 @@ from core import (
     todo_service,
     tool_config_service,
 )
+from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
@@ -45,6 +47,7 @@ class CommentMessage:
     content: str
     seq: int
     created_at: float
+    attachments: list[Attachment]
 
 
 @dataclass(frozen=True)
@@ -134,7 +137,13 @@ def list_conversation_messages_after(
     return [_message_from_row(row) for row in rows]
 
 
-def append_comment(post_id: str, soul_name: str, role: str, content: str) -> CommentMessage:
+def append_comment(
+    post_id: str,
+    soul_name: str,
+    role: str,
+    content: str,
+    attachment_ids: list[str] | None = None,
+) -> CommentMessage:
     if role not in {"user", "assistant"}:
         raise ValueError(f"非法评论角色：{role}")
     _assert_soul_writable(soul_name)
@@ -142,7 +151,8 @@ def append_comment(post_id: str, soul_name: str, role: str, content: str) -> Com
     if _get_root_comment(post_id, soul_name) is None:
         raise ValueError(f"没有找到 {soul_name} 对 post {post_id} 的首条回复")
     body = content.strip()
-    if not body:
+    attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    if not body and not attachment_ids:
         raise ValueError("评论消息不能为空")
     now = db.now_ts()
     with db.immediate_transaction() as conn:
@@ -159,6 +169,7 @@ def append_comment(post_id: str, soul_name: str, role: str, content: str) -> Com
             (post_id, soul_name, role, body, seq, now),
         )
         comment_id = db.require_lastrowid(cursor, "comment insert")
+    attachment_service.attach_to_comment(comment_id, attachment_ids)
     message = get_message(comment_id)
     record_service.index_comment_embedding(message.id, message.post_id, message.soul_name, message.role, message.seq, message.content)
     return message
@@ -174,6 +185,7 @@ def build_comment_context(
     conversation = get_conversation(post_id, soul_name)
     soul = _load_soul_context(soul_name)
     messages = list_conversation_messages(post_id, soul_name, limit=COMMENT_HISTORY_LIMIT, include_root=False)
+    llm_messages = [_message_for_llm(message) for message in messages]
     sections: list[str] = []
 
     profile = profile_service.read_profile().strip()
@@ -233,7 +245,7 @@ def build_comment_context(
         conversation=conversation,
         soul=soul,
         context=context_text,
-        messages=messages,
+        messages=llm_messages,
         retrieval_query=retrieval_query,
         relevant_post_ids=relevant_post_ids,
         retrieval_hits=retrieval_hits,
@@ -246,9 +258,12 @@ def call_comment_reply(
     user_message: str,
     client: LLMClient,
     model: str,
+    attachment_ids: list[str] | None = None,
 ) -> CommentReplyResult:
-    user_message_row = append_comment(post_id, soul_name, "user", user_message)
-    comment_context = build_comment_context(post_id, soul_name, user_message, client, model)
+    attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    user_message_row = append_comment(post_id, soul_name, "user", user_message, attachment_ids=attachment_ids)
+    llm_user_message = attachment_service.content_for_llm(user_message, len(user_message_row.attachments))
+    comment_context = build_comment_context(post_id, soul_name, llm_user_message, client, model)
     data = reply_router.call_soul_comment_reply(
         client,
         model,
@@ -390,15 +405,22 @@ def _conversation_from_root(post_id: str, soul_name: str, root_comment) -> Comme
 
 
 def _message_from_row(row) -> CommentMessage:
+    message_id = int(row["id"])
     return CommentMessage(
-        id=int(row["id"]),
+        id=message_id,
         post_id=row["post_id"],
         soul_name=row["soul_name"],
         role=row["role"],
         content=row["content"],
         seq=int(row["seq"]),
         created_at=float(row["created_at"]),
+        attachments=attachment_service.list_comment_attachments(message_id),
     )
+
+
+def _message_for_llm(message: CommentMessage) -> CommentMessage:
+    content = attachment_service.content_for_llm(message.content, len(message.attachments))
+    return replace(message, content=content)
 
 
 def _build_comment_retrieval_query(post, messages: list[CommentMessage], user_message: str) -> str:

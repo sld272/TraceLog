@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -8,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
+
+from PIL import Image
 
 from core import db, logging_service, profile_service, retrieval, soul_memory_service, soul_service
 from core.app_services import job_service
@@ -125,6 +128,23 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, memory_response.status_code)
         self.assertIn("API 里写入的记忆", memory_response.json()["content"])
         self.assertIn("测试好友", [item["name"] for item in list_response.json()])
+
+    def test_upload_attachment_and_create_image_only_post(self) -> None:
+        with self._client() as client:
+            upload_response = client.post(
+                "/attachments/upload",
+                files={"file": ("photo.png", _image_bytes(), "image/png")},
+            )
+            attachment_id = upload_response.json()["id"]
+            create_response = client.post("/posts", json={"content": "", "attachment_ids": [attachment_id]})
+            list_response = client.get("/posts")
+
+        self.assertEqual(200, upload_response.status_code)
+        self.assertEqual("image/png", upload_response.json()["mime_type"])
+        self.assertEqual(200, create_response.status_code)
+        post = list_response.json()[0]
+        self.assertEqual("", post["content"])
+        self.assertEqual([attachment_id], [attachment["id"] for attachment in post["attachments"]])
 
     def test_generate_soul_route_returns_markdown(self) -> None:
         generated = {
@@ -296,6 +316,13 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("id: 1\n", payload)
         self.assertIn("event: comment_message\n", payload)
         self.assertIn('"content": "继续说。"', payload)
+
+
+def _image_bytes() -> bytes:
+    image = Image.new("RGB", (10, 10), color=(50, 100, 150))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 
 if __name__ == "__main__":
