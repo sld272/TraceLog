@@ -19,6 +19,16 @@ import styles from './SettingsPage.module.css'
 type SettingsTab = 'model' | 'souls' | 'data'
 type CreateSoulMode = 'ai' | 'markdown'
 
+interface AiSoulDraft {
+  name: string
+  inspiration: string
+}
+
+interface MarkdownSoulDraft {
+  name: string
+  content: string
+}
+
 interface SettingsPageProps {
   onSoulsChanged?: () => void
 }
@@ -60,8 +70,8 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
   const [souls, setSouls] = useState<Soul[]>([])
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null)
   const [createSoulMode, setCreateSoulMode] = useState<CreateSoulMode>('ai')
-  const [newSoulName, setNewSoulName] = useState('')
-  const [newSoulContent, setNewSoulContent] = useState('')
+  const [aiSoulDraft, setAiSoulDraft] = useState<AiSoulDraft>({ name: '', inspiration: '' })
+  const [markdownSoulDraft, setMarkdownSoulDraft] = useState<MarkdownSoulDraft>({ name: '', content: '' })
   const [loading, setLoading] = useState(true)
   const [savingModel, setSavingModel] = useState(false)
   const [savingSoul, setSavingSoul] = useState<string | null>(null)
@@ -157,8 +167,9 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
 
   const handleCreateSoul = async (event: FormEvent) => {
     event.preventDefault()
-    const name = newSoulName.trim()
-    const content = newSoulContent.trim()
+    const draft = createSoulMode === 'ai' ? aiSoulDraft : markdownSoulDraft
+    const name = draft.name.trim()
+    const content = (createSoulMode === 'ai' ? aiSoulDraft.inspiration : markdownSoulDraft.content).trim()
     if (!name || !content) return
     setSavingSoul('new')
     setNotice(null)
@@ -169,8 +180,11 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
         : content
       const created = await createSoul(name, null, true, persona)
       setSouls((items) => [...items, created].sort((a, b) => a.sort_order - b.sort_order))
-      setNewSoulName('')
-      setNewSoulContent('')
+      if (createSoulMode === 'ai') {
+        setAiSoulDraft({ name: '', inspiration: '' })
+      } else {
+        setMarkdownSoulDraft({ name: '', content: '' })
+      }
       setNotice(`已创建 ${created.name}`)
       onSoulsChanged?.()
     } catch (err) {
@@ -182,16 +196,33 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
 
   const handleCreateSoulModeChange = (mode: CreateSoulMode) => {
     setCreateSoulMode(mode)
-    if (mode === 'markdown' && !newSoulContent.trim()) {
-      setNewSoulContent(newSoulMarkdownTemplate(newSoulName))
+    if (mode === 'markdown' && !markdownSoulDraft.content.trim()) {
+      setMarkdownSoulDraft((draft) => ({
+        ...draft,
+        content: newSoulMarkdownTemplate(draft.name),
+      }))
     }
   }
 
   const handleNewSoulNameChange = (name: string) => {
-    setNewSoulName(name)
-    if (createSoulMode === 'markdown' && isDefaultSoulTemplate(newSoulContent, newSoulName)) {
-      setNewSoulContent(newSoulMarkdownTemplate(name))
+    if (createSoulMode === 'ai') {
+      setAiSoulDraft((draft) => ({ ...draft, name }))
+      return
     }
+    setMarkdownSoulDraft((draft) => ({
+      name,
+      content: isDefaultSoulTemplate(draft.content, draft.name)
+        ? newSoulMarkdownTemplate(name)
+        : draft.content,
+    }))
+  }
+
+  const handleNewSoulContentChange = (content: string) => {
+    if (createSoulMode === 'ai') {
+      setAiSoulDraft((draft) => ({ ...draft, inspiration: content }))
+      return
+    }
+    setMarkdownSoulDraft((draft) => ({ ...draft, content }))
   }
 
   return (
@@ -242,11 +273,11 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
               souls={souls}
               savingSoul={savingSoul}
               createSoulMode={createSoulMode}
-              newSoulName={newSoulName}
-              newSoulContent={newSoulContent}
+              newSoulName={createSoulMode === 'ai' ? aiSoulDraft.name : markdownSoulDraft.name}
+              newSoulContent={createSoulMode === 'ai' ? aiSoulDraft.inspiration : markdownSoulDraft.content}
               onCreateSoulModeChange={handleCreateSoulModeChange}
               onNewSoulNameChange={handleNewSoulNameChange}
-              onNewSoulContentChange={setNewSoulContent}
+              onNewSoulContentChange={handleNewSoulContentChange}
               onCreateSoul={handleCreateSoul}
               onToggleSoul={handleToggleSoul}
               onMoveSoul={handleMoveSoul}
