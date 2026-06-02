@@ -19,6 +19,7 @@
   width: 100%;
   min-height: 68px;
   max-height: 200px;
+  padding: 10px var(--space-3);
   resize: none;
   color: var(--color-text-primary);
   font-size: var(--text-base);

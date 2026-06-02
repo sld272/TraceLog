@@ -301,6 +301,7 @@
   min-height: 44px;
   max-height: 160px;
   flex: 1;
+  padding: 10px var(--space-3);
   resize: vertical;
   color: var(--color-text-primary);
   line-height: var(--leading-normal);

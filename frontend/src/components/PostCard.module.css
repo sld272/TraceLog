@@ -218,6 +218,7 @@
   min-height: 34px;
   max-height: 120px;
   flex: 1;
+  padding: 6px var(--space-2);
   resize: none;
   color: var(--color-text-primary);
   font-size: var(--text-sm);
