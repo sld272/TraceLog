@@ -228,6 +228,13 @@
   color: var(--color-text-tertiary);
 }
 
+.replyButtonWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .replyButton {
   display: flex;
   align-items: center;

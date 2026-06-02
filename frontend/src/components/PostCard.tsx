@@ -5,6 +5,7 @@ import {
   type CommentMessage,
   type Post,
 } from '@/api/client'
+import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './PostCard.module.css'
 
 export interface CommentConversationState {
@@ -97,6 +98,7 @@ function CommentPreview({
   const soulName = comment.soul_name
   const hue = soulName.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
   const trimmed = reply.trim()
+  const submitShortcutTitle = getSubmitShortcutTitle()
 
   const handleSubmit = async () => {
     if (!trimmed || conversation?.sending || !onReply) return
@@ -145,14 +147,16 @@ function CommentPreview({
           disabled={conversation?.sending}
           aria-label={`回复 ${soulName}`}
         />
-        <button
-          className={styles.replyButton}
-          onClick={handleSubmit}
-          disabled={!trimmed || conversation?.sending || !onReply}
-          aria-label={`发送给 ${soulName}`}
-        >
-          {conversation?.sending ? <LoadingIndicator /> : <SendIcon />}
-        </button>
+        <span className={styles.replyButtonWrap} title={submitShortcutTitle}>
+          <button
+            className={styles.replyButton}
+            onClick={handleSubmit}
+            disabled={!trimmed || conversation?.sending || !onReply}
+            aria-label={`发送给 ${soulName}`}
+          >
+            {conversation?.sending ? <LoadingIndicator /> : <SendIcon />}
+          </button>
+        </span>
       </div>
       {conversation?.error && <p className={styles.threadError}>{conversation.error}</p>}
     </div>

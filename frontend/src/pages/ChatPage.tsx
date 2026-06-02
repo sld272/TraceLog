@@ -6,6 +6,7 @@ import {
   listChatThreads,
   sendChatMessage,
 } from '@/api/client'
+import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './WorkspacePages.module.css'
 
 interface ChatPageProps {
@@ -19,6 +20,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const submitShortcutTitle = getSubmitShortcutTitle()
 
   const fetchThread = useCallback(async () => {
     try {
@@ -122,9 +124,11 @@ export function ChatPage({ soulName }: ChatPageProps) {
             rows={2}
             aria-label="私聊消息"
           />
-          <button className={styles.button} disabled={!draft.trim() || sending}>
-            {sending ? '发送中...' : '发送'}
-          </button>
+          <span className={styles.buttonTooltipWrap} title={submitShortcutTitle}>
+            <button className={styles.button} disabled={!draft.trim() || sending}>
+              {sending ? '发送中...' : '发送'}
+            </button>
+          </span>
         </form>
       </div>
     </div>

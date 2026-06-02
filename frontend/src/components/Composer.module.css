@@ -52,6 +52,13 @@
   font-size: var(--text-xs);
 }
 
+.submitWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+}
+
 .submitBtn {
   display: flex;
   align-items: center;

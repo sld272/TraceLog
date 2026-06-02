@@ -83,6 +83,10 @@
   opacity: 0.45;
 }
 
+.buttonTooltipWrap {
+  display: inline-flex;
+}
+
 .ghostButton {
   display: inline-flex;
   align-items: center;

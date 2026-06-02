@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './Composer.module.css'
 
 interface ComposerProps {
@@ -9,6 +10,7 @@ export function Composer({ onSubmit }: ComposerProps) {
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const submitShortcutTitle = getSubmitShortcutTitle()
 
   /* Auto-resize textarea */
   useEffect(() => {
@@ -52,21 +54,23 @@ export function Composer({ onSubmit }: ComposerProps) {
         aria-label="发帖内容"
       />
       <div className={styles.footer}>
-        <span className={styles.hint}>
-          {content.length > 0 ? `${content.length} 字` : 'Cmd+Enter 发送'}
+        {content.length > 0 && (
+          <span className={styles.hint}>{content.length} 字</span>
+        )}
+        <span className={styles.submitWrap} title={submitShortcutTitle}>
+          <button
+            className={styles.submitBtn}
+            onClick={handleSubmit}
+            disabled={!content.trim() || submitting}
+            aria-label="发布"
+          >
+            {submitting ? (
+              <LoadingDots />
+            ) : (
+              <SendIcon />
+            )}
+          </button>
         </span>
-        <button
-          className={styles.submitBtn}
-          onClick={handleSubmit}
-          disabled={!content.trim() || submitting}
-          aria-label="发布"
-        >
-          {submitting ? (
-            <LoadingDots />
-          ) : (
-            <SendIcon />
-          )}
-        </button>
       </div>
     </div>
   )
