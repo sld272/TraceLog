@@ -32,7 +32,7 @@ export function LeftNav({ souls, activePage, onNavigate }: LeftNavProps) {
       </section>
 
       <section className={styles.section}>
-        <h3 className={styles.sectionTitle}>人格</h3>
+        <h3 className={styles.sectionTitle}>私聊</h3>
         {souls.map((soul) => (
           <NavItem
             key={soul.name}
