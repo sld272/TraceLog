@@ -61,6 +61,7 @@ export function Composer({ onSubmit }: ComposerProps) {
         attachments={attachments}
         disabled={submitting}
         onChange={setAttachments}
+        showControls={false}
       />
       <div className={styles.footer}>
         {(content.length > 0 || attachments.length > 0) && (
@@ -68,20 +69,28 @@ export function Composer({ onSubmit }: ComposerProps) {
             {content.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
           </span>
         )}
-        <span className={styles.submitWrap} title={submitShortcutTitle}>
-          <button
-            className={styles.submitBtn}
-            onClick={handleSubmit}
-            disabled={(!content.trim() && attachments.length === 0) || submitting}
-            aria-label="发布"
-          >
-            {submitting ? (
-              <LoadingDots />
-            ) : (
-              <SendIcon />
-            )}
-          </button>
-        </span>
+        <div className={styles.actions}>
+          <ImageUploader
+            attachments={attachments}
+            disabled={submitting}
+            onChange={setAttachments}
+            showPreview={false}
+          />
+          <span className={styles.submitWrap} title={submitShortcutTitle}>
+            <button
+              className={styles.submitBtn}
+              onClick={handleSubmit}
+              disabled={(!content.trim() && attachments.length === 0) || submitting}
+              aria-label="发布"
+            >
+              {submitting ? (
+                <LoadingDots />
+              ) : (
+                <SendIcon />
+              )}
+            </button>
+          </span>
+        </div>
       </div>
     </div>
   )

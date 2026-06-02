@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   type Attachment,
   type Comment,
@@ -98,10 +98,19 @@ function CommentPreview({
 }) {
   const [reply, setReply] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const soulName = comment.soul_name
   const hue = soulName.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
   const trimmed = reply.trim()
   const submitShortcutTitle = getSubmitShortcutTitle()
+
+  useEffect(() => {
+    const el = replyInputRef.current
+    if (el) {
+      el.style.height = 'auto'
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+    }
+  }, [reply])
 
   const handleSubmit = async () => {
     if ((!trimmed && attachments.length === 0) || conversation?.sending || !onReply) return
@@ -144,6 +153,7 @@ function CommentPreview({
       <div className={styles.replyBox}>
         <div className={styles.replyInputGroup}>
           <textarea
+            ref={replyInputRef}
             className={styles.replyInput}
             value={reply}
             onChange={(event) => setReply(event.target.value)}
@@ -158,18 +168,35 @@ function CommentPreview({
             compact
             disabled={conversation?.sending}
             onChange={setAttachments}
+            showControls={false}
           />
         </div>
-        <span className={styles.replyButtonWrap} title={submitShortcutTitle}>
-          <button
-            className={styles.replyButton}
-            onClick={handleSubmit}
-            disabled={(!trimmed && attachments.length === 0) || conversation?.sending || !onReply}
-            aria-label={`发送给 ${soulName}`}
-          >
-            {conversation?.sending ? <LoadingIndicator /> : <SendIcon />}
-          </button>
-        </span>
+        <div className={styles.replyFooter}>
+          {(reply.length > 0 || attachments.length > 0) && (
+            <span className={styles.replyHint}>
+              {reply.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
+            </span>
+          )}
+          <div className={styles.replyActions}>
+            <ImageUploader
+              attachments={attachments}
+              compact
+              disabled={conversation?.sending}
+              onChange={setAttachments}
+              showPreview={false}
+            />
+            <span className={styles.replyButtonWrap} title={submitShortcutTitle}>
+              <button
+                className={styles.replyButton}
+                onClick={handleSubmit}
+                disabled={(!trimmed && attachments.length === 0) || conversation?.sending || !onReply}
+                aria-label={`发送给 ${soulName}`}
+              >
+                {conversation?.sending ? <LoadingIndicator /> : <SendIcon />}
+              </button>
+            </span>
+          </div>
+        </div>
       </div>
       {conversation?.error && <p className={styles.threadError}>{conversation.error}</p>}
     </div>

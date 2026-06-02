@@ -11,13 +11,27 @@ interface ImageUploaderProps {
   attachments: Attachment[]
   disabled?: boolean
   compact?: boolean
+  showPreview?: boolean
+  showControls?: boolean
   onChange: (attachments: Attachment[]) => void
 }
 
-export function ImageUploader({ attachments, disabled = false, compact = false, onChange }: ImageUploaderProps) {
+export function ImageUploader({
+  attachments,
+  disabled = false,
+  compact = false,
+  showPreview = true,
+  showControls = true,
+  onChange,
+}: ImageUploaderProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const hasPreview = showPreview && attachments.length > 0
+
+  if (!hasPreview && !showControls) {
+    return null
+  }
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || disabled) return
@@ -53,7 +67,7 @@ export function ImageUploader({ attachments, disabled = false, compact = false, 
 
   return (
     <div className={`${styles.uploader} ${compact ? styles.compact : ''}`}>
-      {attachments.length > 0 && (
+      {hasPreview && (
         <div className={styles.preview}>
           <ImageGrid attachments={attachments} compact />
           <div className={styles.removeList}>
@@ -74,28 +88,29 @@ export function ImageUploader({ attachments, disabled = false, compact = false, 
         </div>
       )}
 
-      <div className={styles.controls}>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/jpeg,image/png"
-          multiple
-          className={styles.input}
-          onChange={(event) => handleFiles(event.target.files)}
-          disabled={disabled || uploading || attachments.length >= MAX_IMAGES}
-        />
-        <button
-          type="button"
-          className={styles.pickButton}
-          onClick={() => inputRef.current?.click()}
-          disabled={disabled || uploading || attachments.length >= MAX_IMAGES}
-          aria-label="添加图片"
-        >
-          <ImageIcon />
-          <span>{uploading ? '上传中' : '图片'}</span>
-        </button>
-        {error && <span className={styles.error}>{error}</span>}
-      </div>
+      {showControls && (
+        <div className={styles.controls}>
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/jpeg,image/png"
+            multiple
+            className={styles.input}
+            onChange={(event) => handleFiles(event.target.files)}
+            disabled={disabled || uploading || attachments.length >= MAX_IMAGES}
+          />
+          <button
+            type="button"
+            className={styles.pickButton}
+            onClick={() => inputRef.current?.click()}
+            disabled={disabled || uploading || attachments.length >= MAX_IMAGES}
+            aria-label={uploading ? '图片上传中' : '添加图片'}
+          >
+            <ImageIcon />
+          </button>
+          {error && <span className={styles.error}>{error}</span>}
+        </div>
+      )}
     </div>
   )
 }

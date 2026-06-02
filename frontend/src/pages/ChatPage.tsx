@@ -59,7 +59,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
     const el = chatInputRef.current
     if (el) {
       el.style.height = 'auto'
-      el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+      el.style.height = `${Math.min(el.scrollHeight, 200)}px`
     }
   }, [draft])
 
@@ -146,17 +146,33 @@ export function ChatPage({ soulName }: ChatPageProps) {
               attachments={attachments}
               disabled={sending}
               onChange={setAttachments}
+              showControls={false}
             />
           </div>
-          <span className={styles.buttonTooltipWrap} title={submitShortcutTitle}>
-            <button
-              className={styles.chatSubmitButton}
-              disabled={(!draft.trim() && attachments.length === 0) || sending}
-              aria-label="发送"
-            >
-              {sending ? <LoadingDots /> : <SendIcon />}
-            </button>
-          </span>
+          <div className={styles.chatFooter}>
+            {(draft.length > 0 || attachments.length > 0) && (
+              <span className={styles.chatHint}>
+                {draft.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
+              </span>
+            )}
+            <div className={styles.chatActions}>
+              <ImageUploader
+                attachments={attachments}
+                disabled={sending}
+                onChange={setAttachments}
+                showPreview={false}
+              />
+              <span className={styles.buttonTooltipWrap} title={submitShortcutTitle}>
+                <button
+                  className={styles.chatSubmitButton}
+                  disabled={(!draft.trim() && attachments.length === 0) || sending}
+                  aria-label="发送"
+                >
+                  {sending ? <LoadingDots /> : <SendIcon />}
+                </button>
+              </span>
+            </div>
+          </div>
         </form>
       </div>
     </div>
@@ -165,7 +181,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
 
 function SendIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <line x1="22" y1="2" x2="11" y2="13" />
       <polygon points="22 2 15 22 11 13 2 9 22 2" />
     </svg>
