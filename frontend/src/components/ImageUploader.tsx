@@ -5,6 +5,7 @@ import styles from './ImageUploader.module.css'
 
 const MAX_IMAGES = 9
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png'])
+const ALLOWED_EXTENSIONS = new Set(['jpg', 'jpeg', 'png'])
 
 interface ImageUploaderProps {
   attachments: Attachment[]
@@ -40,7 +41,7 @@ export function ImageUploader({
       setError(`最多上传 ${MAX_IMAGES} 张图片`)
       return
     }
-    const invalid = nextFiles.find((file) => !ALLOWED_TYPES.has(file.type))
+    const invalid = nextFiles.find((file) => !isAllowedImageFile(file))
     if (invalid) {
       setError('仅支持 JPEG/PNG 图片')
       return
@@ -82,7 +83,7 @@ export function ImageUploader({
           <input
             ref={inputRef}
             type="file"
-            accept="image/jpeg,image/png"
+            accept="image/jpeg,image/png,.jpg,.jpeg,.png,.JPG,.JPEG,.PNG"
             multiple
             className={styles.input}
             onChange={(event) => handleFiles(event.target.files)}
@@ -102,6 +103,15 @@ export function ImageUploader({
       )}
     </div>
   )
+}
+
+function isAllowedImageFile(file: File) {
+  const mediaType = file.type.split(';', 1)[0]?.trim().toLowerCase()
+  if (mediaType && ALLOWED_TYPES.has(mediaType)) {
+    return true
+  }
+  const extension = file.name.split('.').pop()?.trim().toLowerCase()
+  return Boolean(extension && ALLOWED_EXTENSIONS.has(extension))
 }
 
 function ImageIcon() {

@@ -21,9 +21,18 @@ MAX_COMPRESSED_IMAGE_SIDE = 3_840
 MIN_COMPRESSED_IMAGE_SIDE = 512
 MAX_ATTACHMENTS_PER_ENTITY = 9
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png"}
+ACCEPTED_UPLOAD_MIME_TYPES = ALLOWED_MIME_TYPES | {"image/jpg", "image/pjpeg"}
+GENERIC_UPLOAD_MIME_TYPES = {"application/octet-stream", "binary/octet-stream"}
 ALLOWED_FORMATS = {"JPEG": ("image/jpeg", ".jpg"), "PNG": ("image/png", ".png")}
+READ_FORMAT_ALIASES = {"JPEG": "JPEG", "JPG": "JPEG", "MPO": "JPEG", "PNG": "PNG"}
 COMPRESSION_TOO_LARGE_MESSAGE = "图片压缩后体积仍超过5MB！"
 JPEG_QUALITIES = (92, 88, 84, 80, 76, 72)
+
+
+class UnsupportedImageFormatError(ValueError):
+    def __init__(self, image_format: str | None) -> None:
+        super().__init__("仅支持 JPEG 或 PNG 图片")
+        self.image_format = image_format
 
 
 @dataclass(frozen=True)
@@ -45,7 +54,8 @@ def upload_image(file_bytes: bytes, *, content_type: str | None = None, filename
     """Validate, normalize, store one JPEG/PNG image, and return its metadata."""
     if len(file_bytes) > MAX_UPLOAD_IMAGE_BYTES:
         raise ValueError("图片不能超过 50MB")
-    if content_type and content_type not in ALLOWED_MIME_TYPES:
+    normalized_content_type = _normalize_content_type(content_type)
+    if normalized_content_type and not _is_allowed_upload_content_type(normalized_content_type):
         raise ValueError("仅支持 JPEG 或 PNG 图片")
 
     image, image_format = _open_image(file_bytes)
@@ -249,9 +259,9 @@ def _open_image(file_bytes: bytes):
     try:
         with Image.open(io.BytesIO(file_bytes)) as image:
             image.load()
-            image_format = image.format
-            if image_format not in ALLOWED_FORMATS:
-                raise ValueError("仅支持 JPEG 或 PNG 图片")
+            image_format = _normalize_image_format(image.format)
+            if image_format is None:
+                raise UnsupportedImageFormatError(image.format)
             normalized = ImageOps.exif_transpose(image)
             return normalized.copy(), image_format
     except DecompressionBombError as exc:
@@ -340,6 +350,12 @@ def _has_transparency(image) -> bool:
     return False
 
 
+def _normalize_image_format(image_format: str | None) -> str | None:
+    if not image_format:
+        return None
+    return READ_FORMAT_ALIASES.get(image_format.upper())
+
+
 def _new_attachment_id() -> str:
     return f"att_{int(time.time() * 1000)}_{secrets.token_urlsafe(8)}"
 
@@ -353,6 +369,17 @@ def _write_bytes_atomic(path: Path, content: bytes) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(content)
     os.replace(tmp, path)
+
+
+def _normalize_content_type(content_type: str | None) -> str | None:
+    if not content_type:
+        return None
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type or None
+
+
+def _is_allowed_upload_content_type(content_type: str) -> bool:
+    return content_type in ACCEPTED_UPLOAD_MIME_TYPES or content_type in GENERIC_UPLOAD_MIME_TYPES
 
 
 def _clean_filename(filename: str | None) -> str | None:

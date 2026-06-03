@@ -147,6 +147,36 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("", post["content"])
         self.assertEqual([attachment_id], [attachment["id"] for attachment in post["attachments"]])
 
+    def test_upload_attachment_accepts_uppercase_jpg_with_generic_mime_type(self) -> None:
+        with self._client() as client:
+            upload_response = client.post(
+                "/attachments/upload",
+                files={"file": ("PHOTO.JPG", _image_bytes("JPEG"), "application/octet-stream")},
+            )
+
+        self.assertEqual(200, upload_response.status_code, upload_response.text)
+        self.assertEqual("image/jpeg", upload_response.json()["mime_type"])
+        self.assertEqual("PHOTO.JPG", upload_response.json()["original_filename"])
+        self.assertTrue(upload_response.json()["file_path"].endswith(".jpg"))
+
+    def test_upload_attachment_accepts_first_file_even_when_field_name_varies(self) -> None:
+        with self._client() as client:
+            upload_response = client.post(
+                "/attachments/upload",
+                files={"upload": ("PHOTO.JPG", _image_bytes("JPEG"), "application/octet-stream")},
+            )
+
+        self.assertEqual(200, upload_response.status_code, upload_response.text)
+        self.assertEqual("image/jpeg", upload_response.json()["mime_type"])
+        self.assertEqual("PHOTO.JPG", upload_response.json()["original_filename"])
+
+    def test_upload_attachment_returns_readable_error_when_file_is_missing(self) -> None:
+        with self._client() as client:
+            upload_response = client.post("/attachments/upload", data={"file": "PHOTO.JPG"})
+
+        self.assertEqual(400, upload_response.status_code)
+        self.assertEqual("没有找到上传图片文件", upload_response.json()["detail"])
+
     def test_upload_attachment_compresses_large_image(self) -> None:
         with self._client() as client:
             upload_response = client.post(
@@ -330,10 +360,10 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn('"content": "继续说。"', payload)
 
 
-def _image_bytes() -> bytes:
+def _image_bytes(image_format: str = "PNG") -> bytes:
     image = Image.new("RGB", (10, 10), color=(50, 100, 150))
     output = io.BytesIO()
-    image.save(output, format="PNG")
+    image.save(output, format=image_format)
     return output.getvalue()
 
 

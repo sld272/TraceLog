@@ -55,9 +55,53 @@ class AttachmentServiceTest(unittest.TestCase):
         with Image.open(self.workspace / attachment.file_path) as image:
             self.assertEqual([], list(image.getexif().items()))
 
+    def test_upload_accepts_uppercase_jpg_filename_and_mime_type(self) -> None:
+        attachment = attachment_service.upload_image(
+            _image_bytes("JPEG"),
+            content_type="IMAGE/JPEG",
+            filename="PHOTO.JPG",
+        )
+
+        self.assertEqual("image/jpeg", attachment.mime_type)
+        self.assertEqual("PHOTO.JPG", attachment.original_filename)
+        self.assertTrue(attachment.file_path.endswith(".jpg"))
+
+    def test_upload_accepts_valid_image_with_generic_browser_mime_type(self) -> None:
+        attachment = attachment_service.upload_image(
+            _image_bytes("JPEG"),
+            content_type="application/octet-stream",
+            filename="PHOTO.JPG",
+        )
+
+        self.assertEqual("image/jpeg", attachment.mime_type)
+        self.assertTrue(attachment.file_path.endswith(".jpg"))
+
+    def test_upload_accepts_camera_jpg_detected_as_mpo(self) -> None:
+        real_open = Image.open
+
+        def open_as_mpo(*args, **kwargs):
+            image = real_open(*args, **kwargs)
+            image.format = "MPO"
+            return image
+
+        with patch("PIL.Image.open", side_effect=open_as_mpo):
+            attachment = attachment_service.upload_image(
+                _image_bytes("JPEG"),
+                content_type="image/jpeg",
+                filename="DSC_9843.JPG",
+            )
+
+        self.assertEqual("image/jpeg", attachment.mime_type)
+        self.assertEqual("DSC_9843.JPG", attachment.original_filename)
+        self.assertTrue(attachment.file_path.endswith(".jpg"))
+
     def test_upload_rejects_non_image(self) -> None:
         with self.assertRaises(ValueError):
             attachment_service.upload_image(b"not an image", content_type="image/png", filename="x.png")
+
+    def test_upload_rejects_specific_unsupported_image_mime_type(self) -> None:
+        with self.assertRaisesRegex(ValueError, "仅支持 JPEG 或 PNG 图片"):
+            attachment_service.upload_image(_image_bytes("PNG"), content_type="image/gif", filename="x.gif")
 
     def test_upload_large_jpeg_compresses_to_stored_limit(self) -> None:
         attachment = attachment_service.upload_image(
