@@ -27,8 +27,16 @@ export function ImageViewer({ attachments, initialIndex, onClose }: ImageViewerP
 
   return createPortal(
     <div className={styles.overlay} onClick={onClose} role="dialog" aria-modal="true">
-      <button className={styles.closeButton} type="button" onClick={onClose} aria-label="关闭">
-        ×
+      <button
+        className={styles.closeButton}
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          onClose()
+        }}
+        aria-label="关闭"
+      >
+        <CloseIcon />
       </button>
       {attachments.length > 1 && (
         <button
@@ -41,7 +49,7 @@ export function ImageViewer({ attachments, initialIndex, onClose }: ImageViewerP
           disabled={index === 0}
           aria-label="上一张"
         >
-          ‹
+          <ChevronLeftIcon />
         </button>
       )}
       <img
@@ -61,11 +69,35 @@ export function ImageViewer({ attachments, initialIndex, onClose }: ImageViewerP
           disabled={index === attachments.length - 1}
           aria-label="下一张"
         >
-          ›
+          <ChevronRightIcon />
         </button>
       )}
       <div className={styles.counter}>{index + 1}/{attachments.length}</div>
     </div>,
     document.body,
+  )
+}
+
+function CloseIcon() {
+  return (
+    <svg className={styles.buttonIcon} width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  )
+}
+
+function ChevronLeftIcon() {
+  return (
+    <svg className={styles.buttonIcon} width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M15 5l-7 7 7 7" />
+    </svg>
+  )
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg className={styles.buttonIcon} width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 5l7 7-7 7" />
+    </svg>
   )
 }

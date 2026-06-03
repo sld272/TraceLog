@@ -6,13 +6,15 @@
   place-items: center;
   padding: var(--space-6);
   background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(2px);
 }
 
 .image {
   max-width: 92vw;
-  max-height: 86vh;
+  max-height: 84vh;
   border-radius: var(--radius-md);
   object-fit: contain;
+  box-shadow: 0 22px 72px rgba(0, 0, 0, 0.32);
 }
 
 .closeButton,
@@ -20,37 +22,60 @@
   position: fixed;
   display: grid;
   place-items: center;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(18, 20, 20, 0.52);
   color: #fff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+  transition: background var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.closeButton:hover,
+.navButton:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.buttonIcon {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
 }
 
 .closeButton {
-  top: var(--space-5);
-  right: var(--space-5);
-  width: 42px;
-  height: 42px;
-  font-size: 30px;
+  top: clamp(16px, 3vw, 28px);
+  right: clamp(16px, 3vw, 28px);
+  width: 44px;
+  height: 44px;
 }
 
 .navButton {
   top: 50%;
-  width: 48px;
-  height: 48px;
-  font-size: 38px;
+  width: 52px;
+  height: 52px;
   transform: translateY(-50%);
 }
 
+.navButton:hover:not(:disabled) {
+  transform: translateY(-50%) scale(1.04);
+}
+
 .navButton:disabled {
+  cursor: default;
   opacity: 0.25;
+  box-shadow: none;
 }
 
 .prevButton {
-  left: var(--space-5);
+  left: clamp(12px, 4vw, 34px);
 }
 
 .nextButton {
-  right: var(--space-5);
+  right: clamp(12px, 4vw, 34px);
 }
 
 .counter {
@@ -59,8 +84,10 @@
   left: 50%;
   transform: translateX(-50%);
   border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(18, 20, 20, 0.52);
   color: #fff;
-  padding: var(--space-2) var(--space-3);
+  padding: 6px 11px;
   font-size: var(--text-xs);
+  line-height: 1;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
 }
