@@ -32,6 +32,7 @@ _SECRET_PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_\-]{12,}\b"),
     re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{12,}\b", re.IGNORECASE),
 ]
+_IMAGE_DATA_URL_RE = re.compile(r"^data:image/[A-Za-z0-9.+-]+;base64,", re.IGNORECASE)
 
 
 def default_config() -> dict:
@@ -200,6 +201,8 @@ def _prune_history(history_dir: Path, retention: int) -> None:
 def _redact(value: Any, key: str | None = None) -> Any:
     if key is not None and key.lower() in _SENSITIVE_KEYS:
         return "[REDACTED]"
+    if key is not None and key.lower() == "url" and isinstance(value, str) and _IMAGE_DATA_URL_RE.match(value):
+        return "[REDACTED_IMAGE_DATA_URL]"
     if isinstance(value, dict):
         return {item_key: _redact(item_value, str(item_key)) for item_key, item_value in value.items()}
     if isinstance(value, list):
@@ -207,6 +210,8 @@ def _redact(value: Any, key: str | None = None) -> Any:
     if isinstance(value, tuple):
         return [_redact(item) for item in value]
     if isinstance(value, str):
+        if _IMAGE_DATA_URL_RE.match(value):
+            return "[REDACTED_IMAGE_DATA_URL]"
         redacted = value
         for pattern in _SECRET_PATTERNS:
             redacted = pattern.sub("[REDACTED]", redacted)

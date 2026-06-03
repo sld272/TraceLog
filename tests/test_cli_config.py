@@ -41,6 +41,10 @@ class CliConfigTest(unittest.TestCase):
         self.assertNotIn("llm_payload", loaded["logging"])
         self.assertNotIn("preview_chars", loaded["logging"])
         self.assertEqual(2, loaded["logging"]["history_retention"])
+        self.assertEqual(
+            {"enabled": False, "model": None, "api_key": None, "base_url": None},
+            loaded["vision"],
+        )
 
 
 if __name__ == "__main__":

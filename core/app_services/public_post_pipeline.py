@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import attachment_service, context_builder, db, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service
+from core import attachment_service, context_builder, db, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service, vision_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
@@ -37,7 +37,7 @@ def create_post(content: str, attachment_ids: list[str] | None = None) -> Create
     job_ids.append(job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id, "content": body}))
     if body and tool_config_service.is_tool_enabled("todo"):
         job_ids.append(job_service.enqueue(job_service.TYPE_RUN_TODO_TOOL, {"post_id": post_id}))
-    if body:
+    if body or attachment_ids:
         job_ids.extend(
             [
                 job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id}),
@@ -84,8 +84,16 @@ def _run_index_post_embedding(job_id: int, payload: dict[str, Any]) -> None:
 def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
     post_id = _required_post_id(payload)
     content = _post_content(post_id)
-    attachment_count = len(attachment_service.list_post_attachments(post_id))
-    llm_content = attachment_service.content_for_llm(content, attachment_count)
+    attachments = attachment_service.list_post_attachments(post_id)
+    summaries = vision_service.describe_attachments(attachments)
+    llm_content = vision_service.content_with_summaries(content, attachments, summaries)
+    vision_context = vision_service.format_summaries(summaries)
+    if vision_context:
+        record_service.index_post_vision_embedding(
+            post_id,
+            vision_context,
+            [attachment.id for attachment in attachments],
+        )
     rewritten_query = query_rewriter.rewrite_query(
         client,
         model,

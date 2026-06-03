@@ -77,7 +77,10 @@ class PublicPostPipelineTest(unittest.TestCase):
         created = public_post_pipeline.create_post("", [attachment.id])
         jobs = job_service.list_jobs_for_post(created.post_id)
 
-        self.assertEqual(["generate_post_replies"], [job["type"] for job in jobs])
+        self.assertEqual(
+            ["generate_post_replies", "run_light_reflection", "maybe_trigger_global_deep_reflection"],
+            [job["type"] for job in jobs],
+        )
         self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_embedding:{created.post_id}",)))
 
     def test_index_post_embedding_job_indexes_and_emits_events(self) -> None:

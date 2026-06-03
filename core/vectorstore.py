@@ -114,6 +114,19 @@ def index_post(post_id: str, content: str):
     )
 
 
+def index_post_vision(post_id: str, content: str, attachment_ids: list[str]) -> None:
+    """Index visual understanding for one public post as a related retrieval doc."""
+    _index_document(
+        doc_id=f"post-vision-{post_id}",
+        content=content,
+        metadata={
+            "type": "post_vision",
+            "post_id": post_id,
+            "attachment_ids": ",".join(attachment_ids),
+        },
+    )
+
+
 def index_comment(comment_id: int, post_id: str, soul_name: str, role: str, seq: int, content: str) -> None:
     """Index one public comment or comment follow-up message."""
     _index_document(
@@ -172,7 +185,11 @@ def query_post_ids(query: str, n_results: int = 20) -> list[str]:
 
 def query_post_hits(query: str, n_results: int = 20) -> list[VectorHit]:
     """语义检索相关帖子，返回排序与可选 distance 信号。"""
-    hits = query_documents(query, n_results=n_results, where={"type": {"$eq": "post"}})
+    hits = query_documents(
+        query,
+        n_results=n_results,
+        where={"$or": [{"type": {"$eq": "post"}}, {"type": {"$eq": "post_vision"}}]},
+    )
     return [
         VectorHit(
             post_id=str(hit.metadata.get("post_id") or hit.source_id),
@@ -180,7 +197,7 @@ def query_post_hits(query: str, n_results: int = 20) -> list[VectorHit]:
             distance=hit.distance,
         )
         for hit in hits
-        if hit.type == "post"
+        if hit.type in {"post", "post_vision"}
     ]
 
 
@@ -260,7 +277,7 @@ def _infer_doc_type(doc_id: str) -> str:
 
 
 def _source_id(doc_id: str, doc_type: str, metadata: dict) -> str:
-    if doc_type == "post":
+    if doc_type in {"post", "post_vision"}:
         return str(metadata.get("post_id") or doc_id.removeprefix("post-"))
     if doc_type == "comment":
         return str(metadata.get("comment_id") or doc_id.removeprefix("comment-"))

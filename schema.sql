@@ -101,6 +101,26 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS idx_attachments_sha256 ON attachments(sha256);
 CREATE INDEX IF NOT EXISTS idx_attachments_linked_created ON attachments(linked_at, created_at);
 
+CREATE TABLE IF NOT EXISTS vision_cache (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    attachment_id  TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+    model          TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    description    TEXT,
+    visible_text   TEXT,
+    uncertainties  TEXT,
+    status         TEXT NOT NULL CHECK(status IN ('ok', 'failed', 'skipped')),
+    error          TEXT,
+    created_at     REAL NOT NULL,
+    updated_at     REAL NOT NULL,
+    UNIQUE(attachment_id, model, prompt_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vision_cache_attachment
+    ON vision_cache(attachment_id);
+CREATE INDEX IF NOT EXISTS idx_vision_cache_status
+    ON vision_cache(status, updated_at);
+
 CREATE TABLE IF NOT EXISTS post_attachments (
     post_id       TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
     attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,

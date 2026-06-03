@@ -217,6 +217,12 @@ class ApiManagementTest(unittest.TestCase):
                     "embedding_base_url": "https://embeddings.invalid/v1",
                     "job_worker_concurrency": 2,
                     "logging": {"enabled": True, "level": "DEBUG", "history_retention": 7},
+                    "vision": {
+                        "enabled": True,
+                        "model": "vision-model",
+                        "api_key": "",
+                        "base_url": "",
+                    },
                 },
             )
             workspace_response = client.get("/settings/workspace")
@@ -233,11 +239,13 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("sk-test-secret-123456", saved["api_key"])
         self.assertEqual("https://updated.invalid/v1", saved["base_url"])
         self.assertEqual(2, saved["job_worker_concurrency"])
+        self.assertEqual({"enabled": True, "model": "vision-model", "api_key": None, "base_url": None}, saved["vision"])
 
         self.assertEqual(200, workspace_response.status_code)
         status = workspace_response.json()
         self.assertTrue(status["db_exists"])
         self.assertGreaterEqual(status["counts"]["souls"], 1)
+        self.assertIn("vision_cache", status["counts"])
 
     def test_todo_routes_list_and_patch_status(self) -> None:
         db.execute(

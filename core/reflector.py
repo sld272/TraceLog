@@ -14,6 +14,7 @@ from core import soul_memory_service
 from core import soul_service
 from core import todo_service
 from core import tool_config_service
+from core import vision_service
 
 
 GLOBAL_DEEP_REFLECTION_TYPE = "global_deep"
@@ -370,13 +371,17 @@ def _load_recent_posts_before(post_id: str, limit: int) -> list:
 def _format_posts(rows: list) -> str:
     parts = []
     for row in rows:
+        content = str(row["content"] or "")
+        vision_context = vision_service.cached_context_for_post(str(row["id"]))
+        if vision_context:
+            content = f"{content}\n\n{vision_context}" if content.strip() else vision_context
         parts.append(
             "---\n"
             f"id: \"{row['id']}\"\n"
             f"date: \"{row['ts']}\"\n"
             "type: \"post\"\n"
             "---\n\n"
-            f"{row['content']}"
+            f"{content}"
         )
     return "\n\n---\n\n".join(parts)
 

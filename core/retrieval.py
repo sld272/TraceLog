@@ -178,11 +178,12 @@ def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
 def build_retrieval_filter(channel: str, soul_name: str | None = None) -> dict | None:
     """Build a Chroma metadata filter for one reply context."""
     if channel == "public_post":
-        return {"type": {"$eq": "post"}}
+        return {"$or": [{"type": {"$eq": "post"}}, {"type": {"$eq": "post_vision"}}]}
     if channel in {"chat", "comment", "comment_thread"} and soul_name:
         return {
             "$or": [
                 {"type": {"$eq": "post"}},
+                {"type": {"$eq": "post_vision"}},
                 {"type": {"$eq": "comment"}},
                 {
                     "$and": [

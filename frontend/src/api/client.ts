@@ -210,6 +210,17 @@ export interface ModelSettings {
     level: string
     history_retention: number
   }
+  vision: {
+    enabled: boolean
+    configured: boolean
+    model: string | null
+    has_api_key: boolean
+    api_key_masked: string | null
+    base_url: string | null
+    effective_base_url: string | null
+    prompt_version: string
+    timeout_s: number
+  }
   config_path: string
   restart_required?: boolean
 }
@@ -224,6 +235,12 @@ export interface ModelSettingsUpdate {
   reuse_embedding_config: boolean
   job_worker_concurrency: number
   logging: ModelSettings['logging']
+  vision: {
+    enabled: boolean
+    model?: string | null
+    api_key?: string
+    base_url?: string | null
+  }
 }
 
 export interface WorkspaceStatus {
@@ -242,6 +259,7 @@ export interface WorkspaceStatus {
     enabled_souls: number
     todos: number
     jobs: number
+    vision_cache: number
   }
   logs: {
     current_log_path: string

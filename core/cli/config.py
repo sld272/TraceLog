@@ -11,6 +11,12 @@ from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_settings
 
 CONFIG_FILE = "config.json"
+DEFAULT_VISION_CONFIG = {
+    "enabled": False,
+    "model": None,
+    "api_key": None,
+    "base_url": None,
+}
 
 
 def load_config() -> dict:
@@ -25,6 +31,7 @@ def load_config() -> dict:
             config.setdefault("embedding_api_key", None)
             config.setdefault("embedding_base_url", None)
             config["logging"] = _normalize_logging_config(config.get("logging"))
+            config["vision"] = normalize_vision_config(config.get("vision"))
             return config
 
         print(f"[配置] 检测到配置不完整（缺少：{', '.join(missing)}），将重新配置。")
@@ -67,6 +74,7 @@ def load_config() -> dict:
         "embedding_api_key": embedding_api_key,
         "embedding_base_url": embedding_base_url,
         "logging": default_logging_config(),
+        "vision": default_vision_config(),
     }
     tmp = CONFIG_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -79,3 +87,36 @@ def load_config() -> dict:
 
 def _normalize_logging_config(value) -> dict:
     return normalize_logging_settings(value)
+
+
+def default_vision_config() -> dict:
+    return dict(DEFAULT_VISION_CONFIG)
+
+
+def normalize_vision_config(value) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    merged = default_vision_config()
+    merged.update(
+        {
+            key: _clean_optional(raw.get(key)) if key != "enabled" else bool(raw.get(key))
+            for key in DEFAULT_VISION_CONFIG
+            if key in raw
+        }
+    )
+    merged["enabled"] = bool(merged.get("enabled"))
+    if not merged.get("enabled"):
+        merged["api_key"] = _clean_optional(merged.get("api_key"))
+        merged["base_url"] = _clean_optional(merged.get("base_url"))
+        merged["model"] = _clean_optional(merged.get("model"))
+        return merged
+    merged["model"] = _clean_optional(merged.get("model"))
+    merged["api_key"] = _clean_optional(merged.get("api_key"))
+    merged["base_url"] = _clean_optional(merged.get("base_url"))
+    return merged
+
+
+def _clean_optional(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None

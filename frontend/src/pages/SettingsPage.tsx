@@ -43,6 +43,12 @@ interface ModelForm {
   reuse_embedding_config: boolean
   job_worker_concurrency: number
   logging: ModelSettings['logging']
+  vision: {
+    enabled: boolean
+    model: string
+    api_key: string
+    base_url: string
+  }
 }
 
 const DEFAULT_MODEL_FORM: ModelForm = {
@@ -58,6 +64,12 @@ const DEFAULT_MODEL_FORM: ModelForm = {
     enabled: true,
     level: 'INFO',
     history_retention: 5,
+  },
+  vision: {
+    enabled: false,
+    model: '',
+    api_key: '',
+    base_url: '',
   },
 }
 
@@ -348,6 +360,50 @@ function ModelSettingsPanel({
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
+            <h2 className={styles.sectionTitle}>图片识别</h2>
+            <p className={styles.sectionMeta}>用于上传图片的视觉摘要、回复和检索。</p>
+          </div>
+          <div className={styles.headerControls}>
+            <StatusPill ok={settings?.vision.configured ?? false} label={settings?.vision.configured ? '可用' : '未启用'} />
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={form.vision.enabled}
+                onChange={(event) => onChange({
+                  ...form,
+                  vision: { ...form.vision, enabled: event.target.checked },
+                })}
+              />
+              <span>启用</span>
+            </label>
+          </div>
+        </div>
+        <div className={styles.formGrid}>
+          <TextField
+            label="Vision Model"
+            value={form.vision.model}
+            placeholder="例如 gpt-4o-mini"
+            onChange={(value) => onChange({ ...form, vision: { ...form.vision, model: value } })}
+          />
+          <TextField
+            label="Vision Base URL"
+            value={form.vision.base_url}
+            placeholder={settings?.vision.effective_base_url ?? form.base_url}
+            onChange={(value) => onChange({ ...form, vision: { ...form.vision, base_url: value } })}
+          />
+          <TextField
+            label="Vision API Key"
+            type="password"
+            value={form.vision.api_key}
+            placeholder={settings?.vision.api_key_masked ?? '留空复用主 Key'}
+            onChange={(value) => onChange({ ...form, vision: { ...form.vision, api_key: value } })}
+          />
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
             <h2 className={styles.sectionTitle}>Embedding</h2>
             <p className={styles.sectionMeta}>用于语义检索和长期记忆索引。</p>
           </div>
@@ -609,6 +665,7 @@ function DataSettingsPanel({ status }: { status: WorkspaceStatus | null }) {
           <Stat label="启用人格" value={status.counts.enabled_souls} />
           <Stat label="待办" value={status.counts.todos} />
           <Stat label="任务" value={status.counts.jobs} />
+          <Stat label="图片摘要" value={status.counts.vision_cache} />
         </div>
       </section>
 
@@ -736,6 +793,12 @@ function formFromModelSettings(settings: ModelSettings): ModelForm {
     reuse_embedding_config: settings.reuse_embedding_config,
     job_worker_concurrency: settings.job_worker_concurrency,
     logging: settings.logging,
+    vision: {
+      enabled: settings.vision?.enabled ?? false,
+      model: settings.vision?.model ?? '',
+      api_key: '',
+      base_url: settings.vision?.base_url ?? '',
+    },
   }
 }
 
@@ -750,6 +813,12 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
     reuse_embedding_config: form.reuse_embedding_config,
     job_worker_concurrency: form.job_worker_concurrency,
     logging: form.logging,
+    vision: {
+      enabled: form.vision.enabled,
+      model: form.vision.model.trim() || null,
+      api_key: form.vision.api_key.trim() || undefined,
+      base_url: form.vision.base_url.trim() || null,
+    },
   }
 }
 

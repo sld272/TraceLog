@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import io
 import os
 import secrets
@@ -48,6 +49,17 @@ class Attachment:
     linked_at: float | None
     created_at: float
     url: str
+
+
+@dataclass(frozen=True)
+class ImageInput:
+    attachment_id: str
+    mime_type: str
+    file_path: Path
+    width: int
+    height: int
+    file_size: int
+    data_url: str
 
 
 def upload_image(file_bytes: bytes, *, content_type: str | None = None, filename: str | None = None) -> Attachment:
@@ -214,7 +226,7 @@ def image_notice(count: int) -> str:
     if count <= 0:
         return ""
     unit = "张图片"
-    return f"用户附带了 {count} {unit}，但当前未启用识图。不要描述、推断或声称看到了图片内容。"
+    return f"用户附带了 {count} {unit}，但当前没有可用的识图结果。不要描述、推断或声称看到了图片内容。"
 
 
 def content_for_llm(content: str, attachment_count: int) -> str:
@@ -223,6 +235,24 @@ def content_for_llm(content: str, attachment_count: int) -> str:
     if body and notice:
         return f"{body}\n\n[{notice}]"
     return body or notice
+
+
+def image_input_for_attachment(attachment: Attachment) -> ImageInput:
+    path = attachment_path(attachment.id)
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return ImageInput(
+        attachment_id=attachment.id,
+        mime_type=attachment.mime_type,
+        file_path=path,
+        width=attachment.width,
+        height=attachment.height,
+        file_size=attachment.file_size,
+        data_url=f"data:{attachment.mime_type};base64,{encoded}",
+    )
+
+
+def image_inputs_for_attachments(attachments: list[Attachment]) -> list[ImageInput]:
+    return [image_input_for_attachment(attachment) for attachment in attachments]
 
 
 def cleanup_orphan_attachments(max_age_seconds: float = 24 * 3600) -> int:

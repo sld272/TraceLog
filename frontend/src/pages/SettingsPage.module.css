@@ -53,6 +53,13 @@
   margin-bottom: var(--space-4);
 }
 
+.headerControls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+}
+
 .sectionTitle {
   color: var(--color-text-primary);
   font-size: var(--text-base);
@@ -420,6 +427,7 @@
   }
 
   .sectionHeader,
+  .headerControls,
   .saveBar,
   .soulRow {
     align-items: stretch;

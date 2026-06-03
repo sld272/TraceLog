@@ -16,6 +16,7 @@ from core import (
     soul_service,
     todo_service,
     tool_config_service,
+    vision_service,
 )
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -194,9 +195,10 @@ def build_comment_context(
 
     post = _get_post(post_id)
     if post is not None:
-        sections.append(f"# 原始 post\n\n[{post['id']}] {post['content']}")
+        post_content = _post_content_for_llm(post)
+        sections.append(f"# 原始 post\n\n[{post['id']}] {post_content}")
 
-    retrieval_query = _build_comment_retrieval_query(post, messages, user_message)
+    retrieval_query = _build_comment_retrieval_query(post, llm_messages, user_message)
     rewritten_query = reply_context.rewrite_for_retrieval(
         client,
         model,
@@ -262,7 +264,7 @@ def call_comment_reply(
 ) -> CommentReplyResult:
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
     user_message_row = append_comment(post_id, soul_name, "user", user_message, attachment_ids=attachment_ids)
-    llm_user_message = attachment_service.content_for_llm(user_message, len(user_message_row.attachments))
+    llm_user_message = vision_service.content_for_llm(user_message, user_message_row.attachments)
     comment_context = build_comment_context(post_id, soul_name, llm_user_message, client, model)
     data = reply_router.call_soul_comment_reply(
         client,
@@ -419,18 +421,27 @@ def _message_from_row(row) -> CommentMessage:
 
 
 def _message_for_llm(message: CommentMessage) -> CommentMessage:
-    content = attachment_service.content_for_llm(message.content, len(message.attachments))
+    content = vision_service.content_with_cached_summaries(message.content, message.attachments)
     return replace(message, content=content)
 
 
 def _build_comment_retrieval_query(post, messages: list[CommentMessage], user_message: str) -> str:
     parts: list[str] = []
     if post is not None:
-        parts.append(str(post["content"]).strip())
+        parts.append(_post_content_for_llm(post).strip())
     parts.extend(_recent_user_message_contents(messages, limit=RETRIEVAL_USER_MESSAGE_LIMIT))
     if parts:
         return "\n".join(part for part in parts if part)
     return user_message
+
+
+def _post_content_for_llm(post) -> str:
+    content = str(post["content"] or "")
+    vision_context = vision_service.cached_context_for_post(str(post["id"]))
+    if vision_context:
+        return f"{content}\n\n{vision_context}" if content.strip() else vision_context
+    attachment_count = len(attachment_service.list_post_attachments(str(post["id"])))
+    return attachment_service.content_for_llm(content, attachment_count)
 
 
 def _recent_user_message_contents(messages: list[CommentMessage], limit: int) -> list[str]:

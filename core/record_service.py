@@ -144,8 +144,47 @@ def index_chat_message_embedding(message_id: int, thread_id: int, soul_name: str
         )
 
 
+def index_post_vision_embedding(post_id: str, content: str, attachment_ids: list[str]) -> None:
+    body = content.strip()
+    if not body:
+        return
+    doc_id = f"post-vision-{post_id}"
+    metadata = {
+        "type": "post_vision",
+        "post_id": post_id,
+        "attachment_ids": ",".join(attachment_ids),
+    }
+    try:
+        vectorstore = _vectorstore()
+        if not vectorstore.is_initialized():
+            raise RuntimeError("vectorstore is not initialized")
+        vectorstore.index_post_vision(post_id, body, attachment_ids)
+        _clear_pending_vector_doc(doc_id)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        _mark_pending_vector_doc(doc_id, body, metadata, str(exc))
+        logging_service.log_event(
+            "vector_doc_index_failed",
+            level="WARNING",
+            doc_id=doc_id,
+            type="post_vision",
+            error=str(exc),
+            **_external_api_error_fields(exc, operation="vector_index_post_vision"),
+        )
+
+
 def format_post(row) -> str:
     """Format one SQLite post row as markdown with frontmatter."""
+    content = str(row["content"] or "")
+    try:
+        from core import vision_service
+
+        vision_context = vision_service.cached_context_for_post(str(row["id"]))
+    except Exception:
+        vision_context = ""
+    if vision_context:
+        content = f"{content}\n\n{vision_context}" if content.strip() else vision_context
     frontmatter = (
         "---\n"
         f"id: \"{row['id']}\"\n"
@@ -155,7 +194,7 @@ def format_post(row) -> str:
         "type: \"post\"\n"
         "---\n\n"
     )
-    return frontmatter + f"\n{row['content']}\n"
+    return frontmatter + f"\n{content}\n"
 
 
 def retry_pending_embeddings(limit: int | None = None) -> int:
@@ -240,6 +279,11 @@ def retry_pending_vector_docs(limit: int | None = None) -> int:
                     metadata["role"],
                     payload["content"],
                 )
+            elif doc_type == "post_vision":
+                attachment_ids = [
+                    item for item in str(metadata.get("attachment_ids") or "").split(",") if item
+                ]
+                vectorstore.index_post_vision(metadata["post_id"], payload["content"], attachment_ids)
             else:
                 continue
             db.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
@@ -319,6 +363,35 @@ def reindex_all_vector_docs() -> int:
                     "thread_id": int(row["thread_id"]),
                     "soul_name": row["soul_name"],
                     "role": row["role"],
+                },
+                str(exc),
+            )
+    for row in db.query_all(
+        """
+        SELECT
+            post_attachments.post_id AS post_id,
+            GROUP_CONCAT(vision_cache.attachment_id) AS attachment_ids,
+            GROUP_CONCAT(vision_cache.description, '\n') AS descriptions
+        FROM vision_cache
+        JOIN post_attachments ON post_attachments.attachment_id = vision_cache.attachment_id
+        WHERE vision_cache.status = 'ok'
+        GROUP BY post_attachments.post_id
+        ORDER BY post_attachments.post_id ASC
+        """
+    ):
+        content = str(row["descriptions"] or "").strip()
+        attachment_ids = [item for item in str(row["attachment_ids"] or "").split(",") if item]
+        try:
+            vectorstore.index_post_vision(row["post_id"], content, attachment_ids)
+            indexed += 1
+        except Exception as exc:
+            _mark_pending_vector_doc(
+                f"post-vision-{row['post_id']}",
+                content,
+                {
+                    "type": "post_vision",
+                    "post_id": row["post_id"],
+                    "attachment_ids": ",".join(attachment_ids),
                 },
                 str(exc),
             )

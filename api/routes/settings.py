@@ -11,8 +11,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from api.deps import run_sync
-from core import db
-from core.cli.config import CONFIG_FILE
+from core import db, vision_service
+from core.cli.config import CONFIG_FILE, default_vision_config, normalize_vision_config
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
 
@@ -25,6 +25,13 @@ class LoggingSettings(BaseModel):
     history_retention: int = Field(default=5, ge=0, le=100)
 
 
+class VisionSettings(BaseModel):
+    enabled: bool = False
+    model: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+
+
 class ModelSettingsRequest(BaseModel):
     api_key: str | None = None
     base_url: str = Field(min_length=1)
@@ -35,6 +42,7 @@ class ModelSettingsRequest(BaseModel):
     reuse_embedding_config: bool = False
     job_worker_concurrency: int = Field(default=1, ge=1, le=4)
     logging: LoggingSettings | None = None
+    vision: VisionSettings | None = None
 
 
 @router.get("/model")
@@ -58,6 +66,8 @@ async def get_workspace_status():
 def _read_model_settings() -> dict[str, Any]:
     config = _load_config_file()
     logging_config = normalize_logging_config(config.get("logging"))
+    vision = normalize_vision_config(config.get("vision"))
+    effective_vision = vision_service.configured_status(config)
     return {
         "configured": _is_configured(config),
         "has_api_key": bool(config.get("api_key")),
@@ -71,6 +81,17 @@ def _read_model_settings() -> dict[str, Any]:
         "reuse_embedding_config": not bool(config.get("embedding_api_key") or config.get("embedding_base_url")),
         "job_worker_concurrency": _normalize_concurrency(config.get("job_worker_concurrency")),
         "logging": logging_config,
+        "vision": {
+            "enabled": bool(vision.get("enabled")),
+            "configured": bool(effective_vision.get("configured")),
+            "model": vision.get("model"),
+            "has_api_key": bool(vision.get("api_key")),
+            "api_key_masked": _mask_secret(vision.get("api_key")),
+            "base_url": vision.get("base_url"),
+            "effective_base_url": effective_vision.get("base_url"),
+            "prompt_version": effective_vision.get("prompt_version"),
+            "timeout_s": effective_vision.get("timeout_s"),
+        },
         "config_path": str(Path(CONFIG_FILE).resolve()),
     }
 
@@ -91,6 +112,11 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
             embedding_api_key = existing.get("embedding_api_key")
         embedding_base_url = _clean_optional(payload.get("embedding_base_url"))
 
+    incoming_vision = normalize_vision_config(payload.get("vision"))
+    existing_vision = normalize_vision_config(existing.get("vision"))
+    if incoming_vision.get("api_key") is None:
+        incoming_vision["api_key"] = existing_vision.get("api_key")
+
     config = {
         **existing,
         "api_key": api_key,
@@ -101,6 +127,7 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "embedding_base_url": embedding_base_url,
         "job_worker_concurrency": _normalize_concurrency(payload.get("job_worker_concurrency")),
         "logging": normalize_logging_config(payload.get("logging")),
+        "vision": incoming_vision,
     }
 
     missing = [key for key in ("api_key", "base_url", "model", "embedding_model") if not config.get(key)]
@@ -134,6 +161,7 @@ def _workspace_status() -> dict[str, Any]:
             "enabled_souls": _count_enabled_souls(),
             "todos": _count_table("todos"),
             "jobs": _count_table("jobs"),
+            "vision_cache": _count_table("vision_cache"),
         },
         "logs": {
             "current_log_path": str(current_log),
@@ -150,7 +178,7 @@ def _load_config_file() -> dict[str, Any]:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
-        return {"logging": default_logging_config()}
+        return {"logging": default_logging_config(), "vision": default_vision_config()}
     except json.JSONDecodeError as exc:
         raise ValueError(f"{CONFIG_FILE} 不是有效 JSON") from exc
     return data if isinstance(data, dict) else {}

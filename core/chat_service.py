@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from core import attachment_service, db, evidence_service, logging_service, profile_service, record_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import attachment_service, db, evidence_service, logging_service, profile_service, record_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -172,7 +172,7 @@ def build_chat_context(
     soul = _load_soul_context(thread.soul_name)
     messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT)
     llm_messages = [_message_for_llm(message) for message in messages]
-    retrieval_query = _build_retrieval_query(user_message, messages)
+    retrieval_query = _build_retrieval_query(user_message, llm_messages)
     sections: list[str] = []
 
     profile = profile_service.read_profile().strip()
@@ -231,7 +231,7 @@ def call_chat_reply(
     """Append user input, call one SOUL, and persist the assistant reply."""
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
     user_message_row = append_user_message(thread_id, user_message, attachment_ids=attachment_ids)
-    llm_user_message = attachment_service.content_for_llm(user_message, len(user_message_row.attachments))
+    llm_user_message = vision_service.content_for_llm(user_message, user_message_row.attachments)
     chat_context = build_chat_context(thread_id, llm_user_message, client, model)
     data = reply_router.call_soul_chat_reply(
         client,
@@ -427,5 +427,5 @@ def _message_from_row(row) -> ChatMessage:
 
 
 def _message_for_llm(message: ChatMessage) -> ChatMessage:
-    content = attachment_service.content_for_llm(message.content, len(message.attachments))
+    content = vision_service.content_with_cached_summaries(message.content, message.attachments)
     return replace(message, content=content)

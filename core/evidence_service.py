@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core import db, record_service
+from core import attachment_service, db, record_service, vision_service
 
 
 def read_posts_by_ids(post_ids: list[str]) -> str:
@@ -43,7 +43,7 @@ def format_retrieval_hits(hits: list, *, current_soul: str | None = None) -> str
     for hit in hits:
         hit_type = getattr(hit, "type", None)
         metadata = getattr(hit, "metadata", {}) or {}
-        if hit_type == "post":
+        if hit_type in {"post", "post_vision"}:
             post_id = str(metadata.get("post_id") or getattr(hit, "source_id", ""))
             if post_id and post_id not in seen_posts:
                 seen_posts.add(post_id)
@@ -77,7 +77,7 @@ def expand_post(post_id: str) -> str:
     row = db.query_one("SELECT id, ts, content FROM posts WHERE id = ?", (post_id,))
     if row is None:
         return ""
-    return f"## 用户公开记录 · {row['ts']} · post {row['id']}\n{row['content']}"
+    return f"## 用户公开记录 · {row['ts']} · post {row['id']}\n{_post_content_for_evidence(row)}"
 
 
 def expand_comment_conversation(post_id: str, soul_name: str, limit: int = 30) -> str:
@@ -96,7 +96,7 @@ def expand_comment_conversation(post_id: str, soul_name: str, limit: int = 30) -
         return ""
     title = f"## 公开评论对话 · post {post_id} · {soul_name}"
     if post is not None:
-        title += f"\n[关于 post] {post['content']}"
+        title += f"\n[关于 post] {_post_content_for_evidence(post)}"
     lines = [title]
     for row in rows:
         label = _comment_label(row["role"], int(row["seq"]), soul_name)
@@ -149,3 +149,12 @@ def _comment_label(role: str, seq: int, soul_name: str) -> str:
     if seq == 0:
         return f"{soul_name} · 首评"
     return f"{soul_name} · 回复"
+
+
+def _post_content_for_evidence(row) -> str:
+    content = str(row["content"] or "")
+    vision_context = vision_service.cached_context_for_post(str(row["id"]))
+    if vision_context:
+        return f"{content}\n\n{vision_context}" if content.strip() else vision_context
+    attachment_count = len(attachment_service.list_post_attachments(str(row["id"])))
+    return attachment_service.content_for_llm(content, attachment_count)
