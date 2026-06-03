@@ -150,6 +150,8 @@ def format_post(row) -> str:
         "---\n"
         f"id: \"{row['id']}\"\n"
         f"date: \"{row['ts']}\"\n"
+        "author: \"current_user\"\n"
+        "source: \"current_user_public_post\"\n"
         "type: \"post\"\n"
         "---\n\n"
     )

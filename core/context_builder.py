@@ -33,7 +33,7 @@ def build_context(
     if relevant_post_ids:
         relevant_posts, effective_relevant_ids = _read_posts_by_ids(_dedupe_relevant_ids(relevant_post_ids))
         if relevant_posts:
-            sections.append(f"# 相关帖子\n\n{relevant_posts}")
+            sections.append(f"# 当前用户的历史相关帖子\n\n{relevant_posts}")
 
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()

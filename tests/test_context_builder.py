@@ -62,9 +62,11 @@ class ContextBuilderTest(unittest.TestCase):
 
         self.assertIn("# 用户档案", built.shared_context)
         self.assertIn("测试用户", built.shared_context)
-        self.assertIn("# 相关帖子", built.shared_context)
+        self.assertIn("# 当前用户的历史相关帖子", built.shared_context)
         self.assertEqual(1, built.shared_context.count("raw related content one"))
         self.assertIn("raw related content two", built.shared_context)
+        self.assertIn('author: "current_user"', built.shared_context)
+        self.assertIn('source: "current_user_public_post"', built.shared_context)
         self.assertIn("# 待办事项", built.shared_context)
         self.assertIn("整理比赛材料", built.shared_context)
         self.assertNotIn("# 相关记忆", built.shared_context)
@@ -75,13 +77,13 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertEqual("public_post", event["context_type"])
         self.assertEqual(["p-related", "p-related-2"], event["relevant_post_ids"])
         self.assertTrue(event["raw_related_posts_present"])
-        self.assertEqual(["# 用户档案", "# 相关帖子", "# 待办事项"], [item["title"] for item in event["sections"]])
+        self.assertEqual(["# 用户档案", "# 当前用户的历史相关帖子", "# 待办事项"], [item["title"] for item in event["sections"]])
 
     def test_public_context_omits_related_posts_when_none_are_found(self) -> None:
         built = context_builder.build_context(relevant_post_ids=["missing"])
 
         self.assertIn("# 用户档案", built.shared_context)
-        self.assertNotIn("# 相关帖子", built.shared_context)
+        self.assertNotIn("# 当前用户的历史相关帖子", built.shared_context)
         self.assertNotIn("# 近期帖子", built.shared_context)
         self.assertEqual([], built.relevant_post_ids)
 

@@ -52,10 +52,12 @@
 }
 
 .single .item {
+  aspect-ratio: clamp(0.5625, var(--image-ratio, 1), 2.333);
   max-height: 360px;
 }
 
 .compact.single .item {
+  aspect-ratio: clamp(0.5625, var(--image-ratio, 1), 2.333);
   max-height: 260px;
 }
 
@@ -71,16 +73,6 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.single .openButton img {
-  height: auto;
-  max-height: 360px;
-  object-fit: contain;
-}
-
-.compact.single .openButton img {
-  max-height: 260px;
 }
 
 .removeButton {

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { type Attachment, attachmentUrl } from '@/api/client'
 import { ImageViewer } from './ImageViewer'
 import styles from './ImageGrid.module.css'
@@ -21,7 +21,11 @@ export function ImageGrid({ attachments, compact = false, disabled = false, onRe
     <>
       <div className={`${styles.grid} ${layout} ${compact ? styles.compact : ''}`}>
         {attachments.slice(0, 9).map((attachment, index) => (
-          <div key={attachment.id} className={styles.item}>
+          <div
+            key={attachment.id}
+            className={styles.item}
+            style={visibleCount === 1 ? imageRatioStyle(attachment) : undefined}
+          >
             <button
               type="button"
               className={styles.openButton}
@@ -64,4 +68,11 @@ function getLayoutClass(count: number): string {
   if (count === 3) return styles.row3 ?? ''
   if (count === 4) return styles.grid2 ?? ''
   return styles.grid3 ?? ''
+}
+
+function imageRatioStyle(attachment: Attachment): CSSProperties {
+  const ratio = attachment.width > 0 && attachment.height > 0
+    ? attachment.width / attachment.height
+    : 1
+  return { '--image-ratio': ratio } as CSSProperties
 }
