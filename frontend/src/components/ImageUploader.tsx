@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { type Attachment, attachmentUrl, uploadAttachment } from '@/api/client'
+import { type Attachment, uploadAttachment } from '@/api/client'
 import { ImageGrid } from './ImageGrid'
 import styles from './ImageUploader.module.css'
 
@@ -68,22 +68,12 @@ export function ImageUploader({
     <div className={`${styles.uploader} ${compact ? styles.compact : ''}`}>
       {hasPreview && (
         <div className={styles.preview}>
-          <ImageGrid attachments={attachments} compact />
-          <div className={styles.removeList}>
-            {attachments.map((attachment) => (
-              <button
-                key={attachment.id}
-                type="button"
-                className={styles.removeButton}
-                onClick={() => removeAttachment(attachment.id)}
-                disabled={disabled || uploading}
-                aria-label={`移除 ${attachment.original_filename ?? '图片'}`}
-              >
-                <img src={attachmentUrl(attachment)} alt="" />
-                <span>×</span>
-              </button>
-            ))}
-          </div>
+          <ImageGrid
+            attachments={attachments}
+            compact
+            disabled={disabled || uploading}
+            onRemove={(attachment) => removeAttachment(attachment.id)}
+          />
         </div>
       )}
 

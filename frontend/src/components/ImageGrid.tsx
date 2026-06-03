@@ -6,9 +6,11 @@ import styles from './ImageGrid.module.css'
 interface ImageGridProps {
   attachments: Attachment[]
   compact?: boolean
+  disabled?: boolean
+  onRemove?: (attachment: Attachment) => void
 }
 
-export function ImageGrid({ attachments, compact = false }: ImageGridProps) {
+export function ImageGrid({ attachments, compact = false, disabled = false, onRemove }: ImageGridProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
   if (attachments.length === 0) return null
 
@@ -19,15 +21,30 @@ export function ImageGrid({ attachments, compact = false }: ImageGridProps) {
     <>
       <div className={`${styles.grid} ${layout} ${compact ? styles.compact : ''}`}>
         {attachments.slice(0, 9).map((attachment, index) => (
-          <button
-            key={attachment.id}
-            type="button"
-            className={styles.item}
-            onClick={() => setActiveIndex(index)}
-            aria-label="查看图片"
-          >
-            <img src={attachmentUrl(attachment)} alt="" loading="lazy" />
-          </button>
+          <div key={attachment.id} className={styles.item}>
+            <button
+              type="button"
+              className={styles.openButton}
+              onClick={() => setActiveIndex(index)}
+              aria-label="查看图片"
+            >
+              <img src={attachmentUrl(attachment)} alt="" loading="lazy" />
+            </button>
+            {onRemove && (
+              <button
+                type="button"
+                className={styles.removeButton}
+                disabled={disabled}
+                aria-label={`移除 ${attachment.original_filename ?? '图片'}`}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onRemove(attachment)
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
         ))}
       </div>
       {activeIndex !== null && (
