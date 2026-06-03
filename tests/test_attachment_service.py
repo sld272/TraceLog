@@ -129,6 +129,38 @@ class AttachmentServiceTest(unittest.TestCase):
         self.assertEqual([attachment.id], [item.id for item in linked])
         self.assertIsNotNone(attachment_service.get_attachment(attachment.id).linked_at)
 
+    def test_cleanup_orphan_attachments_removes_only_expired_unlinked_files(self) -> None:
+        old_orphan = attachment_service.upload_image(_image_bytes("PNG"), content_type="image/png")
+        fresh_orphan = attachment_service.upload_image(_image_bytes("PNG"), content_type="image/png")
+        linked = attachment_service.upload_image(_image_bytes("PNG"), content_type="image/png")
+        post_id = record_service.save_post("带图帖子", index_immediately=False)
+        attachment_service.attach_to_post(post_id, [linked.id])
+
+        cutoff_age = 24 * 3600
+        old_created_at = db.now_ts() - cutoff_age - 1
+        db.execute("UPDATE attachments SET created_at = ? WHERE id = ?", (old_created_at, old_orphan.id))
+        db.execute("UPDATE attachments SET created_at = ? WHERE id = ?", (old_created_at, linked.id))
+
+        removed = attachment_service.cleanup_orphan_attachments(max_age_seconds=cutoff_age)
+
+        self.assertEqual(1, removed)
+        self.assertFalse((self.workspace / old_orphan.file_path).exists())
+        self.assertIsNone(db.query_one("SELECT 1 FROM attachments WHERE id = ?", (old_orphan.id,)))
+        self.assertTrue((self.workspace / fresh_orphan.file_path).exists())
+        self.assertIsNotNone(attachment_service.get_attachment(fresh_orphan.id))
+        self.assertTrue((self.workspace / linked.file_path).exists())
+        self.assertIsNotNone(attachment_service.get_attachment(linked.id))
+
+    def test_cleanup_orphan_attachments_deletes_db_row_even_if_file_is_missing(self) -> None:
+        orphan = attachment_service.upload_image(_image_bytes("PNG"), content_type="image/png")
+        (self.workspace / orphan.file_path).unlink()
+        db.execute("UPDATE attachments SET created_at = ? WHERE id = ?", (db.now_ts() - 25 * 3600, orphan.id))
+
+        removed = attachment_service.cleanup_orphan_attachments(max_age_seconds=24 * 3600)
+
+        self.assertEqual(1, removed)
+        self.assertIsNone(db.query_one("SELECT 1 FROM attachments WHERE id = ?", (orphan.id,)))
+
 
 def _image_bytes(image_format: str) -> bytes:
     image = Image.new("RGB", (12, 8), color=(120, 80, 40))
