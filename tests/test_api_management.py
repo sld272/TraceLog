@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -145,6 +146,17 @@ class ApiManagementTest(unittest.TestCase):
         post = list_response.json()[0]
         self.assertEqual("", post["content"])
         self.assertEqual([attachment_id], [attachment["id"] for attachment in post["attachments"]])
+
+    def test_upload_attachment_compresses_large_image(self) -> None:
+        with self._client() as client:
+            upload_response = client.post(
+                "/attachments/upload",
+                files={"file": ("large.jpg", _noisy_image_bytes("JPEG", (3000, 2200)), "image/jpeg")},
+            )
+
+        self.assertEqual(200, upload_response.status_code)
+        self.assertEqual("image/jpeg", upload_response.json()["mime_type"])
+        self.assertLessEqual(upload_response.json()["file_size"], 5 * 1024 * 1024)
 
     def test_generate_soul_route_returns_markdown(self) -> None:
         generated = {
@@ -322,6 +334,14 @@ def _image_bytes() -> bytes:
     image = Image.new("RGB", (10, 10), color=(50, 100, 150))
     output = io.BytesIO()
     image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _noisy_image_bytes(image_format: str, size: tuple[int, int]) -> bytes:
+    width, height = size
+    image = Image.frombytes("RGB", size, os.urandom(width * height * 3))
+    output = io.BytesIO()
+    image.save(output, format=image_format)
     return output.getvalue()
 
 

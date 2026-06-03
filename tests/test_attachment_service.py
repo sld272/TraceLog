@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -57,6 +59,66 @@ class AttachmentServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             attachment_service.upload_image(b"not an image", content_type="image/png", filename="x.png")
 
+    def test_upload_large_jpeg_compresses_to_stored_limit(self) -> None:
+        attachment = attachment_service.upload_image(
+            _noisy_image_bytes("JPEG", "RGB", (3000, 2200)),
+            content_type="image/jpeg",
+        )
+
+        self.assertEqual("image/jpeg", attachment.mime_type)
+        self.assertLessEqual(attachment.file_size, attachment_service.MAX_STORED_IMAGE_BYTES)
+        self.assertLessEqual(max(attachment.width, attachment.height), attachment_service.MAX_COMPRESSED_IMAGE_SIDE)
+        with Image.open(self.workspace / attachment.file_path) as image:
+            self.assertEqual("JPEG", image.format)
+            self.assertEqual((attachment.width, attachment.height), image.size)
+
+    def test_upload_jpeg_above_old_pixel_limit_compresses(self) -> None:
+        attachment = attachment_service.upload_image(
+            _solid_image_bytes("JPEG", (7000, 4000)),
+            content_type="image/jpeg",
+        )
+
+        self.assertEqual("image/jpeg", attachment.mime_type)
+        self.assertLessEqual(attachment.file_size, attachment_service.MAX_STORED_IMAGE_BYTES)
+        self.assertLessEqual(max(attachment.width, attachment.height), attachment_service.MAX_COMPRESSED_IMAGE_SIDE)
+
+    def test_upload_large_rgb_png_can_store_as_jpeg(self) -> None:
+        attachment = attachment_service.upload_image(
+            _noisy_image_bytes("PNG", "RGB", (2200, 2200)),
+            content_type="image/png",
+        )
+
+        self.assertEqual("image/jpeg", attachment.mime_type)
+        self.assertTrue(attachment.file_path.endswith(".jpg"))
+        self.assertLessEqual(attachment.file_size, attachment_service.MAX_STORED_IMAGE_BYTES)
+        with Image.open(self.workspace / attachment.file_path) as image:
+            self.assertEqual("JPEG", image.format)
+
+    def test_upload_large_transparent_png_preserves_alpha(self) -> None:
+        attachment = attachment_service.upload_image(
+            _noisy_image_bytes("PNG", "RGBA", (1700, 1700)),
+            content_type="image/png",
+        )
+
+        self.assertEqual("image/png", attachment.mime_type)
+        self.assertLessEqual(attachment.file_size, attachment_service.MAX_STORED_IMAGE_BYTES)
+        with Image.open(self.workspace / attachment.file_path) as image:
+            self.assertEqual("PNG", image.format)
+            self.assertIn(image.mode, {"RGBA", "LA"})
+            self.assertLess(image.getchannel("A").getextrema()[0], 255)
+
+    def test_upload_rejects_when_compressed_image_still_exceeds_limit(self) -> None:
+        with patch.object(attachment_service, "MAX_STORED_IMAGE_BYTES", 1):
+            with self.assertRaisesRegex(ValueError, "图片压缩后体积仍超过5MB！"):
+                attachment_service.upload_image(_image_bytes("JPEG"), content_type="image/jpeg")
+
+    def test_upload_rejects_when_original_file_exceeds_upload_limit(self) -> None:
+        image_bytes = _image_bytes("PNG")
+
+        with patch.object(attachment_service, "MAX_UPLOAD_IMAGE_BYTES", len(image_bytes) - 1):
+            with self.assertRaisesRegex(ValueError, "图片不能超过 50MB"):
+                attachment_service.upload_image(image_bytes, content_type="image/png")
+
     def test_attach_to_post_lists_attachments(self) -> None:
         attachment = attachment_service.upload_image(_image_bytes("PNG"), content_type="image/png")
         post_id = record_service.save_post("带图帖子", index_immediately=False)
@@ -70,6 +132,22 @@ class AttachmentServiceTest(unittest.TestCase):
 
 def _image_bytes(image_format: str) -> bytes:
     image = Image.new("RGB", (12, 8), color=(120, 80, 40))
+    output = io.BytesIO()
+    image.save(output, format=image_format)
+    return output.getvalue()
+
+
+def _solid_image_bytes(image_format: str, size: tuple[int, int]) -> bytes:
+    image = Image.new("RGB", size, color=(120, 80, 40))
+    output = io.BytesIO()
+    image.save(output, format=image_format)
+    return output.getvalue()
+
+
+def _noisy_image_bytes(image_format: str, mode: str, size: tuple[int, int]) -> bytes:
+    width, height = size
+    channels = len(mode)
+    image = Image.frombytes(mode, size, os.urandom(width * height * channels))
     output = io.BytesIO()
     image.save(output, format=image_format)
     return output.getvalue()

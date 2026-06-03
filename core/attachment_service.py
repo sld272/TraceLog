@@ -12,12 +12,18 @@ from pathlib import Path
 
 from core import db
 
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
-MAX_IMAGE_PIXELS = 20_000_000
-MAX_IMAGE_SIDE = 8_000
+MAX_UPLOAD_IMAGE_BYTES = 50 * 1024 * 1024
+MAX_STORED_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_BYTES = MAX_STORED_IMAGE_BYTES
+MAX_IMAGE_PIXELS = 60_000_000
+MAX_IMAGE_SIDE = 12_000
+MAX_COMPRESSED_IMAGE_SIDE = 3_840
+MIN_COMPRESSED_IMAGE_SIDE = 512
 MAX_ATTACHMENTS_PER_ENTITY = 9
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png"}
 ALLOWED_FORMATS = {"JPEG": ("image/jpeg", ".jpg"), "PNG": ("image/png", ".png")}
+COMPRESSION_TOO_LARGE_MESSAGE = "图片压缩后体积仍超过5MB！"
+JPEG_QUALITIES = (92, 88, 84, 80, 76, 72)
 
 
 @dataclass(frozen=True)
@@ -37,13 +43,12 @@ class Attachment:
 
 def upload_image(file_bytes: bytes, *, content_type: str | None = None, filename: str | None = None) -> Attachment:
     """Validate, normalize, store one JPEG/PNG image, and return its metadata."""
-    if len(file_bytes) > MAX_IMAGE_BYTES:
-        raise ValueError("图片不能超过 5MB")
+    if len(file_bytes) > MAX_UPLOAD_IMAGE_BYTES:
+        raise ValueError("图片不能超过 50MB")
     if content_type and content_type not in ALLOWED_MIME_TYPES:
         raise ValueError("仅支持 JPEG 或 PNG 图片")
 
     image, image_format = _open_image(file_bytes)
-    mime_type, ext = ALLOWED_FORMATS[image_format]
 
     width, height = image.size
     if width <= 0 or height <= 0:
@@ -51,9 +56,10 @@ def upload_image(file_bytes: bytes, *, content_type: str | None = None, filename
     if width > MAX_IMAGE_SIDE or height > MAX_IMAGE_SIDE or width * height > MAX_IMAGE_PIXELS:
         raise ValueError("图片像素尺寸过大")
 
-    normalized = _encode_clean_image(image, image_format)
-    if len(normalized) > MAX_IMAGE_BYTES:
-        raise ValueError("图片处理后超过 5MB")
+    normalized, stored_format, width, height = _encode_stored_image(image, image_format)
+    if len(normalized) > MAX_STORED_IMAGE_BYTES:
+        raise ValueError(COMPRESSION_TOO_LARGE_MESSAGE)
+    mime_type, ext = ALLOWED_FORMATS[stored_format]
 
     attachment_id = _new_attachment_id()
     created_at = db.now_ts()
@@ -256,17 +262,82 @@ def _open_image(file_bytes: bytes):
         raise ValueError("图片文件无效") from exc
 
 
-def _encode_clean_image(image, image_format: str) -> bytes:
-    output = io.BytesIO()
+def _encode_stored_image(image, image_format: str) -> tuple[bytes, str, int, int]:
     if image_format == "JPEG":
-        clean = image.convert("RGB")
-        clean.save(output, format="JPEG", quality=92, optimize=True)
-    elif image_format == "PNG":
-        clean = image.convert("RGBA") if image.mode in {"RGBA", "LA", "P"} else image.convert("RGB")
-        clean.save(output, format="PNG", optimize=True)
-    else:
-        raise ValueError("仅支持 JPEG 或 PNG 图片")
+        return _encode_jpeg_to_limit(image.convert("RGB"))
+    if image_format == "PNG":
+        if _has_transparency(image):
+            return _encode_transparent_png_to_limit(image.convert("RGBA"))
+        png_image = image.convert("RGB")
+        encoded = _encode_png(png_image)
+        if len(encoded) <= MAX_STORED_IMAGE_BYTES:
+            width, height = png_image.size
+            return encoded, "PNG", width, height
+        return _encode_jpeg_to_limit(png_image)
+    raise ValueError("仅支持 JPEG 或 PNG 图片")
+
+
+def _encode_jpeg_to_limit(image) -> tuple[bytes, str, int, int]:
+    for candidate in _compression_candidates(image):
+        for quality in JPEG_QUALITIES:
+            encoded = _encode_jpeg(candidate, quality)
+            if len(encoded) <= MAX_STORED_IMAGE_BYTES:
+                width, height = candidate.size
+                return encoded, "JPEG", width, height
+    raise ValueError(COMPRESSION_TOO_LARGE_MESSAGE)
+
+
+def _encode_transparent_png_to_limit(image) -> tuple[bytes, str, int, int]:
+    for candidate in _compression_candidates(image):
+        encoded = _encode_png(candidate)
+        if len(encoded) <= MAX_STORED_IMAGE_BYTES:
+            width, height = candidate.size
+            return encoded, "PNG", width, height
+    raise ValueError(COMPRESSION_TOO_LARGE_MESSAGE)
+
+
+def _compression_candidates(image):
+    width, height = image.size
+    scale = min(1.0, MAX_COMPRESSED_IMAGE_SIDE / max(width, height))
+    while True:
+        next_width = max(1, int(width * scale))
+        next_height = max(1, int(height * scale))
+        if (next_width, next_height) == image.size:
+            yield image
+        else:
+            yield _resize_image(image, next_width, next_height)
+        if max(next_width, next_height) <= MIN_COMPRESSED_IMAGE_SIDE:
+            break
+        scale *= 0.85
+
+
+def _resize_image(image, width: int, height: int):
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Pillow is required for image uploads") from exc
+    return image.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def _encode_jpeg(image, quality: int) -> bytes:
+    output = io.BytesIO()
+    image.save(output, format="JPEG", quality=quality, optimize=True)
     return output.getvalue()
+
+
+def _encode_png(image) -> bytes:
+    output = io.BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _has_transparency(image) -> bool:
+    if image.mode in {"RGBA", "LA"}:
+        alpha = image.getchannel("A")
+        return alpha.getextrema()[0] < 255
+    if image.mode == "P":
+        return "transparency" in image.info
+    return False
 
 
 def _new_attachment_id() -> str:

@@ -4,7 +4,6 @@ import { ImageGrid } from './ImageGrid'
 import styles from './ImageUploader.module.css'
 
 const MAX_IMAGES = 9
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png'])
 
 interface ImageUploaderProps {
@@ -41,9 +40,9 @@ export function ImageUploader({
       setError(`最多上传 ${MAX_IMAGES} 张图片`)
       return
     }
-    const invalid = nextFiles.find((file) => !ALLOWED_TYPES.has(file.type) || file.size > MAX_IMAGE_BYTES)
+    const invalid = nextFiles.find((file) => !ALLOWED_TYPES.has(file.type))
     if (invalid) {
-      setError('仅支持 5MB 以内的 JPEG/PNG 图片')
+      setError('仅支持 JPEG/PNG 图片')
       return
     }
 
