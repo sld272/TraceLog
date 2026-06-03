@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { type Attachment, attachmentUrl } from '@/api/client'
 import styles from './ImageViewer.module.css'
 
@@ -24,7 +25,7 @@ export function ImageViewer({ attachments, initialIndex, onClose }: ImageViewerP
 
   if (!current) return null
 
-  return (
+  return createPortal(
     <div className={styles.overlay} onClick={onClose} role="dialog" aria-modal="true">
       <button className={styles.closeButton} type="button" onClick={onClose} aria-label="关闭">
         ×
@@ -64,6 +65,7 @@ export function ImageViewer({ attachments, initialIndex, onClose }: ImageViewerP
         </button>
       )}
       <div className={styles.counter}>{index + 1}/{attachments.length}</div>
-    </div>
+    </div>,
+    document.body,
   )
 }
