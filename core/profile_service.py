@@ -9,9 +9,22 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+import yaml
+
 from core import db
 
 USER_MD_PATH = str(db.WORKSPACE_DIR / "user.md")
+
+DEFAULT_SECTION_SENSITIVITY = {
+    "基本信息": "high",
+    "身份与角色": "high",
+    "性格与倾向": "normal",
+    "技能与专长": "normal",
+    "兴趣与习惯": "normal",
+    "核心人际关系": "normal",
+    "长期目标": "normal",
+    "当前状态与关注": "low",
+}
 
 DEFAULT_USER_MD = """---
 schema: tracelog/user.md@v1
@@ -47,6 +60,7 @@ sensitivity:
 
 ANCHOR_RE = re.compile(r"<!--\s*id:\s*([A-Za-z0-9_-]+)\s*-->")
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
+VALID_SENSITIVITY_LEVELS = {"high", "normal", "low"}
 
 SECTION_PREFIXES = {
     "基本信息": "bf",
@@ -211,29 +225,38 @@ def _evidence_exists(evidence: list[str]) -> bool:
 
 def _parse_user_md(text: str) -> UserMdDoc:
     lines = text.splitlines()
-    sensitivity: dict[str, str] = {}
-    if len(lines) >= 2 and lines[0].strip() == "---":
-        try:
-            end = lines.index("---", 1)
-        except ValueError:
-            end = -1
-        if end > 0:
-            in_sensitivity = False
-            for line in lines[1:end]:
-                stripped = line.strip()
-                if stripped == "sensitivity:":
-                    in_sensitivity = True
-                    continue
-                if in_sensitivity:
-                    if not line.startswith("  ") or ":" not in stripped:
-                        if stripped:
-                            in_sensitivity = False
-                        continue
-                    key, value = stripped.split(":", 1)
-                    level = value.strip()
-                    if level in ("high", "normal", "low"):
-                        sensitivity[key.strip()] = level
+    sensitivity: dict[str, str] = dict(DEFAULT_SECTION_SENSITIVITY)
+    frontmatter = _extract_frontmatter(lines)
+    if frontmatter is None:
+        return UserMdDoc(lines=lines, sensitivity=sensitivity)
+
+    try:
+        metadata = yaml.safe_load(frontmatter) or {}
+    except yaml.YAMLError:
+        return UserMdDoc(lines=lines, sensitivity=sensitivity)
+
+    if not isinstance(metadata, dict):
+        return UserMdDoc(lines=lines, sensitivity=sensitivity)
+
+    raw_sensitivity = metadata.get("sensitivity")
+    if isinstance(raw_sensitivity, dict):
+        for section, level in raw_sensitivity.items():
+            if (
+                isinstance(section, str)
+                and isinstance(level, str)
+                and level in VALID_SENSITIVITY_LEVELS
+            ):
+                sensitivity[section.strip()] = level
     return UserMdDoc(lines=lines, sensitivity=sensitivity)
+
+
+def _extract_frontmatter(lines: list[str]) -> str | None:
+    if len(lines) < 2 or lines[0].strip() != "---":
+        return None
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return "\n".join(lines[1:index])
+    return None
 
 
 def _apply_ops_to_doc(doc: UserMdDoc, patch: dict) -> str | None:

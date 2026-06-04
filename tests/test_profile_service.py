@@ -108,6 +108,83 @@ class ProfileServiceTest(unittest.TestCase):
         self.assertNotIn("## 长期目标与当前痛点", profile_service.DEFAULT_USER_MD)
         self.assertNotIn("## 近期主题与走向", profile_service.DEFAULT_USER_MD)
 
+    def test_user_md_frontmatter_is_parsed_as_yaml(self) -> None:
+        cases = [
+            (
+                "one_space_indent",
+                "---\n"
+                "schema: tracelog/user.md@v1\n"
+                "sensitivity:\n"
+                " 基本信息: high\n"
+                " 当前状态与关注: low\n"
+                "---\n\n"
+                "# 用户档案\n",
+            ),
+            (
+                "inline_map",
+                "---\n"
+                "schema: tracelog/user.md@v1\n"
+                "sensitivity: {基本信息: high, 当前状态与关注: low}\n"
+                "---\n\n"
+                "# 用户档案\n",
+            ),
+            (
+                "comment_inside_mapping",
+                "---\n"
+                "schema: tracelog/user.md@v1\n"
+                "sensitivity:\n"
+                "  # 用户手动批注\n"
+                "  基本信息: high\n"
+                "  当前状态与关注: low\n"
+                "---\n\n"
+                "# 用户档案\n",
+            ),
+        ]
+
+        for name, text in cases:
+            with self.subTest(name=name):
+                doc = profile_service._parse_user_md(text)
+                self.assertEqual("high", doc.sensitivity["基本信息"])
+                self.assertEqual("low", doc.sensitivity["当前状态与关注"])
+
+    def test_malformed_frontmatter_falls_back_to_default_sensitivity(self) -> None:
+        (self.workspace / "user.md").write_text(
+            "---\n"
+            "schema: tracelog/user.md@v1\n"
+            "sensitivity:\n"
+            "\t基本信息: high\n"
+            "\t当前状态与关注: low\n"
+            "---\n\n"
+            "# 用户档案\n\n"
+            "## 基本信息\n\n"
+            "## 当前状态与关注\n",
+            encoding="utf-8",
+        )
+
+        high_result = profile_service.apply_patch(
+            {
+                "section": "基本信息",
+                "ops": [{"op": "add", "value": "姓名：张三"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.60,
+            }
+        )
+        low_result = profile_service.apply_patch(
+            {
+                "section": "当前状态与关注",
+                "ops": [{"op": "add", "value": "最近在准备数学期末考"}],
+                "evidence": ["20260525-001"],
+                "confidence": 0.50,
+            }
+        )
+
+        content = profile_service.read_profile()
+
+        self.assertEqual({"status": "skipped", "reason": "low_confidence"}, high_result)
+        self.assertEqual("applied", low_result["status"])
+        self.assertNotIn("姓名：张三", content)
+        self.assertIn("最近在准备数学期末考 <!-- id: current-", content)
+
     def test_high_add_with_one_evidence_writes_user_md_and_leaves_legacy_placeholder(self) -> None:
         result = profile_service.apply_patch(
             {
