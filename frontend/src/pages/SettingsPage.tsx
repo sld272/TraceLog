@@ -347,13 +347,6 @@ function ModelSettingsPanel({
             placeholder={settings?.api_key_masked ?? '输入新的 API Key'}
             onChange={(value) => setField('api_key', value)}
           />
-          <NumberField
-            label="并发任务"
-            value={form.job_worker_concurrency}
-            min={1}
-            max={4}
-            onChange={(value) => setField('job_worker_concurrency', value)}
-          />
         </div>
       </section>
 
@@ -438,44 +431,6 @@ function ModelSettingsPanel({
               />
             </>
           )}
-        </div>
-      </section>
-
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <h2 className={styles.sectionTitle}>日志</h2>
-            <p className={styles.sectionMeta}>写入本地 JSONL，敏感字段会脱敏。</p>
-          </div>
-          <label className={styles.toggleRow}>
-            <input
-              type="checkbox"
-              checked={form.logging.enabled}
-              onChange={(event) => onChange({
-                ...form,
-                logging: { ...form.logging, enabled: event.target.checked },
-              })}
-            />
-            <span>启用</span>
-          </label>
-        </div>
-        <div className={styles.formGrid}>
-          <SelectField
-            label="日志级别"
-            value={form.logging.level}
-            options={['DEBUG', 'INFO', 'WARNING', 'ERROR']}
-            onChange={(value) => onChange({ ...form, logging: { ...form.logging, level: value } })}
-          />
-          <NumberField
-            label="历史保留"
-            value={form.logging.history_retention}
-            min={0}
-            max={100}
-            onChange={(value) => onChange({
-              ...form,
-              logging: { ...form.logging, history_retention: value },
-            })}
-          />
         </div>
       </section>
 
@@ -706,56 +661,6 @@ function TextField({
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
-  )
-}
-
-function NumberField({
-  label,
-  value,
-  min,
-  max,
-  onChange,
-}: {
-  label: string
-  value: number
-  min: number
-  max: number
-  onChange: (value: number) => void
-}) {
-  return (
-    <label className={styles.field}>
-      <span>{label}</span>
-      <input
-        type="number"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </label>
-  )
-}
-
-function SelectField({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string
-  value: string
-  options: string[]
-  onChange: (value: string) => void
-}) {
-  return (
-    <label className={styles.field}>
-      <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => (
-          <option key={option} value={option}>{option}</option>
-        ))}
-      </select>
     </label>
   )
 }

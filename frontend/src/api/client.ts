@@ -394,10 +394,23 @@ export function listTodos() {
   return request<Todo[]>('/todos')
 }
 
+export function createTodo(changes: Partial<Todo> & { task: string }) {
+  return request<Todo>('/todos', {
+    method: 'POST',
+    body: JSON.stringify(changes),
+  })
+}
+
 export function updateTodo(todoId: string, changes: Partial<Todo>) {
   return request<Todo>(`/todos/${todoId}`, {
     method: 'PATCH',
     body: JSON.stringify(changes),
+  })
+}
+
+export function deleteTodo(todoId: string) {
+  return request<{ ok: boolean }>(`/todos/${todoId}`, {
+    method: 'DELETE',
   })
 }
 

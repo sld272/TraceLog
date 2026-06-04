@@ -25,7 +25,8 @@ def load_todos() -> list[dict]:
     """List all todos ordered for display and prompt context."""
     rows = db.query_all(
         """
-        SELECT id, task, date, start_time, end_time, status
+        SELECT id, task, date, start_time, end_time, status,
+               source_post, created_at, updated_at, completed_at
         FROM todos
         ORDER BY COALESCE(date, '9999-99-99'), created_at, id
         """
@@ -313,4 +314,8 @@ def _todo_row_to_dict(row) -> dict:
         "start_time": row["start_time"],
         "end_time": row["end_time"],
         "status": row["status"],
+        "source_post": row["source_post"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "completed_at": row["completed_at"],
     }

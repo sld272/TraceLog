@@ -250,20 +250,66 @@ class ApiManagementTest(unittest.TestCase):
     def test_todo_routes_list_and_patch_status(self) -> None:
         db.execute(
             """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            ("todo-1", "复习数学", "未完成", 1.0, 1.0),
+            ("post-1", "2026-06-04T00:00:00+00:00", "来源记录", 1.0, 1.0),
+        )
+        db.execute(
+            """
+            INSERT INTO todos(id, task, status, source_post, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("todo-1", "复习数学", "未完成", "post-1", 1.0, 1.0),
         )
 
         with self._client() as client:
             list_response = client.get("/todos")
             patch_response = client.patch("/todos/todo-1", json={"status": "已完成"})
+            create_response = client.post(
+                "/todos",
+                json={
+                    "task": "手动整理错题",
+                    "date": "2026-06-05",
+                    "start_time": "20:00",
+                    "end_time": "",
+                },
+            )
+            delete_response = client.delete("/todos/todo-1")
+            list_after_delete_response = client.get("/todos")
 
         self.assertEqual(200, list_response.status_code)
         self.assertEqual("复习数学", list_response.json()[0]["task"])
+        self.assertEqual("post-1", list_response.json()[0]["source_post"])
         self.assertEqual(200, patch_response.status_code)
         self.assertEqual("已完成", patch_response.json()["status"])
+        self.assertIsNotNone(patch_response.json()["completed_at"])
+
+        self.assertEqual(200, create_response.status_code)
+        created = create_response.json()
+        self.assertTrue(created["id"].startswith("manual-"))
+        self.assertEqual("手动整理错题", created["task"])
+        self.assertEqual("2026-06-05", created["date"])
+        self.assertEqual("20:00", created["start_time"])
+        self.assertIsNone(created["end_time"])
+        self.assertEqual("未完成", created["status"])
+        self.assertIsNone(created["source_post"])
+
+        self.assertEqual(200, delete_response.status_code)
+        self.assertEqual({"ok": True}, delete_response.json())
+        self.assertEqual([created["id"]], [todo["id"] for todo in list_after_delete_response.json()])
+
+    def test_todo_routes_validate_create_update_delete(self) -> None:
+        with self._client() as client:
+            empty_create = client.post("/todos", json={"task": " "})
+            invalid_status = client.post("/todos", json={"task": "有效任务", "status": "doing"})
+            missing_patch = client.patch("/todos/missing", json={"status": "已完成"})
+            missing_delete = client.delete("/todos/missing")
+
+        self.assertEqual(422, empty_create.status_code)
+        self.assertEqual(422, invalid_status.status_code)
+        self.assertEqual(404, missing_patch.status_code)
+        self.assertEqual(404, missing_delete.status_code)
 
     def test_manual_reflection_routes_enqueue_jobs(self) -> None:
         with self._client() as client:
