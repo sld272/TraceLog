@@ -9,6 +9,7 @@ import {
   listTodos,
   previewGlobalReflection,
   previewSoulReflections,
+  updateTodo,
 } from '@/api/client'
 import { AppShell } from '@/components/AppShell'
 import { LeftNav } from '@/components/LeftNav'
@@ -61,6 +62,27 @@ export function App() {
     }
   }, [])
 
+  const refreshTodos = useCallback(async () => {
+    const todoData = await listTodos()
+    setTodos(todoData)
+  }, [])
+
+  const refreshHomeContext = useCallback(async () => {
+    await Promise.all([
+      fetchProfile(),
+      fetchRightPanelData(),
+    ])
+  }, [fetchProfile, fetchRightPanelData])
+
+  const handleTodoToggle = useCallback(async (todo: Todo) => {
+    await updateTodo(todo.id, { status: '已完成' })
+    await refreshTodos()
+  }, [refreshTodos])
+
+  const openReflections = useCallback(() => {
+    setActivePage('reflections')
+  }, [])
+
   useEffect(() => {
     fetchSouls()
     fetchProfile()
@@ -70,7 +92,7 @@ export function App() {
   const renderMain = () => {
     switch (activePage) {
       case 'home':
-        return <Timeline />
+        return <Timeline onActivitySettled={refreshHomeContext} />
       case 'todos':
         return <TodosPage />
       case 'reflections':
@@ -82,7 +104,7 @@ export function App() {
           const soulName = activePage.replace('chat:', '')
           return <ChatPage soulName={soulName} />
         }
-        return <Timeline />
+        return <Timeline onActivitySettled={refreshHomeContext} />
     }
   }
 
@@ -102,6 +124,8 @@ export function App() {
           todos={todos}
           globalReflection={globalReflection}
           soulReflections={soulReflections}
+          onTodoToggle={handleTodoToggle}
+          onOpenReflections={openReflections}
         />
       ) : undefined}
     />

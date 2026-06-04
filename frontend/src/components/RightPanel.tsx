@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   type ReflectionScope,
   type SoulReflectionScope,
@@ -10,6 +11,8 @@ interface RightPanelProps {
   todos: Todo[]
   globalReflection: ReflectionScope | null
   soulReflections: SoulReflectionScope[]
+  onTodoToggle: (todo: Todo) => Promise<void> | void
+  onOpenReflections: () => void
 }
 
 export function RightPanel({
@@ -17,70 +20,141 @@ export function RightPanel({
   todos,
   globalReflection,
   soulReflections,
+  onTodoToggle,
+  onOpenReflections,
 }: RightPanelProps) {
-  const focusItems = extractFocusItems(profileContent).slice(0, 3)
-  const todayTodos = todos
-    .filter((todo) => isTodayTodo(todo) && !isDone(todo))
-    .slice(0, 3)
-  const reflectionItems = buildReflectionItems(globalReflection, soulReflections).slice(0, 3)
-
   return (
     <div className={styles.panel}>
-      <section className={styles.card}>
-        <PanelHeader eyebrow="Focus" title="当前关注" />
-        <div className={styles.itemList}>
-          {focusItems.length > 0 ? (
-            focusItems.map((item, index) => (
-              <div key={`${item}-${index}`} className={styles.textItem}>
-                {item}
-              </div>
-            ))
-          ) : (
-            <p className={styles.empty}>user.md 里还没有可展示的当前关注</p>
-          )}
-        </div>
-      </section>
+      <FocusCard profileContent={profileContent} />
+      <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} />
+      <ReflectionQueueCard
+        globalReflection={globalReflection}
+        soulReflections={soulReflections}
+        onOpenReflections={onOpenReflections}
+      />
+    </div>
+  )
+}
 
-      <section className={styles.card}>
-        <PanelHeader eyebrow="Today" title="今日待办" />
-        <div className={styles.itemList}>
-          {todayTodos.length > 0 ? (
-            todayTodos.map((todo) => (
+function FocusCard({ profileContent }: { profileContent: string | null }) {
+  const focusItems = extractCurrentFocusItems(profileContent)
+
+  return (
+    <section className={styles.card}>
+      <PanelHeader eyebrow="Focus" title="当前关注" />
+      <div className={styles.itemList}>
+        {focusItems.length > 0 ? (
+          focusItems.map((item, index) => (
+            <div key={`${item}-${index}`} className={styles.focusItem}>
+              <span className={styles.focusMarker} aria-hidden="true" />
+              <span>{item}</span>
+            </div>
+          ))
+        ) : (
+          <p className={styles.empty}>还没有当前关注</p>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function TodayTodosCard({
+  todos,
+  onTodoToggle,
+}: {
+  todos: Todo[]
+  onTodoToggle: (todo: Todo) => Promise<void> | void
+}) {
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const todayTodos = selectTodayTodos(todos)
+
+  const completeTodo = async (todo: Todo) => {
+    setSavingId(todo.id)
+    setError(null)
+    try {
+      await onTodoToggle(todo)
+    } catch {
+      setError('更新失败，稍后再试')
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  return (
+    <section className={styles.card}>
+      <PanelHeader eyebrow="Today" title="今日待办" />
+      <div className={styles.itemList}>
+        {todayTodos.length > 0 ? (
+          todayTodos.map((todo) => {
+            const meta = todoMeta(todo)
+
+            return (
               <div key={todo.id} className={styles.todoItem}>
-                <span className={styles.todoDot} aria-hidden="true" />
+                <button
+                  type="button"
+                  className={styles.todoCheckbox}
+                  disabled={savingId === todo.id}
+                  aria-label={`完成待办：${todo.task}`}
+                  onClick={() => completeTodo(todo)}
+                >
+                  {savingId === todo.id ? '...' : ''}
+                </button>
                 <div className={styles.todoBody}>
                   <p>{todo.task}</p>
-                  {(todo.start_time || todo.end_time) && (
-                    <span>{[todo.start_time, todo.end_time].filter(Boolean).join(' - ')}</span>
-                  )}
+                  {meta && <span>{meta}</span>}
                 </div>
               </div>
-            ))
-          ) : (
-            <p className={styles.empty}>今天没有未完成待办</p>
-          )}
-        </div>
-      </section>
+            )
+          })
+        ) : (
+          <p className={styles.empty}>今天没有待办</p>
+        )}
+        {error && <p className={styles.inlineError}>{error}</p>}
+      </div>
+    </section>
+  )
+}
 
-      <section className={styles.card}>
-        <PanelHeader eyebrow="Reflection" title="最近反思" />
-        <div className={styles.itemList}>
-          {reflectionItems.length > 0 ? (
-            reflectionItems.map((item) => (
-              <div key={item.label} className={styles.reflectionItem}>
-                <span className={styles.reflectionCount}>{item.count}</span>
-                <div>
-                  <p>{item.label}</p>
-                  <span>{item.detail}</span>
-                </div>
-              </div>
-            ))
-          ) : (
-            <p className={styles.empty}>暂无新的反思范围</p>
-          )}
-        </div>
-      </section>
-    </div>
+function ReflectionQueueCard({
+  globalReflection,
+  soulReflections,
+  onOpenReflections,
+}: {
+  globalReflection: ReflectionScope | null
+  soulReflections: SoulReflectionScope[]
+  onOpenReflections: () => void
+}) {
+  const globalCount = globalReflection?.post_ids.length ?? 0
+  const soulCount = soulReflections.reduce(
+    (total, scope) => total + Math.max(scope.interaction_count, 0),
+    0,
+  )
+  const hasQueue = globalCount > 0 || soulCount > 0
+
+  return (
+    <section className={styles.card}>
+      <PanelHeader eyebrow="Queue" title="待整理线索" />
+      <div className={styles.itemList}>
+        {hasQueue ? (
+          <>
+            <div className={styles.queueRows}>
+              <QueueRow
+                label="公开记录"
+                count={globalCount}
+                detail={formatScope(globalReflection?.scope_start, globalReflection?.scope_end)}
+              />
+              <QueueRow label="人格互动" count={soulCount} detail={formatSoulScope(soulReflections)} />
+            </div>
+            <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
+              查看
+            </button>
+          </>
+        ) : (
+          <p className={styles.empty}>没有待整理线索</p>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -93,20 +167,30 @@ function PanelHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
   )
 }
 
-function extractFocusItems(content: string | null): string[] {
-  if (!content) return []
-  const lines = content
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
+function QueueRow({ label, count, detail }: { label: string; count: number; detail: string }) {
+  return (
+    <div className={styles.queueRow}>
+      <div>
+        <p>{label}</p>
+        <span>{detail}</span>
+      </div>
+      <strong>{count} 条</strong>
+    </div>
+  )
+}
 
-  const focusIndex = lines.findIndex((line) => /当前关注|关注|focus/i.test(line))
-  const sourceLines = focusIndex >= 0 ? lines.slice(focusIndex + 1) : lines
+function extractCurrentFocusItems(content: string | null): string[] {
+  if (!content) return []
+  const lines = content.split('\n')
+  const focusIndex = lines.findIndex((line) => line.trim() === '## 当前状态与关注')
+  if (focusIndex < 0) return []
   const items: string[] = []
 
-  for (const line of sourceLines) {
+  for (const rawLine of lines.slice(focusIndex + 1)) {
     if (items.length >= 3) break
-    if (/^#{1,6}\s/.test(line) && items.length > 0) break
+    const line = rawLine.trim()
+    if (/^##\s+/.test(line)) break
+    if (!line || /^#{1,6}\s/.test(line)) continue
     const cleaned = line
       .replace(/^[-*+]\s+/, '')
       .replace(/^\d+[.)、]\s*/, '')
@@ -122,9 +206,17 @@ function isDone(todo: Todo): boolean {
   return ['已完成', '完成', 'done', 'completed'].includes(todo.status)
 }
 
-function isTodayTodo(todo: Todo): boolean {
-  if (!todo.date) return true
-  return todo.date === getTodayKey()
+function selectTodayTodos(todos: Todo[]): Todo[] {
+  const active = todos.filter((todo) => !isDone(todo))
+  const today = active.filter((todo) => todo.date === getTodayKey())
+  const undated = active.filter((todo) => !todo.date)
+  return [...today, ...undated].slice(0, 3)
+}
+
+function todoMeta(todo: Todo): string {
+  const time = [todo.start_time, todo.end_time].filter(Boolean).join(' - ')
+  if (todo.date && time) return `${todo.date} ${time}`
+  return todo.date || time
 }
 
 function getTodayKey(): string {
@@ -135,39 +227,19 @@ function getTodayKey(): string {
   return `${year}-${month}-${day}`
 }
 
-function buildReflectionItems(
-  globalReflection: ReflectionScope | null,
-  soulReflections: SoulReflectionScope[],
-) {
-  const items: Array<{ label: string; detail: string; count: string }> = []
-  const postCount = globalReflection?.post_ids.length ?? 0
-  if (postCount > 0) {
-    items.push({
-      label: '全局画像等待整理',
-      detail: formatScope(globalReflection?.scope_start, globalReflection?.scope_end),
-      count: String(postCount),
-    })
-  }
-
-  soulReflections
-    .filter((scope) => scope.interaction_count > 0)
-    .sort((a, b) => b.interaction_count - a.interaction_count)
-    .forEach((scope) => {
-      items.push({
-        label: `${scope.soul_name} 的对话线索`,
-        detail: formatUnixScope(scope.scope_start, scope.scope_end),
-        count: String(scope.interaction_count),
-      })
-    })
-
-  return items
-}
-
 function formatScope(start: string | null | undefined, end: string | null | undefined): string {
   const startText = formatDate(start)
   const endText = formatDate(end)
-  if (startText === '-' && endText === '-') return '新的记录已进入反思范围'
+  if (startText === '-' && endText === '-') return '等待整理'
   return `${startText} - ${endText}`
+}
+
+function formatSoulScope(soulReflections: SoulReflectionScope[]): string {
+  const activeScopes = soulReflections.filter((scope) => scope.interaction_count > 0)
+  if (activeScopes.length === 0) return '等待整理'
+  const start = Math.min(...activeScopes.map((scope) => scope.scope_start))
+  const end = Math.max(...activeScopes.map((scope) => scope.scope_end))
+  return formatUnixScope(start, end)
 }
 
 function formatUnixScope(start: number, end: number): string {

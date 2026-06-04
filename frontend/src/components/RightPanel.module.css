@@ -1,15 +1,14 @@
 .panel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .card {
-  background: rgba(255, 255, 255, 0.74);
+  background: rgba(255, 255, 255, 0.68);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
 }
 
 .cardHeader {
@@ -24,6 +23,7 @@
   color: var(--color-accent);
   font-size: 0.68rem;
   font-weight: 700;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -39,21 +39,30 @@
   gap: var(--space-2);
 }
 
-.textItem {
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-soft);
+.focusItem {
+  display: grid;
+  grid-template-columns: 8px 1fr;
+  gap: var(--space-2);
+  align-items: start;
   color: var(--color-text-secondary);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
   word-break: break-word;
 }
 
+.focusMarker {
+  width: 5px;
+  height: 5px;
+  margin-top: 0.52rem;
+  border-radius: 50%;
+  background: var(--color-accent);
+}
+
 .todoItem {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  padding: var(--space-3) 0;
+  padding: var(--space-2) 0;
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -61,14 +70,31 @@
   border-bottom: 0;
 }
 
-.todoDot {
-  width: 9px;
-  height: 9px;
-  margin-top: 0.45rem;
+.todoCheckbox {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  margin-top: 0.12rem;
+  padding: 0;
   flex-shrink: 0;
-  border: 2px solid var(--color-accent);
+  place-items: center;
+  border: 1px solid var(--color-border-strong);
   border-radius: 50%;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: 0.58rem;
+  line-height: 1;
+}
+
+.todoCheckbox:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--color-accent-subtle);
+}
+
+.todoCheckbox:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .todoBody {
@@ -76,7 +102,7 @@
 }
 
 .todoBody p,
-.reflectionItem p {
+.queueRow p {
   color: var(--color-text-primary);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
@@ -84,39 +110,65 @@
 }
 
 .todoBody span,
-.reflectionItem span {
+.queueRow span {
   display: block;
   margin-top: var(--space-1);
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
 }
 
-.reflectionItem {
-  display: grid;
-  grid-template-columns: 34px 1fr;
-  gap: var(--space-3);
-  align-items: start;
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--color-accent-subtle), rgba(255, 255, 255, 0.72));
+.queueRows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
-.reflectionItem .reflectionCount {
+.queueRow {
   display: grid;
-  width: 34px;
-  height: 34px;
-  margin-top: 0;
-  place-items: center;
-  border-radius: 50%;
-  background: #ffffff;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.queueRow:last-child {
+  border-bottom: 0;
+}
+
+.queueRow strong {
   color: var(--color-accent);
   font-size: var(--text-sm);
-  font-weight: 700;
-  box-shadow: var(--shadow-sm);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.queueAction {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.queueAction:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
 }
 
 .empty {
   color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.inlineError {
+  color: var(--color-error);
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
 }

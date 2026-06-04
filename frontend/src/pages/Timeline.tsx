@@ -18,7 +18,11 @@ import { Composer } from '@/components/Composer'
 import { type CommentConversationState, PostCard } from '@/components/PostCard'
 import styles from './Timeline.module.css'
 
-export function Timeline() {
+interface TimelineProps {
+  onActivitySettled?: () => void
+}
+
+export function Timeline({ onActivitySettled }: TimelineProps) {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
   const [postCommentConversations, setPostCommentConversations] = useState<Record<string, Record<string, CommentConversationState>>>({})
@@ -80,6 +84,7 @@ export function Timeline() {
               : p,
           ),
         )
+        onActivitySettled?.()
       },
     )
   }
