@@ -83,6 +83,10 @@ export function App() {
     setActivePage('reflections')
   }, [])
 
+  const openTodos = useCallback(() => {
+    setActivePage('todos')
+  }, [])
+
   useEffect(() => {
     fetchSouls()
     fetchProfile()
@@ -94,7 +98,7 @@ export function App() {
       case 'home':
         return <Timeline onActivitySettled={refreshHomeContext} />
       case 'todos':
-        return <TodosPage />
+        return <TodosPage onTodosChanged={refreshTodos} />
       case 'reflections':
         return <ReflectionsPage />
       case 'settings':
@@ -125,6 +129,7 @@ export function App() {
           globalReflection={globalReflection}
           soulReflections={soulReflections}
           onTodoToggle={handleTodoToggle}
+          onOpenTodos={openTodos}
           onOpenReflections={openReflections}
         />
       ) : undefined}

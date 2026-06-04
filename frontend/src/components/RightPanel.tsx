@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 import {
   type ReflectionScope,
   type SoulReflectionScope,
@@ -12,6 +12,7 @@ interface RightPanelProps {
   globalReflection: ReflectionScope | null
   soulReflections: SoulReflectionScope[]
   onTodoToggle: (todo: Todo) => Promise<void> | void
+  onOpenTodos: () => void
   onOpenReflections: () => void
 }
 
@@ -21,12 +22,13 @@ export function RightPanel({
   globalReflection,
   soulReflections,
   onTodoToggle,
+  onOpenTodos,
   onOpenReflections,
 }: RightPanelProps) {
   return (
     <div className={styles.panel}>
       <FocusCard profileContent={profileContent} />
-      <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} />
+      <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} onOpenTodos={onOpenTodos} />
       <ReflectionQueueCard
         globalReflection={globalReflection}
         soulReflections={soulReflections}
@@ -61,12 +63,15 @@ function FocusCard({ profileContent }: { profileContent: string | null }) {
 function TodayTodosCard({
   todos,
   onTodoToggle,
+  onOpenTodos,
 }: {
   todos: Todo[]
   onTodoToggle: (todo: Todo) => Promise<void> | void
+  onOpenTodos: () => void
 }) {
   const [savingId, setSavingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const todoCount = countTodayTodoCandidates(todos)
   const todayTodos = selectTodayTodos(todos)
 
   const completeTodo = async (todo: Todo) => {
@@ -83,7 +88,15 @@ function TodayTodosCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader eyebrow="Today" title="今日待办" />
+      <PanelHeader
+        eyebrow="Today"
+        title="今日待办"
+        action={todoCount > 0 ? (
+          <button type="button" className={styles.headerAction} onClick={onOpenTodos}>
+            {todoCount > todayTodos.length ? `还有 ${todoCount - todayTodos.length} 个` : '管理'}
+          </button>
+        ) : undefined}
+      />
       <div className={styles.itemList}>
         {todayTodos.length > 0 ? (
           todayTodos.map((todo) => {
@@ -158,11 +171,22 @@ function ReflectionQueueCard({
   )
 }
 
-function PanelHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
+function PanelHeader({
+  eyebrow,
+  title,
+  action,
+}: {
+  eyebrow: string
+  title: string
+  action?: ReactNode
+}) {
   return (
     <div className={styles.cardHeader}>
       <span className={styles.eyebrow}>{eyebrow}</span>
-      <h3 className={styles.cardTitle}>{title}</h3>
+      <div className={styles.titleCluster}>
+        <h3 className={styles.cardTitle}>{title}</h3>
+        {action}
+      </div>
     </div>
   )
 }
@@ -211,6 +235,10 @@ function selectTodayTodos(todos: Todo[]): Todo[] {
   const today = active.filter((todo) => todo.date === getTodayKey())
   const undated = active.filter((todo) => !todo.date)
   return [...today, ...undated].slice(0, 3)
+}
+
+function countTodayTodoCandidates(todos: Todo[]): number {
+  return todos.filter((todo) => !isDone(todo) && (todo.date === getTodayKey() || !todo.date)).length
 }
 
 function todoMeta(todo: Todo): string {

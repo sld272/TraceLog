@@ -177,10 +177,56 @@
   margin-bottom: var(--space-4);
 }
 
-.todoSummaryPills {
-  display: flex;
-  flex-wrap: wrap;
+.todoSummaryBar h2 {
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.todoSummaryBar p {
+  margin-top: var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.quickAdd {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.quickAdd input {
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: #ffffff;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--text-sm);
+  padding: 0 var(--space-4);
+}
+
+.quickAdd input:focus {
+  border-color: var(--color-accent-border);
+  outline: none;
+}
+
+.quickAdd button {
+  min-height: 38px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.quickAdd button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .todoGroups {
@@ -191,6 +237,13 @@
 
 .todoGroup {
   min-width: 0;
+}
+
+.todayGroup {
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-subtle);
+  padding: var(--space-3);
 }
 
 .todoGroupHeader {
@@ -318,6 +371,10 @@
   font-size: var(--text-xs);
 }
 
+.todoDrawerLayer {
+  display: contents;
+}
+
 .todoDrawer {
   position: sticky;
   top: calc(var(--topbar-height) + var(--space-4));
@@ -420,8 +477,23 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .todoDrawerLayer {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: var(--space-4);
+    background: rgba(31, 41, 35, 0.18);
+  }
+
   .todoDrawer {
     position: static;
+    width: min(100%, 520px);
+    max-height: calc(100vh - var(--space-8));
+    overflow: auto;
+    box-shadow: var(--shadow-lg);
   }
 }
 
@@ -439,6 +511,10 @@
   .drawerActions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .quickAdd {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .drawerFieldGrid {

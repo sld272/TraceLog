@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { type Todo, createTodo, deleteTodo, listTodos, updateTodo } from '@/api/client'
 import styles from './WorkspacePages.module.css'
 
@@ -20,6 +20,10 @@ interface TodoGroup {
   todos: Todo[]
 }
 
+interface TodosPageProps {
+  onTodosChanged?: () => void
+}
+
 const EMPTY_FORM: TodoForm = {
   task: '',
   date: '',
@@ -28,7 +32,7 @@ const EMPTY_FORM: TodoForm = {
   status: '未完成',
 }
 
-export function TodosPage() {
+export function TodosPage({ onTodosChanged }: TodosPageProps) {
   const [todos, setTodos] = useState<Todo[]>([])
   const [loading, setLoading] = useState(true)
   const [savingId, setSavingId] = useState<string | null>(null)
@@ -36,6 +40,8 @@ export function TodosPage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteArmed, setDeleteArmed] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [quickTask, setQuickTask] = useState('')
+  const [savingQuickAdd, setSavingQuickAdd] = useState(false)
   const [drawerMode, setDrawerMode] = useState<DrawerMode | null>(null)
   const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null)
   const [form, setForm] = useState<TodoForm>(EMPTY_FORM)
@@ -94,6 +100,7 @@ export function TodosPage() {
     try {
       const updated = await updateTodo(todo.id, { status: nextStatus })
       setTodos((prev) => replaceTodo(prev, updated))
+      onTodosChanged?.()
     } catch (err) {
       setError(err instanceof Error ? err.message : '更新失败')
     } finally {
@@ -113,9 +120,11 @@ export function TodosPage() {
       if (drawerMode === 'create') {
         const created = await createTodo(payload)
         setTodos((prev) => [...prev, created])
+        onTodosChanged?.()
       } else if (drawerMode === 'edit' && selectedTodo) {
         const updated = await updateTodo(selectedTodo.id, payload)
         setTodos((prev) => replaceTodo(prev, updated))
+        onTodosChanged?.()
       }
       closeDrawer()
     } catch (err) {
@@ -136,11 +145,30 @@ export function TodosPage() {
     try {
       await deleteTodo(selectedTodo.id)
       setTodos((prev) => prev.filter((todo) => todo.id !== selectedTodo.id))
+      onTodosChanged?.()
       closeDrawer()
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除失败')
     } finally {
       setDeleting(false)
+    }
+  }
+
+  const createQuickTodo = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const task = quickTask.trim()
+    if (!task) return
+    setSavingQuickAdd(true)
+    setError(null)
+    try {
+      const created = await createTodo({ task })
+      setTodos((prev) => [...prev, created])
+      setQuickTask('')
+      onTodosChanged?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '新增失败')
+    } finally {
+      setSavingQuickAdd(false)
     }
   }
 
@@ -170,13 +198,23 @@ export function TodosPage() {
         <div className={`${styles.todoWorkspace} ${drawerOpen ? styles.drawerOpen : ''}`}>
           <section className={styles.todoListPanel}>
             <div className={styles.todoSummaryBar}>
-              <div className={styles.todoSummaryPills}>
-                <span className={styles.pill}>{activeCount} 个未完成</span>
-                <span className={styles.pill}>{todayCount} 个今天</span>
-                <span className={styles.pill}>{undatedCount} 个无日期</span>
+              <div>
+                <h2>{activeCount} 个待完成</h2>
+                <p>今天 {todayCount} · 无日期 {undatedCount}</p>
               </div>
               <span className={styles.meta}>{completedCount} 个已完成</span>
             </div>
+
+            <form className={styles.quickAdd} onSubmit={createQuickTodo}>
+              <input
+                value={quickTask}
+                placeholder="快速添加待办..."
+                onChange={(event) => setQuickTask(event.target.value)}
+              />
+              <button type="submit" disabled={savingQuickAdd || !quickTask.trim()}>
+                {savingQuickAdd ? '添加中...' : '添加'}
+              </button>
+            </form>
 
             <div className={styles.todoGroups}>
               {groups.map((group) => (
@@ -192,18 +230,20 @@ export function TodosPage() {
           </section>
 
           {drawerOpen && (
-            <TodoDrawer
-              mode={drawerMode}
-              form={form}
-              selectedTodo={selectedTodo}
-              saving={savingDrawer}
-              deleting={deleting}
-              deleteArmed={deleteArmed}
-              onChange={setForm}
-              onClose={closeDrawer}
-              onSave={saveDrawer}
-              onDelete={removeSelectedTodo}
-            />
+            <div className={styles.todoDrawerLayer} onClick={closeDrawer}>
+              <TodoDrawer
+                mode={drawerMode}
+                form={form}
+                selectedTodo={selectedTodo}
+                saving={savingDrawer}
+                deleting={deleting}
+                deleteArmed={deleteArmed}
+                onChange={setForm}
+                onClose={closeDrawer}
+                onSave={saveDrawer}
+                onDelete={removeSelectedTodo}
+              />
+            </div>
           )}
         </div>
       )}
@@ -230,7 +270,7 @@ function TodoGroupSection({
   }, [group.key, group.todos.length])
 
   return (
-    <section className={styles.todoGroup}>
+    <section className={`${styles.todoGroup} ${group.key === 'today' ? styles.todayGroup : ''}`}>
       <div className={styles.todoGroupHeader}>
         <div>
           <h2>{group.title}</h2>
@@ -337,7 +377,7 @@ function TodoDrawer({
   }
 
   return (
-    <aside className={styles.todoDrawer}>
+    <aside className={styles.todoDrawer} onClick={(event) => event.stopPropagation()}>
       <div className={styles.drawerHeader}>
         <div>
           <h2>{mode === 'create' ? '新增待办' : '编辑待办'}</h2>
