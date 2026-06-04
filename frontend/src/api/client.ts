@@ -270,19 +270,6 @@ export interface WorkspaceStatus {
   }
 }
 
-export interface MemoryRevisionSummary {
-  id: number
-  target_type: 'user' | 'soul'
-  target_name: string | null
-  source: string
-  patch: unknown
-  created_at: number
-}
-
-export interface MemoryRevisionDetail extends MemoryRevisionSummary {
-  snapshot: string
-}
-
 /* Posts */
 const DEFAULT_LIST_LIMIT = 20
 
@@ -411,16 +398,6 @@ export function updateProfile(content: string) {
   })
 }
 
-const DEFAULT_REVISION_LIMIT = 20
-
-export function listProfileRevisions(limit = DEFAULT_REVISION_LIMIT) {
-  return request<MemoryRevisionSummary[]>(`/profile/revisions?limit=${limit}`)
-}
-
-export function getProfileRevision(revisionId: number) {
-  return request<MemoryRevisionDetail>(`/profile/revisions/${revisionId}`)
-}
-
 export function getSoulMemory(name: string) {
   return request<{ soul_name: string; content: string }>(`/souls/${encodeURIComponent(name)}/memory`)
 }
@@ -430,14 +407,6 @@ export function updateSoulMemory(name: string, content: string) {
     method: 'PUT',
     body: JSON.stringify({ content }),
   })
-}
-
-export function listSoulMemoryRevisions(name: string, limit = DEFAULT_REVISION_LIMIT) {
-  return request<MemoryRevisionSummary[]>(`/souls/${encodeURIComponent(name)}/memory/revisions?limit=${limit}`)
-}
-
-export function getSoulMemoryRevision(name: string, revisionId: number) {
-  return request<MemoryRevisionDetail>(`/souls/${encodeURIComponent(name)}/memory/revisions/${revisionId}`)
 }
 
 /* Todos */

@@ -1,15 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import {
-  type MemoryRevisionDetail,
-  type MemoryRevisionSummary,
   type Soul,
   type WorkspaceStatus,
   getProfile,
-  getProfileRevision,
   getSoulMemory,
-  getSoulMemoryRevision,
-  listProfileRevisions,
-  listSoulMemoryRevisions,
   updateProfile,
   updateSoulMemory,
 } from '@/api/client'
@@ -30,7 +24,6 @@ interface MemoryObject {
 
 interface SectionSpec {
   title: string
-  sensitivity?: 'high' | 'normal' | 'low'
 }
 
 interface ParsedSection {
@@ -39,14 +32,14 @@ interface ParsedSection {
 }
 
 const PROFILE_SECTIONS: SectionSpec[] = [
-  { title: '基本信息', sensitivity: 'high' },
-  { title: '身份与角色', sensitivity: 'high' },
-  { title: '性格与倾向', sensitivity: 'normal' },
-  { title: '技能与专长', sensitivity: 'normal' },
-  { title: '兴趣与习惯', sensitivity: 'normal' },
-  { title: '核心人际关系', sensitivity: 'normal' },
-  { title: '长期目标', sensitivity: 'normal' },
-  { title: '当前状态与关注', sensitivity: 'low' },
+  { title: '基本信息' },
+  { title: '身份与角色' },
+  { title: '性格与倾向' },
+  { title: '技能与专长' },
+  { title: '兴趣与习惯' },
+  { title: '核心人际关系' },
+  { title: '长期目标' },
+  { title: '当前状态与关注' },
 ]
 
 const SOUL_MEMORY_SECTIONS: SectionSpec[] = [
@@ -70,11 +63,8 @@ export function MemorySettingsPanel({
   const [editorMode, setEditorMode] = useState<EditorMode>('structured')
   const [savedContent, setSavedContent] = useState('')
   const [draftContent, setDraftContent] = useState('')
-  const [revisions, setRevisions] = useState<MemoryRevisionSummary[]>([])
-  const [snapshot, setSnapshot] = useState<MemoryRevisionDetail | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [loadingSnapshotId, setLoadingSnapshotId] = useState<number | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -85,7 +75,6 @@ export function MemorySettingsPanel({
     () => getDisplaySections(selectedObject.kind, draftContent),
     [selectedObject.kind, draftContent],
   )
-  const sourceSummary = useMemo(() => summarizeSources(revisions), [revisions])
 
   useEffect(() => {
     if (!memoryObjects.some((item) => item.id === selectedObjectId)) {
@@ -128,9 +117,7 @@ export function MemorySettingsPanel({
         : (await updateSoulMemory(selectedObject.label, content)).content
       setSavedContent(saved)
       setDraftContent(saved)
-      setSnapshot(null)
-      setNotice('记忆已保存，新的版本记录已经写入。')
-      setRevisions(await fetchRevisions(selectedObject))
+      setNotice('记忆已保存。')
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存记忆失败')
     } finally {
@@ -138,45 +125,18 @@ export function MemorySettingsPanel({
     }
   }
 
-  const handleViewRevision = async (revision: MemoryRevisionSummary) => {
-    setLoadingSnapshotId(revision.id)
-    setError(null)
-    try {
-      const detail = selectedObject.kind === 'profile'
-        ? await getProfileRevision(revision.id)
-        : await getSoulMemoryRevision(selectedObject.label, revision.id)
-      setSnapshot(detail)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '读取历史版本失败')
-    } finally {
-      setLoadingSnapshotId(null)
-    }
-  }
-
-  const handleCopySnapshot = () => {
-    if (!snapshot) return
-    setDraftContent(snapshot.snapshot)
-    setNotice('历史快照已复制到当前草稿，保存后才会覆盖现有记忆。')
-  }
-
   async function loadMemory(object: MemoryObject) {
     setLoading(true)
     setNotice(null)
     setError(null)
-    setSnapshot(null)
     try {
-      const [content, nextRevisions] = await Promise.all([
-        fetchContent(object),
-        fetchRevisions(object),
-      ])
+      const content = await fetchContent(object)
       setSavedContent(content)
       setDraftContent(content)
-      setRevisions(nextRevisions)
       setEditorMode('structured')
     } catch (err) {
       setSavedContent('')
       setDraftContent('')
-      setRevisions([])
       setError(err instanceof Error ? err.message : '读取记忆失败')
     } finally {
       setLoading(false)
@@ -196,8 +156,6 @@ export function MemorySettingsPanel({
         <div className={styles.memoryStats}>
           <MemoryStat label="用户画像" value="1" />
           <MemoryStat label="人格记忆" value={souls.length} />
-          <MemoryStat label="当前版本" value={revisions.length} />
-          <MemoryStat label="待审核" value="预留" muted />
         </div>
       </section>
 
@@ -260,7 +218,6 @@ export function MemorySettingsPanel({
           </div>
 
           <div className={styles.memorySummaryRow}>
-            <span>来源：{sourceSummary}</span>
             <span>{selectedObject.kind === 'profile' ? '保存到 user.md' : '保存到 soul_memories'}</span>
           </div>
 
@@ -272,11 +229,6 @@ export function MemorySettingsPanel({
                 <label className={styles.memorySection} key={section.title}>
                   <span className={styles.memorySectionHeader}>
                     <span>{section.title}</span>
-                    {section.sensitivity && (
-                      <span className={`${styles.sensitivityBadge} ${styles[`sensitivity_${section.sensitivity}`]}`}>
-                        {sensitivityLabel(section.sensitivity)}
-                      </span>
-                    )}
                   </span>
                   <textarea
                     value={section.body}
@@ -302,7 +254,7 @@ export function MemorySettingsPanel({
           <div className={styles.memorySaveBar}>
             <span className={styles.saveHint}>
               {selectedObject.kind === 'profile'
-                ? '高敏感画像应由用户明确确认；手动保存会直接写入 revision。'
+                ? '这里直接编辑用户画像 Markdown。'
                 : '这里只编辑相处记忆，不改变 SOUL 的人格 Markdown。'}
             </span>
             <div className={styles.formActions}>
@@ -324,53 +276,14 @@ export function MemorySettingsPanel({
             </div>
           </div>
         </form>
-
-        <section className={styles.memoryHistory}>
-          <div className={styles.sectionHeader}>
-            <div>
-              <h2 className={styles.sectionTitle}>历史</h2>
-              <p className={styles.sectionMeta}>最近 20 条版本记录。</p>
-            </div>
-          </div>
-          <div className={styles.revisionList}>
-            {revisions.map((revision) => (
-              <button
-                className={`${styles.revisionItem} ${snapshot?.id === revision.id ? styles.revisionItemActive : ''}`}
-                key={revision.id}
-                type="button"
-                onClick={() => handleViewRevision(revision)}
-              >
-                <span className={styles.revisionMain}>
-                  <span>{sourceLabel(revision.source)}</span>
-                  <span>{patchSummary(revision.patch)}</span>
-                </span>
-                <span className={styles.revisionMeta}>
-                  {loadingSnapshotId === revision.id ? '读取中...' : formatDateTime(revision.created_at)}
-                </span>
-              </button>
-            ))}
-            {revisions.length === 0 && <div className={workspaceStyles.empty}>暂无历史版本</div>}
-          </div>
-          {snapshot && (
-            <div className={styles.snapshotPanel}>
-              <div className={styles.snapshotHeader}>
-                <span>快照 #{snapshot.id}</span>
-                <button className={workspaceStyles.ghostButton} type="button" onClick={handleCopySnapshot}>
-                  复制到草稿
-                </button>
-              </div>
-              <pre>{snapshot.snapshot}</pre>
-            </div>
-          )}
-        </section>
       </div>
     </div>
   )
 }
 
-function MemoryStat({ label, value, muted = false }: { label: string; value: string | number; muted?: boolean }) {
+function MemoryStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className={`${styles.memoryStat} ${muted ? styles.memoryStatMuted : ''}`}>
+    <div className={styles.memoryStat}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
@@ -382,13 +295,6 @@ async function fetchContent(object: MemoryObject): Promise<string> {
     return (await getProfile()).content
   }
   return (await getSoulMemory(object.label)).content
-}
-
-async function fetchRevisions(object: MemoryObject): Promise<MemoryRevisionSummary[]> {
-  if (object.kind === 'profile') {
-    return listProfileRevisions()
-  }
-  return listSoulMemoryRevisions(object.label)
 }
 
 function buildMemoryObjects(souls: Soul[], status: WorkspaceStatus | null): MemoryObject[] {
@@ -485,53 +391,4 @@ function buildMarkdown(prefix: string, sections: ParsedSection[]): string {
     parts.push(`## ${section.title}\n${section.body.trimEnd()}`)
   })
   return `${parts.join('\n\n').trimEnd()}\n`
-}
-
-function sensitivityLabel(value: NonNullable<SectionSpec['sensitivity']>): string {
-  if (value === 'high') return '高敏感'
-  if (value === 'low') return '低敏感'
-  return '普通'
-}
-
-function sourceLabel(source: string): string {
-  if (source === 'user') return '用户手动'
-  if (source === 'reflector') return '全局反思'
-  if (source === 'soul_deep_reflector') return 'SOUL 深反思'
-  if (source === 'system' || source === 'init') return '系统初始化'
-  return source
-}
-
-function summarizeSources(revisions: MemoryRevisionSummary[]): string {
-  if (revisions.length === 0) return '暂无版本记录'
-  const counts = new Map<string, number>()
-  revisions.forEach((revision) => {
-    const label = sourceLabel(revision.source)
-    counts.set(label, (counts.get(label) ?? 0) + 1)
-  })
-  return Array.from(counts.entries())
-    .slice(0, 3)
-    .map(([label, count]) => `${label} ${count}`)
-    .join(' · ')
-}
-
-function patchSummary(patch: unknown): string {
-  if (!patch || typeof patch !== 'object') return '记忆变更'
-  const item = patch as { op?: unknown; section?: unknown; ops?: unknown }
-  if (item.op === 'overwrite_user_memory') return '覆盖用户画像'
-  if (item.op === 'overwrite_soul_memory') return '覆盖人格记忆'
-  if (item.op === 'init') return '初始化'
-  if (typeof item.section === 'string') {
-    return `更新 ${item.section}`
-  }
-  return Array.isArray(item.ops) ? '结构化变更' : '记忆变更'
-}
-
-function formatDateTime(value: number): string {
-  const date = new Date(value * 1000)
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
 }
