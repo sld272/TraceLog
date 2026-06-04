@@ -166,8 +166,6 @@ export function TodosPage() {
 
       {loading ? (
         <div className={styles.empty}>加载中...</div>
-      ) : todos.length === 0 && !drawerOpen ? (
-        <div className={styles.empty}>暂无待办</div>
       ) : (
         <div className={`${styles.todoWorkspace} ${drawerOpen ? styles.drawerOpen : ''}`}>
           <section className={styles.todoListPanel}>
