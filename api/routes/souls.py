@@ -118,5 +118,13 @@ async def list_soul_memory_revisions(name: str, limit: int = 20):
     return await run_sync(memory_review_service.list_soul_revisions, name, limit)
 
 
+@router.get("/{name}/memory/revisions/{revision_id}")
+async def get_soul_memory_revision(name: str, revision_id: int):
+    revision = await run_sync(memory_review_service.get_soul_revision, revision_id)
+    if revision is None or revision.get("target_name") != name:
+        raise HTTPException(status_code=404, detail="soul memory revision not found")
+    return revision
+
+
 def _record(record: Any) -> dict[str, Any]:
     return asdict(record)

@@ -104,6 +104,8 @@ class ApiManagementTest(unittest.TestCase):
             get_response = client.get("/profile")
             put_response = client.put("/profile", json={"content": new_profile})
             revisions_response = client.get("/profile/revisions")
+            revision_id = revisions_response.json()[0]["id"]
+            revision_response = client.get(f"/profile/revisions/{revision_id}")
 
         self.assertEqual(200, get_response.status_code)
         self.assertIn("测试用户", get_response.json()["content"])
@@ -111,6 +113,8 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("API 测试用户", put_response.json()["content"])
         self.assertEqual(200, revisions_response.status_code)
         self.assertGreaterEqual(len(revisions_response.json()), 1)
+        self.assertEqual(200, revision_response.status_code)
+        self.assertEqual(new_profile, revision_response.json()["snapshot"])
 
     def test_soul_routes_create_patch_and_edit_memory(self) -> None:
         name = quote("测试好友")
@@ -119,15 +123,25 @@ class ApiManagementTest(unittest.TestCase):
         with self._client() as client:
             create_response = client.post("/souls", json={"name": "测试好友", "description": "测试描述"})
             patch_response = client.patch(f"/souls/{name}", json={"enabled": False})
+            get_memory_response = client.get(f"/souls/{name}/memory")
             memory_response = client.put(f"/souls/{name}/memory", json={"content": memory})
+            revisions_response = client.get(f"/souls/{name}/memory/revisions")
+            revision_id = revisions_response.json()[0]["id"]
+            revision_response = client.get(f"/souls/{name}/memory/revisions/{revision_id}")
             list_response = client.get("/souls")
 
         self.assertEqual(200, create_response.status_code)
         self.assertEqual("测试好友", create_response.json()["name"])
         self.assertEqual(200, patch_response.status_code)
         self.assertFalse(patch_response.json()["enabled"])
+        self.assertEqual(200, get_memory_response.status_code)
+        self.assertIn("# 测试好友的相处记忆", get_memory_response.json()["content"])
         self.assertEqual(200, memory_response.status_code)
         self.assertIn("API 里写入的记忆", memory_response.json()["content"])
+        self.assertEqual(200, revisions_response.status_code)
+        self.assertGreaterEqual(len(revisions_response.json()), 1)
+        self.assertEqual(200, revision_response.status_code)
+        self.assertEqual(memory, revision_response.json()["snapshot"])
         self.assertIn("测试好友", [item["name"] for item in list_response.json()])
 
     def test_upload_attachment_and_create_image_only_post(self) -> None:

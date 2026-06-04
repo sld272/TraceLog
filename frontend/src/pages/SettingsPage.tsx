@@ -13,10 +13,11 @@ import {
   saveModelSettings,
   updateSoul,
 } from '@/api/client'
+import { MemorySettingsPanel } from './MemorySettingsPanel'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
-type SettingsTab = 'model' | 'souls' | 'data'
+type SettingsTab = 'model' | 'souls' | 'memory' | 'data'
 type CreateSoulMode = 'ai' | 'markdown'
 
 interface AiSoulDraft {
@@ -94,6 +95,7 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
     () => [
       { id: 'model' as const, label: '模型' },
       { id: 'souls' as const, label: '人格' },
+      { id: 'memory' as const, label: '记忆' },
       { id: 'data' as const, label: '数据' },
     ],
     [],
@@ -242,7 +244,7 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
       <header className={workspaceStyles.header}>
         <div className={workspaceStyles.titleGroup}>
           <h1 className={workspaceStyles.title}>设置</h1>
-          <p className={workspaceStyles.subtitle}>模型、人格与本地数据</p>
+          <p className={workspaceStyles.subtitle}>模型、人格、记忆与本地数据</p>
         </div>
         <button className={workspaceStyles.ghostButton} onClick={refreshSettings} disabled={loading}>
           刷新
@@ -294,6 +296,9 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
               onToggleSoul={handleToggleSoul}
               onMoveSoul={handleMoveSoul}
             />
+          )}
+          {activeTab === 'memory' && (
+            <MemorySettingsPanel souls={souls} workspaceStatus={workspaceStatus} />
           )}
           {activeTab === 'data' && <DataSettingsPanel status={workspaceStatus} />}
         </div>

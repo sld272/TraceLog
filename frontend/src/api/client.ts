@@ -270,6 +270,19 @@ export interface WorkspaceStatus {
   }
 }
 
+export interface MemoryRevisionSummary {
+  id: number
+  target_type: 'user' | 'soul'
+  target_name: string | null
+  source: string
+  patch: unknown
+  created_at: number
+}
+
+export interface MemoryRevisionDetail extends MemoryRevisionSummary {
+  snapshot: string
+}
+
 /* Posts */
 export function listPosts(limit = 20, offset = 0) {
   return request<Post[]>(`/posts?limit=${limit}&offset=${offset}`)
@@ -387,6 +400,40 @@ export function reorderSouls(order: string[]) {
 /* Profile */
 export function getProfile() {
   return request<{ content: string }>('/profile')
+}
+
+export function updateProfile(content: string) {
+  return request<{ ok: boolean; content: string }>('/profile', {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  })
+}
+
+export function listProfileRevisions(limit = 20) {
+  return request<MemoryRevisionSummary[]>(`/profile/revisions?limit=${limit}`)
+}
+
+export function getProfileRevision(revisionId: number) {
+  return request<MemoryRevisionDetail>(`/profile/revisions/${revisionId}`)
+}
+
+export function getSoulMemory(name: string) {
+  return request<{ soul_name: string; content: string }>(`/souls/${encodeURIComponent(name)}/memory`)
+}
+
+export function updateSoulMemory(name: string, content: string) {
+  return request<{ soul_name: string; content: string }>(`/souls/${encodeURIComponent(name)}/memory`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  })
+}
+
+export function listSoulMemoryRevisions(name: string, limit = 20) {
+  return request<MemoryRevisionSummary[]>(`/souls/${encodeURIComponent(name)}/memory/revisions?limit=${limit}`)
+}
+
+export function getSoulMemoryRevision(name: string, revisionId: number) {
+  return request<MemoryRevisionDetail>(`/souls/${encodeURIComponent(name)}/memory/revisions/${revisionId}`)
 }
 
 /* Todos */
