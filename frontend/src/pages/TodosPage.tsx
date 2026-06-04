@@ -223,11 +223,11 @@ function TodoGroupSection({
   onEdit: (todo: Todo) => void
 }) {
   const [expanded, setExpanded] = useState(group.key !== 'completed')
-  const isCollapsible = group.key === 'completed'
+  const isCollapsible = group.key === 'completed' && group.todos.length > 0
 
   useEffect(() => {
-    if (group.key === 'completed') setExpanded(false)
-  }, [group.key])
+    if (group.key === 'completed' && group.todos.length === 0) setExpanded(false)
+  }, [group.key, group.todos.length])
 
   return (
     <section className={styles.todoGroup}>
@@ -240,6 +240,8 @@ function TodoGroupSection({
           <button className={styles.textButton} onClick={() => setExpanded((value) => !value)}>
             {expanded ? '折叠' : '展开'}
           </button>
+        ) : group.key === 'completed' ? (
+          null
         ) : (
           <span className={styles.groupCount}>{group.todos.length}</span>
         )}
