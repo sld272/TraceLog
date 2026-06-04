@@ -8,6 +8,9 @@ import {
 } from '@/api/client'
 import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
+import { ChatIcon, LoadingDots, SendIcon, StarIcon } from '@/components/icons'
+import { LAYOUT } from '@/utils/constants'
+import { formatRelativeTime } from '@/utils/date'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './PostCard.module.css'
 
@@ -79,7 +82,7 @@ export function PostCard({
 
       {post.latest_event_type && post.latest_event_type !== 'pipeline_done' && (
         <div className={styles.processing}>
-          <LoadingIndicator />
+          <LoadingDots />
           <span>人格正在思考...</span>
         </div>
       )}
@@ -108,7 +111,7 @@ function CommentPreview({
     const el = replyInputRef.current
     if (el) {
       el.style.height = 'auto'
-      el.style.height = `${Math.min(el.scrollHeight, 120)}px`
+      el.style.height = `${Math.min(el.scrollHeight, LAYOUT.REPLY_TEXTAREA_MAX_HEIGHT)}px`
     }
   }, [reply])
 
@@ -192,7 +195,7 @@ function CommentPreview({
                 disabled={(!trimmed && attachments.length === 0) || conversation?.sending || !onReply}
                 aria-label={`发送给 ${soulName}`}
               >
-                {conversation?.sending ? <LoadingIndicator /> : <SendIcon />}
+                {conversation?.sending ? <LoadingDots /> : <SendIcon width={14} height={14} />}
               </button>
             </span>
           </div>
@@ -214,54 +217,3 @@ function ThreadMessage({ message, soulName }: { message: CommentMessage; soulNam
   )
 }
 
-function StarIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-    </svg>
-  )
-}
-
-function ChatIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
-  )
-}
-
-function SendIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="22" y1="2" x2="11" y2="13" />
-      <polygon points="22 2 15 22 11 13 2 9 22 2" />
-    </svg>
-  )
-}
-
-function LoadingIndicator() {
-  return (
-    <span className={styles.loadingDots}>
-      <span className={styles.dot} />
-      <span className={styles.dot} />
-      <span className={styles.dot} />
-    </span>
-  )
-}
-
-/* Time formatting */
-function formatRelativeTime(ts: string): string {
-  const date = new Date(ts)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffMin = Math.floor(diffMs / 60000)
-  const diffHour = Math.floor(diffMs / 3600000)
-  const diffDay = Math.floor(diffMs / 86400000)
-
-  if (diffMin < 1) return '刚刚'
-  if (diffMin < 60) return `${diffMin} 分钟前`
-  if (diffHour < 24) return `${diffHour} 小时前`
-  if (diffDay < 7) return `${diffDay} 天前`
-
-  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
-}

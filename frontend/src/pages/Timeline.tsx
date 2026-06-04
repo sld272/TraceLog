@@ -16,6 +16,7 @@ import {
 } from '@/api/client'
 import { Composer } from '@/components/Composer'
 import { type CommentConversationState, PostCard } from '@/components/PostCard'
+import { API_LIMITS } from '@/utils/constants'
 import styles from './Timeline.module.css'
 
 interface TimelineProps {
@@ -32,7 +33,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
 
   const fetchPosts = useCallback(async () => {
     try {
-      const data = await listPosts(30, 0)
+      const data = await listPosts(API_LIMITS.POSTS_DEFAULT, 0)
       setPosts(data)
       setError(null)
     } catch (err) {

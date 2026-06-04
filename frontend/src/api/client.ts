@@ -284,7 +284,9 @@ export interface MemoryRevisionDetail extends MemoryRevisionSummary {
 }
 
 /* Posts */
-export function listPosts(limit = 20, offset = 0) {
+const DEFAULT_LIST_LIMIT = 20
+
+export function listPosts(limit = DEFAULT_LIST_LIMIT, offset = 0) {
   return request<Post[]>(`/posts?limit=${limit}&offset=${offset}`)
 }
 
@@ -409,7 +411,9 @@ export function updateProfile(content: string) {
   })
 }
 
-export function listProfileRevisions(limit = 20) {
+const DEFAULT_REVISION_LIMIT = 20
+
+export function listProfileRevisions(limit = DEFAULT_REVISION_LIMIT) {
   return request<MemoryRevisionSummary[]>(`/profile/revisions?limit=${limit}`)
 }
 
@@ -428,7 +432,7 @@ export function updateSoulMemory(name: string, content: string) {
   })
 }
 
-export function listSoulMemoryRevisions(name: string, limit = 20) {
+export function listSoulMemoryRevisions(name: string, limit = DEFAULT_REVISION_LIMIT) {
   return request<MemoryRevisionSummary[]>(`/souls/${encodeURIComponent(name)}/memory/revisions?limit=${limit}`)
 }
 
@@ -462,11 +466,13 @@ export function deleteTodo(todoId: string) {
 }
 
 /* Chat */
+const DEFAULT_MESSAGE_LIMIT = 30
+
 export function listChatThreads(soulName: string) {
   return request<ChatThread[]>(`/chat/${soulName}/threads`)
 }
 
-export function getChatThread(threadId: number, limit = 30) {
+export function getChatThread(threadId: number, limit = DEFAULT_MESSAGE_LIMIT) {
   return request<{ thread: ChatThread; messages: ChatMessage[] }>(
     `/chat/threads/${threadId}?limit=${limit}`,
   )
@@ -480,24 +486,26 @@ export function sendChatMessage(soulName: string, content: string, attachmentIds
 }
 
 /* Reflections */
-export function previewGlobalReflection(limit = 100) {
+const DEFAULT_REFLECTION_LIMIT = 100
+
+export function previewGlobalReflection(limit = DEFAULT_REFLECTION_LIMIT) {
   return request<ReflectionScope>(`/reflections/global/preview?limit=${limit}`)
 }
 
-export function triggerGlobalReflection(limit = 100) {
+export function triggerGlobalReflection(limit = DEFAULT_REFLECTION_LIMIT) {
   return request<JobQueued>('/reflections/global', {
     method: 'POST',
     body: JSON.stringify({ limit }),
   })
 }
 
-export function previewSoulReflections(limitPerSoul = 100) {
+export function previewSoulReflections(limitPerSoul = DEFAULT_REFLECTION_LIMIT) {
   return request<SoulReflectionScope[]>(
     `/reflections/souls/preview?limit_per_soul=${limitPerSoul}`,
   )
 }
 
-export function triggerSoulReflections(limitPerSoul = 100) {
+export function triggerSoulReflections(limitPerSoul = DEFAULT_REFLECTION_LIMIT) {
   return request<JobQueued>('/reflections/souls', {
     method: 'POST',
     body: JSON.stringify({ limit_per_soul: limitPerSoul }),
@@ -511,7 +519,7 @@ export function listCommentConversations(postId: string) {
   )
 }
 
-export function getCommentConversation(postId: string, soulName: string, limit = 30) {
+export function getCommentConversation(postId: string, soulName: string, limit = DEFAULT_MESSAGE_LIMIT) {
   return request<{ conversation: CommentConversation; messages: CommentMessage[] }>(
     `/comments/posts/${encodeURIComponent(postId)}/souls/${encodeURIComponent(soulName)}?limit=${limit}`,
   )

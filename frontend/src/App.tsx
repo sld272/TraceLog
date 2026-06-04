@@ -51,8 +51,8 @@ export function App() {
     try {
       const [todoData, globalData, soulData] = await Promise.all([
         listTodos(),
-        previewGlobalReflection(20),
-        previewSoulReflections(20),
+        previewGlobalReflection(),
+        previewSoulReflections(),
       ])
       setTodos(todoData)
       setGlobalReflection(globalData)

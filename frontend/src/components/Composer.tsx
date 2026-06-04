@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { type Attachment } from '@/api/client'
 import { ImageUploader } from './ImageUploader'
+import { LoadingDots, SendIcon } from '@/components/icons'
+import { LAYOUT } from '@/utils/constants'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './Composer.module.css'
 
@@ -20,7 +22,7 @@ export function Composer({ onSubmit }: ComposerProps) {
     const el = textareaRef.current
     if (el) {
       el.style.height = 'auto'
-      el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+      el.style.height = `${Math.min(el.scrollHeight, LAYOUT.TEXTAREA_MAX_HEIGHT)}px`
     }
   }, [content])
 
@@ -96,21 +98,3 @@ export function Composer({ onSubmit }: ComposerProps) {
   )
 }
 
-function SendIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <line x1="22" y1="2" x2="11" y2="13" />
-      <polygon points="22 2 15 22 11 13 2 9 22 2" />
-    </svg>
-  )
-}
-
-function LoadingDots() {
-  return (
-    <span className={styles.dots}>
-      <span className={styles.dot} />
-      <span className={styles.dot} />
-      <span className={styles.dot} />
-    </span>
-  )
-}

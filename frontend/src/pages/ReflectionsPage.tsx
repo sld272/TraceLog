@@ -7,6 +7,7 @@ import {
   triggerGlobalReflection,
   triggerSoulReflections,
 } from '@/api/client'
+import { formatDate } from '@/utils/date'
 import styles from './WorkspacePages.module.css'
 
 export function ReflectionsPage() {
@@ -95,8 +96,8 @@ export function ReflectionsPage() {
             </div>
             <div className={styles.scopeGrid}>
               <ScopeStat value={String(postCount)} label="待处理帖子" />
-              <ScopeStat value={formatScopeDate(globalScope?.scope_start)} label="起点" />
-              <ScopeStat value={formatScopeDate(globalScope?.scope_end)} label="终点" />
+              <ScopeStat value={formatDate(globalScope?.scope_start)} label="起点" />
+              <ScopeStat value={formatDate(globalScope?.scope_end)} label="终点" />
             </div>
           </section>
 
@@ -133,11 +134,4 @@ function ScopeStat({ value, label }: { value: string; label: string }) {
       <span className={styles.scopeLabel}>{label}</span>
     </div>
   )
-}
-
-function formatScopeDate(value: string | null | undefined): string {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
 }

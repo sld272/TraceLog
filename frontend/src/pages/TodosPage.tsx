@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type Todo, createTodo, deleteTodo, listTodos, updateTodo } from '@/api/client'
+import { CheckIcon, PlusIcon } from '@/components/icons'
+import { isTodoDone, getTodayKey, cleanOptionalField } from '@/utils/todo'
+import { formatDateLabel } from '@/utils/date'
 import styles from './WorkspacePages.module.css'
 
 type TodoStatus = '未完成' | '已完成'
@@ -45,7 +48,7 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
   const [form, setForm] = useState<TodoForm>(EMPTY_FORM)
   const groups = useMemo(() => groupTodos(todos), [todos])
   const selectedTodo = selectedTodoId ? todos.find((todo) => todo.id === selectedTodoId) ?? null : null
-  const activeCount = todos.filter((todo) => !isDone(todo)).length
+  const activeCount = todos.filter((todo) => !isTodoDone(todo)).length
   const todayCount = groups.find((group) => group.key === 'today')?.todos.length ?? 0
   const undatedCount = groups.find((group) => group.key === 'undated')?.todos.length ?? 0
   const completedCount = groups.find((group) => group.key === 'completed')?.todos.length ?? 0
@@ -93,7 +96,7 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
   }
 
   const toggleTodo = async (todo: Todo) => {
-    const nextStatus = isDone(todo) ? '未完成' : '已完成'
+    const nextStatus = isTodoDone(todo) ? '未完成' : '已完成'
     setSavingId(todo.id)
     setError(null)
     try {
@@ -289,7 +292,7 @@ function TodoRow({
   onToggle: () => void
   onEdit: () => void
 }) {
-  const done = isDone(todo)
+  const done = isTodoDone(todo)
   const meta = todoMeta(todo)
 
   return (
@@ -430,11 +433,11 @@ function TodoDrawer({
 
 function groupTodos(todos: Todo[]): TodoGroup[] {
   const todayKey = getTodayKey()
-  const active = todos.filter((todo) => !isDone(todo))
+  const active = todos.filter((todo) => !isTodoDone(todo))
   const today = sortTodos(active.filter((todo) => todo.date === todayKey))
   const upcoming = sortTodos(active.filter((todo) => todo.date && todo.date !== todayKey), true)
   const undated = sortTodos(active.filter((todo) => !todo.date))
-  const completed = sortTodos(todos.filter(isDone), true)
+  const completed = sortTodos(todos.filter(isTodoDone), true)
 
   return [
     { key: 'today', title: '今天', todos: today },
@@ -466,75 +469,32 @@ function formFromTodo(todo: Todo): TodoForm {
     date: todo.date ?? '',
     start_time: todo.start_time ?? '',
     end_time: todo.end_time ?? '',
-    status: isDone(todo) ? '已完成' : '未完成',
+    status: isTodoDone(todo) ? '已完成' : '未完成',
   }
 }
 
 function formToPayload(form: TodoForm): Partial<Todo> & { task: string } {
   return {
     task: form.task.trim(),
-    date: cleanOptional(form.date),
-    start_time: cleanOptional(form.start_time),
-    end_time: cleanOptional(form.end_time),
+    date: cleanOptionalField(form.date),
+    start_time: cleanOptionalField(form.start_time),
+    end_time: cleanOptionalField(form.end_time),
     status: form.status,
   }
 }
 
-function cleanOptional(value: string): string | null {
-  const text = value.trim()
-  return text || null
-}
-
-function isDone(todo: Todo): boolean {
-  return ['已完成', '完成', 'done', 'completed'].includes(todo.status)
-}
-
 function todoMeta(todo: Todo): string[] {
+  const todayKey = getTodayKey()
   const items: string[] = []
   if (todo.date) {
-    items.push(formatDateLabel(todo.date))
-    if (!isDone(todo) && todo.date < getTodayKey()) items.push('已过期')
+    items.push(formatDateLabel(todo.date, todayKey))
+    if (!isTodoDone(todo) && todo.date < todayKey) items.push('已过期')
   } else {
     items.push('无日期')
   }
   const time = [todo.start_time, todo.end_time].filter(Boolean).join(' - ')
   if (time) items.push(time)
-  items.push(isDone(todo) ? '已完成' : todo.status)
+  items.push(isTodoDone(todo) ? '已完成' : todo.status)
   items.push(todo.source_post ? '来自记录' : '手动新增')
   return items
-}
-
-function formatDateLabel(date: string): string {
-  if (date === getTodayKey()) return '今天'
-  const parsed = new Date(`${date}T00:00:00`)
-  if (Number.isNaN(parsed.getTime())) return date
-  return parsed.toLocaleDateString('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-  })
-}
-
-function getTodayKey(): string {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function CheckIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M20 6L9 17l-5-5" />
-    </svg>
-  )
-}
-
-function PlusIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 5v14" />
-      <path d="M5 12h14" />
-    </svg>
-  )
 }

@@ -4,6 +4,8 @@ import {
   type SoulReflectionScope,
   type Todo,
 } from '@/api/client'
+import { isTodoDone, getTodayKey } from '@/utils/todo'
+import { formatDateScope, formatUnixScope } from '@/utils/date'
 import styles from './RightPanel.module.css'
 
 interface RightPanelProps {
@@ -152,7 +154,7 @@ function ReflectionQueueCard({
               <QueueRow
                 label="公开记录"
                 count={globalCount}
-                detail={formatScope(globalReflection?.scope_start, globalReflection?.scope_end)}
+                detail={formatDateScope(globalReflection?.scope_start, globalReflection?.scope_end)}
               />
               <QueueRow label="人格互动" count={soulCount} detail={formatSoulScope(soulReflections)} />
             </div>
@@ -212,19 +214,15 @@ function extractCurrentFocusItems(content: string | null): string[] {
   return items
 }
 
-function isDone(todo: Todo): boolean {
-  return ['已完成', '完成', 'done', 'completed'].includes(todo.status)
-}
-
 function selectTodayTodos(todos: Todo[]): Todo[] {
-  const active = todos.filter((todo) => !isDone(todo))
+  const active = todos.filter((todo) => !isTodoDone(todo))
   const today = active.filter((todo) => todo.date === getTodayKey())
   const undated = active.filter((todo) => !todo.date)
   return [...today, ...undated].slice(0, 3)
 }
 
 function countTodayTodoCandidates(todos: Todo[]): number {
-  return todos.filter((todo) => !isDone(todo) && (todo.date === getTodayKey() || !todo.date)).length
+  return todos.filter((todo) => !isTodoDone(todo) && (todo.date === getTodayKey() || !todo.date)).length
 }
 
 function todoMeta(todo: Todo): string {
@@ -233,43 +231,10 @@ function todoMeta(todo: Todo): string {
   return todo.date || time
 }
 
-function getTodayKey(): string {
-  const now = new Date()
-  const year = now.getFullYear()
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function formatScope(start: string | null | undefined, end: string | null | undefined): string {
-  const startText = formatDate(start)
-  const endText = formatDate(end)
-  if (startText === '-' && endText === '-') return '等待整理'
-  return `${startText} - ${endText}`
-}
-
 function formatSoulScope(soulReflections: SoulReflectionScope[]): string {
   const activeScopes = soulReflections.filter((scope) => scope.interaction_count > 0)
   if (activeScopes.length === 0) return '等待整理'
   const start = Math.min(...activeScopes.map((scope) => scope.scope_start))
   const end = Math.max(...activeScopes.map((scope) => scope.scope_end))
   return formatUnixScope(start, end)
-}
-
-function formatUnixScope(start: number, end: number): string {
-  return `${formatDateFromMs(start * 1000)} - ${formatDateFromMs(end * 1000)}`
-}
-
-function formatDate(value: string | null | undefined): string {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '-'
-  return formatDateFromMs(date.getTime())
-}
-
-function formatDateFromMs(value: number): string {
-  return new Date(value).toLocaleDateString('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-  })
 }
