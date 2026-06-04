@@ -67,6 +67,14 @@ export function App() {
     setTodos(todoData)
   }, [])
 
+  const handleTodosChanged = useCallback((nextTodos?: Todo[]) => {
+    if (nextTodos) {
+      setTodos(nextTodos)
+      return
+    }
+    void refreshTodos()
+  }, [refreshTodos])
+
   const refreshHomeContext = useCallback(async () => {
     await Promise.all([
       fetchProfile(),
@@ -89,16 +97,18 @@ export function App() {
 
   useEffect(() => {
     fetchSouls()
-    fetchProfile()
-    fetchRightPanelData()
-  }, [fetchSouls, fetchProfile, fetchRightPanelData])
+  }, [fetchSouls])
+
+  useEffect(() => {
+    if (showRightPanel) void refreshHomeContext()
+  }, [showRightPanel, refreshHomeContext])
 
   const renderMain = () => {
     switch (activePage) {
       case 'home':
-        return <Timeline onActivitySettled={refreshHomeContext} />
+        return <Timeline onActivitySettled={refreshHomeContext} onTodosChanged={refreshTodos} />
       case 'todos':
-        return <TodosPage onTodosChanged={refreshTodos} />
+        return <TodosPage onTodosChanged={handleTodosChanged} />
       case 'reflections':
         return <ReflectionsPage />
       case 'settings':
@@ -108,7 +118,7 @@ export function App() {
           const soulName = activePage.replace('chat:', '')
           return <ChatPage soulName={soulName} />
         }
-        return <Timeline onActivitySettled={refreshHomeContext} />
+        return <Timeline onActivitySettled={refreshHomeContext} onTodosChanged={refreshTodos} />
     }
   }
 

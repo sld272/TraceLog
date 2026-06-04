@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type Todo, createTodo, deleteTodo, listTodos, updateTodo } from '@/api/client'
 import styles from './WorkspacePages.module.css'
 
@@ -21,7 +21,7 @@ interface TodoGroup {
 }
 
 interface TodosPageProps {
-  onTodosChanged?: () => void
+  onTodosChanged?: (todos?: Todo[]) => void
 }
 
 const EMPTY_FORM: TodoForm = {
@@ -40,8 +40,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
   const [deleting, setDeleting] = useState(false)
   const [deleteArmed, setDeleteArmed] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [quickTask, setQuickTask] = useState('')
-  const [savingQuickAdd, setSavingQuickAdd] = useState(false)
   const [drawerMode, setDrawerMode] = useState<DrawerMode | null>(null)
   const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null)
   const [form, setForm] = useState<TodoForm>(EMPTY_FORM)
@@ -58,13 +56,14 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
       setLoading(true)
       const data = await listTodos()
       setTodos(data)
+      onTodosChanged?.(data)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [onTodosChanged])
 
   useEffect(() => {
     fetchTodos()
@@ -154,24 +153,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
     }
   }
 
-  const createQuickTodo = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const task = quickTask.trim()
-    if (!task) return
-    setSavingQuickAdd(true)
-    setError(null)
-    try {
-      const created = await createTodo({ task })
-      setTodos((prev) => [...prev, created])
-      setQuickTask('')
-      onTodosChanged?.()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '新增失败')
-    } finally {
-      setSavingQuickAdd(false)
-    }
-  }
-
   return (
     <div className={styles.page}>
       <header className={styles.header}>
@@ -204,17 +185,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
               </div>
               <span className={styles.meta}>{completedCount} 个已完成</span>
             </div>
-
-            <form className={styles.quickAdd} onSubmit={createQuickTodo}>
-              <input
-                value={quickTask}
-                placeholder="快速添加待办..."
-                onChange={(event) => setQuickTask(event.target.value)}
-              />
-              <button type="submit" disabled={savingQuickAdd || !quickTask.trim()}>
-                {savingQuickAdd ? '添加中...' : '添加'}
-              </button>
-            </form>
 
             <div className={styles.todoGroups}>
               {groups.map((group) => (

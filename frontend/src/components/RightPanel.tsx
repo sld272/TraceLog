@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react'
+import { useState } from 'react'
 import {
   type ReflectionScope,
   type SoulReflectionScope,
@@ -88,15 +88,7 @@ function TodayTodosCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader
-        eyebrow="Today"
-        title="今日待办"
-        action={todoCount > 0 ? (
-          <button type="button" className={styles.headerAction} onClick={onOpenTodos}>
-            {todoCount > todayTodos.length ? `还有 ${todoCount - todayTodos.length} 个` : '管理'}
-          </button>
-        ) : undefined}
-      />
+      <PanelHeader eyebrow="Today" title="今日待办" />
       <div className={styles.itemList}>
         {todayTodos.length > 0 ? (
           todayTodos.map((todo) => {
@@ -122,6 +114,11 @@ function TodayTodosCard({
           })
         ) : (
           <p className={styles.empty}>今天没有待办</p>
+        )}
+        {todoCount > 0 && (
+          <button type="button" className={styles.queueAction} onClick={onOpenTodos}>
+            查看
+          </button>
         )}
         {error && <p className={styles.inlineError}>{error}</p>}
       </div>
@@ -171,22 +168,11 @@ function ReflectionQueueCard({
   )
 }
 
-function PanelHeader({
-  eyebrow,
-  title,
-  action,
-}: {
-  eyebrow: string
-  title: string
-  action?: ReactNode
-}) {
+function PanelHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
   return (
     <div className={styles.cardHeader}>
       <span className={styles.eyebrow}>{eyebrow}</span>
-      <div className={styles.titleCluster}>
-        <h3 className={styles.cardTitle}>{title}</h3>
-        {action}
-      </div>
+      <h3 className={styles.cardTitle}>{title}</h3>
     </div>
   )
 }

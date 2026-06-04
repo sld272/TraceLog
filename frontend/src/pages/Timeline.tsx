@@ -20,9 +20,10 @@ import styles from './Timeline.module.css'
 
 interface TimelineProps {
   onActivitySettled?: () => void
+  onTodosChanged?: () => void
 }
 
-export function Timeline({ onActivitySettled }: TimelineProps) {
+export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
   const [postCommentConversations, setPostCommentConversations] = useState<Record<string, Record<string, CommentConversationState>>>({})
@@ -73,6 +74,10 @@ export function Timeline({ onActivitySettled }: TimelineProps) {
 
         if (shouldRefreshPostDetail(event)) {
           refreshPostDetail(result.post_id, event.event_type)
+        }
+
+        if (event.event_type === 'todo_succeeded') {
+          onTodosChanged?.()
         }
       },
       () => {
