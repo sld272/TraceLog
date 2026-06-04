@@ -2,35 +2,7 @@
 
 from __future__ import annotations
 
-from core import attachment_service, db, record_service, vision_service
-
-
-def read_posts_by_ids(post_ids: list[str]) -> str:
-    parts = []
-    for post_id in post_ids:
-        row = db.query_one(
-            "SELECT id, ts, content FROM posts WHERE id = ?",
-            (post_id,),
-        )
-        if row is not None:
-            parts.append(record_service.format_post(row).strip())
-    return "\n\n---\n\n".join(parts)
-
-
-def read_soul_comments(soul_name: str, post_ids: list[str]) -> str:
-    lines = []
-    for post_id in post_ids:
-        row = db.query_one(
-            """
-            SELECT content
-            FROM comments
-            WHERE post_id = ? AND soul_name = ? AND seq = 0
-            """,
-            (post_id, soul_name),
-        )
-        if row is not None:
-            lines.append(f"- {post_id}: {row['content']}")
-    return "\n".join(lines)
+from core import attachment_service, db, vision_service
 
 
 def format_retrieval_hits(hits: list, *, current_soul: str | None = None) -> str:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -103,11 +103,6 @@ def _rollback_safely(conn: sqlite3.Connection) -> None:
 def execute(sql: str, params: Sequence[Any] = ()) -> None:
     with transaction() as conn:
         conn.execute(sql, params)
-
-
-def execute_many(sql: str, params: Iterable[Sequence[Any]]) -> None:
-    with transaction() as conn:
-        conn.executemany(sql, params)
 
 
 def query_one(sql: str, params: Sequence[Any] = ()) -> sqlite3.Row | None:

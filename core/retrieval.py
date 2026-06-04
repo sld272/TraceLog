@@ -44,19 +44,6 @@ class RetrievalDocHit:
     reasons: list[str]
 
 
-def fts_search(
-    query: str,
-    k: int = 20,
-    fts_keywords: list[str] | None = None,
-    trace_context: dict | None = None,
-) -> list[str]:
-    """Return post ids ranked by SQLite FTS5, with a short-CJK fallback."""
-    return [
-        hit.post_id
-        for hit in fts_search_scored(query, k, fts_keywords=fts_keywords, trace_context=trace_context)
-    ]
-
-
 def fts_search_scored(
     query: str,
     k: int = 20,
@@ -150,11 +137,6 @@ def fts_search_scored(
             trace_context=trace_context,
         )
         return []
-
-
-def vector_search(query: str, k: int = 20) -> list[str]:
-    """Return post ids ranked by ChromaDB semantic search."""
-    return [hit.post_id for hit in vector_search_scored(query, k)]
 
 
 def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
@@ -638,10 +620,6 @@ def _ordered_unique(values: list[str]) -> list[str]:
 
 def _sanitize_fts5(query: str) -> str:
     return fts_query.sanitize_fts5(query)
-
-
-def _build_match_query(query: str) -> str:
-    return fts_query.build_match_query(query)
 
 
 def _has_cjk(text: str) -> bool:

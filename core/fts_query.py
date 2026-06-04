@@ -42,15 +42,6 @@ def build_match_query(query: str, *, max_terms: int = MAX_MATCH_TERMS) -> str:
     return " OR ".join(quoted_terms)
 
 
-def build_keyword_match_query(keywords: list[str], *, max_terms: int = MAX_MATCH_TERMS) -> str:
-    candidates = keyword_candidates(keywords, max_terms=max_terms)
-    quoted_terms = []
-    for term in candidates:
-        escaped = term.replace('"', '""')
-        quoted_terms.append(f'"{escaped}"')
-    return " OR ".join(quoted_terms)
-
-
 def keyword_candidates(keywords: list[str], *, max_terms: int = MAX_MATCH_TERMS) -> list[str]:
     candidates = []
     for keyword in keywords:

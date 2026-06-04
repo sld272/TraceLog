@@ -47,12 +47,6 @@ POST_REPLY_TASK_PROMPT = """\
 {current_datetime}
 """
 
-POST_REPLY_PROMPT = """\
-你是 TraceLog 拾迹，一个温暖且有洞察力的个人成长 AI 伴侣。
-
-{task_prompt}
-"""
-
 CHAT_REPLY_TASK_PROMPT = """\
 ## 核心任务
 **回复 (reply)**：你正在和用户进行一对一私聊。结合上下文给出自然、真诚、贴近该 SOUL 人格的中文回应，字数控制在 2-5 句话。
@@ -106,29 +100,6 @@ COMMENT_REPLY_TASK_PROMPT = """\
 ## 当前时间
 {current_datetime}
 """
-
-
-def call_post_reply(
-    user_input: str,
-    client: LLMClient,
-    model: str,
-    context: str,
-    *,
-    trace_context: dict | None = None,
-) -> dict | None:
-    """Post Reply: generate one empathetic reply."""
-    system_msg = POST_REPLY_PROMPT.format(
-        task_prompt=_post_reply_task_prompt(),
-    )
-    return _call_post_reply_json(
-        user_input,
-        client,
-        model,
-        context,
-        system_msg,
-        operation="post_reply",
-        trace_context=trace_context,
-    )
 
 
 def call_soul_post_reply(

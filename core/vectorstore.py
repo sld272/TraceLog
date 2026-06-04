@@ -158,12 +158,6 @@ def index_chat_message(message_id: int, thread_id: int, soul_name: str, role: st
     )
 
 
-def delete_document(doc_id: str) -> None:
-    if _collection is None:
-        return
-    _collection.delete(ids=[doc_id])
-
-
 def _index_document(doc_id: str, content: str, metadata: dict) -> None:
     if _collection is None:
         return
@@ -171,11 +165,6 @@ def _index_document(doc_id: str, content: str, metadata: dict) -> None:
     if not body:
         return
     _collection.upsert(ids=[doc_id], documents=[body], metadatas=[metadata])
-
-
-def search_relevant_posts(query: str, n_results: int = 3) -> list[str]:
-    """语义检索相关帖子，返回 post_id 列表。"""
-    return query_post_ids(query, n_results)
 
 
 def query_post_ids(query: str, n_results: int = 20) -> list[str]:

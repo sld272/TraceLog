@@ -135,10 +135,6 @@ def cached_context_for_post(post_id: str) -> str:
     return format_summaries(cached_summaries_for_attachments(attachment_service.list_post_attachments(post_id)))
 
 
-def cached_context_for_attachments(attachments: list[attachment_service.Attachment]) -> str:
-    return format_summaries(cached_summaries_for_attachments(attachments))
-
-
 def _call_vision_llm(attachments: list[attachment_service.Attachment], config: dict) -> list[VisionSummary]:
     try:
         from openai import OpenAI

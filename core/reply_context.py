@@ -43,24 +43,6 @@ def rewrite_for_retrieval(
     return rewritten
 
 
-def hybrid_search_with_rewrite(
-    retrieval_query: str,
-    rewritten_query: query_rewriter.RewrittenQuery,
-    *,
-    k: int,
-    trace_context: dict | None = None,
-) -> list[str]:
-    if not rewritten_query.used_rewrite:
-        return retrieval.hybrid_search(retrieval_query, k=k, trace_context=trace_context)
-    return retrieval.hybrid_search(
-        retrieval_query,
-        k=k,
-        semantic_query=rewritten_query.semantic_query,
-        fts_keywords=rewritten_query.keywords,
-        trace_context=trace_context,
-    )
-
-
 def hybrid_search_documents_with_rewrite(
     retrieval_query: str,
     rewritten_query: query_rewriter.RewrittenQuery,

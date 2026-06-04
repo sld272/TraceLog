@@ -203,10 +203,6 @@ def list_chat_message_attachments(message_id: int) -> list[Attachment]:
     )
 
 
-def has_attachments(attachment_ids: list[str] | None) -> bool:
-    return bool(_normalize_attachment_ids(attachment_ids))
-
-
 def validate_attachment_ids(attachment_ids: list[str] | None) -> list[str]:
     ids = _normalize_attachment_ids(attachment_ids)
     if not ids:
