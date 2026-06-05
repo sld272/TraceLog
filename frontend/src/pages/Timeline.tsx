@@ -7,12 +7,15 @@ import {
   type Post,
   type PostEvent,
   createPost,
+  deleteCommentMessage,
+  deletePost,
   getCommentConversation,
   getPost,
   listCommentConversations,
   listPosts,
   sendCommentMessage,
   streamPostEvents,
+  rerunCommentMessage,
 } from '@/api/client'
 import { Composer } from '@/components/Composer'
 import { type CommentConversationState, PostCard } from '@/components/PostCard'
@@ -30,6 +33,8 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   const [postCommentConversations, setPostCommentConversations] = useState<Record<string, Record<string, CommentConversationState>>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [deletingPostId, setDeletingPostId] = useState<string | null>(null)
+  const [busyCommentId, setBusyCommentId] = useState<number | null>(null)
 
   const fetchPosts = useCallback(async () => {
     try {
@@ -197,6 +202,58 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
     }
   }
 
+  const handleDeletePost = async (postId: string) => {
+    const confirmed = window.confirm('删除这条 post 会同时删除所有 SOUL 回复和评论对话，且不会自动恢复。确定删除吗？')
+    if (!confirmed) return
+    setDeletingPostId(postId)
+    try {
+      await deletePost(postId)
+      setPosts((prev) => prev.filter((post) => post.post_id !== postId))
+      setPostComments((prev) => {
+        const next = { ...prev }
+        delete next[postId]
+        return next
+      })
+      setPostCommentConversations((prev) => {
+        const next = { ...prev }
+        delete next[postId]
+        return next
+      })
+      onTodosChanged?.()
+      onActivitySettled?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除失败')
+    } finally {
+      setDeletingPostId(null)
+    }
+  }
+
+  const handleDeleteComment = async (postId: string, commentId: number) => {
+    const confirmed = window.confirm('删除这条评论会同时删除它之后的同一段对话，且不会自动恢复。确定删除吗？')
+    if (!confirmed) return
+    setBusyCommentId(commentId)
+    try {
+      await deleteCommentMessage(commentId)
+      await refreshPostDetail(postId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除评论失败')
+    } finally {
+      setBusyCommentId(null)
+    }
+  }
+
+  const handleRerunComment = async (postId: string, commentId: number) => {
+    setBusyCommentId(commentId)
+    try {
+      await rerunCommentMessage(commentId)
+      await refreshPostDetail(postId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重跑失败')
+    } finally {
+      setBusyCommentId(null)
+    }
+  }
+
   if (loading) {
     return (
       <div className={styles.timeline}>
@@ -235,8 +292,13 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
               post={post}
               comments={postComments[post.post_id]}
               commentConversations={postCommentConversations[post.post_id]}
+              busyCommentId={busyCommentId}
+              deletingPost={deletingPostId === post.post_id}
               onExpand={() => handleExpand(post.post_id)}
               onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
+              onDeletePost={() => handleDeletePost(post.post_id)}
+              onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
+              onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
             />
           ))}
         </div>

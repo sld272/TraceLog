@@ -325,6 +325,37 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(404, missing_patch.status_code)
         self.assertEqual(404, missing_delete.status_code)
 
+    def test_delete_post_route_hard_deletes_post_comments_and_cancels_pending_jobs(self) -> None:
+        post_id = "post-delete-1"
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (post_id, "2026-06-05T12:00:00+08:00", "要删除的 post", 1.0, 1.0),
+        )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+            VALUES (?, ?, 'assistant', ?, 0, ?)
+            """,
+            (post_id, "默认", "要一起删除的评论", 2.0),
+        )
+        job_id = job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id})
+
+        with self._client() as client:
+            delete_response = client.delete(f"/posts/{post_id}")
+            detail_response = client.get(f"/posts/{post_id}")
+
+        self.assertEqual(200, delete_response.status_code, delete_response.text)
+        self.assertEqual({"ok": True, "post_id": post_id, "deleted_comments": 1, "cancelled_jobs": 1}, delete_response.json())
+        self.assertEqual(404, detail_response.status_code)
+        self.assertIsNone(db.query_one("SELECT id FROM posts WHERE id = ?", (post_id,)))
+        self.assertIsNone(db.query_one("SELECT id FROM comments WHERE post_id = ?", (post_id,)))
+        job = job_service.get_job(job_id)
+        self.assertIsNotNone(job)
+        self.assertEqual(job_service.STATUS_CANCELLED, job["status"])
+
     def test_manual_reflection_routes_enqueue_jobs(self) -> None:
         with self._client() as client:
             global_response = client.post("/reflections/global", json={"limit": 5})

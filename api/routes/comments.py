@@ -85,6 +85,37 @@ async def send_comment_message(post_id: str, soul_name: str, request: SendCommen
     }
 
 
+@router.delete("/messages/{comment_id}")
+async def delete_comment_message(comment_id: int):
+    try:
+        return await run_sync(comment_service.delete_message, comment_id)
+    except ValueError as exc:
+        status = 404 if str(exc).startswith("评论消息不存在") else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+@router.post("/messages/{comment_id}/rerun")
+async def rerun_comment_message(comment_id: int):
+    runtime = get_runtime()
+    try:
+        result = await run_sync(
+            comment_service.rerun_latest_assistant_message,
+            comment_id,
+            runtime.client,
+            runtime.model,
+        )
+    except ValueError as exc:
+        status = 404 if str(exc).startswith("评论消息不存在") else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "message": asdict(result["message"]),
+        "conversation": asdict(result["conversation"]),
+        "messages": [asdict(message) for message in result["messages"]],
+    }
+
+
 async def _message_stream(post_id: str, soul_name: str, after_id: int):
     current_id = after_id
     while True:

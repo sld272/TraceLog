@@ -36,6 +36,7 @@ def init_db() -> None:
     conn = connect()
     try:
         conn.executescript(sql)
+        _migrate_schema(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         if str(mode).lower() != "wal":
@@ -53,6 +54,20 @@ def init_db() -> None:
         raise
     finally:
         conn.close()
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    _ensure_column(conn, "comments", "edited_at", "REAL")
+    _ensure_column(conn, "comments", "rerun_at", "REAL")
+    _ensure_column(conn, "chat_messages", "edited_at", "REAL")
+    _ensure_column(conn, "chat_messages", "rerun_at", "REAL")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    if any(row["name"] == column for row in rows):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:

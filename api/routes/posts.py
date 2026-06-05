@@ -13,7 +13,7 @@ from starlette.responses import StreamingResponse
 
 from api.deps import get_runtime, run_sync
 from core import attachment_service, db, vectorstore
-from core.app_services import event_service, job_service, public_post_pipeline
+from core.app_services import event_service, job_service, post_mutation, public_post_pipeline
 
 router = APIRouter(tags=["posts"])
 
@@ -60,6 +60,14 @@ async def get_post(post_id: str):
     if post is None:
         raise HTTPException(status_code=404, detail="post not found")
     return post
+
+
+@router.delete("/posts/{post_id}")
+async def delete_post(post_id: str):
+    result = await run_sync(post_mutation.delete_post, post_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="post not found")
+    return {"ok": True, **asdict(result)}
 
 
 @router.get("/posts/{post_id}/events")
@@ -128,7 +136,7 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
         _comment_row_to_dict(row)
         for row in db.query_all(
             """
-            SELECT id, post_id, soul_name, role, content, seq, metadata, created_at
+            SELECT id, post_id, soul_name, role, content, seq, metadata, created_at, edited_at, rerun_at
             FROM comments
             WHERE post_id = ? AND seq = 0
             ORDER BY created_at ASC, id ASC

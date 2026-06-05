@@ -31,6 +31,8 @@ class ChatMessage:
     role: str
     content: str
     created_at: float
+    edited_at: float | None
+    rerun_at: float | None
     attachments: list[Attachment]
 
 
@@ -122,18 +124,25 @@ def get_thread(thread_id: int) -> ChatThread:
     return _thread_from_row(row)
 
 
-def list_thread_messages(thread_id: int, limit: int = 30) -> list[ChatMessage]:
+def list_thread_messages(thread_id: int, limit: int = 30, *, before_message_id: int | None = None) -> list[ChatMessage]:
     """List recent thread messages in chronological order."""
     get_thread(thread_id)
+    before_clause = ""
+    params: list = [thread_id]
+    if before_message_id is not None:
+        before_clause = "AND id < ?"
+        params.append(int(before_message_id))
+    params.append(limit)
     rows = db.query_all(
-        """
-        SELECT id, thread_id, role, content, created_at
+        f"""
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at
         FROM chat_messages
         WHERE thread_id = ?
+        {before_clause}
         ORDER BY created_at DESC, id DESC
         LIMIT ?
         """,
-        (thread_id, limit),
+        tuple(params),
     )
     return [_message_from_row(row) for row in reversed(rows)]
 
@@ -143,7 +152,7 @@ def list_thread_messages_after(thread_id: int, after_id: int, limit: int = 100) 
     get_thread(thread_id)
     rows = db.query_all(
         """
-        SELECT id, thread_id, role, content, created_at
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at
         FROM chat_messages
         WHERE thread_id = ? AND id > ?
         ORDER BY id ASC
@@ -166,11 +175,13 @@ def build_chat_context(
     user_message: str,
     client: LLMClient | None = None,
     model: str | None = None,
+    *,
+    before_message_id: int | None = None,
 ) -> ChatContext:
     """Build prompt context after the current user message has been appended."""
     thread = get_thread(thread_id)
     soul = _load_soul_context(thread.soul_name)
-    messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT)
+    messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT, before_message_id=before_message_id)
     llm_messages = [_message_for_llm(message) for message in messages]
     retrieval_query = _build_retrieval_query(user_message, llm_messages)
     sections: list[str] = []
@@ -326,7 +337,7 @@ def _append_message(
 def get_message(message_id: int) -> ChatMessage:
     row = db.query_one(
         """
-        SELECT id, thread_id, role, content, created_at
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at
         FROM chat_messages
         WHERE id = ?
         """,
@@ -335,6 +346,115 @@ def get_message(message_id: int) -> ChatMessage:
     if row is None:
         raise ValueError(f"私聊消息不存在：{message_id}")
     return _message_from_row(row)
+
+
+def edit_user_message(message_id: int, content: str, attachment_ids: list[str] | None = None) -> dict:
+    message = get_message(message_id)
+    if message.role != "user":
+        raise ValueError("只能编辑用户消息")
+    body = content.strip()
+    attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    if not body and not attachment_ids:
+        raise ValueError("私聊消息不能为空")
+
+    deleted_ids = _message_ids_after(message.thread_id, message.id)
+    now = db.now_ts()
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            UPDATE chat_messages
+            SET content = ?, edited_at = ?
+            WHERE id = ?
+            """,
+            (body, now, message.id),
+        )
+        conn.execute("DELETE FROM chat_message_attachments WHERE message_id = ?", (message.id,))
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO chat_message_attachments(message_id, attachment_id, sort_order)
+            VALUES (?, ?, ?)
+            """,
+            [(message.id, attachment_id, index) for index, attachment_id in enumerate(attachment_ids)],
+        )
+        conn.executemany(
+            "UPDATE attachments SET linked_at = COALESCE(linked_at, ?) WHERE id = ?",
+            [(now, attachment_id) for attachment_id in attachment_ids],
+        )
+        if deleted_ids:
+            conn.execute(
+                f"DELETE FROM chat_messages WHERE id IN ({','.join('?' for _ in deleted_ids)})",
+                tuple(deleted_ids),
+            )
+        _refresh_thread_activity(conn, message.thread_id, now)
+
+    for deleted_id in deleted_ids:
+        record_service.delete_chat_message_embedding(deleted_id)
+    updated = get_message(message.id)
+    thread = get_thread(message.thread_id)
+    record_service.index_chat_message_embedding(updated.id, updated.thread_id, thread.soul_name, updated.role, updated.content)
+    return {
+        "thread": thread,
+        "message": updated,
+        "messages": list_thread_messages(thread.id),
+    }
+
+
+def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> dict:
+    message = get_message(message_id)
+    if message.role != "assistant":
+        raise ValueError("只能重跑 SOUL 回复")
+    thread = get_thread(message.thread_id)
+    prior_messages = list_thread_messages(thread.id, limit=CHAT_HISTORY_LIMIT, before_message_id=message.id)
+    user_message = _last_user_message_content(prior_messages)
+    if not user_message:
+        raise ValueError("没有可用于重跑的用户消息")
+    chat_context = build_chat_context(thread.id, user_message, client, model, before_message_id=message.id)
+    data = reply_router.call_soul_chat_reply(
+        client,
+        model,
+        chat_context,
+        chat_context.soul,
+        trace_context={
+            "thread_id": thread.id,
+            "soul_name": thread.soul_name,
+            "rerun_message_id": message.id,
+            "relevant_post_ids": chat_context.relevant_post_ids,
+        },
+    )
+    if data is None:
+        raise RuntimeError("chat rerun failed")
+    reply = data.get("reply")
+    if not isinstance(reply, str) or not reply.strip():
+        raise RuntimeError("chat rerun returned empty reply")
+
+    deleted_ids = _message_ids_after(thread.id, message.id)
+    now = db.now_ts()
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            UPDATE chat_messages
+            SET content = ?, rerun_at = ?
+            WHERE id = ?
+            """,
+            (reply.strip(), now, message.id),
+        )
+        if deleted_ids:
+            conn.execute(
+                f"DELETE FROM chat_messages WHERE id IN ({','.join('?' for _ in deleted_ids)})",
+                tuple(deleted_ids),
+            )
+        _refresh_thread_activity(conn, thread.id, now)
+
+    for deleted_id in deleted_ids:
+        record_service.delete_chat_message_embedding(deleted_id)
+    updated = get_message(message.id)
+    thread = get_thread(thread.id)
+    record_service.index_chat_message_embedding(updated.id, updated.thread_id, thread.soul_name, updated.role, updated.content)
+    return {
+        "thread": thread,
+        "message": updated,
+        "messages": list_thread_messages(thread.id),
+    }
 
 
 def _assert_soul_writable(soul_name: str) -> None:
@@ -373,6 +493,48 @@ def _recent_user_message_contents(messages, limit: int) -> list[str]:
         if message.role == "user" and message.content.strip()
     ]
     return contents[-limit:]
+
+
+def _last_user_message_content(messages: list[ChatMessage]) -> str:
+    for message in reversed(messages):
+        if message.role == "user" and message.content.strip():
+            return message.content.strip()
+    return ""
+
+
+def _message_ids_after(thread_id: int, message_id: int) -> list[int]:
+    rows = db.query_all(
+        """
+        SELECT id
+        FROM chat_messages
+        WHERE thread_id = ? AND id > ?
+        ORDER BY id ASC
+        """,
+        (thread_id, message_id),
+    )
+    return [int(row["id"]) for row in rows]
+
+
+def _refresh_thread_activity(conn, thread_id: int, now: float) -> None:
+    row = conn.execute(
+        """
+        SELECT created_at
+        FROM chat_messages
+        WHERE thread_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (thread_id,),
+    ).fetchone()
+    last_message_at = row["created_at"] if row is not None else None
+    conn.execute(
+        """
+        UPDATE chat_threads
+        SET updated_at = ?, last_message_at = ?
+        WHERE id = ?
+        """,
+        (now, last_message_at, thread_id),
+    )
 
 
 def _post_ids_from_hits(hits: list) -> list[str]:
@@ -422,6 +584,8 @@ def _message_from_row(row) -> ChatMessage:
         role=row["role"],
         content=row["content"],
         created_at=row["created_at"],
+        edited_at=float(row["edited_at"]) if row["edited_at"] is not None else None,
+        rerun_at=float(row["rerun_at"]) if row["rerun_at"] is not None else None,
         attachments=attachment_service.list_chat_message_attachments(message_id),
     )
 

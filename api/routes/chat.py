@@ -22,6 +22,11 @@ class SendChatMessageRequest(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=9)
 
 
+class UpdateChatMessageRequest(BaseModel):
+    content: str = Field(default="", max_length=20_000)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=9)
+
+
 @router.get("/threads/{thread_id}")
 async def get_chat_thread(thread_id: int, limit: int = Query(default=30, ge=1, le=100)):
     try:
@@ -77,6 +82,47 @@ async def send_chat_message(soul_name: str, request: SendChatMessageRequest):
         "thread": asdict(thread),
         "result": asdict(result),
         "messages": [asdict(message) for message in messages],
+    }
+
+
+@router.patch("/messages/{message_id}")
+async def update_chat_message(message_id: int, request: UpdateChatMessageRequest):
+    try:
+        result = await run_sync(
+            chat_service.edit_user_message,
+            message_id,
+            request.content,
+            request.attachment_ids,
+        )
+    except ValueError as exc:
+        status = 404 if str(exc).startswith("私聊消息不存在") else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    return {
+        "thread": asdict(result["thread"]),
+        "message": asdict(result["message"]),
+        "messages": [asdict(message) for message in result["messages"]],
+    }
+
+
+@router.post("/messages/{message_id}/rerun")
+async def rerun_chat_message(message_id: int):
+    runtime = get_runtime()
+    try:
+        result = await run_sync(
+            chat_service.rerun_assistant_message,
+            message_id,
+            runtime.client,
+            runtime.model,
+        )
+    except ValueError as exc:
+        status = 404 if str(exc).startswith("私聊消息不存在") else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {
+        "thread": asdict(result["thread"]),
+        "message": asdict(result["message"]),
+        "messages": [asdict(message) for message in result["messages"]],
     }
 
 

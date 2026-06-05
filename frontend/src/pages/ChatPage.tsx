@@ -5,11 +5,13 @@ import {
   type ChatThread,
   getChatThread,
   listChatThreads,
+  rerunChatMessage,
   sendChatMessage,
+  updateChatMessage,
 } from '@/api/client'
 import { ImageGrid } from '@/components/ImageGrid'
 import { ImageUploader } from '@/components/ImageUploader'
-import { LoadingDots, SendIcon } from '@/components/icons'
+import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './WorkspacePages.module.css'
@@ -25,6 +27,9 @@ export function ChatPage({ soulName }: ChatPageProps) {
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
+  const [busyMessageId, setBusyMessageId] = useState<number | null>(null)
+  const [editingMessageId, setEditingMessageId] = useState<number | null>(null)
+  const [editDraft, setEditDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const submitShortcutTitle = getSubmitShortcutTitle()
@@ -43,6 +48,8 @@ export function ChatPage({ soulName }: ChatPageProps) {
       const detail = await getChatThread(latestThread.id)
       setThread(detail.thread)
       setMessages(detail.messages)
+      setEditingMessageId(null)
+      setEditDraft('')
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
@@ -54,6 +61,8 @@ export function ChatPage({ soulName }: ChatPageProps) {
   useEffect(() => {
     setDraft('')
     setAttachments([])
+    setEditingMessageId(null)
+    setEditDraft('')
     fetchThread()
   }, [fetchThread])
 
@@ -99,6 +108,63 @@ export function ChatPage({ soulName }: ChatPageProps) {
     submitDraft()
   }
 
+  const startEditMessage = (message: ChatMessage) => {
+    setEditingMessageId(message.id)
+    setEditDraft(message.content)
+    setError(null)
+  }
+
+  const cancelEditMessage = () => {
+    setEditingMessageId(null)
+    setEditDraft('')
+  }
+
+  const saveEditMessage = async (message: ChatMessage) => {
+    const body = editDraft.trim()
+    if (!body && (message.attachments ?? []).length === 0) return
+    const hasLaterMessages = messages.some((item) => item.id > message.id)
+    if (hasLaterMessages && !window.confirm('保存后会移除这条消息之后的私聊内容，确定继续？')) {
+      return
+    }
+    setBusyMessageId(message.id)
+    try {
+      const response = await updateChatMessage(
+        message.id,
+        body,
+        (message.attachments ?? []).map((attachment) => attachment.id),
+      )
+      setThread(response.thread)
+      setMessages(response.messages)
+      setEditingMessageId(null)
+      setEditDraft('')
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '编辑失败')
+    } finally {
+      setBusyMessageId(null)
+    }
+  }
+
+  const rerunMessage = async (message: ChatMessage) => {
+    const hasLaterMessages = messages.some((item) => item.id > message.id)
+    if (hasLaterMessages && !window.confirm('重跑后会移除这条回复之后的私聊内容，确定继续？')) {
+      return
+    }
+    setBusyMessageId(message.id)
+    try {
+      const response = await rerunChatMessage(message.id)
+      setThread(response.thread)
+      setMessages(response.messages)
+      setEditingMessageId(null)
+      setEditDraft('')
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重跑失败')
+    } finally {
+      setBusyMessageId(null)
+    }
+  }
+
   return (
     <div className={styles.page}>
       <div className={styles.chatShell}>
@@ -121,7 +187,18 @@ export function ChatPage({ soulName }: ChatPageProps) {
             <div className={styles.empty}>还没有消息</div>
           ) : (
             messages.map((message) => (
-              <MessageBubble key={message.id} soulName={soulName} message={message} />
+              <MessageBubble
+                key={message.id}
+                soulName={soulName}
+                message={message}
+                busy={busyMessageId === message.id}
+                editDraft={editingMessageId === message.id ? editDraft : null}
+                onStartEdit={startEditMessage}
+                onChangeEditDraft={setEditDraft}
+                onCancelEdit={cancelEditMessage}
+                onSaveEdit={saveEditMessage}
+                onRerun={rerunMessage}
+              />
             ))
           )}
         </div>
@@ -181,13 +258,73 @@ export function ChatPage({ soulName }: ChatPageProps) {
   )
 }
 
-function MessageBubble({ soulName, message }: { soulName: string; message: ChatMessage }) {
+function MessageBubble({
+  soulName,
+  message,
+  busy,
+  editDraft,
+  onStartEdit,
+  onChangeEditDraft,
+  onCancelEdit,
+  onSaveEdit,
+  onRerun,
+}: {
+  soulName: string
+  message: ChatMessage
+  busy: boolean
+  editDraft: string | null
+  onStartEdit: (message: ChatMessage) => void
+  onChangeEditDraft: (value: string) => void
+  onCancelEdit: () => void
+  onSaveEdit: (message: ChatMessage) => void
+  onRerun: (message: ChatMessage) => void
+}) {
   const isUser = message.role === 'user'
   return (
     <article className={`${styles.message} ${isUser ? styles.messageUser : styles.messageAssistant}`}>
-      <span className={styles.messageRole}>{isUser ? '我' : soulName}</span>
-      {message.content}
+      <div className={styles.messageHeader}>
+        <span className={styles.messageRole}>{isUser ? '我' : soulName}</span>
+        {editDraft === null && (
+          <div className={styles.messageActions}>
+            {isUser ? (
+              <button className={styles.messageAction} onClick={() => onStartEdit(message)} disabled={busy} title="编辑" aria-label="编辑私聊消息">
+                <PencilIcon />
+              </button>
+            ) : (
+              <button className={styles.messageAction} onClick={() => onRerun(message)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
+                <RefreshCwIcon />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+      {editDraft === null ? (
+        <p className={styles.messageText}>{message.content}</p>
+      ) : (
+        <textarea
+          className={styles.messageEditInput}
+          value={editDraft}
+          onChange={(event) => onChangeEditDraft(event.target.value)}
+          disabled={busy}
+          rows={3}
+          aria-label="编辑私聊消息"
+        />
+      )}
       <ImageGrid attachments={message.attachments ?? []} />
+      <div className={styles.messageMetaRow}>
+        {message.edited_at && <span className={styles.messageMarker}>已编辑</span>}
+        {message.rerun_at && <span className={styles.messageMarker}>已重跑</span>}
+        {editDraft !== null && (
+          <div className={styles.messageActions}>
+            <button className={styles.messageTextAction} onClick={() => onSaveEdit(message)} disabled={busy}>
+              保存
+            </button>
+            <button className={styles.messageTextAction} onClick={onCancelEdit} disabled={busy}>
+              取消
+            </button>
+          </div>
+        )}
+      </div>
     </article>
   )
 }

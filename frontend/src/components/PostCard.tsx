@@ -8,7 +8,7 @@ import {
 } from '@/api/client'
 import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
-import { ChatIcon, LoadingDots, SendIcon, StarIcon } from '@/components/icons'
+import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, StarIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatRelativeTime } from '@/utils/date'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
@@ -25,16 +25,26 @@ interface PostCardProps {
   post: Post
   comments?: Comment[]
   commentConversations?: Record<string, CommentConversationState>
+  busyCommentId?: number | null
+  deletingPost?: boolean
   onExpand?: () => void
   onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
+  onDeletePost?: () => Promise<void>
+  onDeleteComment?: (commentId: number) => Promise<void>
+  onRerunComment?: (commentId: number) => Promise<void>
 }
 
 export function PostCard({
   post,
   comments = [],
   commentConversations = {},
+  busyCommentId = null,
+  deletingPost = false,
   onExpand,
   onReply,
+  onDeletePost,
+  onDeleteComment,
+  onRerunComment,
 }: PostCardProps) {
   const timeAgo = formatRelativeTime(post.ts)
 
@@ -55,6 +65,11 @@ export function PostCard({
             <StarIcon />
           </span>
         )}
+        {onDeletePost && (
+          <button className={styles.postAction} onClick={onDeletePost} disabled={deletingPost} title="删除 post" aria-label="删除 post">
+            <TrashIcon />
+          </button>
+        )}
       </div>
 
       {post.content && <div className={styles.content}>{post.content}</div>}
@@ -67,7 +82,10 @@ export function PostCard({
               key={comment.id}
               comment={comment}
               conversation={commentConversations[comment.soul_name]}
+              busyCommentId={busyCommentId}
               onReply={onReply}
+              onDelete={onDeleteComment}
+              onRerun={onRerunComment}
             />
           ))}
         </div>
@@ -92,11 +110,17 @@ export function PostCard({
 function CommentPreview({
   comment,
   conversation,
+  busyCommentId,
   onReply,
+  onDelete,
+  onRerun,
 }: {
   comment: Comment
   conversation?: CommentConversationState
+  busyCommentId: number | null
   onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
+  onDelete?: (commentId: number) => Promise<void>
+  onRerun?: (commentId: number) => Promise<void>
 }) {
   const [reply, setReply] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -105,6 +129,10 @@ function CommentPreview({
   const hue = soulName.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
   const trimmed = reply.trim()
   const submitShortcutTitle = getSubmitShortcutTitle()
+  const messages = conversation?.messages ?? []
+  const latestMessage = latestConversationMessage(comment, messages)
+  const canRerunRoot = latestMessage?.id === comment.id && latestMessage.role === 'assistant'
+  const rootBusy = busyCommentId === comment.id
 
   useEffect(() => {
     const el = replyInputRef.current
@@ -138,16 +166,34 @@ function CommentPreview({
           {soulName.charAt(0).toUpperCase()}
         </span>
         <div className={styles.commentBody}>
-          <span className={styles.soulName}>{soulName}</span>
+          <div className={styles.commentHeader}>
+            <span className={styles.soulName}>{soulName}</span>
+            <div className={styles.messageActions}>
+              {comment.rerun_at && <span className={styles.messageMarker}>已重跑</span>}
+              {canRerunRoot && onRerun && (
+                <button className={styles.inlineAction} onClick={() => onRerun(comment.id)} disabled={rootBusy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
+                  <RefreshCwIcon />
+                </button>
+              )}
+            </div>
+          </div>
           {comment.content && <p className={styles.commentText}>{comment.content}</p>}
           <ImageGrid attachments={comment.attachments ?? []} />
         </div>
       </div>
 
-      {conversation?.messages && conversation.messages.some((message) => message.seq > 0) && (
+      {messages.some((message) => message.seq > 0) && (
         <div className={styles.threadMessages}>
-          {conversation.messages.filter((message) => message.seq > 0).map((message) => (
-            <ThreadMessage key={message.id} message={message} soulName={soulName} />
+          {messages.filter((message) => message.seq > 0).map((message) => (
+            <ThreadMessage
+              key={message.id}
+              message={message}
+              soulName={soulName}
+              isLatest={latestMessage?.id === message.id}
+              busy={busyCommentId === message.id}
+              onDelete={onDelete}
+              onRerun={onRerun}
+            />
           ))}
         </div>
       )}
@@ -205,13 +251,50 @@ function CommentPreview({
   )
 }
 
-function ThreadMessage({ message, soulName }: { message: CommentMessage; soulName: string }) {
+function ThreadMessage({
+  message,
+  soulName,
+  isLatest,
+  busy,
+  onDelete,
+  onRerun,
+}: {
+  message: CommentMessage
+  soulName: string
+  isLatest: boolean
+  busy: boolean
+  onDelete?: (commentId: number) => Promise<void>
+  onRerun?: (commentId: number) => Promise<void>
+}) {
   const isUser = message.role === 'user'
   return (
     <div className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
-      <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
+      <div className={styles.threadHeader}>
+        <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
+        <div className={styles.threadActionRow}>
+          {message.rerun_at && <span className={styles.threadMarker}>已重跑</span>}
+          {isLatest && message.role === 'assistant' && onRerun && (
+            <button className={styles.threadAction} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
+              <RefreshCwIcon />
+            </button>
+          )}
+          {isUser && onDelete && (
+            <button className={styles.threadDanger} onClick={() => onDelete(message.id)} disabled={busy} title="删除评论" aria-label="删除评论">
+              <TrashIcon />
+            </button>
+          )}
+        </div>
+      </div>
       {message.content && <p>{message.content}</p>}
       <ImageGrid attachments={message.attachments ?? []} />
     </div>
   )
+}
+
+function latestConversationMessage(root: Comment, messages: CommentMessage[]): Comment | CommentMessage {
+  if (messages.length === 0) return root
+  return [...messages].sort((a, b) => {
+    if (a.seq !== b.seq) return b.seq - a.seq
+    return b.id - a.id
+  })[0] ?? root
 }

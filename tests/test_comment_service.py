@@ -220,6 +220,62 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIsNone(result.assistant_message_id)
         self.assertEqual(["user"], [message.role for message in messages])
 
+    def test_delete_assistant_comment_is_rejected(self) -> None:
+        comment_service.append_comment("20260525-001", "默认", "user", "继续聊")
+        comment_service.append_comment("20260525-001", "默认", "assistant", "继续聊的回复")
+        root = comment_service.get_conversation("20260525-001", "默认").root_comment_id
+        self.assertIsNotNone(root)
+
+        with self.assertRaises(ValueError):
+            comment_service.delete_message(root)
+
+        messages = comment_service.list_conversation_messages("20260525-001", "默认")
+        self.assertEqual(["assistant", "user", "assistant"], [message.role for message in messages])
+
+    def test_delete_comment_message_deletes_that_message_and_later_messages(self) -> None:
+        first_user = comment_service.append_comment("20260525-001", "默认", "user", "第一条")
+        comment_service.append_comment("20260525-001", "默认", "assistant", "第一条回复")
+        comment_service.append_comment("20260525-001", "默认", "user", "第二条")
+
+        result = comment_service.delete_message(first_user.id)
+        messages = comment_service.list_conversation_messages("20260525-001", "默认")
+
+        self.assertEqual([first_user.id, first_user.id + 1, first_user.id + 2], result["deleted_message_ids"])
+        self.assertEqual(["assistant"], [message.role for message in messages])
+        self.assertEqual([0], [message.seq for message in messages])
+
+    def test_rerun_latest_assistant_comment_updates_same_message_and_marks_rerun(self) -> None:
+        result = comment_service.call_comment_reply(
+            "20260525-001",
+            "默认",
+            "继续聊练歌",
+            FakeClient({"reply": "原回复"}),
+            "fake-model",
+        )
+        self.assertIsNotNone(result.assistant_message_id)
+
+        with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value={"reply": "重跑后的回复"}):
+            rerun = comment_service.rerun_latest_assistant_message(result.assistant_message_id, FakeClient(), "fake-model")
+
+        messages = rerun["messages"]
+        self.assertEqual([0, 1, 2], [message.seq for message in messages])
+        self.assertEqual("重跑后的回复", messages[-1].content)
+        self.assertIsNotNone(messages[-1].rerun_at)
+
+    def test_rerun_comment_requires_latest_assistant_message(self) -> None:
+        first = comment_service.call_comment_reply(
+            "20260525-001",
+            "默认",
+            "第一轮",
+            FakeClient({"reply": "第一轮回复"}),
+            "fake-model",
+        )
+        comment_service.append_comment("20260525-001", "默认", "user", "第二轮用户消息")
+        self.assertIsNotNone(first.assistant_message_id)
+
+        with self.assertRaises(ValueError):
+            comment_service.rerun_latest_assistant_message(first.assistant_message_id, FakeClient(), "fake-model")
+
     def test_comment_reply_ignores_todo_fields(self) -> None:
         client = FakeClient(
             {

@@ -66,6 +66,15 @@ class DbTest(unittest.TestCase):
         self.assertIn("jobs", tables)
         self.assertIn("post_events", tables)
 
+    def test_message_mutation_marker_columns_exist(self) -> None:
+        comment_columns = {row["name"] for row in db.query_all("PRAGMA table_info(comments)")}
+        chat_columns = {row["name"] for row in db.query_all("PRAGMA table_info(chat_messages)")}
+
+        self.assertIn("edited_at", comment_columns)
+        self.assertIn("rerun_at", comment_columns)
+        self.assertIn("edited_at", chat_columns)
+        self.assertIn("rerun_at", chat_columns)
+
     def _insert_post(self, post_id: str) -> None:
         db.execute(
             """

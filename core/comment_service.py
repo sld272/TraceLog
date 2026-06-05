@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 
 from core import (
@@ -48,6 +49,8 @@ class CommentMessage:
     content: str
     seq: int
     created_at: float
+    edited_at: float | None
+    rerun_at: float | None
     attachments: list[Attachment]
 
 
@@ -102,18 +105,26 @@ def list_conversation_messages(
     limit: int = COMMENT_HISTORY_LIMIT,
     *,
     include_root: bool = True,
+    before_seq: int | None = None,
 ) -> list[CommentMessage]:
     get_conversation(post_id, soul_name)
     min_seq = 0 if include_root else 1
+    before_clause = ""
+    params: list = [post_id, soul_name, min_seq]
+    if before_seq is not None:
+        before_clause = "AND seq < ?"
+        params.append(int(before_seq))
+    params.append(limit)
     rows = db.query_all(
-        """
-        SELECT id, post_id, soul_name, role, content, seq, created_at
+        f"""
+        SELECT id, post_id, soul_name, role, content, seq, created_at, edited_at, rerun_at
         FROM comments
         WHERE post_id = ? AND soul_name = ? AND seq >= ?
+        {before_clause}
         ORDER BY seq DESC
         LIMIT ?
         """,
-        (post_id, soul_name, min_seq, limit),
+        tuple(params),
     )
     return [_message_from_row(row) for row in reversed(rows)]
 
@@ -127,7 +138,7 @@ def list_conversation_messages_after(
     get_conversation(post_id, soul_name)
     rows = db.query_all(
         """
-        SELECT id, post_id, soul_name, role, content, seq, created_at
+        SELECT id, post_id, soul_name, role, content, seq, created_at, edited_at, rerun_at
         FROM comments
         WHERE post_id = ? AND soul_name = ? AND id > ?
         ORDER BY id ASC
@@ -182,10 +193,19 @@ def build_comment_context(
     user_message: str,
     client: LLMClient | None = None,
     model: str | None = None,
+    *,
+    before_seq: int | None = None,
+    include_root_comment: bool = True,
 ) -> CommentContext:
     conversation = get_conversation(post_id, soul_name)
     soul = _load_soul_context(soul_name)
-    messages = list_conversation_messages(post_id, soul_name, limit=COMMENT_HISTORY_LIMIT, include_root=False)
+    messages = list_conversation_messages(
+        post_id,
+        soul_name,
+        limit=COMMENT_HISTORY_LIMIT,
+        include_root=False,
+        before_seq=before_seq,
+    )
     llm_messages = [_message_for_llm(message) for message in messages]
     sections: list[str] = []
 
@@ -220,7 +240,7 @@ def build_comment_context(
         sections.append(f"# 相关记忆\n\n{related_memory}")
 
     root_comment = _get_root_comment(post_id, soul_name)
-    if root_comment is not None:
+    if include_root_comment and root_comment is not None:
         sections.append(f"# {soul_name} 的首条回复\n\n{root_comment['content']}")
 
     if tool_config_service.is_tool_enabled("todo"):
@@ -322,7 +342,7 @@ def call_comment_reply(
 def get_message(message_id: int) -> CommentMessage:
     row = db.query_one(
         """
-        SELECT id, post_id, soul_name, role, content, seq, created_at
+        SELECT id, post_id, soul_name, role, content, seq, created_at, edited_at, rerun_at
         FROM comments
         WHERE id = ?
         """,
@@ -331,6 +351,126 @@ def get_message(message_id: int) -> CommentMessage:
     if row is None:
         raise ValueError(f"评论消息不存在：{message_id}")
     return _message_from_row(row)
+
+
+def delete_message(message_id: int) -> dict:
+    message = get_message(message_id)
+    if message.role != "user":
+        raise ValueError("只能删除用户评论；要删除 SOUL 回复，请删除它前面的用户评论或原 post")
+    if message.seq == 0:
+        rows = db.query_all(
+            """
+            SELECT id
+            FROM comments
+            WHERE post_id = ? AND soul_name = ?
+            ORDER BY seq ASC, id ASC
+            """,
+            (message.post_id, message.soul_name),
+        )
+        deleted_ids = [int(row["id"]) for row in rows]
+        with db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM comments WHERE post_id = ? AND soul_name = ?",
+                (message.post_id, message.soul_name),
+            )
+    else:
+        rows = db.query_all(
+            """
+            SELECT id
+            FROM comments
+            WHERE post_id = ? AND soul_name = ? AND seq >= ?
+            ORDER BY seq ASC, id ASC
+            """,
+            (message.post_id, message.soul_name, message.seq),
+        )
+        deleted_ids = [int(row["id"]) for row in rows]
+        with db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM comments WHERE post_id = ? AND soul_name = ? AND seq >= ?",
+                (message.post_id, message.soul_name, message.seq),
+            )
+
+    for deleted_id in deleted_ids:
+        record_service.delete_comment_embedding(deleted_id)
+    return {
+        "ok": True,
+        "post_id": message.post_id,
+        "soul_name": message.soul_name,
+        "deleted_message_ids": deleted_ids,
+    }
+
+
+def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: str) -> dict:
+    message = get_message(message_id)
+    latest = _latest_conversation_message(message.post_id, message.soul_name)
+    if latest is None or latest.id != message.id or latest.role != "assistant":
+        raise ValueError("只能重跑最新一条 SOUL 回复")
+
+    post = _get_post(message.post_id)
+    if post is None:
+        raise ValueError(f"post 不存在：{message.post_id}")
+
+    prior_messages = list_conversation_messages(
+        message.post_id,
+        message.soul_name,
+        limit=COMMENT_HISTORY_LIMIT,
+        include_root=False,
+        before_seq=message.seq,
+    )
+    rerun_user_message = _rerun_user_message(post, prior_messages)
+    context = build_comment_context(
+        message.post_id,
+        message.soul_name,
+        rerun_user_message,
+        client,
+        model,
+        before_seq=message.seq,
+        include_root_comment=message.seq != 0,
+    )
+    data = reply_router.call_soul_comment_reply(
+        client,
+        model,
+        context,
+        context.soul,
+        trace_context={
+            "post_id": message.post_id,
+            "soul_name": message.soul_name,
+            "rerun_comment_id": message.id,
+            "relevant_post_ids": context.relevant_post_ids,
+        },
+    )
+    if data is None:
+        raise RuntimeError("comment rerun failed")
+    reply = data.get("reply")
+    if not isinstance(reply, str) or not reply.strip():
+        raise RuntimeError("comment rerun returned empty reply")
+
+    now = db.now_ts()
+    metadata = {"status": "ok", "model": model, "rerun": True}
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            UPDATE comments
+            SET content = ?, metadata = ?, rerun_at = ?
+            WHERE id = ?
+            """,
+            (reply.strip(), json.dumps(metadata, ensure_ascii=False), now, message.id),
+        )
+
+    updated = get_message(message.id)
+    record_service.index_comment_embedding(
+        updated.id,
+        updated.post_id,
+        updated.soul_name,
+        updated.role,
+        updated.seq,
+        updated.content,
+    )
+    return {
+        "message": updated,
+        "conversation": get_conversation(updated.post_id, updated.soul_name),
+        "messages": list_conversation_messages(updated.post_id, updated.soul_name),
+    }
 
 
 def _failed_result(post_id: str, soul_name: str, user_message_id: int, error: str) -> CommentReplyResult:
@@ -386,6 +526,20 @@ def _get_root_comment(post_id: str, soul_name: str):
     )
 
 
+def _latest_conversation_message(post_id: str, soul_name: str) -> CommentMessage | None:
+    row = db.query_one(
+        """
+        SELECT id, post_id, soul_name, role, content, seq, created_at, edited_at, rerun_at
+        FROM comments
+        WHERE post_id = ? AND soul_name = ?
+        ORDER BY seq DESC, id DESC
+        LIMIT 1
+        """,
+        (post_id, soul_name),
+    )
+    return _message_from_row(row) if row is not None else None
+
+
 def _conversation_from_root(post_id: str, soul_name: str, root_comment) -> CommentConversation:
     activity = db.query_one(
         """
@@ -416,6 +570,8 @@ def _message_from_row(row) -> CommentMessage:
         content=row["content"],
         seq=int(row["seq"]),
         created_at=float(row["created_at"]),
+        edited_at=float(row["edited_at"]) if row["edited_at"] is not None else None,
+        rerun_at=float(row["rerun_at"]) if row["rerun_at"] is not None else None,
         attachments=attachment_service.list_comment_attachments(message_id),
     )
 
@@ -433,6 +589,17 @@ def _build_comment_retrieval_query(post, messages: list[CommentMessage], user_me
     if parts:
         return "\n".join(part for part in parts if part)
     return user_message
+
+
+def _rerun_user_message(post, prior_messages: list[CommentMessage]) -> str:
+    user_messages = [
+        message.content.strip()
+        for message in prior_messages
+        if message.role == "user" and message.content.strip()
+    ]
+    if user_messages:
+        return user_messages[-1]
+    return _post_content_for_llm(post)
 
 
 def _post_content_for_llm(post) -> str:

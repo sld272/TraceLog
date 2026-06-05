@@ -158,6 +158,21 @@ def index_chat_message(message_id: int, thread_id: int, soul_name: str, role: st
     )
 
 
+def delete_document(doc_id: str) -> None:
+    """Delete one vector document if the vector store is initialized."""
+    delete_documents([doc_id])
+
+
+def delete_documents(doc_ids: list[str]) -> None:
+    """Delete vector documents by id if the vector store is initialized."""
+    if _collection is None:
+        return
+    ids = [doc_id for doc_id in doc_ids if isinstance(doc_id, str) and doc_id.strip()]
+    if not ids:
+        return
+    _collection.delete(ids=ids)
+
+
 def _index_document(doc_id: str, content: str, metadata: dict) -> None:
     if _collection is None:
         return

@@ -174,6 +174,51 @@ def index_post_vision_embedding(post_id: str, content: str, attachment_ids: list
         )
 
 
+def delete_post_embedding(post_id: str) -> None:
+    _delete_vector_doc(f"post-{post_id}", "post", post_id=post_id)
+    _clear_pending_embedding(post_id)
+    _clear_pending_vector_doc(f"post-{post_id}")
+
+
+def delete_post_vision_embedding(post_id: str) -> None:
+    _delete_vector_doc(f"post-vision-{post_id}", "post_vision", post_id=post_id)
+    _clear_pending_vector_doc(f"post-vision-{post_id}")
+
+
+def delete_comment_embedding(comment_id: int) -> None:
+    doc_id = f"comment-{int(comment_id)}"
+    _delete_vector_doc(doc_id, "comment", comment_id=int(comment_id))
+    _clear_pending_vector_doc(doc_id)
+
+
+def delete_chat_message_embedding(message_id: int) -> None:
+    doc_id = f"chat-{int(message_id)}"
+    _delete_vector_doc(doc_id, "chat", message_id=int(message_id))
+    _clear_pending_vector_doc(doc_id)
+
+
+def delete_vector_docs(doc_ids: list[str]) -> None:
+    ids = [doc_id for doc_id in doc_ids if isinstance(doc_id, str) and doc_id.strip()]
+    if not ids:
+        return
+    try:
+        vectorstore = _vectorstore()
+        if vectorstore.is_initialized():
+            vectorstore.delete_documents(ids)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        logging_service.log_event(
+            "vector_doc_delete_failed",
+            level="WARNING",
+            doc_ids=ids,
+            error=str(exc),
+            **_external_api_error_fields(exc, operation="vector_delete_docs"),
+        )
+    for doc_id in ids:
+        _clear_pending_vector_doc(doc_id)
+
+
 def format_post(row) -> str:
     """Format one SQLite post row as markdown with frontmatter."""
     content = str(row["content"] or "")
@@ -440,6 +485,25 @@ def _mark_pending_vector_doc(doc_id: str, content: str, metadata: dict, error: s
         "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
         (f"pending_vector_doc:{doc_id}", json.dumps(payload, ensure_ascii=False)),
     )
+
+
+def _delete_vector_doc(doc_id: str, doc_type: str, **metadata) -> None:
+    try:
+        vectorstore = _vectorstore()
+        if vectorstore.is_initialized():
+            vectorstore.delete_document(doc_id)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        logging_service.log_event(
+            "vector_doc_delete_failed",
+            level="WARNING",
+            doc_id=doc_id,
+            type=doc_type,
+            error=str(exc),
+            **metadata,
+            **_external_api_error_fields(exc, operation="vector_delete_doc"),
+        )
 
 
 def _pending_embedding_payload(post_id: str, content: str, error: str) -> str:

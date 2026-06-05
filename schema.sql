@@ -75,7 +75,9 @@ CREATE TABLE IF NOT EXISTS comments (
     content     TEXT NOT NULL,
     seq         INTEGER NOT NULL DEFAULT 0,
     metadata    TEXT,
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    edited_at   REAL,
+    rerun_at    REAL
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_conversation_seq
@@ -245,7 +247,9 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     thread_id   INTEGER NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
     role        TEXT NOT NULL,
     content     TEXT NOT NULL,
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    edited_at   REAL,
+    rerun_at    REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);

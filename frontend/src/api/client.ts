@@ -34,6 +34,8 @@ export interface Comment {
   seq: number
   metadata: string | null
   created_at: number
+  edited_at?: number | null
+  rerun_at?: number | null
   attachments: Attachment[]
 }
 
@@ -104,6 +106,8 @@ export interface ChatMessage {
   role: string
   content: string
   created_at: number
+  edited_at?: number | null
+  rerun_at?: number | null
   attachments: Attachment[]
 }
 
@@ -124,6 +128,8 @@ export interface CommentMessage {
   content: string
   seq: number
   created_at: number
+  edited_at?: number | null
+  rerun_at?: number | null
   attachments: Attachment[]
 }
 
@@ -285,6 +291,13 @@ export function createPost(content: string, attachmentIds: string[] = []) {
   return request<{ post_id: string; status: string; job_ids: number[] }>(
     '/posts',
     { method: 'POST', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
+  )
+}
+
+export function deletePost(postId: string) {
+  return request<{ ok: boolean; post_id: string; deleted_comments: number; cancelled_jobs: number }>(
+    `/posts/${encodeURIComponent(postId)}`,
+    { method: 'DELETE' },
   )
 }
 
@@ -454,6 +467,20 @@ export function sendChatMessage(soulName: string, content: string, attachmentIds
   )
 }
 
+export function updateChatMessage(messageId: number, content: string, attachmentIds: string[] = []) {
+  return request<{ thread: ChatThread; message: ChatMessage; messages: ChatMessage[] }>(
+    `/chat/messages/${messageId}`,
+    { method: 'PATCH', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
+  )
+}
+
+export function rerunChatMessage(messageId: number) {
+  return request<{ thread: ChatThread; message: ChatMessage; messages: ChatMessage[] }>(
+    `/chat/messages/${messageId}/rerun`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
 /* Reflections */
 const DEFAULT_REFLECTION_LIMIT = 100
 
@@ -502,6 +529,20 @@ export function sendCommentMessage(postId: string, soulName: string, content: st
   }>(
     `/comments/posts/${encodeURIComponent(postId)}/souls/${encodeURIComponent(soulName)}/messages`,
     { method: 'POST', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
+  )
+}
+
+export function deleteCommentMessage(commentId: number) {
+  return request<{ ok: boolean; post_id: string; soul_name: string; deleted_message_ids: number[] }>(
+    `/comments/messages/${commentId}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function rerunCommentMessage(commentId: number) {
+  return request<{ message: CommentMessage; conversation: CommentConversation; messages: CommentMessage[] }>(
+    `/comments/messages/${commentId}/rerun`,
+    { method: 'POST', body: JSON.stringify({}) },
   )
 }
 

@@ -164,6 +164,31 @@ def attach_to_chat_message(message_id: int, attachment_ids: list[str] | None) ->
     _link_many("chat_message_attachments", "message_id", int(message_id), ids)
 
 
+def replace_chat_message_attachments(message_id: int, attachment_ids: list[str] | None) -> None:
+    ids = _normalize_attachment_ids(attachment_ids)
+    if db.query_one("SELECT 1 FROM chat_messages WHERE id = ?", (message_id,)) is None:
+        raise ValueError(f"私聊消息不存在：{message_id}")
+    with db.transaction() as conn:
+        conn.execute("DELETE FROM chat_message_attachments WHERE message_id = ?", (int(message_id),))
+    attach_to_chat_message(message_id, ids)
+
+
+def delete_comment_attachment_links(comment_ids: list[int]) -> None:
+    ids = [int(comment_id) for comment_id in comment_ids]
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    db.execute(f"DELETE FROM comment_attachments WHERE comment_id IN ({placeholders})", tuple(ids))
+
+
+def delete_chat_message_attachment_links(message_ids: list[int]) -> None:
+    ids = [int(message_id) for message_id in message_ids]
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    db.execute(f"DELETE FROM chat_message_attachments WHERE message_id IN ({placeholders})", tuple(ids))
+
+
 def list_post_attachments(post_id: str) -> list[Attachment]:
     return _list_linked(
         """

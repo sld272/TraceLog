@@ -148,6 +148,29 @@ def cancel_pending_job(job_id: int) -> bool | None:
     return True
 
 
+def cancel_pending_jobs_for_post(post_id: str) -> int:
+    """Cancel all pending jobs whose payload references a post."""
+    now = db.now_ts()
+    cancelled = 0
+    with db.transaction() as conn:
+        rows = conn.execute("SELECT * FROM jobs WHERE status = ?", (STATUS_PENDING,)).fetchall()
+        for row in rows:
+            item = _row_to_dict(row)
+            payload = item.get("payload") or {}
+            if payload.get("post_id") != post_id:
+                continue
+            cursor = conn.execute(
+                """
+                UPDATE jobs
+                SET status = ?, updated_at = ?, finished_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (STATUS_CANCELLED, now, now, item["id"], STATUS_PENDING),
+            )
+            cancelled += cursor.rowcount
+    return cancelled
+
+
 def reset_running_to_pending() -> int:
     """Return running jobs to pending after an interrupted API worker shutdown."""
     now = db.now_ts()
