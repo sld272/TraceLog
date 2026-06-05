@@ -326,6 +326,19 @@ function MessageBubble({
   onRerun: (message: ChatMessage) => void
 }) {
   const isUser = message.role === 'user'
+  const editInputRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    const el = editInputRef.current
+    if (el && editDraft !== null) {
+      el.style.height = 'auto'
+      const newHeight = Math.min(el.scrollHeight, 200)
+      el.style.height = `${newHeight}px`
+      // Only show scrollbar when content exceeds max height
+      el.style.overflowY = el.scrollHeight > 200 ? 'auto' : 'hidden'
+    }
+  }, [editDraft])
+
   return (
     <article className={`${styles.message} ${isUser ? styles.messageUser : styles.messageAssistant}`}>
       <div className={styles.messageHeader}>
@@ -348,11 +361,12 @@ function MessageBubble({
         <p className={styles.messageText}>{message.content}</p>
       ) : (
         <textarea
+          ref={editInputRef}
           className={styles.messageEditInput}
           value={editDraft}
           onChange={(event) => onChangeEditDraft(event.target.value)}
           disabled={busy}
-          rows={3}
+          rows={1}
           aria-label="编辑私聊消息"
         />
       )}
@@ -360,11 +374,11 @@ function MessageBubble({
       <div className={styles.messageMetaRow}>
         {editDraft !== null && (
           <div className={styles.messageActions}>
-            <button className={styles.messageTextAction} onClick={() => onSaveEdit(message)} disabled={busy}>
-              保存
-            </button>
             <button className={styles.messageTextAction} onClick={onCancelEdit} disabled={busy}>
               取消
+            </button>
+            <button className={styles.messageTextAction} onClick={() => onSaveEdit(message)} disabled={busy}>
+              保存
             </button>
           </div>
         )}
