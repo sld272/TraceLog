@@ -3,7 +3,7 @@ interface IconProps {
   height?: number
 }
 
-export function TrashIcon({ width = 16, height = 16 }: IconProps = {}) {
+export function TrashIcon({ width = 11, height = 11 }: IconProps = {}) {
   return (
     <svg
       width={width}
@@ -11,7 +11,7 @@ export function TrashIcon({ width = 16, height = 16 }: IconProps = {}) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="2"
+      strokeWidth="1.7"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
