@@ -266,10 +266,23 @@ class CommentServiceTest(unittest.TestCase):
         root_id = comment_service.get_conversation("20260525-001", "默认").root_comment_id
         self.assertIsNotNone(root_id)
         captured = {}
+        retrieval.hybrid_search_documents = lambda *args, **kwargs: [
+            retrieval.RetrievalDocHit(
+                doc_id=f"comment-{root_id}",
+                type="comment",
+                source_id=str(root_id),
+                score=1.0,
+                rank=1,
+                metadata={"type": "comment", "post_id": "20260525-001", "soul_name": "默认"},
+                sources=["vector"],
+                reasons=["test"],
+            )
+        ]
 
         def fake_reply(client, model, context, soul, *, trace_context=None):
             del client, model, soul, trace_context
             captured["messages"] = context.messages
+            captured["context"] = context.context
             return {"reply": "根评论重跑回复"}
 
         with patch("core.comment_service.reply_router.call_soul_comment_reply", side_effect=fake_reply):
@@ -278,6 +291,8 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("根评论重跑回复", rerun["message"].content)
         self.assertEqual(["user"], [message.role for message in captured["messages"]])
         self.assertIn("今天想认真练歌", captured["messages"][0].content)
+        self.assertNotIn("公开评论对话 · post 20260525-001 · 默认", captured["context"])
+        self.assertNotIn("我陪你继续拆", captured["context"])
         self.assertIsNotNone(rerun["message"].rerun_at)
 
     def test_rerun_comment_requires_latest_assistant_message(self) -> None:

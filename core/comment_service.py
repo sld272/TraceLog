@@ -254,7 +254,11 @@ def build_comment_context(
         soul_name=soul_name,
         trace_context={"channel": "comment", "post_id": post_id, "soul_name": soul_name},
     )
-    related_memory = evidence_service.format_retrieval_hits(retrieval_hits, current_soul=soul_name)
+    related_memory = evidence_service.format_retrieval_hits(
+        retrieval_hits,
+        current_soul=soul_name,
+        exclude_comment_conversations={(post_id, soul_name)},
+    )
     if related_memory:
         sections.append(f"# 相关记忆\n\n{related_memory}")
 
