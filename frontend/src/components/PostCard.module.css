@@ -36,7 +36,7 @@
 
 .author {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-3);
   min-width: 0;
 }
@@ -56,6 +56,7 @@
 
 .userName {
   display: block;
+  margin-top: 2px;
   color: var(--color-text-primary);
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
@@ -165,7 +166,7 @@
 
 .commentHeader {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: var(--space-1);
@@ -190,11 +191,10 @@
 
 .messageActions {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  min-height: 20px;
+  height: 20px;
   margin-left: auto;
 }
 
@@ -275,7 +275,7 @@
 
 .threadHeader {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   margin-bottom: 2px;
@@ -311,11 +311,10 @@
 
 .threadActionRow {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  min-height: 20px;
+  height: 20px;
   margin-left: auto;
 }
 
