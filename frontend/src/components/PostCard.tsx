@@ -89,7 +89,6 @@ export function PostCard({
     </article>
   )
 }
-
 function CommentPreview({
   comment,
   conversation,
@@ -216,4 +215,3 @@ function ThreadMessage({ message, soulName }: { message: CommentMessage; soulNam
     </div>
   )
 }
-

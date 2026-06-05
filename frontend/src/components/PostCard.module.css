@@ -68,7 +68,6 @@
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
 }
-
 .importanceBadge {
   display: flex;
   align-items: center;
@@ -346,4 +345,3 @@
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
 }
-

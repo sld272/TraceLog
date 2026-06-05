@@ -97,4 +97,3 @@ export function Composer({ onSubmit }: ComposerProps) {
     </div>
   )
 }
-
