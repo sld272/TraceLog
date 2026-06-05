@@ -9,6 +9,7 @@ import {
   sendChatMessage,
   updateChatMessage,
 } from '@/api/client'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ImageGrid } from '@/components/ImageGrid'
 import { ImageUploader } from '@/components/ImageUploader'
 import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
@@ -31,6 +32,12 @@ export function ChatPage({ soulName }: ChatPageProps) {
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    onConfirm: () => void
+  } | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const submitShortcutTitle = getSubmitShortcutTitle()
 
@@ -123,9 +130,22 @@ export function ChatPage({ soulName }: ChatPageProps) {
     const body = editDraft.trim()
     if (!body && (message.attachments ?? []).length === 0) return
     const hasLaterMessages = messages.some((item) => item.id > message.id)
-    if (hasLaterMessages && !window.confirm('保存后会移除这条消息之后的私聊内容，确定继续？')) {
+    if (hasLaterMessages) {
+      setConfirmDialog({
+        isOpen: true,
+        title: '编辑消息',
+        message: '保存后会移除这条消息之后的私聊内容，确定继续？',
+        onConfirm: async () => {
+          setConfirmDialog(null)
+          await performSaveEdit(message, body)
+        },
+      })
       return
     }
+    await performSaveEdit(message, body)
+  }
+
+  const performSaveEdit = async (message: ChatMessage, body: string) => {
     setBusyMessageId(message.id)
     try {
       const response = await updateChatMessage(
@@ -147,9 +167,22 @@ export function ChatPage({ soulName }: ChatPageProps) {
 
   const rerunMessage = async (message: ChatMessage) => {
     const hasLaterMessages = messages.some((item) => item.id > message.id)
-    if (hasLaterMessages && !window.confirm('重跑后会移除这条回复之后的私聊内容，确定继续？')) {
+    if (hasLaterMessages) {
+      setConfirmDialog({
+        isOpen: true,
+        title: '重跑消息',
+        message: '重跑后会移除这条回复之后的私聊内容，确定继续？',
+        onConfirm: async () => {
+          setConfirmDialog(null)
+          await performRerun(message)
+        },
+      })
       return
     }
+    await performRerun(message)
+  }
+
+  const performRerun = async (message: ChatMessage) => {
     setBusyMessageId(message.id)
     try {
       const response = await rerunChatMessage(message.id)
@@ -254,6 +287,19 @@ export function ChatPage({ soulName }: ChatPageProps) {
           </div>
         </form>
       </div>
+
+      {confirmDialog && (
+        <ConfirmDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmText="继续"
+          cancelText="取消"
+          danger
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
     </div>
   )
 }

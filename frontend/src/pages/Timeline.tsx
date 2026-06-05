@@ -18,6 +18,7 @@ import {
   rerunCommentMessage,
 } from '@/api/client'
 import { Composer } from '@/components/Composer'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { type CommentConversationState, PostCard } from '@/components/PostCard'
 import { API_LIMITS } from '@/utils/constants'
 import styles from './Timeline.module.css'
@@ -35,6 +36,12 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   const [error, setError] = useState<string | null>(null)
   const [deletingPostId, setDeletingPostId] = useState<string | null>(null)
   const [busyCommentId, setBusyCommentId] = useState<number | null>(null)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    onConfirm: () => void
+  } | null>(null)
 
   const fetchPosts = useCallback(async () => {
     try {
@@ -203,43 +210,55 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   }
 
   const handleDeletePost = async (postId: string) => {
-    const confirmed = window.confirm('删除这条 post 会同时删除所有 SOUL 回复和评论对话，且不会自动恢复。确定删除吗？')
-    if (!confirmed) return
-    setDeletingPostId(postId)
-    try {
-      await deletePost(postId)
-      setPosts((prev) => prev.filter((post) => post.post_id !== postId))
-      setPostComments((prev) => {
-        const next = { ...prev }
-        delete next[postId]
-        return next
-      })
-      setPostCommentConversations((prev) => {
-        const next = { ...prev }
-        delete next[postId]
-        return next
-      })
-      onTodosChanged?.()
-      onActivitySettled?.()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '删除失败')
-    } finally {
-      setDeletingPostId(null)
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: '删除 Post',
+      message: '删除这条 post 会同时删除所有 SOUL 回复和评论对话，且不会自动恢复。确定删除吗？',
+      onConfirm: async () => {
+        setConfirmDialog(null)
+        setDeletingPostId(postId)
+        try {
+          await deletePost(postId)
+          setPosts((prev) => prev.filter((post) => post.post_id !== postId))
+          setPostComments((prev) => {
+            const next = { ...prev }
+            delete next[postId]
+            return next
+          })
+          setPostCommentConversations((prev) => {
+            const next = { ...prev }
+            delete next[postId]
+            return next
+          })
+          onTodosChanged?.()
+          onActivitySettled?.()
+        } catch (err) {
+          setError(err instanceof Error ? err.message : '删除失败')
+        } finally {
+          setDeletingPostId(null)
+        }
+      },
+    })
   }
 
   const handleDeleteComment = async (postId: string, commentId: number) => {
-    const confirmed = window.confirm('删除这条评论会同时删除它之后的同一段对话，且不会自动恢复。确定删除吗？')
-    if (!confirmed) return
-    setBusyCommentId(commentId)
-    try {
-      await deleteCommentMessage(commentId)
-      await refreshPostDetail(postId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '删除评论失败')
-    } finally {
-      setBusyCommentId(null)
-    }
+    setConfirmDialog({
+      isOpen: true,
+      title: '删除评论',
+      message: '删除这条评论会同时删除它之后的同一段对话，且不会自动恢复。确定删除吗？',
+      onConfirm: async () => {
+        setConfirmDialog(null)
+        setBusyCommentId(commentId)
+        try {
+          await deleteCommentMessage(commentId)
+          await refreshPostDetail(postId)
+        } catch (err) {
+          setError(err instanceof Error ? err.message : '删除评论失败')
+        } finally {
+          setBusyCommentId(null)
+        }
+      },
+    })
   }
 
   const handleRerunComment = async (postId: string, commentId: number) => {
@@ -302,6 +321,19 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
             />
           ))}
         </div>
+      )}
+
+      {confirmDialog && (
+        <ConfirmDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmText="删除"
+          cancelText="取消"
+          danger
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
       )}
     </div>
   )
