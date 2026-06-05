@@ -262,6 +262,24 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("重跑后的回复", messages[-1].content)
         self.assertIsNotNone(messages[-1].rerun_at)
 
+    def test_rerun_root_assistant_comment_uses_post_as_synthetic_user_message(self) -> None:
+        root_id = comment_service.get_conversation("20260525-001", "默认").root_comment_id
+        self.assertIsNotNone(root_id)
+        captured = {}
+
+        def fake_reply(client, model, context, soul, *, trace_context=None):
+            del client, model, soul, trace_context
+            captured["messages"] = context.messages
+            return {"reply": "根评论重跑回复"}
+
+        with patch("core.comment_service.reply_router.call_soul_comment_reply", side_effect=fake_reply):
+            rerun = comment_service.rerun_latest_assistant_message(root_id, FakeClient(), "fake-model")
+
+        self.assertEqual("根评论重跑回复", rerun["message"].content)
+        self.assertEqual(["user"], [message.role for message in captured["messages"]])
+        self.assertIn("今天想认真练歌", captured["messages"][0].content)
+        self.assertIsNotNone(rerun["message"].rerun_at)
+
     def test_rerun_comment_requires_latest_assistant_message(self) -> None:
         first = comment_service.call_comment_reply(
             "20260525-001",

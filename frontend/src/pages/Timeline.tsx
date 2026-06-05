@@ -264,7 +264,16 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   const handleRerunComment = async (postId: string, commentId: number) => {
     setBusyCommentId(commentId)
     try {
-      await rerunCommentMessage(commentId)
+      const response = await rerunCommentMessage(commentId)
+      // Update the conversation state with the returned data
+      setPostCommentConversations((prev) => ({
+        ...prev,
+        [postId]: {
+          ...(prev[postId] ?? {}),
+          [response.conversation.soul_name]: toConversationState(response.conversation, response.messages),
+        },
+      }))
+      // Also refresh post detail to get updated comment list
       await refreshPostDetail(postId)
     } catch (err) {
       setError(err instanceof Error ? err.message : '重跑失败')

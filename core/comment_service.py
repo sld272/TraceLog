@@ -207,6 +207,25 @@ def build_comment_context(
         before_seq=before_seq,
     )
     llm_messages = [_message_for_llm(message) for message in messages]
+
+    # Rerunning a root assistant comment has no persisted follow-up user row,
+    # so provide a synthetic current user message. Normal comment replies have
+    # already appended the current user row before building context.
+    if _should_append_synthetic_user_message(llm_messages, user_message):
+        user_msg = CommentMessage(
+            id=-1,
+            post_id=post_id,
+            soul_name=soul_name,
+            role="user",
+            content=user_message.strip(),
+            seq=-1,
+            created_at=0,
+            edited_at=None,
+            rerun_at=None,
+            attachments=[],
+        )
+        llm_messages.append(user_msg)
+
     sections: list[str] = []
 
     profile = profile_service.read_profile().strip()
@@ -589,6 +608,16 @@ def _build_comment_retrieval_query(post, messages: list[CommentMessage], user_me
     if parts:
         return "\n".join(part for part in parts if part)
     return user_message
+
+
+def _should_append_synthetic_user_message(messages: list[CommentMessage], user_message: str) -> bool:
+    body = user_message.strip()
+    if not body:
+        return False
+    if not messages:
+        return True
+    latest = messages[-1]
+    return latest.role != "user" or latest.content.strip() != body
 
 
 def _rerun_user_message(post, prior_messages: list[CommentMessage]) -> str:
