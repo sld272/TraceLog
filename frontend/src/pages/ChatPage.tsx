@@ -30,6 +30,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
   const [sending, setSending] = useState(false)
   const [busyMessageId, setBusyMessageId] = useState<number | null>(null)
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null)
+  const [regeneratedMessageId, setRegeneratedMessageId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -39,6 +40,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
     onConfirm: () => void
   } | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
+  const regeneratedMessageTimerRef = useRef<number | null>(null)
   const submitShortcutTitle = getSubmitShortcutTitle()
 
   const fetchThread = useCallback(async () => {
@@ -70,8 +72,17 @@ export function ChatPage({ soulName }: ChatPageProps) {
     setAttachments([])
     setEditingMessageId(null)
     setEditDraft('')
+    setRegeneratedMessageId(null)
     fetchThread()
   }, [fetchThread])
+
+  useEffect(() => {
+    return () => {
+      if (regeneratedMessageTimerRef.current !== null) {
+        window.clearTimeout(regeneratedMessageTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const el = chatInputRef.current
@@ -157,12 +168,24 @@ export function ChatPage({ soulName }: ChatPageProps) {
       setMessages(response.messages)
       setEditingMessageId(null)
       setEditDraft('')
+      showRegeneratedMessage(response.message.id)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '编辑失败')
     } finally {
       setBusyMessageId(null)
     }
+  }
+
+  const showRegeneratedMessage = (messageId: number) => {
+    if (regeneratedMessageTimerRef.current !== null) {
+      window.clearTimeout(regeneratedMessageTimerRef.current)
+    }
+    setRegeneratedMessageId(messageId)
+    regeneratedMessageTimerRef.current = window.setTimeout(() => {
+      setRegeneratedMessageId(null)
+      regeneratedMessageTimerRef.current = null
+    }, 3000)
   }
 
   const rerunMessage = async (message: ChatMessage) => {
@@ -225,6 +248,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
                 soulName={soulName}
                 message={message}
                 busy={busyMessageId === message.id}
+                regenerated={regeneratedMessageId === message.id}
                 editDraft={editingMessageId === message.id ? editDraft : null}
                 onStartEdit={startEditMessage}
                 onChangeEditDraft={setEditDraft}
@@ -308,6 +332,7 @@ function MessageBubble({
   soulName,
   message,
   busy,
+  regenerated,
   editDraft,
   onStartEdit,
   onChangeEditDraft,
@@ -318,6 +343,7 @@ function MessageBubble({
   soulName: string
   message: ChatMessage
   busy: boolean
+  regenerated: boolean
   editDraft: string | null
   onStartEdit: (message: ChatMessage) => void
   onChangeEditDraft: (value: string) => void
@@ -359,7 +385,7 @@ function MessageBubble({
       <ImageGrid attachments={message.attachments ?? []} />
       <div className={styles.messageMetaRow}>
         {message.edited_at && <span className={styles.messageMarker}>已编辑</span>}
-        {message.rerun_at && <span className={styles.messageMarker}>已重跑</span>}
+        {regenerated && <span className={styles.messageMarker}>已重新生成</span>}
         {editDraft !== null && (
           <div className={styles.messageActions}>
             <button className={styles.messageTextAction} onClick={() => onSaveEdit(message)} disabled={busy}>

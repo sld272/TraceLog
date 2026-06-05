@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   type Attachment,
   type Comment,
@@ -36,12 +36,14 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   const [error, setError] = useState<string | null>(null)
   const [deletingPostId, setDeletingPostId] = useState<string | null>(null)
   const [busyCommentId, setBusyCommentId] = useState<number | null>(null)
+  const [regeneratedCommentId, setRegeneratedCommentId] = useState<number | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
     title: string
     message: string
     onConfirm: () => void
   } | null>(null)
+  const regeneratedCommentTimerRef = useRef<number | null>(null)
 
   const fetchPosts = useCallback(async () => {
     try {
@@ -58,6 +60,14 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   useEffect(() => {
     fetchPosts()
   }, [fetchPosts])
+
+  useEffect(() => {
+    return () => {
+      if (regeneratedCommentTimerRef.current !== null) {
+        window.clearTimeout(regeneratedCommentTimerRef.current)
+      }
+    }
+  }, [])
 
   const handleSubmit = async (content: string, attachments: Attachment[]) => {
     const result = await createPost(content, attachments.map((attachment) => attachment.id))
@@ -275,11 +285,23 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
       }))
       // Also refresh post detail to get updated comment list
       await refreshPostDetail(postId)
+      showRegeneratedComment(response.message.id)
     } catch (err) {
       setError(err instanceof Error ? err.message : '重跑失败')
     } finally {
       setBusyCommentId(null)
     }
+  }
+
+  const showRegeneratedComment = (commentId: number) => {
+    if (regeneratedCommentTimerRef.current !== null) {
+      window.clearTimeout(regeneratedCommentTimerRef.current)
+    }
+    setRegeneratedCommentId(commentId)
+    regeneratedCommentTimerRef.current = window.setTimeout(() => {
+      setRegeneratedCommentId(null)
+      regeneratedCommentTimerRef.current = null
+    }, 3000)
   }
 
   if (loading) {
@@ -321,6 +343,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
               comments={postComments[post.post_id]}
               commentConversations={postCommentConversations[post.post_id]}
               busyCommentId={busyCommentId}
+              regeneratedCommentId={regeneratedCommentId}
               deletingPost={deletingPostId === post.post_id}
               onExpand={() => handleExpand(post.post_id)}
               onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}

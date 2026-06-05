@@ -26,6 +26,7 @@ interface PostCardProps {
   comments?: Comment[]
   commentConversations?: Record<string, CommentConversationState>
   busyCommentId?: number | null
+  regeneratedCommentId?: number | null
   deletingPost?: boolean
   onExpand?: () => void
   onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
@@ -39,6 +40,7 @@ export function PostCard({
   comments = [],
   commentConversations = {},
   busyCommentId = null,
+  regeneratedCommentId = null,
   deletingPost = false,
   onExpand,
   onReply,
@@ -83,6 +85,7 @@ export function PostCard({
               comment={comment}
               conversation={commentConversations[comment.soul_name]}
               busyCommentId={busyCommentId}
+              regeneratedCommentId={regeneratedCommentId}
               onReply={onReply}
               onDelete={onDeleteComment}
               onRerun={onRerunComment}
@@ -111,6 +114,7 @@ function CommentPreview({
   comment,
   conversation,
   busyCommentId,
+  regeneratedCommentId,
   onReply,
   onDelete,
   onRerun,
@@ -118,6 +122,7 @@ function CommentPreview({
   comment: Comment
   conversation?: CommentConversationState
   busyCommentId: number | null
+  regeneratedCommentId: number | null
   onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
   onDelete?: (commentId: number) => Promise<void>
   onRerun?: (commentId: number) => Promise<void>
@@ -169,7 +174,7 @@ function CommentPreview({
           <div className={styles.commentHeader}>
             <span className={styles.soulName}>{soulName}</span>
             <div className={styles.messageActions}>
-              {comment.rerun_at && <span className={styles.messageMarker}>已重跑</span>}
+              {regeneratedCommentId === comment.id && <span className={styles.messageMarker}>已重新生成</span>}
               {canRerunRoot && onRerun && (
                 <button className={styles.inlineAction} onClick={() => onRerun(comment.id)} disabled={rootBusy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
                   <RefreshCwIcon />
@@ -191,6 +196,7 @@ function CommentPreview({
               soulName={soulName}
               isLatest={latestMessage?.id === message.id}
               busy={busyCommentId === message.id}
+              regenerated={regeneratedCommentId === message.id}
               onDelete={onDelete}
               onRerun={onRerun}
             />
@@ -256,6 +262,7 @@ function ThreadMessage({
   soulName,
   isLatest,
   busy,
+  regenerated,
   onDelete,
   onRerun,
 }: {
@@ -263,6 +270,7 @@ function ThreadMessage({
   soulName: string
   isLatest: boolean
   busy: boolean
+  regenerated: boolean
   onDelete?: (commentId: number) => Promise<void>
   onRerun?: (commentId: number) => Promise<void>
 }) {
@@ -272,7 +280,7 @@ function ThreadMessage({
       <div className={styles.threadHeader}>
         <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
         <div className={styles.threadActionRow}>
-          {message.rerun_at && <span className={styles.threadMarker}>已重跑</span>}
+          {regenerated && <span className={styles.threadMarker}>已重新生成</span>}
           {isLatest && message.role === 'assistant' && onRerun && (
             <button className={styles.threadAction} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
               <RefreshCwIcon />
