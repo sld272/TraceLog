@@ -468,7 +468,7 @@ export function sendChatMessage(soulName: string, content: string, attachmentIds
 }
 
 export function updateChatMessage(messageId: number, content: string, attachmentIds: string[] = []) {
-  return request<{ thread: ChatThread; message: ChatMessage; messages: ChatMessage[] }>(
+  return request<{ thread: ChatThread; message: ChatMessage; result: ChatReplyResult; messages: ChatMessage[] }>(
     `/chat/messages/${messageId}`,
     { method: 'PATCH', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
   )

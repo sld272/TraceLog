@@ -87,11 +87,14 @@ async def send_chat_message(soul_name: str, request: SendChatMessageRequest):
 
 @router.patch("/messages/{message_id}")
 async def update_chat_message(message_id: int, request: UpdateChatMessageRequest):
+    runtime = get_runtime()
     try:
         result = await run_sync(
-            chat_service.edit_user_message,
+            chat_service.edit_user_message_and_reply,
             message_id,
             request.content,
+            runtime.client,
+            runtime.model,
             request.attachment_ids,
         )
     except ValueError as exc:
@@ -100,6 +103,7 @@ async def update_chat_message(message_id: int, request: UpdateChatMessageRequest
     return {
         "thread": asdict(result["thread"]),
         "message": asdict(result["message"]),
+        "result": asdict(result["result"]),
         "messages": [asdict(message) for message in result["messages"]],
     }
 

@@ -316,6 +316,23 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIsNotNone(messages[0].edited_at)
         self.assertEqual(1, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM chat_messages"))["count"])
 
+    def test_edit_user_message_and_reply_generates_new_assistant_message(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        chat_service.call_chat_reply(thread.id, "第一句", FakeClient({"reply": "第一句回复"}), "fake-model")
+        chat_service.call_chat_reply(thread.id, "第二句", FakeClient({"reply": "第二句回复"}), "fake-model")
+        first_user = chat_service.list_thread_messages(thread.id)[0]
+
+        with patch("core.chat_service.reply_router.call_soul_chat_reply", return_value={"reply": "编辑后的新回复"}):
+            result = chat_service.edit_user_message_and_reply(first_user.id, "第一句改过", FakeClient(), "fake-model")
+
+        messages = result["messages"]
+        self.assertTrue(result["result"].ok)
+        self.assertEqual(["user", "assistant"], [message.role for message in messages])
+        self.assertEqual("第一句改过", messages[0].content)
+        self.assertEqual("编辑后的新回复", messages[1].content)
+        self.assertIsNotNone(messages[0].edited_at)
+        self.assertEqual(2, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM chat_messages"))["count"])
+
     def test_rerun_assistant_message_truncates_later_chat_messages_and_marks_rerun(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
         chat_service.call_chat_reply(thread.id, "第一句", FakeClient({"reply": "第一句回复"}), "fake-model")

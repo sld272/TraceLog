@@ -242,15 +242,24 @@ def call_chat_reply(
     """Append user input, call one SOUL, and persist the assistant reply."""
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
     user_message_row = append_user_message(thread_id, user_message, attachment_ids=attachment_ids)
-    llm_user_message = vision_service.content_for_llm(user_message, user_message_row.attachments)
-    chat_context = build_chat_context(thread_id, llm_user_message, client, model)
+    return _call_assistant_reply_for_user_message(user_message_row, client, model)
+
+
+def _call_assistant_reply_for_user_message(
+    user_message_row: ChatMessage,
+    client: LLMClient,
+    model: str,
+) -> ChatReplyResult:
+    """Generate and append the assistant reply for an existing latest user message."""
+    llm_user_message = vision_service.content_for_llm(user_message_row.content, user_message_row.attachments)
+    chat_context = build_chat_context(user_message_row.thread_id, llm_user_message, client, model)
     data = reply_router.call_soul_chat_reply(
         client,
         model,
         chat_context,
         chat_context.soul,
         trace_context={
-            "thread_id": thread_id,
+            "thread_id": user_message_row.thread_id,
             "soul_name": chat_context.thread.soul_name,
             "user_message_id": user_message_row.id,
             "relevant_post_ids": chat_context.relevant_post_ids,
@@ -262,7 +271,7 @@ def call_chat_reply(
             "reply_failed",
             level="WARNING",
             channel="chat",
-            thread_id=thread_id,
+            thread_id=user_message_row.thread_id,
             soul_name=chat_context.thread.soul_name,
             user_message_id=user_message_row.id,
             error=error,
@@ -277,7 +286,7 @@ def call_chat_reply(
             "reply_failed",
             level="WARNING",
             channel="chat",
-            thread_id=thread_id,
+            thread_id=user_message_row.thread_id,
             soul_name=chat_context.thread.soul_name,
             user_message_id=user_message_row.id,
             error=error,
@@ -285,9 +294,9 @@ def call_chat_reply(
         )
         return _failed_result(chat_context.thread, user_message_row.id, error)
 
-    assistant_message = _append_message(thread_id, "assistant", reply.strip())
+    assistant_message = _append_message(user_message_row.thread_id, "assistant", reply.strip())
     return ChatReplyResult(
-        thread_id=thread_id,
+        thread_id=user_message_row.thread_id,
         soul_name=chat_context.thread.soul_name,
         ok=True,
         reply=reply.strip(),
@@ -395,6 +404,24 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
     return {
         "thread": thread,
         "message": updated,
+        "messages": list_thread_messages(thread.id),
+    }
+
+
+def edit_user_message_and_reply(
+    message_id: int,
+    content: str,
+    client: LLMClient,
+    model: str,
+    attachment_ids: list[str] | None = None,
+) -> dict:
+    edited = edit_user_message(message_id, content, attachment_ids=attachment_ids)
+    result = _call_assistant_reply_for_user_message(edited["message"], client, model)
+    thread = get_thread(edited["thread"].id)
+    return {
+        "thread": thread,
+        "message": edited["message"],
+        "result": result,
         "messages": list_thread_messages(thread.id),
     }
 

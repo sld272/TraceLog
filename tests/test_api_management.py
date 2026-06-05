@@ -396,6 +396,26 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(["user", "assistant"], [message["role"] for message in data["messages"]])
         self.assertEqual("我在。", data["result"]["reply"])
 
+    def test_chat_edit_route_regenerates_assistant_reply(self) -> None:
+        soul_name = quote("默认")
+
+        with patch(
+            "core.chat_service.reply_router.call_soul_chat_reply",
+            side_effect=[{"reply": "旧回复"}, {"reply": "新回复"}],
+        ):
+            with self._client() as client:
+                send_response = client.post(f"/chat/{soul_name}/messages", json={"content": "旧问题"})
+                user_message_id = send_response.json()["messages"][0]["id"]
+                edit_response = client.patch(f"/chat/messages/{user_message_id}", json={"content": "新问题"})
+
+        self.assertEqual(200, edit_response.status_code, edit_response.text)
+        data = edit_response.json()
+        self.assertTrue(data["result"]["ok"])
+        self.assertEqual("新回复", data["result"]["reply"])
+        self.assertEqual(["user", "assistant"], [message["role"] for message in data["messages"]])
+        self.assertEqual("新问题", data["messages"][0]["content"])
+        self.assertEqual("新回复", data["messages"][1]["content"])
+
     def test_chat_message_sse_format(self) -> None:
         from api.routes.chat import _format_message_sse
 
