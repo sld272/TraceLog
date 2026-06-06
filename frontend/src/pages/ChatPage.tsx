@@ -40,6 +40,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
   } | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const submitShortcutTitle = getSubmitShortcutTitle()
+  const chatBusy = sending || busyMessageId !== null
 
   const fetchThread = useCallback(async () => {
     try {
@@ -83,7 +84,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
 
   const submitDraft = async () => {
     const body = draft.trim()
-    if ((!body && attachments.length === 0) || sending) return
+    if ((!body && attachments.length === 0) || chatBusy) return
 
     const submittedDraft = draft
     const submittedAttachments = attachments
@@ -161,7 +162,13 @@ export function ChatPage({ soulName }: ChatPageProps) {
   }
 
   const performSaveEdit = async (message: ChatMessage, body: string) => {
+    const previousMessages = messages
+    const previousEditDraft = editDraft
+    const pendingAssistantId = -Date.now()
     setBusyMessageId(message.id)
+    setEditingMessageId(null)
+    setEditDraft('')
+    setMessages((prev) => withPendingReplyAfterUserEdit(prev, message, body, pendingAssistantId))
     try {
       const response = await updateChatMessage(
         message.id,
@@ -170,10 +177,11 @@ export function ChatPage({ soulName }: ChatPageProps) {
       )
       setThread(response.thread)
       setMessages(response.messages)
-      setEditingMessageId(null)
-      setEditDraft('')
       setError(response.result.ok ? null : response.result.error ?? '回复失败')
     } catch (err) {
+      setMessages(previousMessages)
+      setEditingMessageId(message.id)
+      setEditDraft(previousEditDraft)
       setError(err instanceof Error ? err.message : '编辑失败')
     } finally {
       setBusyMessageId(null)
@@ -221,7 +229,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
             <h1 className={styles.title}>{soulName}</h1>
             <p className={styles.subtitle}>{thread?.title ?? '私聊'}</p>
           </div>
-          <button className={styles.ghostButton} onClick={fetchThread} disabled={loading || sending}>
+          <button className={styles.ghostButton} onClick={fetchThread} disabled={loading || chatBusy}>
             刷新
           </button>
         </header>
@@ -265,13 +273,13 @@ export function ChatPage({ soulName }: ChatPageProps) {
                 }
               }}
               placeholder={`和 ${soulName} 说点什么...`}
-              disabled={sending}
+              disabled={chatBusy}
               rows={2}
               aria-label="私聊消息"
             />
             <ImageUploader
               attachments={attachments}
-              disabled={sending}
+              disabled={chatBusy}
               onChange={setAttachments}
               showControls={false}
             />
@@ -285,17 +293,17 @@ export function ChatPage({ soulName }: ChatPageProps) {
             <div className={styles.chatActions}>
               <ImageUploader
                 attachments={attachments}
-                disabled={sending}
+                disabled={chatBusy}
                 onChange={setAttachments}
                 showPreview={false}
               />
               <span className={styles.buttonTooltipWrap} title={submitShortcutTitle}>
                 <button
                   className={styles.chatSubmitButton}
-                  disabled={(!draft.trim() && attachments.length === 0) || sending}
+                  disabled={(!draft.trim() && attachments.length === 0) || chatBusy}
                   aria-label="发送"
                 >
-                  {sending ? <LoadingDots /> : <SendIcon />}
+                  {chatBusy ? <LoadingDots /> : <SendIcon />}
                 </button>
               </span>
             </div>
@@ -317,6 +325,33 @@ export function ChatPage({ soulName }: ChatPageProps) {
       )}
     </div>
   )
+}
+
+function withPendingReplyAfterUserEdit(
+  messages: ChatMessage[],
+  editedMessage: ChatMessage,
+  content: string,
+  pendingAssistantId: number,
+): ChatMessage[] {
+  const createdAt = Date.now() / 1000
+  return [
+    ...messages
+      .filter((message) => message.id < editedMessage.id)
+      .map((message) => ({ ...message })),
+    {
+      ...editedMessage,
+      content,
+      edited_at: createdAt,
+    },
+    {
+      id: pendingAssistantId,
+      thread_id: editedMessage.thread_id,
+      role: 'assistant',
+      content: '',
+      created_at: createdAt,
+      attachments: [],
+    },
+  ]
 }
 
 function MessageBubble({
