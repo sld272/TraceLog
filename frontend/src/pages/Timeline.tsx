@@ -172,26 +172,21 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   }
 
   const handleCommentReply = async (postId: string, soulName: string, content: string, attachments: Attachment[]) => {
-    const optimisticMessage: CommentMessage = {
-      id: -Date.now(),
-      post_id: postId,
-      soul_name: soulName,
-      role: 'user',
-      content,
-      seq: Number.MAX_SAFE_INTEGER,
-      created_at: Date.now() / 1000,
-      attachments,
-    }
+    const optimisticUserId = -Date.now()
+    const optimisticAssistantId = optimisticUserId - 1
     setPostCommentConversations((prev) => ({
       ...prev,
       [postId]: {
         ...(prev[postId] ?? {}),
-        [soulName]: {
-          ...(prev[postId]?.[soulName] ?? { messages: [] }),
-          messages: [...(prev[postId]?.[soulName]?.messages ?? []), optimisticMessage],
-          sending: true,
-          error: null,
-        },
+        [soulName]: buildSendingCommentState(
+          prev[postId]?.[soulName],
+          postId,
+          soulName,
+          content,
+          attachments,
+          optimisticUserId,
+          optimisticAssistantId,
+        ),
       },
     }))
 
@@ -211,11 +206,15 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
           ...(prev[postId] ?? {}),
           [soulName]: {
             ...(prev[postId]?.[soulName] ?? { messages: [] }),
+            messages: (prev[postId]?.[soulName]?.messages ?? []).filter(
+              (message) => message.id !== optimisticUserId && message.id !== optimisticAssistantId,
+            ),
             sending: false,
             error: err instanceof Error ? err.message : '发送失败',
           },
         },
       }))
+      throw err
     }
   }
 
@@ -376,6 +375,46 @@ function toConversationState(conversation: CommentConversation, messages: Commen
     conversation,
     messages,
     sending: false,
+    error: null,
+  }
+}
+
+function buildSendingCommentState(
+  current: CommentConversationState | undefined,
+  postId: string,
+  soulName: string,
+  content: string,
+  attachments: Attachment[],
+  optimisticUserId: number,
+  optimisticAssistantId: number,
+): CommentConversationState {
+  const messages = current?.messages ?? []
+  const nextSeq = Math.max(0, ...messages.map((message) => message.seq)) + 1
+  const createdAt = Date.now() / 1000
+  const optimisticUserMessage: CommentMessage = {
+    id: optimisticUserId,
+    post_id: postId,
+    soul_name: soulName,
+    role: 'user',
+    content,
+    seq: nextSeq,
+    created_at: createdAt,
+    attachments,
+  }
+  const optimisticAssistantMessage: CommentMessage = {
+    id: optimisticAssistantId,
+    post_id: postId,
+    soul_name: soulName,
+    role: 'assistant',
+    content: '',
+    seq: nextSeq + 1,
+    created_at: createdAt,
+    attachments: [],
+  }
+  return {
+    ...(current ?? { messages: [] }),
+    messages: [...messages, optimisticUserMessage, optimisticAssistantMessage],
+    sending: true,
     error: null,
   }
 }

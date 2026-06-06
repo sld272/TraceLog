@@ -570,6 +570,14 @@
   word-break: break-word;
 }
 
+.messagePending {
+  display: flex;
+  align-items: center;
+  min-width: 36px;
+  min-height: 22px;
+  color: var(--color-text-tertiary);
+}
+
 .messageEditInput {
   width: 100%;
   min-height: auto;

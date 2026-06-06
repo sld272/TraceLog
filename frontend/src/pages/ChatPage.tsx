@@ -85,15 +85,28 @@ export function ChatPage({ soulName }: ChatPageProps) {
     const body = draft.trim()
     if ((!body && attachments.length === 0) || sending) return
 
-    const optimistic: ChatMessage = {
-      id: Date.now() * -1,
+    const submittedDraft = draft
+    const submittedAttachments = attachments
+    const optimisticUserId = -Date.now()
+    const optimisticAssistantId = optimisticUserId - 1
+    const createdAt = Date.now() / 1000
+    const optimisticUser: ChatMessage = {
+      id: optimisticUserId,
       thread_id: thread?.id ?? 0,
       role: 'user',
       content: body,
-      created_at: Date.now() / 1000,
+      created_at: createdAt,
       attachments,
     }
-    setMessages((prev) => [...prev, optimistic])
+    const optimisticAssistant: ChatMessage = {
+      id: optimisticAssistantId,
+      thread_id: thread?.id ?? 0,
+      role: 'assistant',
+      content: '',
+      created_at: createdAt,
+      attachments: [],
+    }
+    setMessages((prev) => [...prev, optimisticUser, optimisticAssistant])
     setDraft('')
     setAttachments([])
     setSending(true)
@@ -103,7 +116,9 @@ export function ChatPage({ soulName }: ChatPageProps) {
       setMessages(response.messages)
       setError(response.result.ok ? null : response.result.error ?? '回复失败')
     } catch (err) {
-      setMessages((prev) => prev.filter((message) => message.id !== optimistic.id))
+      setMessages((prev) => prev.filter((message) => message.id !== optimisticUserId && message.id !== optimisticAssistantId))
+      setDraft(submittedDraft)
+      setAttachments(submittedAttachments)
       setError(err instanceof Error ? err.message : '发送失败')
     } finally {
       setSending(false)
@@ -326,6 +341,8 @@ function MessageBubble({
   onRerun: (message: ChatMessage) => void
 }) {
   const isUser = message.role === 'user'
+  const isPersisted = message.id > 0
+  const isPendingAssistant = message.role === 'assistant' && message.id < 0 && !message.content
   const editInputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -343,7 +360,7 @@ function MessageBubble({
     <article className={`${styles.message} ${isUser ? styles.messageUser : styles.messageAssistant}`}>
       <div className={styles.messageHeader}>
         <span className={styles.messageRole}>{isUser ? '我' : soulName}</span>
-        {editDraft === null && (
+        {isPersisted && editDraft === null && (
           <div className={styles.messageActions}>
             {isUser ? (
               <button className={styles.messageAction} onClick={() => onStartEdit(message)} disabled={busy} title="编辑" aria-label="编辑私聊消息">
@@ -357,7 +374,11 @@ function MessageBubble({
           </div>
         )}
       </div>
-      {editDraft === null ? (
+      {isPendingAssistant ? (
+        <div className={styles.messagePending} aria-label={`${soulName} 正在回复`}>
+          <LoadingDots />
+        </div>
+      ) : editDraft === null ? (
         <p className={styles.messageText}>{message.content}</p>
       ) : (
         <textarea

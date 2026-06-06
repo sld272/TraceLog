@@ -149,9 +149,16 @@ function CommentPreview({
 
   const handleSubmit = async () => {
     if ((!trimmed && attachments.length === 0) || conversation?.sending || !onReply) return
-    await onReply(soulName, trimmed, attachments)
+    const submittedReply = reply
+    const submittedAttachments = attachments
     setReply('')
     setAttachments([])
+    try {
+      await onReply(soulName, trimmed, attachments)
+    } catch (err) {
+      setReply(submittedReply)
+      setAttachments(submittedAttachments)
+    }
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -275,18 +282,20 @@ function ThreadMessage({
   onRerun?: (commentId: number) => Promise<void>
 }) {
   const isUser = message.role === 'user'
+  const isPersisted = message.id > 0
+  const isPendingAssistant = message.role === 'assistant' && message.id < 0 && !message.content
   return (
     <div className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
       <div className={styles.threadHeader}>
         <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
         <div className={styles.threadActionRow}>
           {regenerated && <span className={styles.threadMarker}>已重新生成</span>}
-          {isLatest && message.role === 'assistant' && onRerun && (
+          {isPersisted && isLatest && message.role === 'assistant' && onRerun && (
             <button className={styles.threadAction} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
               <RefreshCwIcon />
             </button>
           )}
-          {isUser && onDelete && (
+          {isPersisted && isUser && onDelete && (
             <button className={styles.threadDanger} onClick={() => onDelete(message.id)} disabled={busy} title="删除评论" aria-label="删除评论">
               <TrashIcon />
             </button>
@@ -294,6 +303,11 @@ function ThreadMessage({
         </div>
       </div>
       {message.content && <p>{message.content}</p>}
+      {isPendingAssistant && (
+        <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
+          <LoadingDots />
+        </div>
+      )}
       <ImageGrid attachments={message.attachments ?? []} />
     </div>
   )

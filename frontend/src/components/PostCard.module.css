@@ -287,6 +287,14 @@
   word-break: break-word;
 }
 
+.threadPending {
+  display: flex;
+  align-items: center;
+  min-width: 36px;
+  min-height: 20px;
+  color: var(--color-text-tertiary);
+}
+
 .threadMessageUser {
   align-self: flex-end;
   background: var(--color-accent);
