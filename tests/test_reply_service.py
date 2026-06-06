@@ -73,6 +73,33 @@ class ReplyServiceTest(unittest.TestCase):
         rows = db.query_all("SELECT soul_name, content FROM comments ORDER BY soul_name")
         self.assertEqual([("毒舌好友", "毒舌好友 回复"), ("默认", "默认 回复")], [(row["soul_name"], row["content"]) for row in rows])
 
+    def test_failed_reply_does_not_overwrite_existing_root_comment(self) -> None:
+        soul = SoulContext("默认", None, 1, "默认人格", "")
+        built_context = BuiltContext(
+            shared_context="共享上下文",
+            enabled_souls=[soul],
+            relevant_post_ids=[],
+        )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, role, content, seq, metadata, created_at)
+            VALUES (?, ?, 'assistant', ?, 0, ?, ?)
+            """,
+            ("p-1", "默认", "之前成功生成的回复", json.dumps({"status": "ok"}, ensure_ascii=False), 1.0),
+        )
+
+        client = cast(LLMClient, SimpleNamespace(chat=SimpleNamespace()))
+        with patch("core.reply_service.reply_router.call_soul_post_reply", return_value=None):
+            with patch("core.reply_service.record_service.index_comment_embedding") as index_comment:
+                results = reply_service.fanout("p-1", "新的公开 post", client, "fake-model", built_context)
+
+        row = db.query_one("SELECT content, metadata FROM comments WHERE post_id = ? AND soul_name = ? AND seq = 0", ("p-1", "默认"))
+        self.assertIsNotNone(row)
+        self.assertFalse(results[0].ok)
+        self.assertEqual("之前成功生成的回复", row["content"])
+        self.assertEqual({"status": "ok"}, json.loads(row["metadata"]))
+        index_comment.assert_not_called()
+
     def test_soul_post_reply_prompt_includes_virtual_friend_boundaries(self) -> None:
         soul = SoulContext("默认", None, 0, "默认人格", "")
         client = FakeClient()

@@ -151,6 +151,8 @@ def _save_comment(post_id: str, result: SoulReplyResult, model: str) -> None:
             )
             comment_id = db.require_lastrowid(cursor, "root comment insert")
         else:
+            if not result.ok:
+                return
             comment_id = int(existing["id"])
             conn.execute(
                 """
