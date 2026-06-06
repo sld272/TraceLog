@@ -237,6 +237,15 @@ class ApiManagementTest(unittest.TestCase):
                         "api_key": "",
                         "base_url": "",
                     },
+                    "web_search": {
+                        "enabled": True,
+                        "provider": "auto",
+                        "tavily_api_key": "tavily-secret",
+                        "max_results": 6,
+                        "timeout_s": 9,
+                        "cache_ttl_s": 600,
+                        "include_sources": True,
+                    },
                 },
             )
             workspace_response = client.get("/settings/workspace")
@@ -254,12 +263,26 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("https://updated.invalid/v1", saved["base_url"])
         self.assertEqual(2, saved["job_worker_concurrency"])
         self.assertEqual({"enabled": True, "model": "vision-model", "api_key": None, "base_url": None}, saved["vision"])
+        self.assertEqual(
+            {
+                "enabled": True,
+                "provider": "auto",
+                "tavily_api_key": "tavily-secret",
+                "max_results": 6,
+                "timeout_s": 9,
+                "cache_ttl_s": 600,
+                "include_sources": True,
+            },
+            saved["web_search"],
+        )
+        self.assertNotIn("tavily-secret", json.dumps(updated))
 
         self.assertEqual(200, workspace_response.status_code)
         status = workspace_response.json()
         self.assertTrue(status["db_exists"])
         self.assertGreaterEqual(status["counts"]["souls"], 1)
         self.assertIn("vision_cache", status["counts"])
+        self.assertIn("web_search", status)
 
     def test_todo_routes_list_and_patch_status(self) -> None:
         db.execute(

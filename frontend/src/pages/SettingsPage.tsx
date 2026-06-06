@@ -19,6 +19,7 @@ import styles from './SettingsPage.module.css'
 
 type SettingsTab = 'model' | 'souls' | 'memory' | 'data'
 type CreateSoulMode = 'ai' | 'markdown'
+type WebSearchProvider = ModelSettings['web_search']['provider']
 
 interface AiSoulDraft {
   name: string
@@ -50,6 +51,15 @@ interface ModelForm {
     api_key: string
     base_url: string
   }
+  web_search: {
+    enabled: boolean
+    provider: WebSearchProvider
+    tavily_api_key: string
+    max_results: number
+    timeout_s: number
+    cache_ttl_s: number
+    include_sources: boolean
+  }
 }
 
 const DEFAULT_MODEL_FORM: ModelForm = {
@@ -71,6 +81,15 @@ const DEFAULT_MODEL_FORM: ModelForm = {
     model: '',
     api_key: '',
     base_url: '',
+  },
+  web_search: {
+    enabled: false,
+    provider: 'auto',
+    tavily_api_key: '',
+    max_results: 5,
+    timeout_s: 8,
+    cache_ttl_s: 1800,
+    include_sources: true,
   },
 }
 
@@ -402,6 +421,98 @@ function ModelSettingsPanel({
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
+            <h2 className={styles.sectionTitle}>网页搜索</h2>
+            <p className={styles.sectionMeta}>由模型自动判断是否需要搜索；DuckDuckGo 免配置，Tavily 更稳定。</p>
+          </div>
+          <div className={styles.headerControls}>
+            <StatusPill
+              ok={settings?.web_search.configured ?? false}
+              label={webSearchStatusLabel(settings)}
+            />
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={form.web_search.enabled}
+                onChange={(event) => onChange({
+                  ...form,
+                  web_search: { ...form.web_search, enabled: event.target.checked },
+                })}
+              />
+              <span>启用</span>
+            </label>
+          </div>
+        </div>
+        <div className={styles.formGrid}>
+          <SelectField
+            label="Provider"
+            value={form.web_search.provider}
+            options={[
+              { value: 'auto', label: '自动' },
+              { value: 'tavily', label: 'Tavily' },
+              { value: 'duckduckgo', label: 'DuckDuckGo 免配置' },
+            ]}
+            onChange={(value) => onChange({
+              ...form,
+              web_search: { ...form.web_search, provider: value as WebSearchProvider },
+            })}
+          />
+          <TextField
+            label="Tavily API Key"
+            type="password"
+            value={form.web_search.tavily_api_key}
+            placeholder={settings?.web_search.tavily_api_key_masked ?? '留空使用 DuckDuckGo'}
+            onChange={(value) => onChange({
+              ...form,
+              web_search: { ...form.web_search, tavily_api_key: value },
+            })}
+          />
+          <NumberField
+            label="Max Results"
+            value={form.web_search.max_results}
+            min={1}
+            max={8}
+            onChange={(value) => onChange({
+              ...form,
+              web_search: { ...form.web_search, max_results: value },
+            })}
+          />
+          <NumberField
+            label="Timeout Seconds"
+            value={form.web_search.timeout_s}
+            min={3}
+            max={20}
+            onChange={(value) => onChange({
+              ...form,
+              web_search: { ...form.web_search, timeout_s: value },
+            })}
+          />
+          <NumberField
+            label="Cache TTL Seconds"
+            value={form.web_search.cache_ttl_s}
+            min={0}
+            max={86400}
+            onChange={(value) => onChange({
+              ...form,
+              web_search: { ...form.web_search, cache_ttl_s: value },
+            })}
+          />
+          <label className={styles.toggleRow}>
+            <input
+              type="checkbox"
+              checked={form.web_search.include_sources}
+              onChange={(event) => onChange({
+                ...form,
+                web_search: { ...form.web_search, include_sources: event.target.checked },
+              })}
+            />
+            <span>回复中包含来源</span>
+          </label>
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
             <h2 className={styles.sectionTitle}>Embedding</h2>
             <p className={styles.sectionMeta}>用于语义检索和长期记忆索引。</p>
           </div>
@@ -670,6 +781,58 @@ function TextField({
   )
 }
 
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className={styles.field}>
+      <span>{label}</span>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        onChange={(event) => onChange(clampNumber(event.target.valueAsNumber, min, max, value))}
+      />
+    </label>
+  )
+}
+
+function SelectField<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: Array<{ value: T; label: string }>
+  onChange: (value: T) => void
+}) {
+  return (
+    <label className={styles.field}>
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value as T)}>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
 function StatusPill({ ok, label }: { ok: boolean; label: string }) {
   return <span className={`${styles.statusPill} ${ok ? styles.statusOk : styles.statusMuted}`}>{label}</span>
 }
@@ -709,6 +872,15 @@ function formFromModelSettings(settings: ModelSettings): ModelForm {
       api_key: '',
       base_url: settings.vision?.base_url ?? '',
     },
+    web_search: {
+      enabled: settings.web_search?.enabled ?? false,
+      provider: settings.web_search?.provider ?? 'auto',
+      tavily_api_key: '',
+      max_results: settings.web_search?.max_results ?? 5,
+      timeout_s: settings.web_search?.timeout_s ?? 8,
+      cache_ttl_s: settings.web_search?.cache_ttl_s ?? 1800,
+      include_sources: settings.web_search?.include_sources ?? true,
+    },
   }
 }
 
@@ -729,7 +901,30 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
       api_key: form.vision.api_key.trim() || undefined,
       base_url: form.vision.base_url.trim() || null,
     },
+    web_search: {
+      enabled: form.web_search.enabled,
+      provider: form.web_search.provider,
+      tavily_api_key: form.web_search.tavily_api_key.trim() || undefined,
+      max_results: form.web_search.max_results,
+      timeout_s: form.web_search.timeout_s,
+      cache_ttl_s: form.web_search.cache_ttl_s,
+      include_sources: form.web_search.include_sources,
+    },
   }
+}
+
+function webSearchStatusLabel(settings: ModelSettings | null): string {
+  const webSearch = settings?.web_search
+  if (!webSearch?.enabled) return '已关闭'
+  if (!webSearch.configured) return '不可用'
+  if (webSearch.selected_provider === 'tavily') return '可用：Tavily'
+  if (webSearch.selected_provider === 'duckduckgo') return '可用：DuckDuckGo'
+  return '可用'
+}
+
+function clampNumber(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.max(min, Math.min(max, Math.trunc(value)))
 }
 
 function newSoulMarkdownTemplate(name: string): string {

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service
+from core import chat_service, db, logging_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
 from tests.helpers import require_not_none
@@ -290,6 +290,78 @@ class ChatServiceTest(unittest.TestCase):
         self.assertTrue(event["rewrite_skipped_by_gate"])
         self.assertEqual(0, event["keyword_count"])
 
+    def test_build_chat_context_skips_web_search_when_disabled(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+
+        with (
+            patch("core.reply_context.web_search_gate.decide") as decide,
+            patch("core.reply_context.web_search_service.search") as search,
+        ):
+            context = chat_service.build_chat_context(thread.id, "短句")
+
+        self.assertNotIn("# 网页搜索结果", context.context)
+        decide.assert_not_called()
+        search.assert_not_called()
+
+    def test_build_chat_context_injects_web_search_results_when_gate_requests_search(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        settings = web_search_service.WebSearchConfig(
+            enabled=True,
+            provider="tavily",
+            tavily_api_key="tavily-key",
+            max_results=5,
+            timeout_s=8,
+            cache_ttl_s=0,
+            include_sources=True,
+        )
+        decision = web_search_gate.WebSearchDecision(
+            should_search=True,
+            queries=["OpenAI latest model"],
+            reason="当前事实",
+            freshness_required=True,
+        )
+        run = web_search_service.WebSearchRun(
+            used=True,
+            provider="tavily",
+            queries=decision.queries,
+            results=[
+                web_search_service.WebSearchResult(
+                    title="OpenAI news",
+                    url="https://example.com/openai",
+                    snippet="最新公开信息",
+                    provider="tavily",
+                )
+            ],
+            error=None,
+            elapsed_ms=1,
+        )
+
+        with (
+            patch("core.reply_context.web_search_service.effective_config", return_value=settings),
+            patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
+            patch("core.reply_context.web_search_service.search", return_value=run) as search,
+            patch(
+                "core.reply_context.query_rewriter.rewrite_query",
+                return_value=query_rewriter.RewrittenQuery(
+                    raw_query="raw",
+                    semantic_query="OpenAI latest model",
+                    keywords=[],
+                    used_rewrite=True,
+                ),
+            ),
+        ):
+            context = chat_service.build_chat_context(
+                thread.id,
+                "今天 OpenAI 最新模型是什么",
+                FakeClient(),
+                "fake-model",
+            )
+
+        self.assertIn("# 网页搜索结果", context.context)
+        self.assertIn("https://example.com/openai", context.context)
+        decide.assert_called_once()
+        search.assert_called_once()
+
     def test_chat_reply_success_writes_assistant_message(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
         client = FakeClient({"reply": "先睡一下也行。", "todos_to_upsert": [], "todos_to_delete": []})
@@ -347,6 +419,37 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual("第一句重跑回复", messages[1].content)
         self.assertIsNotNone(messages[1].rerun_at)
         self.assertEqual(2, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM chat_messages"))["count"])
+
+    def test_rerun_assistant_message_uses_image_summary_from_user_message(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        attachment = self._insert_attachment("att-chat-image")
+        chat_service.call_chat_reply(
+            thread.id,
+            "这张图里有什么新消息",
+            FakeClient({"reply": "原回复"}),
+            "fake-model",
+            attachment_ids=[attachment.id],
+        )
+        assistant = chat_service.list_thread_messages(thread.id)[1]
+        captured = {}
+
+        def fake_reply(client, model, context, soul, *, trace_context=None):
+            del client, model, soul, trace_context
+            captured["thread_messages"] = context.messages
+            return {"reply": "图片重跑回复"}
+
+        with (
+            patch(
+                "core.chat_service.vision_service.content_with_cached_summaries",
+                return_value="这张图里有什么新消息\n\n[图片理解摘要]\n- 图片 1: 屏幕里展示了 Python 3.13 发布新闻",
+            ) as content_with_cached,
+            patch("core.chat_service.reply_router.call_soul_chat_reply", side_effect=fake_reply),
+        ):
+            result = chat_service.rerun_assistant_message(assistant.id, FakeClient(), "fake-model")
+
+        content_with_cached.assert_called()
+        self.assertEqual("图片重跑回复", result["message"].content)
+        self.assertIn("Python 3.13 发布新闻", captured["thread_messages"][-1].content)
 
     def test_chat_reply_sends_multi_turn_messages(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
@@ -542,6 +645,48 @@ class ChatServiceTest(unittest.TestCase):
         matches = [record for record in records if record.get("event") == event_name]
         self.assertTrue(matches)
         return matches[-1]
+
+    def _insert_attachment(self, attachment_id: str):
+        relative = f"attachments/images/2026/06/{attachment_id}.jpg"
+        target = self.workspace / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fake image")
+        now = 1.0
+        db.execute(
+            """
+            INSERT INTO attachments(
+                id, file_path, mime_type, file_size, width, height, sha256,
+                original_filename, linked_at, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                attachment_id,
+                relative,
+                "image/jpeg",
+                10,
+                100,
+                80,
+                "sha",
+                "image.jpg",
+                now,
+                now,
+            ),
+        )
+        row = require_not_none(db.query_one("SELECT * FROM attachments WHERE id = ?", (attachment_id,)))
+        return SimpleNamespace(
+            id=row["id"],
+            file_path=row["file_path"],
+            mime_type=row["mime_type"],
+            file_size=int(row["file_size"]),
+            width=int(row["width"]),
+            height=int(row["height"]),
+            sha256=row["sha256"],
+            original_filename=row["original_filename"],
+            linked_at=float(row["linked_at"]) if row["linked_at"] is not None else None,
+            created_at=float(row["created_at"]),
+            url=f"/attachments/{row['id']}",
+        )
 
 if __name__ == "__main__":
     unittest.main()

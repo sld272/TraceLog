@@ -272,6 +272,17 @@ def build_comment_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
+    web_section = reply_context.build_web_search_section(
+        client,
+        model,
+        user_message,
+        channel="comment",
+        context_hint="\n\n---\n\n".join(sections),
+        trace_context={"post_id": post_id, "soul_name": soul_name},
+    )
+    if web_section:
+        sections.append(web_section)
+
     context_text = "\n\n---\n\n".join(sections)
     relevant_post_ids = _post_ids_from_hits(retrieval_hits, exclude=post_id)
     logging_service.log_event(
@@ -625,13 +636,9 @@ def _should_append_synthetic_user_message(messages: list[CommentMessage], user_m
 
 
 def _rerun_user_message(post, prior_messages: list[CommentMessage]) -> str:
-    user_messages = [
-        message.content.strip()
-        for message in prior_messages
-        if message.role == "user" and message.content.strip()
-    ]
-    if user_messages:
-        return user_messages[-1]
+    for message in reversed(prior_messages):
+        if message.role == "user" and (message.content.strip() or message.attachments):
+            return _message_for_llm(message).content.strip()
     return _post_content_for_llm(post)
 
 

@@ -45,6 +45,39 @@ class CliConfigTest(unittest.TestCase):
             {"enabled": False, "model": None, "api_key": None, "base_url": None},
             loaded["vision"],
         )
+        self.assertEqual(
+            {
+                "enabled": False,
+                "provider": "auto",
+                "tavily_api_key": None,
+                "max_results": 5,
+                "timeout_s": 8,
+                "cache_ttl_s": 1800,
+                "include_sources": True,
+            },
+            loaded["web_search"],
+        )
+
+    def test_normalize_web_search_config_clamps_values_and_cleans_provider(self) -> None:
+        normalized = cli_config.normalize_web_search_config(
+            {
+                "enabled": True,
+                "provider": "bad-provider",
+                "tavily_api_key": "  tavily-key  ",
+                "max_results": 99,
+                "timeout_s": 1,
+                "cache_ttl_s": -5,
+                "include_sources": False,
+            }
+        )
+
+        self.assertTrue(normalized["enabled"])
+        self.assertEqual("auto", normalized["provider"])
+        self.assertEqual("tavily-key", normalized["tavily_api_key"])
+        self.assertEqual(8, normalized["max_results"])
+        self.assertEqual(3, normalized["timeout_s"])
+        self.assertEqual(0, normalized["cache_ttl_s"])
+        self.assertFalse(normalized["include_sources"])
 
 
 if __name__ == "__main__":

@@ -210,6 +210,17 @@ def build_chat_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
+    web_section = reply_context.build_web_search_section(
+        client,
+        model,
+        user_message,
+        channel="chat",
+        context_hint="\n\n---\n\n".join(sections),
+        trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
+    )
+    if web_section:
+        sections.append(web_section)
+
     context_text = "\n\n---\n\n".join(sections)
     logging_service.log_event(
         "context_assembly_result",
@@ -432,7 +443,7 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
         raise ValueError("只能重跑 SOUL 回复")
     thread = get_thread(message.thread_id)
     prior_messages = list_thread_messages(thread.id, limit=CHAT_HISTORY_LIMIT, before_message_id=message.id)
-    user_message = _last_user_message_content(prior_messages)
+    user_message = _last_user_message_content_for_llm(prior_messages)
     if not user_message:
         raise ValueError("没有可用于重跑的用户消息")
     chat_context = build_chat_context(thread.id, user_message, client, model, before_message_id=message.id)
@@ -526,6 +537,13 @@ def _last_user_message_content(messages: list[ChatMessage]) -> str:
     for message in reversed(messages):
         if message.role == "user" and message.content.strip():
             return message.content.strip()
+    return ""
+
+
+def _last_user_message_content_for_llm(messages: list[ChatMessage]) -> str:
+    for message in reversed(messages):
+        if message.role == "user" and (message.content.strip() or message.attachments):
+            return _message_for_llm(message).content.strip()
     return ""
 
 

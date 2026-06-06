@@ -12,7 +12,7 @@ from starlette.concurrency import run_in_threadpool
 from core import db, logging_service, record_service, vectorstore, workspace_service
 from core.app_services import job_service
 from core.app_services.api_runtime import ApiRuntime, JobWorker
-from core.cli.config import CONFIG_FILE, normalize_vision_config
+from core.cli.config import CONFIG_FILE, normalize_vision_config, normalize_web_search_config
 from core.logging_service import normalize_config as normalize_logging_settings
 
 T = TypeVar("T")
@@ -90,6 +90,7 @@ def _load_api_config() -> dict:
     config.setdefault("embedding_base_url", None)
     config["logging"] = normalize_logging_settings(config.get("logging"))
     config["vision"] = normalize_vision_config(config.get("vision"))
+    config["web_search"] = normalize_web_search_config(config.get("web_search"))
     return config
 
 

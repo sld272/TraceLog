@@ -11,8 +11,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from api.deps import run_sync
-from core import db, vision_service
-from core.cli.config import CONFIG_FILE, default_vision_config, normalize_vision_config
+from core import db, vision_service, web_search_service
+from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
 
@@ -32,6 +32,16 @@ class VisionSettings(BaseModel):
     base_url: str | None = None
 
 
+class WebSearchSettings(BaseModel):
+    enabled: bool = False
+    provider: str = "auto"
+    tavily_api_key: str | None = None
+    max_results: int = Field(default=5, ge=1, le=8)
+    timeout_s: int = Field(default=8, ge=3, le=20)
+    cache_ttl_s: int = Field(default=1800, ge=0, le=86400)
+    include_sources: bool = True
+
+
 class ModelSettingsRequest(BaseModel):
     api_key: str | None = None
     base_url: str = Field(min_length=1)
@@ -43,6 +53,7 @@ class ModelSettingsRequest(BaseModel):
     job_worker_concurrency: int = Field(default=1, ge=1, le=4)
     logging: LoggingSettings | None = None
     vision: VisionSettings | None = None
+    web_search: WebSearchSettings | None = None
 
 
 @router.get("/model")
@@ -67,7 +78,9 @@ def _read_model_settings() -> dict[str, Any]:
     config = _load_config_file()
     logging_config = normalize_logging_config(config.get("logging"))
     vision = normalize_vision_config(config.get("vision"))
+    web_search = normalize_web_search_config(config.get("web_search"))
     effective_vision = vision_service.configured_status(config)
+    effective_web_search = web_search_service.configured_status(config)
     return {
         "configured": _is_configured(config),
         "has_api_key": bool(config.get("api_key")),
@@ -91,6 +104,20 @@ def _read_model_settings() -> dict[str, Any]:
             "effective_base_url": effective_vision.get("base_url"),
             "prompt_version": effective_vision.get("prompt_version"),
             "timeout_s": effective_vision.get("timeout_s"),
+        },
+        "web_search": {
+            "enabled": bool(web_search.get("enabled")),
+            "configured": bool(effective_web_search.get("configured")),
+            "provider": web_search.get("provider"),
+            "selected_provider": effective_web_search.get("selected_provider"),
+            "tavily_configured": bool(effective_web_search.get("tavily_configured")),
+            "duckduckgo_available": bool(effective_web_search.get("duckduckgo_available")),
+            "has_tavily_api_key": bool(web_search.get("tavily_api_key")),
+            "tavily_api_key_masked": _mask_secret(web_search.get("tavily_api_key")),
+            "max_results": int(web_search.get("max_results", 5)),
+            "timeout_s": int(web_search.get("timeout_s", 8)),
+            "cache_ttl_s": int(web_search.get("cache_ttl_s", 1800)),
+            "include_sources": bool(web_search.get("include_sources", True)),
         },
         "config_path": str(Path(CONFIG_FILE).resolve()),
     }
@@ -117,6 +144,11 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
     if incoming_vision.get("api_key") is None:
         incoming_vision["api_key"] = existing_vision.get("api_key")
 
+    incoming_web_search = normalize_web_search_config(payload.get("web_search"))
+    existing_web_search = normalize_web_search_config(existing.get("web_search"))
+    if incoming_web_search.get("tavily_api_key") is None:
+        incoming_web_search["tavily_api_key"] = existing_web_search.get("tavily_api_key")
+
     config = {
         **existing,
         "api_key": api_key,
@@ -128,6 +160,7 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "job_worker_concurrency": _normalize_concurrency(payload.get("job_worker_concurrency")),
         "logging": normalize_logging_config(payload.get("logging")),
         "vision": incoming_vision,
+        "web_search": incoming_web_search,
     }
 
     missing = [key for key in ("api_key", "base_url", "model", "embedding_model") if not config.get(key)]
@@ -163,6 +196,7 @@ def _workspace_status() -> dict[str, Any]:
             "jobs": _count_table("jobs"),
             "vision_cache": _count_table("vision_cache"),
         },
+        "web_search": web_search_service.configured_status(_load_config_file()),
         "logs": {
             "current_log_path": str(current_log),
             "current_log_exists": current_log.exists(),
@@ -178,7 +212,11 @@ def _load_config_file() -> dict[str, Any]:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
-        return {"logging": default_logging_config(), "vision": default_vision_config()}
+        return {
+            "logging": default_logging_config(),
+            "vision": default_vision_config(),
+            "web_search": default_web_search_config(),
+        }
     except json.JSONDecodeError as exc:
         raise ValueError(f"{CONFIG_FILE} 不是有效 JSON") from exc
     return data if isinstance(data, dict) else {}

@@ -112,6 +112,8 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
         relevant_post_ids=relevant_ids,
         query=llm_content,
         fts_keywords=rewritten_query.keywords,
+        client=client,
+        model=model,
         trace_context={"channel": "public_post", "post_id": post_id},
     )
 

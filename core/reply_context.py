@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core import logging_service, query_rewriter, retrieval
+from core import logging_service, query_rewriter, retrieval, web_search_gate, web_search_service
 from core.llm.types import LLMClient
 
 
@@ -119,3 +119,56 @@ def section_summaries(sections: list[str]) -> list[dict]:
             }
         )
     return summaries
+
+
+def build_web_search_section(
+    client: LLMClient | None,
+    model: str | None,
+    user_message: str,
+    *,
+    channel: str,
+    context_hint: str = "",
+    trace_context: dict | None = None,
+) -> str:
+    log_context = {"channel": channel, **(trace_context or {})}
+    settings = web_search_service.effective_config()
+    if not settings.enabled:
+        logging_service.log_event(
+            "web_search_skipped",
+            **log_context,
+            reason="disabled",
+            query_count=0,
+        )
+        return ""
+    decision = web_search_gate.decide(
+        client,
+        model,
+        user_message,
+        channel=channel,
+        context_hint=context_hint,
+        trace_context=log_context,
+    )
+    if not decision.should_search:
+        logging_service.log_event(
+            "web_search_skipped",
+            **log_context,
+            reason=decision.reason or "gate_decision",
+            query_count=0,
+        )
+        return ""
+    run = web_search_service.search(
+        decision.queries,
+        config=settings,
+        trace_context=log_context,
+    )
+    section = web_search_service.format_results_for_context(run, include_sources=settings.include_sources)
+    if section:
+        logging_service.log_event(
+            "web_search_context_injected",
+            **log_context,
+            provider=run.provider,
+            query_count=len(run.queries),
+            result_count=len(run.results),
+            context_length=len(section),
+        )
+    return section

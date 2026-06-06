@@ -17,6 +17,8 @@ from core import (
     soul_memory_service,
     soul_service,
     tool_config_service,
+    web_search_gate,
+    web_search_service,
 )
 from tests.helpers import require_not_none
 
@@ -181,6 +183,66 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("comment", event["channel"])
         self.assertTrue(event["used_rewrite"])
 
+    def test_build_comment_context_injects_web_search_results_when_gate_requests_search(self) -> None:
+        comment_service.append_comment("20260525-001", "默认", "user", "查一下 Python 3.13 稳定版")
+        settings = web_search_service.WebSearchConfig(
+            enabled=True,
+            provider="duckduckgo",
+            tavily_api_key=None,
+            max_results=5,
+            timeout_s=8,
+            cache_ttl_s=0,
+            include_sources=True,
+        )
+        decision = web_search_gate.WebSearchDecision(
+            should_search=True,
+            queries=["Python 3.13 stable release"],
+            reason="当前版本事实",
+            freshness_required=True,
+        )
+        run = web_search_service.WebSearchRun(
+            used=True,
+            provider="duckduckgo",
+            queries=decision.queries,
+            results=[
+                web_search_service.WebSearchResult(
+                    title="Python release",
+                    url="https://example.com/python",
+                    snippet="Python 版本信息",
+                    provider="duckduckgo",
+                )
+            ],
+            error=None,
+            elapsed_ms=1,
+        )
+
+        with (
+            patch("core.reply_context.web_search_service.effective_config", return_value=settings),
+            patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
+            patch("core.reply_context.web_search_service.search", return_value=run) as search,
+            patch(
+                "core.reply_context.query_rewriter.rewrite_query",
+                return_value=query_rewriter.RewrittenQuery(
+                    raw_query="raw",
+                    semantic_query="Python 3.13 stable release",
+                    keywords=[],
+                    used_rewrite=True,
+                ),
+            ),
+        ):
+            context = comment_service.build_comment_context(
+                "20260525-001",
+                "默认",
+                "查一下 Python 3.13 稳定版",
+                FakeClient(),
+                "fake-model",
+            )
+
+        self.assertIn("# 网页搜索结果", context.context)
+        self.assertIn("https://example.com/python", context.context)
+        decide.assert_called_once()
+        search.assert_called_once()
+
     def test_comment_reply_sends_multi_turn_messages(self) -> None:
         client = FakeClient({"reply": "我在。"})
 
@@ -261,6 +323,37 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual([0, 1, 2], [message.seq for message in messages])
         self.assertEqual("重跑后的回复", messages[-1].content)
         self.assertIsNotNone(messages[-1].rerun_at)
+
+    def test_rerun_latest_assistant_comment_uses_image_summary_from_user_message(self) -> None:
+        attachment = self._insert_attachment("att-comment-image")
+        result = comment_service.call_comment_reply(
+            "20260525-001",
+            "默认",
+            "这张图是什么发布信息",
+            FakeClient({"reply": "原回复"}),
+            "fake-model",
+            attachment_ids=[attachment.id],
+        )
+        self.assertIsNotNone(result.assistant_message_id)
+        captured = {}
+
+        def fake_reply(client, model, context, soul, *, trace_context=None):
+            del client, model, soul, trace_context
+            captured["messages"] = context.messages
+            return {"reply": "图片评论重跑回复"}
+
+        with (
+            patch(
+                "core.comment_service.vision_service.content_with_cached_summaries",
+                return_value="这张图是什么发布信息\n\n[图片理解摘要]\n- 图片 1: 截图显示 Python 3.13 已发布",
+            ) as content_with_cached,
+            patch("core.comment_service.reply_router.call_soul_comment_reply", side_effect=fake_reply),
+        ):
+            rerun = comment_service.rerun_latest_assistant_message(result.assistant_message_id, FakeClient(), "fake-model")
+
+        content_with_cached.assert_called()
+        self.assertEqual("图片评论重跑回复", rerun["message"].content)
+        self.assertIn("Python 3.13 已发布", captured["messages"][-1].content)
 
     def test_rerun_root_assistant_comment_uses_post_as_synthetic_user_message(self) -> None:
         root_id = comment_service.get_conversation("20260525-001", "默认").root_comment_id
@@ -387,6 +480,48 @@ class CommentServiceTest(unittest.TestCase):
         matches = [record for record in records if record.get("event") == event_name]
         self.assertTrue(matches)
         return matches[-1]
+
+    def _insert_attachment(self, attachment_id: str):
+        relative = f"attachments/images/2026/06/{attachment_id}.jpg"
+        target = self.workspace / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fake image")
+        now = 1.0
+        db.execute(
+            """
+            INSERT INTO attachments(
+                id, file_path, mime_type, file_size, width, height, sha256,
+                original_filename, linked_at, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                attachment_id,
+                relative,
+                "image/jpeg",
+                10,
+                100,
+                80,
+                "sha",
+                "image.jpg",
+                now,
+                now,
+            ),
+        )
+        row = require_not_none(db.query_one("SELECT * FROM attachments WHERE id = ?", (attachment_id,)))
+        return SimpleNamespace(
+            id=row["id"],
+            file_path=row["file_path"],
+            mime_type=row["mime_type"],
+            file_size=int(row["file_size"]),
+            width=int(row["width"]),
+            height=int(row["height"]),
+            sha256=row["sha256"],
+            original_filename=row["original_filename"],
+            linked_at=float(row["linked_at"]) if row["linked_at"] is not None else None,
+            created_at=float(row["created_at"]),
+            url=f"/attachments/{row['id']}",
+        )
 
 
 if __name__ == "__main__":

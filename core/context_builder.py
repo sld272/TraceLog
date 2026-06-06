@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from core import db, logging_service, profile_service, record_service, reply_context, todo_service, tool_config_service
+from core.llm.types import LLMClient
 from core.soul_service import SoulContext, list_enabled_souls
 
 
@@ -19,6 +20,8 @@ def build_context(
     relevant_post_ids: list[str] | None = None,
     query: str | None = None,
     fts_keywords: list[str] | None = None,
+    client: LLMClient | None = None,
+    model: str | None = None,
     trace_context: dict | None = None,
 ) -> BuiltContext:
     """Build shared user/profile/history/todo context plus enabled SOULs."""
@@ -40,6 +43,18 @@ def build_context(
         if pending:
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
+
+    if query and enabled_souls:
+        web_section = reply_context.build_web_search_section(
+            client,
+            model,
+            query,
+            channel="public_post",
+            context_hint="\n\n---\n\n".join(sections),
+            trace_context=trace_context,
+        )
+        if web_section:
+            sections.append(web_section)
 
     shared_context = "\n\n---\n\n".join(sections)
     logging_service.log_event(

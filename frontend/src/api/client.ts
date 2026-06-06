@@ -227,6 +227,20 @@ export interface ModelSettings {
     prompt_version: string
     timeout_s: number
   }
+  web_search: {
+    enabled: boolean
+    configured: boolean
+    provider: 'auto' | 'tavily' | 'duckduckgo'
+    selected_provider: string | null
+    tavily_configured: boolean
+    duckduckgo_available: boolean
+    has_tavily_api_key: boolean
+    tavily_api_key_masked: string | null
+    max_results: number
+    timeout_s: number
+    cache_ttl_s: number
+    include_sources: boolean
+  }
   config_path: string
   restart_required?: boolean
 }
@@ -246,6 +260,15 @@ export interface ModelSettingsUpdate {
     model?: string | null
     api_key?: string
     base_url?: string | null
+  }
+  web_search: {
+    enabled: boolean
+    provider: 'auto' | 'tavily' | 'duckduckgo'
+    tavily_api_key?: string
+    max_results: number
+    timeout_s: number
+    cache_ttl_s: number
+    include_sources: boolean
   }
 }
 
@@ -267,6 +290,7 @@ export interface WorkspaceStatus {
     jobs: number
     vision_cache: number
   }
+  web_search: ModelSettings['web_search']
   logs: {
     current_log_path: string
     current_log_exists: boolean

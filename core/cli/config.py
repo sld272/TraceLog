@@ -17,6 +17,16 @@ DEFAULT_VISION_CONFIG = {
     "api_key": None,
     "base_url": None,
 }
+DEFAULT_WEB_SEARCH_CONFIG = {
+    "enabled": False,
+    "provider": "auto",
+    "tavily_api_key": None,
+    "max_results": 5,
+    "timeout_s": 8,
+    "cache_ttl_s": 1800,
+    "include_sources": True,
+}
+WEB_SEARCH_PROVIDERS = {"auto", "tavily", "duckduckgo"}
 
 
 def load_config() -> dict:
@@ -32,6 +42,7 @@ def load_config() -> dict:
             config.setdefault("embedding_base_url", None)
             config["logging"] = _normalize_logging_config(config.get("logging"))
             config["vision"] = normalize_vision_config(config.get("vision"))
+            config["web_search"] = normalize_web_search_config(config.get("web_search"))
             return config
 
         print(f"[配置] 检测到配置不完整（缺少：{', '.join(missing)}），将重新配置。")
@@ -75,6 +86,7 @@ def load_config() -> dict:
         "embedding_base_url": embedding_base_url,
         "logging": default_logging_config(),
         "vision": default_vision_config(),
+        "web_search": default_web_search_config(),
     }
     tmp = CONFIG_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -91,6 +103,10 @@ def _normalize_logging_config(value) -> dict:
 
 def default_vision_config() -> dict:
     return dict(DEFAULT_VISION_CONFIG)
+
+
+def default_web_search_config() -> dict:
+    return dict(DEFAULT_WEB_SEARCH_CONFIG)
 
 
 def normalize_vision_config(value) -> dict:
@@ -113,6 +129,37 @@ def normalize_vision_config(value) -> dict:
     merged["api_key"] = _clean_optional(merged.get("api_key"))
     merged["base_url"] = _clean_optional(merged.get("base_url"))
     return merged
+
+
+def normalize_web_search_config(value) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    merged = default_web_search_config()
+    merged.update(
+        {
+            key: _clean_optional(raw.get(key))
+            if key in {"provider", "tavily_api_key"}
+            else raw.get(key)
+            for key in DEFAULT_WEB_SEARCH_CONFIG
+            if key in raw
+        }
+    )
+    merged["enabled"] = bool(merged.get("enabled"))
+    provider = str(merged.get("provider") or "auto").strip().lower()
+    merged["provider"] = provider if provider in WEB_SEARCH_PROVIDERS else "auto"
+    merged["tavily_api_key"] = _clean_optional(merged.get("tavily_api_key"))
+    merged["max_results"] = _clamp_int(merged.get("max_results"), 5, 1, 8)
+    merged["timeout_s"] = _clamp_int(merged.get("timeout_s"), 8, 3, 20)
+    merged["cache_ttl_s"] = _clamp_int(merged.get("cache_ttl_s"), 1800, 0, 86400)
+    merged["include_sources"] = bool(merged.get("include_sources", True))
+    return merged
+
+
+def _clamp_int(value, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(number, maximum))
 
 
 def _clean_optional(value) -> str | None:

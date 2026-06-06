@@ -5,7 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import context_builder, db, logging_service, profile_service, soul_memory_service, soul_service, tool_config_service
+from unittest.mock import patch
+
+from core import context_builder, db, logging_service, profile_service, soul_memory_service, soul_service, tool_config_service, web_search_gate, web_search_service
 
 
 class ContextBuilderTest(unittest.TestCase):
@@ -101,6 +103,69 @@ class ContextBuilderTest(unittest.TestCase):
 
         self.assertNotIn("# 待办事项", built.shared_context)
         self.assertNotIn("不应进入上下文", built.shared_context)
+
+    def test_public_context_injects_web_search_once_for_enabled_souls(self) -> None:
+        settings = web_search_service.WebSearchConfig(
+            enabled=True,
+            provider="tavily",
+            tavily_api_key="tavily-key",
+            max_results=5,
+            timeout_s=8,
+            cache_ttl_s=0,
+            include_sources=True,
+        )
+        decision = web_search_gate.WebSearchDecision(
+            should_search=True,
+            queries=["OpenAI latest model"],
+            reason="当前公开事实",
+            freshness_required=True,
+        )
+        run = web_search_service.WebSearchRun(
+            used=True,
+            provider="tavily",
+            queries=decision.queries,
+            results=[
+                web_search_service.WebSearchResult(
+                    title="OpenAI",
+                    url="https://example.com/openai",
+                    snippet="最新公开信息",
+                    provider="tavily",
+                )
+            ],
+            error=None,
+            elapsed_ms=1,
+        )
+
+        with (
+            patch("core.reply_context.web_search_service.effective_config", return_value=settings),
+            patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
+            patch("core.reply_context.web_search_service.search", return_value=run) as search,
+        ):
+            built = context_builder.build_context(
+                query="今天 OpenAI 最新模型是什么",
+                client=object(),
+                model="fake-model",
+                trace_context={"post_id": "post-1"},
+            )
+
+        self.assertIn("# 网页搜索结果", built.shared_context)
+        self.assertIn("https://example.com/openai", built.shared_context)
+        decide.assert_called_once()
+        search.assert_called_once()
+
+    def test_public_context_skips_web_search_when_no_enabled_souls(self) -> None:
+        for soul in soul_service.list_souls(enabled_only=True):
+            soul_service.disable_soul(soul.name)
+
+        with (
+            patch("core.reply_context.web_search_gate.decide") as decide,
+            patch("core.reply_context.web_search_service.search") as search,
+        ):
+            built = context_builder.build_context(query="今天 OpenAI 最新模型是什么")
+
+        self.assertEqual([], built.enabled_souls)
+        decide.assert_not_called()
+        search.assert_not_called()
 
     def _insert_post(self, post_id: str, content: str, *, created_at: float = 1.0) -> None:
         db.execute(
