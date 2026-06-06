@@ -271,7 +271,11 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   }
 
   const handleRerunComment = async (postId: string, commentId: number) => {
+    const previousConversations = postCommentConversations
     setBusyCommentId(commentId)
+    setPostCommentConversations((prev) =>
+      withPendingCommentRerun(prev, postId, commentId, postComments[postId] ?? []),
+    )
     try {
       const response = await rerunCommentMessage(commentId)
       // Update the conversation state with the returned data
@@ -286,6 +290,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
       await refreshPostDetail(postId)
       showRegeneratedComment(response.message.id)
     } catch (err) {
+      setPostCommentConversations(previousConversations)
       setError(err instanceof Error ? err.message : '重跑失败')
     } finally {
       setBusyCommentId(null)
@@ -414,6 +419,66 @@ function buildSendingCommentState(
   return {
     ...(current ?? { messages: [] }),
     messages: [...messages, optimisticUserMessage, optimisticAssistantMessage],
+    sending: true,
+    error: null,
+  }
+}
+
+function withPendingCommentRerun(
+  conversationsByPost: Record<string, Record<string, CommentConversationState>>,
+  postId: string,
+  commentId: number,
+  rootComments: Comment[],
+): Record<string, Record<string, CommentConversationState>> {
+  const postConversations = conversationsByPost[postId] ?? {}
+  const createdAt = Date.now() / 1000
+  let foundMessage = false
+  const nextPostConversations = Object.fromEntries(
+    Object.entries(postConversations).map(([soulName, conversation]) => {
+      const targetIndex = conversation.messages.findIndex((message) => message.id === commentId)
+      if (targetIndex < 0) return [soulName, conversation]
+      foundMessage = true
+      return [soulName, withPendingCommentMessage(conversation, targetIndex, createdAt)]
+    }),
+  )
+
+  const rootComment = rootComments.find((comment) => comment.id === commentId && comment.role === 'assistant')
+  if (!foundMessage && rootComment) {
+    const current = nextPostConversations[rootComment.soul_name] ?? { messages: [] }
+    nextPostConversations[rootComment.soul_name] = {
+      ...current,
+      messages: [],
+      sending: true,
+      error: null,
+    }
+  }
+
+  if (!foundMessage && !rootComment) return conversationsByPost
+
+  return {
+    ...conversationsByPost,
+    [postId]: nextPostConversations,
+  }
+}
+
+function withPendingCommentMessage(
+  conversation: CommentConversationState,
+  targetIndex: number,
+  rerunAt: number,
+): CommentConversationState {
+  const targetMessage = conversation.messages[targetIndex]
+  if (!targetMessage) return conversation
+  return {
+    ...conversation,
+    messages: [
+      ...conversation.messages.slice(0, targetIndex).map((message) => ({ ...message })),
+      {
+        ...targetMessage,
+        content: '',
+        rerun_at: rerunAt,
+        attachments: [],
+      },
+    ],
     sending: true,
     error: null,
   }

@@ -138,6 +138,8 @@ function CommentPreview({
   const latestMessage = latestConversationMessage(comment, messages)
   const canRerunRoot = latestMessage?.id === comment.id && latestMessage.role === 'assistant'
   const rootBusy = busyCommentId === comment.id
+  const rootPending = rootBusy && comment.role === 'assistant'
+  const replyBusy = Boolean(conversation?.sending || rootBusy)
 
   useEffect(() => {
     const el = replyInputRef.current
@@ -148,7 +150,7 @@ function CommentPreview({
   }, [reply])
 
   const handleSubmit = async () => {
-    if ((!trimmed && attachments.length === 0) || conversation?.sending || !onReply) return
+    if ((!trimmed && attachments.length === 0) || replyBusy || !onReply) return
     const submittedReply = reply
     const submittedAttachments = attachments
     setReply('')
@@ -189,8 +191,16 @@ function CommentPreview({
               )}
             </div>
           </div>
-          {comment.content && <p className={styles.commentText}>{comment.content}</p>}
-          <ImageGrid attachments={comment.attachments ?? []} />
+          {rootPending ? (
+            <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
+              <LoadingDots />
+            </div>
+          ) : (
+            <>
+              {comment.content && <p className={styles.commentText}>{comment.content}</p>}
+              <ImageGrid attachments={comment.attachments ?? []} />
+            </>
+          )}
         </div>
       </div>
 
@@ -221,13 +231,13 @@ function CommentPreview({
             onKeyDown={handleKeyDown}
             placeholder={`回复 ${soulName}...`}
             rows={1}
-            disabled={conversation?.sending}
+            disabled={replyBusy}
             aria-label={`回复 ${soulName}`}
           />
           <ImageUploader
             attachments={attachments}
             compact
-            disabled={conversation?.sending}
+            disabled={replyBusy}
             onChange={setAttachments}
             showControls={false}
           />
@@ -242,7 +252,7 @@ function CommentPreview({
             <ImageUploader
               attachments={attachments}
               compact
-              disabled={conversation?.sending}
+              disabled={replyBusy}
               onChange={setAttachments}
               showPreview={false}
             />
@@ -250,10 +260,10 @@ function CommentPreview({
               <button
                 className={styles.replyButton}
                 onClick={handleSubmit}
-                disabled={(!trimmed && attachments.length === 0) || conversation?.sending || !onReply}
+                disabled={(!trimmed && attachments.length === 0) || replyBusy || !onReply}
                 aria-label={`发送给 ${soulName}`}
               >
-                {conversation?.sending ? <LoadingDots /> : <SendIcon width={14} height={14} />}
+                {replyBusy ? <LoadingDots /> : <SendIcon width={14} height={14} />}
               </button>
             </span>
           </div>
@@ -283,7 +293,7 @@ function ThreadMessage({
 }) {
   const isUser = message.role === 'user'
   const isPersisted = message.id > 0
-  const isPendingAssistant = message.role === 'assistant' && message.id < 0 && !message.content
+  const isPendingAssistant = message.role === 'assistant' && !message.content && (message.id < 0 || busy)
   return (
     <div className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
       <div className={styles.threadHeader}>

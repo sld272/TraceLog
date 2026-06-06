@@ -206,7 +206,13 @@ export function ChatPage({ soulName }: ChatPageProps) {
   }
 
   const performRerun = async (message: ChatMessage) => {
+    const previousMessages = messages
+    const previousEditingMessageId = editingMessageId
+    const previousEditDraft = editDraft
     setBusyMessageId(message.id)
+    setEditingMessageId(null)
+    setEditDraft('')
+    setMessages((prev) => withPendingReplyForAssistantRerun(prev, message))
     try {
       const response = await rerunChatMessage(message.id)
       setThread(response.thread)
@@ -215,6 +221,9 @@ export function ChatPage({ soulName }: ChatPageProps) {
       setEditDraft('')
       setError(null)
     } catch (err) {
+      setMessages(previousMessages)
+      setEditingMessageId(previousEditingMessageId)
+      setEditDraft(previousEditDraft)
       setError(err instanceof Error ? err.message : '重跑失败')
     } finally {
       setBusyMessageId(null)
@@ -354,6 +363,23 @@ function withPendingReplyAfterUserEdit(
   ]
 }
 
+function withPendingReplyForAssistantRerun(messages: ChatMessage[], rerunMessage: ChatMessage): ChatMessage[] {
+  const targetIndex = messages.findIndex((message) => message.id === rerunMessage.id)
+  if (targetIndex < 0) return messages
+  const targetMessage = messages[targetIndex]
+  if (!targetMessage) return messages
+  const createdAt = Date.now() / 1000
+  return [
+    ...messages.slice(0, targetIndex).map((message) => ({ ...message })),
+    {
+      ...targetMessage,
+      content: '',
+      rerun_at: createdAt,
+      attachments: [],
+    },
+  ]
+}
+
 function MessageBubble({
   soulName,
   message,
@@ -377,7 +403,7 @@ function MessageBubble({
 }) {
   const isUser = message.role === 'user'
   const isPersisted = message.id > 0
-  const isPendingAssistant = message.role === 'assistant' && message.id < 0 && !message.content
+  const isPendingAssistant = message.role === 'assistant' && !message.content && (message.id < 0 || busy)
   const editInputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
