@@ -10,10 +10,12 @@
 }
 
 .single {
+  width: var(--single-image-width, 360px);
   max-width: min(360px, 100%);
 }
 
 .compact.single {
+  width: var(--compact-single-image-width, 260px);
   max-width: min(260px, 100%);
 }
 
@@ -43,6 +45,11 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-bg-soft);
+}
+
+.borderless .item {
+  border: 0;
+  background: transparent;
 }
 
 .openButton {

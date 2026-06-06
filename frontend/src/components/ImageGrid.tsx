@@ -5,26 +5,30 @@ import styles from './ImageGrid.module.css'
 
 interface ImageGridProps {
   attachments: Attachment[]
+  borderless?: boolean
   compact?: boolean
   disabled?: boolean
   onRemove?: (attachment: Attachment) => void
 }
 
-export function ImageGrid({ attachments, compact = false, disabled = false, onRemove }: ImageGridProps) {
+export function ImageGrid({ attachments, borderless = false, compact = false, disabled = false, onRemove }: ImageGridProps) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
   if (attachments.length === 0) return null
 
   const visibleCount = Math.min(attachments.length, 9)
   const layout = getLayoutClass(visibleCount)
+  const gridStyle = visibleCount === 1 ? imageRatioStyle(attachments[0]!) : undefined
 
   return (
     <>
-      <div className={`${styles.grid} ${layout} ${compact ? styles.compact : ''}`}>
+      <div
+        className={`${styles.grid} ${layout} ${compact ? styles.compact : ''} ${borderless ? styles.borderless : ''}`}
+        style={gridStyle}
+      >
         {attachments.slice(0, 9).map((attachment, index) => (
           <div
             key={attachment.id}
             className={styles.item}
-            style={visibleCount === 1 ? imageRatioStyle(attachment) : undefined}
           >
             <button
               type="button"
@@ -74,5 +78,10 @@ function imageRatioStyle(attachment: Attachment): CSSProperties {
   const ratio = attachment.width > 0 && attachment.height > 0
     ? attachment.width / attachment.height
     : 1
-  return { '--image-ratio': ratio } as CSSProperties
+  const clampedRatio = Math.min(Math.max(ratio, 0.5625), 2.333)
+  return {
+    '--image-ratio': clampedRatio,
+    '--single-image-width': `${Math.min(360, 360 * clampedRatio)}px`,
+    '--compact-single-image-width': `${Math.min(260, 260 * clampedRatio)}px`,
+  } as CSSProperties
 }

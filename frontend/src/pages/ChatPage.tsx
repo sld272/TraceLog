@@ -391,7 +391,7 @@ function MessageBubble({
           aria-label="编辑私聊消息"
         />
       )}
-      <ImageGrid attachments={message.attachments ?? []} />
+      <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
       <div className={styles.messageMetaRow}>
         {editDraft !== null && (
           <div className={styles.messageActions}>
