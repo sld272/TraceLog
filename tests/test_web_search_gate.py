@@ -92,6 +92,31 @@ class WebSearchGateTest(unittest.TestCase):
         self.assertTrue(decision.freshness_required)
         self.assertIn("网页搜索判断器", client.calls[0]["messages"][0]["content"])
 
+    def test_decide_prompt_encourages_light_search_for_named_public_works(self) -> None:
+        client = FakeClient(
+            {
+                "should_search": True,
+                "queries": ["在超市后门吸烟的二人 动画"],
+                "reason": "用户提到具名公开作品，轻量搜索背景有助于贴切回应。",
+                "freshness_required": False,
+            }
+        )
+
+        decision = web_search_gate.decide(
+            client,
+            "fake-model",
+            "刚刚看了新番《在超市后门吸烟的二人》，好好磕啊",
+            channel="public_post",
+        )
+        prompt = client.calls[0]["messages"][0]["content"]
+
+        self.assertTrue(decision.should_search)
+        self.assertEqual(["在超市后门吸烟的二人 动画"], decision.queries)
+        self.assertFalse(decision.freshness_required)
+        self.assertIn("具名公开作品", prompt)
+        self.assertIn("轻量背景搜索", prompt)
+        self.assertIn("不要把用户整句情绪表达放进搜索词", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

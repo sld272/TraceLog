@@ -48,6 +48,7 @@ class CommentServiceTest(unittest.TestCase):
         self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
         self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
         self.old_hybrid_docs = retrieval.hybrid_search_documents
+        self.old_web_search_config = web_search_service.CONFIG_FILE
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
@@ -56,6 +57,7 @@ class CommentServiceTest(unittest.TestCase):
         soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         retrieval.hybrid_search_documents = lambda *args, **kwargs: []
+        web_search_service.CONFIG_FILE = str(Path(self.tmp.name) / "config.json")
 
         db.init_db()
         logging_service.init_logging({"enabled": True, "llm_payload": "off"})
@@ -74,6 +76,7 @@ class CommentServiceTest(unittest.TestCase):
         soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
         soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         retrieval.hybrid_search_documents = self.old_hybrid_docs
+        web_search_service.CONFIG_FILE = self.old_web_search_config
         self.tmp.cleanup()
 
     def test_conversation_is_keyed_by_post_and_soul(self) -> None:
