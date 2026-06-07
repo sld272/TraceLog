@@ -102,26 +102,26 @@
   border: 1px solid transparent;
   background: var(--color-accent);
   color: var(--color-text-inverse);
-  box-shadow: 0 2px 8px rgba(47, 139, 125, 0.18);
+  box-shadow: 0 2px 6px rgba(47, 139, 125, 0.12);
 }
 
 .confirmButton:hover {
   background: var(--color-accent-hover);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(47, 139, 125, 0.24);
+  box-shadow: 0 3px 10px rgba(47, 139, 125, 0.16);
 }
 
 .dangerButton {
   border: 1px solid transparent;
   background: var(--color-error);
   color: white;
-  box-shadow: 0 2px 8px rgba(190, 80, 70, 0.18);
+  box-shadow: 0 2px 6px rgba(190, 80, 70, 0.12);
 }
 
 .dangerButton:hover {
   background: #a5463e;
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(190, 80, 70, 0.24);
+  box-shadow: 0 3px 10px rgba(190, 80, 70, 0.18);
 }
 
 .cancelButton:active,
