@@ -5,9 +5,15 @@ interface LeftNavProps {
   souls: Soul[]
   activePage: string
   onNavigate: (page: string) => void
+  onAfterNavigate?: () => void
 }
 
-export function LeftNav({ souls, activePage, onNavigate }: LeftNavProps) {
+export function LeftNav({ souls, activePage, onNavigate, onAfterNavigate }: LeftNavProps) {
+  const navigate = (page: string) => {
+    onNavigate(page)
+    onAfterNavigate?.()
+  }
+
   return (
     <div className={styles.nav}>
       <section className={styles.section}>
@@ -15,19 +21,19 @@ export function LeftNav({ souls, activePage, onNavigate }: LeftNavProps) {
           icon={<HomeIcon />}
           label="首页"
           active={activePage === 'home'}
-          onClick={() => onNavigate('home')}
+          onClick={() => navigate('home')}
         />
         <NavItem
           icon={<TodoIcon />}
           label="待办"
           active={activePage === 'todos'}
-          onClick={() => onNavigate('todos')}
+          onClick={() => navigate('todos')}
         />
         <NavItem
           icon={<ReflectIcon />}
           label="反思"
           active={activePage === 'reflections'}
-          onClick={() => onNavigate('reflections')}
+          onClick={() => navigate('reflections')}
         />
       </section>
 
@@ -39,7 +45,7 @@ export function LeftNav({ souls, activePage, onNavigate }: LeftNavProps) {
             icon={<SoulIcon name={soul.name} />}
             label={soul.name}
             active={activePage === `chat:${soul.name}`}
-            onClick={() => onNavigate(`chat:${soul.name}`)}
+            onClick={() => navigate(`chat:${soul.name}`)}
           />
         ))}
         {souls.length === 0 && (
@@ -52,7 +58,7 @@ export function LeftNav({ souls, activePage, onNavigate }: LeftNavProps) {
           icon={<SettingsIcon />}
           label="设置"
           active={activePage === 'settings'}
-          onClick={() => onNavigate('settings')}
+          onClick={() => navigate('settings')}
         />
       </section>
     </div>

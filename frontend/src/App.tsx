@@ -124,13 +124,14 @@ export function App() {
 
   return (
     <AppShell
-      nav={
+      nav={(closeMobileNav) => (
         <LeftNav
           souls={souls}
           activePage={activePage}
           onNavigate={setActivePage}
+          onAfterNavigate={closeMobileNav}
         />
-      }
+      )}
       main={renderMain()}
       panel={showRightPanel ? (
         <RightPanel

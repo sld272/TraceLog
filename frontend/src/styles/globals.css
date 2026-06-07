@@ -38,8 +38,8 @@
   --soul-color-4: rgba(160, 120, 80, 0.04);
 
   /* Typography */
-  --font-sans: 'Avenir Next', 'Noto Sans SC', -apple-system, BlinkMacSystemFont,
-    'Segoe UI', sans-serif;
+  --font-sans: 'Avenir Next', 'Inter', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', 'Noto Sans SC', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 
   --text-xs: 0.75rem;
