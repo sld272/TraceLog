@@ -73,7 +73,6 @@ function TodayTodosCard({
 }) {
   const [savingId, setSavingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const todoCount = countTodayTodoCandidates(todos)
   const todayTodos = selectTodayTodos(todos)
 
   const completeTodo = async (todo: Todo) => {
@@ -117,11 +116,9 @@ function TodayTodosCard({
         ) : (
           <p className={styles.empty}>今天没有待办</p>
         )}
-        {todoCount > 0 && (
-          <button type="button" className={styles.queueAction} onClick={onOpenTodos}>
-            查看
-          </button>
-        )}
+        <button type="button" className={styles.queueAction} onClick={onOpenTodos}>
+          查看
+        </button>
         {error && <p className={styles.inlineError}>{error}</p>}
       </div>
     </section>
@@ -219,10 +216,6 @@ function selectTodayTodos(todos: Todo[]): Todo[] {
   const today = active.filter((todo) => todo.date === getTodayKey())
   const undated = active.filter((todo) => !todo.date)
   return [...today, ...undated].slice(0, 3)
-}
-
-function countTodayTodoCandidates(todos: Todo[]): number {
-  return todos.filter((todo) => !isTodoDone(todo) && (todo.date === getTodayKey() || !todo.date)).length
 }
 
 function todoMeta(todo: Todo): string {
