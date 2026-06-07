@@ -153,7 +153,7 @@ function ReflectionQueueCard({
                 count={globalCount}
                 detail={formatDateScope(globalReflection?.scope_start, globalReflection?.scope_end)}
               />
-              <QueueRow label="人格互动" count={soulCount} detail={formatSoulScope(soulReflections)} />
+              <QueueRow label="人格回应" count={soulCount} detail={formatSoulScope(soulReflections)} />
             </div>
             <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
               查看

@@ -56,7 +56,7 @@ export function ReflectionsPage() {
     setRunning('souls')
     try {
       const result = await triggerSoulReflections()
-      setNotice(`人格反思已加入队列：#${result.job_id}`)
+      setNotice(`人格深反思已加入队列：#${result.job_id}`)
       await fetchPreview()
     } catch (err) {
       setError(err instanceof Error ? err.message : '触发失败')

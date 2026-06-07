@@ -49,7 +49,7 @@ export function LeftNav({ souls, activePage, onNavigate, onAfterNavigate }: Left
           />
         ))}
         {souls.length === 0 && (
-          <p className={styles.emptySoul}>暂无活跃人格</p>
+          <p className={styles.emptySoul}>还没有</p>
         )}
       </section>
 

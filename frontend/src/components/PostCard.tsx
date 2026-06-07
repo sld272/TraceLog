@@ -104,7 +104,7 @@ export function PostCard({
       {post.latest_event_type && post.latest_event_type !== 'pipeline_done' && (
         <div className={styles.processing}>
           <LoadingDots />
-          <span>人格正在思考...</span>
+          <span>TA 正在思考...</span>
         </div>
       )}
     </article>
