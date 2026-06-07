@@ -252,7 +252,7 @@
 
 .todoItem {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
   align-items: flex-start;
   gap: var(--space-4);
   min-height: 68px;
@@ -268,8 +268,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-full);
@@ -296,7 +296,7 @@
 
 .todoTask {
   color: var(--color-text-primary);
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   line-height: var(--leading-normal);
   word-break: break-word;
 }
@@ -490,7 +490,7 @@
   }
 
   .todoItem {
-    grid-template-columns: 30px minmax(0, 1fr);
+    grid-template-columns: 22px minmax(0, 1fr);
   }
 
   .todoEditButton {
