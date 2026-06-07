@@ -49,7 +49,6 @@ class ModelSettingsRequest(BaseModel):
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
     reuse_embedding_config: bool = False
-    job_worker_concurrency: int = Field(default=1, ge=1, le=4)
     logging: LoggingSettings | None = None
     vision: VisionSettings | None = None
     web_search: WebSearchSettings | None = None
@@ -91,7 +90,6 @@ def _read_model_settings() -> dict[str, Any]:
         "embedding_api_key_masked": _mask_secret(config.get("embedding_api_key")),
         "embedding_base_url": config.get("embedding_base_url"),
         "reuse_embedding_config": not bool(config.get("embedding_api_key") or config.get("embedding_base_url")),
-        "job_worker_concurrency": _normalize_concurrency(config.get("job_worker_concurrency")),
         "logging": logging_config,
         "vision": {
             "enabled": bool(vision.get("enabled")),
@@ -148,14 +146,13 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
         incoming_web_search["tavily_api_key"] = existing_web_search.get("tavily_api_key")
 
     config = {
-        **existing,
+        **{key: value for key, value in existing.items() if key != "job_worker_concurrency"},
         "api_key": api_key,
         "base_url": str(payload["base_url"]).strip(),
         "model": str(payload["model"]).strip(),
         "embedding_model": str(payload["embedding_model"]).strip(),
         "embedding_api_key": embedding_api_key,
         "embedding_base_url": embedding_base_url,
-        "job_worker_concurrency": _normalize_concurrency(payload.get("job_worker_concurrency")),
         "logging": normalize_logging_config(payload.get("logging")),
         "vision": incoming_vision,
         "web_search": incoming_web_search,

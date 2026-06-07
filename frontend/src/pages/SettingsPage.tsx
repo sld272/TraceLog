@@ -43,7 +43,6 @@ interface ModelForm {
   embedding_api_key: string
   embedding_base_url: string
   reuse_embedding_config: boolean
-  job_worker_concurrency: number
   logging: ModelSettings['logging']
   vision: {
     enabled: boolean
@@ -69,7 +68,6 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   embedding_api_key: '',
   embedding_base_url: '',
   reuse_embedding_config: true,
-  job_worker_concurrency: 1,
   logging: {
     enabled: true,
     level: 'INFO',
@@ -795,7 +793,6 @@ function formFromModelSettings(settings: ModelSettings): ModelForm {
     embedding_api_key: '',
     embedding_base_url: settings.embedding_base_url ?? '',
     reuse_embedding_config: settings.reuse_embedding_config,
-    job_worker_concurrency: settings.job_worker_concurrency,
     logging: settings.logging,
     vision: {
       enabled: settings.vision?.enabled ?? false,
@@ -823,7 +820,6 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
     embedding_api_key: form.embedding_api_key.trim() || undefined,
     embedding_base_url: form.reuse_embedding_config ? null : form.embedding_base_url.trim() || null,
     reuse_embedding_config: form.reuse_embedding_config,
-    job_worker_concurrency: form.job_worker_concurrency,
     logging: form.logging,
     vision: {
       enabled: form.vision.enabled,

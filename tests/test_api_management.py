@@ -229,7 +229,6 @@ class ApiManagementTest(unittest.TestCase):
                     "embedding_model": "updated-embedding",
                     "reuse_embedding_config": False,
                     "embedding_base_url": "https://embeddings.invalid/v1",
-                    "job_worker_concurrency": 2,
                     "logging": {"enabled": True, "level": "DEBUG", "history_retention": 7},
                     "vision": {
                         "enabled": True,
@@ -260,7 +259,7 @@ class ApiManagementTest(unittest.TestCase):
         saved = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual("sk-test-secret-123456", saved["api_key"])
         self.assertEqual("https://updated.invalid/v1", saved["base_url"])
-        self.assertEqual(2, saved["job_worker_concurrency"])
+        self.assertNotIn("job_worker_concurrency", saved)
         self.assertEqual({"enabled": True, "model": "vision-model", "api_key": None, "base_url": None}, saved["vision"])
         self.assertEqual(
             {

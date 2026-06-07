@@ -210,7 +210,6 @@ export interface ModelSettings {
   embedding_api_key_masked: string | null
   embedding_base_url: string | null
   reuse_embedding_config: boolean
-  job_worker_concurrency: number
   logging: {
     enabled: boolean
     level: string
@@ -252,7 +251,6 @@ export interface ModelSettingsUpdate {
   embedding_api_key?: string
   embedding_base_url?: string | null
   reuse_embedding_config: boolean
-  job_worker_concurrency: number
   logging: ModelSettings['logging']
   vision: {
     enabled: boolean
