@@ -45,7 +45,7 @@ function FocusCard({ profileContent }: { profileContent: string | null }) {
 
   return (
     <section className={styles.card}>
-      <PanelHeader eyebrow="Focus" title="当前关注" />
+      <PanelHeader title="当前关注" />
       <div className={styles.itemList}>
         {focusItems.length > 0 ? (
           focusItems.map((item, index) => (
@@ -89,7 +89,7 @@ function TodayTodosCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader eyebrow="Today" title="今日待办" />
+      <PanelHeader title="今日待办" />
       <div className={styles.itemList}>
         {todayTodos.length > 0 ? (
           todayTodos.map((todo) => {
@@ -143,7 +143,7 @@ function ReflectionQueueCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader eyebrow="Queue" title="待整理线索" />
+      <PanelHeader title="待整理线索" />
       <div className={styles.itemList}>
         {hasQueue ? (
           <>
@@ -167,10 +167,9 @@ function ReflectionQueueCard({
   )
 }
 
-function PanelHeader({ eyebrow, title }: { eyebrow: string; title: string }) {
+function PanelHeader({ title }: { title: string }) {
   return (
     <div className={styles.cardHeader}>
-      <span className={styles.eyebrow}>{eyebrow}</span>
       <h3 className={styles.cardTitle}>{title}</h3>
     </div>
   )
