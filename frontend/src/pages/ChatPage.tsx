@@ -453,8 +453,8 @@ function MessageBubble({
         />
       )}
       <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
-      <div className={styles.messageMetaRow}>
-        {editDraft !== null && (
+      {editDraft !== null && (
+        <div className={styles.messageMetaRow}>
           <div className={styles.messageActions}>
             <button className={styles.messageTextAction} onClick={onCancelEdit} disabled={busy}>
               取消
@@ -463,8 +463,8 @@ function MessageBubble({
               保存
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </article>
   )
 }
