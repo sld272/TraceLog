@@ -453,16 +453,18 @@ function ModelSettingsPanel({
               web_search: { ...form.web_search, provider: value as WebSearchProvider },
             })}
           />
-          <TextField
-            label="Tavily API Key"
-            type="password"
-            value={form.web_search.tavily_api_key}
-            placeholder={settings?.web_search.tavily_api_key_masked ?? '选 Tavily 时必填'}
-            onChange={(value) => onChange({
-              ...form,
-              web_search: { ...form.web_search, tavily_api_key: value },
-            })}
-          />
+          {form.web_search.provider === 'tavily' && (
+            <TextField
+              label="Tavily API Key"
+              type="password"
+              value={form.web_search.tavily_api_key}
+              placeholder={settings?.web_search.tavily_api_key_masked ?? '选 Tavily 时必填'}
+              onChange={(value) => onChange({
+                ...form,
+                web_search: { ...form.web_search, tavily_api_key: value },
+              })}
+            />
+          )}
         </div>
       </section>
 
