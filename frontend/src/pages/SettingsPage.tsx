@@ -58,7 +58,6 @@ interface ModelForm {
     max_results: number
     timeout_s: number
     cache_ttl_s: number
-    include_sources: boolean
   }
 }
 
@@ -84,12 +83,11 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   },
   web_search: {
     enabled: false,
-    provider: 'auto',
+    provider: 'duckduckgo',
     tavily_api_key: '',
     max_results: 5,
     timeout_s: 8,
     cache_ttl_s: 1800,
-    include_sources: true,
   },
 }
 
@@ -422,7 +420,7 @@ function ModelSettingsPanel({
         <div className={styles.sectionHeader}>
           <div>
             <h2 className={styles.sectionTitle}>网页搜索</h2>
-            <p className={styles.sectionMeta}>由模型自动判断是否需要搜索；DuckDuckGo 免配置，Tavily 更稳定。</p>
+            <p className={styles.sectionMeta}>由模型自动判断是否需要搜索；DuckDuckGo 免配置，Tavily 体验更稳定但需要 API Key。</p>
           </div>
           <div className={styles.headerControls}>
             <StatusPill
@@ -444,12 +442,11 @@ function ModelSettingsPanel({
         </div>
         <div className={styles.formGrid}>
           <SelectField
-            label="Provider"
+            label="服务"
             value={form.web_search.provider}
             options={[
-              { value: 'auto', label: '自动' },
-              { value: 'tavily', label: 'Tavily' },
-              { value: 'duckduckgo', label: 'DuckDuckGo 免配置' },
+              { value: 'duckduckgo', label: 'DuckDuckGo（免配置）' },
+              { value: 'tavily', label: 'Tavily（需 API Key）' },
             ]}
             onChange={(value) => onChange({
               ...form,
@@ -460,53 +457,12 @@ function ModelSettingsPanel({
             label="Tavily API Key"
             type="password"
             value={form.web_search.tavily_api_key}
-            placeholder={settings?.web_search.tavily_api_key_masked ?? '留空使用 DuckDuckGo'}
+            placeholder={settings?.web_search.tavily_api_key_masked ?? '选 Tavily 时必填'}
             onChange={(value) => onChange({
               ...form,
               web_search: { ...form.web_search, tavily_api_key: value },
             })}
           />
-          <NumberField
-            label="Max Results"
-            value={form.web_search.max_results}
-            min={1}
-            max={8}
-            onChange={(value) => onChange({
-              ...form,
-              web_search: { ...form.web_search, max_results: value },
-            })}
-          />
-          <NumberField
-            label="Timeout Seconds"
-            value={form.web_search.timeout_s}
-            min={3}
-            max={20}
-            onChange={(value) => onChange({
-              ...form,
-              web_search: { ...form.web_search, timeout_s: value },
-            })}
-          />
-          <NumberField
-            label="Cache TTL Seconds"
-            value={form.web_search.cache_ttl_s}
-            min={0}
-            max={86400}
-            onChange={(value) => onChange({
-              ...form,
-              web_search: { ...form.web_search, cache_ttl_s: value },
-            })}
-          />
-          <label className={styles.toggleRow}>
-            <input
-              type="checkbox"
-              checked={form.web_search.include_sources}
-              onChange={(event) => onChange({
-                ...form,
-                web_search: { ...form.web_search, include_sources: event.target.checked },
-              })}
-            />
-            <span>回复中包含来源</span>
-          </label>
         </div>
       </section>
 
@@ -781,33 +737,6 @@ function TextField({
   )
 }
 
-function NumberField({
-  label,
-  value,
-  min,
-  max,
-  onChange,
-}: {
-  label: string
-  value: number
-  min: number
-  max: number
-  onChange: (value: number) => void
-}) {
-  return (
-    <label className={styles.field}>
-      <span>{label}</span>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        onChange={(event) => onChange(clampNumber(event.target.valueAsNumber, min, max, value))}
-      />
-    </label>
-  )
-}
-
 function SelectField<T extends string>({
   label,
   value,
@@ -874,12 +803,11 @@ function formFromModelSettings(settings: ModelSettings): ModelForm {
     },
     web_search: {
       enabled: settings.web_search?.enabled ?? false,
-      provider: settings.web_search?.provider ?? 'auto',
+      provider: settings.web_search?.provider ?? 'duckduckgo',
       tavily_api_key: '',
       max_results: settings.web_search?.max_results ?? 5,
       timeout_s: settings.web_search?.timeout_s ?? 8,
       cache_ttl_s: settings.web_search?.cache_ttl_s ?? 1800,
-      include_sources: settings.web_search?.include_sources ?? true,
     },
   }
 }
@@ -908,7 +836,6 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
       max_results: form.web_search.max_results,
       timeout_s: form.web_search.timeout_s,
       cache_ttl_s: form.web_search.cache_ttl_s,
-      include_sources: form.web_search.include_sources,
     },
   }
 }
@@ -920,11 +847,6 @@ function webSearchStatusLabel(settings: ModelSettings | null): string {
   if (webSearch.selected_provider === 'tavily') return '可用：Tavily'
   if (webSearch.selected_provider === 'duckduckgo') return '可用：DuckDuckGo'
   return '可用'
-}
-
-function clampNumber(value: number, min: number, max: number, fallback: number): number {
-  if (!Number.isFinite(value)) return fallback
-  return Math.max(min, Math.min(max, Math.trunc(value)))
 }
 
 function newSoulMarkdownTemplate(name: string): string {

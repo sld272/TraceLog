@@ -161,7 +161,7 @@ def build_web_search_section(
         config=settings,
         trace_context=log_context,
     )
-    section = web_search_service.format_results_for_context(run, include_sources=settings.include_sources)
+    section = web_search_service.format_results_for_context(run)
     if section:
         logging_service.log_event(
             "web_search_context_injected",

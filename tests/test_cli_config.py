@@ -48,12 +48,11 @@ class CliConfigTest(unittest.TestCase):
         self.assertEqual(
             {
                 "enabled": False,
-                "provider": "auto",
+                "provider": "duckduckgo",
                 "tavily_api_key": None,
                 "max_results": 5,
                 "timeout_s": 8,
                 "cache_ttl_s": 1800,
-                "include_sources": True,
             },
             loaded["web_search"],
         )
@@ -67,17 +66,16 @@ class CliConfigTest(unittest.TestCase):
                 "max_results": 99,
                 "timeout_s": 1,
                 "cache_ttl_s": -5,
-                "include_sources": False,
             }
         )
 
         self.assertTrue(normalized["enabled"])
-        self.assertEqual("auto", normalized["provider"])
+        self.assertEqual("duckduckgo", normalized["provider"])
         self.assertEqual("tavily-key", normalized["tavily_api_key"])
         self.assertEqual(8, normalized["max_results"])
         self.assertEqual(3, normalized["timeout_s"])
         self.assertEqual(0, normalized["cache_ttl_s"])
-        self.assertFalse(normalized["include_sources"])
+        self.assertNotIn("include_sources", normalized)
 
 
 if __name__ == "__main__":

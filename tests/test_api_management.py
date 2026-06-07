@@ -239,12 +239,11 @@ class ApiManagementTest(unittest.TestCase):
                     },
                     "web_search": {
                         "enabled": True,
-                        "provider": "auto",
+                        "provider": "tavily",
                         "tavily_api_key": "tavily-secret",
                         "max_results": 6,
                         "timeout_s": 9,
                         "cache_ttl_s": 600,
-                        "include_sources": True,
                     },
                 },
             )
@@ -266,12 +265,11 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(
             {
                 "enabled": True,
-                "provider": "auto",
+                "provider": "tavily",
                 "tavily_api_key": "tavily-secret",
                 "max_results": 6,
                 "timeout_s": 9,
                 "cache_ttl_s": 600,
-                "include_sources": True,
             },
             saved["web_search"],
         )

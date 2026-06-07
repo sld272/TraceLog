@@ -230,7 +230,7 @@ export interface ModelSettings {
   web_search: {
     enabled: boolean
     configured: boolean
-    provider: 'auto' | 'tavily' | 'duckduckgo'
+    provider: 'tavily' | 'duckduckgo'
     selected_provider: string | null
     tavily_configured: boolean
     duckduckgo_available: boolean
@@ -239,7 +239,6 @@ export interface ModelSettings {
     max_results: number
     timeout_s: number
     cache_ttl_s: number
-    include_sources: boolean
   }
   config_path: string
   restart_required?: boolean
@@ -263,12 +262,11 @@ export interface ModelSettingsUpdate {
   }
   web_search: {
     enabled: boolean
-    provider: 'auto' | 'tavily' | 'duckduckgo'
+    provider: 'tavily' | 'duckduckgo'
     tavily_api_key?: string
     max_results: number
     timeout_s: number
     cache_ttl_s: number
-    include_sources: boolean
   }
 }
 

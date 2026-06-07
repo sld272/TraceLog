@@ -195,7 +195,6 @@ class CommentServiceTest(unittest.TestCase):
             max_results=5,
             timeout_s=8,
             cache_ttl_s=0,
-            include_sources=True,
         )
         decision = web_search_gate.WebSearchDecision(
             should_search=True,
@@ -242,7 +241,8 @@ class CommentServiceTest(unittest.TestCase):
             )
 
         self.assertIn("# 网页搜索结果", context.context)
-        self.assertIn("https://example.com/python", context.context)
+        self.assertIn("Python release", context.context)
+        self.assertIn("Python 版本信息", context.context)
         decide.assert_called_once()
         search.assert_called_once()
 

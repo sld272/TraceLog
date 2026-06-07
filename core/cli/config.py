@@ -19,14 +19,13 @@ DEFAULT_VISION_CONFIG = {
 }
 DEFAULT_WEB_SEARCH_CONFIG = {
     "enabled": False,
-    "provider": "auto",
+    "provider": "duckduckgo",
     "tavily_api_key": None,
     "max_results": 5,
     "timeout_s": 8,
     "cache_ttl_s": 1800,
-    "include_sources": True,
 }
-WEB_SEARCH_PROVIDERS = {"auto", "tavily", "duckduckgo"}
+WEB_SEARCH_PROVIDERS = {"tavily", "duckduckgo"}
 
 
 def load_config() -> dict:
@@ -144,13 +143,12 @@ def normalize_web_search_config(value) -> dict:
         }
     )
     merged["enabled"] = bool(merged.get("enabled"))
-    provider = str(merged.get("provider") or "auto").strip().lower()
-    merged["provider"] = provider if provider in WEB_SEARCH_PROVIDERS else "auto"
+    provider = str(merged.get("provider") or "duckduckgo").strip().lower()
+    merged["provider"] = provider if provider in WEB_SEARCH_PROVIDERS else "duckduckgo"
     merged["tavily_api_key"] = _clean_optional(merged.get("tavily_api_key"))
     merged["max_results"] = _clamp_int(merged.get("max_results"), 5, 1, 8)
     merged["timeout_s"] = _clamp_int(merged.get("timeout_s"), 8, 3, 20)
     merged["cache_ttl_s"] = _clamp_int(merged.get("cache_ttl_s"), 1800, 0, 86400)
-    merged["include_sources"] = bool(merged.get("include_sources", True))
     return merged
 
 

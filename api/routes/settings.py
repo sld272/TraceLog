@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -34,12 +34,11 @@ class VisionSettings(BaseModel):
 
 class WebSearchSettings(BaseModel):
     enabled: bool = False
-    provider: str = "auto"
+    provider: Literal["tavily", "duckduckgo"] = "duckduckgo"
     tavily_api_key: str | None = None
     max_results: int = Field(default=5, ge=1, le=8)
     timeout_s: int = Field(default=8, ge=3, le=20)
     cache_ttl_s: int = Field(default=1800, ge=0, le=86400)
-    include_sources: bool = True
 
 
 class ModelSettingsRequest(BaseModel):
@@ -117,7 +116,6 @@ def _read_model_settings() -> dict[str, Any]:
             "max_results": int(web_search.get("max_results", 5)),
             "timeout_s": int(web_search.get("timeout_s", 8)),
             "cache_ttl_s": int(web_search.get("cache_ttl_s", 1800)),
-            "include_sources": bool(web_search.get("include_sources", True)),
         },
         "config_path": str(Path(CONFIG_FILE).resolve()),
     }

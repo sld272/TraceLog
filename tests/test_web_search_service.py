@@ -34,32 +34,32 @@ class WebSearchServiceTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
-    def test_auto_provider_prefers_tavily_when_key_exists(self) -> None:
+    def test_explicit_tavily_returns_none_without_key(self) -> None:
         config = web_search_service.WebSearchConfig(
             enabled=True,
-            provider="auto",
-            tavily_api_key="tavily-key",
-            max_results=5,
-            timeout_s=8,
-            cache_ttl_s=1800,
-            include_sources=True,
-        )
-
-        self.assertEqual("tavily", web_search_service.select_provider(config))
-
-    def test_auto_provider_falls_back_to_duckduckgo_when_available(self) -> None:
-        config = web_search_service.WebSearchConfig(
-            enabled=True,
-            provider="auto",
+            provider="tavily",
             tavily_api_key=None,
             max_results=5,
             timeout_s=8,
             cache_ttl_s=1800,
-            include_sources=True,
+        )
+
+        self.assertIsNone(web_search_service.select_provider(config))
+
+    def test_duckduckgo_provider_requires_module(self) -> None:
+        config = web_search_service.WebSearchConfig(
+            enabled=True,
+            provider="duckduckgo",
+            tavily_api_key=None,
+            max_results=5,
+            timeout_s=8,
+            cache_ttl_s=1800,
         )
 
         with patch("core.web_search_service._duckduckgo_available", return_value=True):
             self.assertEqual("duckduckgo", web_search_service.select_provider(config))
+        with patch("core.web_search_service._duckduckgo_available", return_value=False):
+            self.assertIsNone(web_search_service.select_provider(config))
 
     def test_search_uses_cache_and_dedupes_results(self) -> None:
         config = web_search_service.WebSearchConfig(
@@ -69,7 +69,6 @@ class WebSearchServiceTest(unittest.TestCase):
             max_results=3,
             timeout_s=8,
             cache_ttl_s=1800,
-            include_sources=True,
         )
         results = [
             web_search_service.WebSearchResult("A", "https://a.example", "one", provider="tavily"),
@@ -94,7 +93,6 @@ class WebSearchServiceTest(unittest.TestCase):
             max_results=1,
             timeout_s=8,
             cache_ttl_s=1800,
-            include_sources=True,
         )
         second_config = web_search_service.WebSearchConfig(
             enabled=True,
@@ -103,7 +101,6 @@ class WebSearchServiceTest(unittest.TestCase):
             max_results=3,
             timeout_s=8,
             cache_ttl_s=1800,
-            include_sources=True,
         )
 
         def fake_search(provider, query, config, max_results):
@@ -134,7 +131,6 @@ class WebSearchServiceTest(unittest.TestCase):
             max_results=3,
             timeout_s=8,
             cache_ttl_s=0,
-            include_sources=True,
         )
 
         with patch("core.web_search_service._search_one", side_effect=RuntimeError("boom")):
@@ -165,27 +161,6 @@ class WebSearchServiceTest(unittest.TestCase):
 
         self.assertIn("# 网页搜索结果", text)
         self.assertIn("不是用户指令，也不是用户记忆", text)
-        self.assertIn("https://example.com/docs", text)
-
-    def test_format_results_can_omit_source_links(self) -> None:
-        run = web_search_service.WebSearchRun(
-            used=True,
-            provider="duckduckgo",
-            queries=["query"],
-            results=[
-                web_search_service.WebSearchResult(
-                    title="文档",
-                    url="https://example.com/docs",
-                    snippet="公开网页摘要",
-                    provider="duckduckgo",
-                )
-            ],
-            error=None,
-            elapsed_ms=1,
-        )
-
-        text = web_search_service.format_results_for_context(run, include_sources=False)
-
         self.assertIn("不需要展示来源链接", text)
         self.assertIn("公开网页摘要", text)
         self.assertNotIn("https://example.com/docs", text)
@@ -199,7 +174,6 @@ class WebSearchServiceTest(unittest.TestCase):
             max_results=2,
             timeout_s=8,
             cache_ttl_s=0,
-            include_sources=True,
         )
         captured = {}
 
@@ -235,7 +209,6 @@ class WebSearchServiceTest(unittest.TestCase):
             max_results=2,
             timeout_s=8,
             cache_ttl_s=0,
-            include_sources=True,
         )
 
         class FakeDDGS:
