@@ -146,22 +146,20 @@ function ReflectionQueueCard({
       <PanelHeader title="待整理线索" />
       <div className={styles.itemList}>
         {hasQueue ? (
-          <>
-            <div className={styles.queueRows}>
-              <QueueRow
-                label="公开记录"
-                count={globalCount}
-                detail={formatDateScope(globalReflection?.scope_start, globalReflection?.scope_end)}
-              />
-              <QueueRow label="人格回应" count={soulCount} detail={formatSoulScope(soulReflections)} />
-            </div>
-            <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
-              查看
-            </button>
-          </>
+          <div className={styles.queueRows}>
+            <QueueRow
+              label="公开记录"
+              count={globalCount}
+              detail={formatDateScope(globalReflection?.scope_start, globalReflection?.scope_end)}
+            />
+            <QueueRow label="人格回应" count={soulCount} detail={formatSoulScope(soulReflections)} />
+          </div>
         ) : (
           <p className={styles.empty}>没有待整理线索</p>
         )}
+        <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
+          查看
+        </button>
       </div>
     </section>
   )
