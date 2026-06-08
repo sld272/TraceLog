@@ -14,6 +14,7 @@ import { ImageGrid } from '@/components/ImageGrid'
 import { ImageUploader } from '@/components/ImageUploader'
 import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
+import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './WorkspacePages.module.css'
 
@@ -421,6 +422,13 @@ function MessageBubble({
     <article className={`${styles.message} ${isUser ? styles.messageUser : styles.messageAssistant}`}>
       <div className={styles.messageHeader}>
         <span className={styles.messageRole}>{isUser ? '我' : soulName}</span>
+        <time
+          className={styles.messageTime}
+          dateTime={formatDateTimeAttribute(message.created_at)}
+          title={formatAbsoluteTime(message.created_at)}
+        >
+          {formatSmartTime(message.created_at)}
+        </time>
         {isPersisted && editDraft === null && (
           <div className={styles.messageActions}>
             {isUser ? (

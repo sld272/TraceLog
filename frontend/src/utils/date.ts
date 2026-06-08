@@ -1,18 +1,57 @@
-/** 格式化相对时间（刚刚、N分钟前、N小时前等） */
-export function formatRelativeTime(ts: string): string {
-  const date = new Date(ts)
-  const now = new Date()
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+
+/** 格式化动态时间（刚刚、今天 HH:mm、M月D日 HH:mm 等） */
+export function formatSmartTime(value: string | number, now = new Date()): string {
+  const date = parseDateValue(value)
+  if (!date) return '-'
+
   const diffMs = now.getTime() - date.getTime()
   const diffMin = Math.floor(diffMs / 60000)
-  const diffHour = Math.floor(diffMs / 3600000)
-  const diffDay = Math.floor(diffMs / 86400000)
-
   if (diffMin < 1) return '刚刚'
   if (diffMin < 60) return `${diffMin} 分钟前`
-  if (diffHour < 24) return `${diffHour} 小时前`
-  if (diffDay < 7) return `${diffDay} 天前`
 
-  return date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  const dayDiff = getCalendarDayDiff(date, now)
+  if (dayDiff === 0) return `今天 ${formatClock(date)}`
+  if (dayDiff === 1) return `昨天 ${formatClock(date)}`
+  if (dayDiff > 1 && dayDiff < 7) return `${WEEKDAYS[date.getDay()]} ${formatClock(date)}`
+
+  if (date.getFullYear() === now.getFullYear()) {
+    return `${date.getMonth() + 1}月${date.getDate()}日 ${formatClock(date)}`
+  }
+
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
+}
+
+/** 格式化绝对时间，用于悬停提示 */
+export function formatAbsoluteTime(value: string | number): string {
+  const date = parseDateValue(value)
+  if (!date) return '-'
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${formatClock(date)}:${pad2(date.getSeconds())}`
+}
+
+/** 格式化 time.dateTime 属性 */
+export function formatDateTimeAttribute(value: string | number): string {
+  const date = parseDateValue(value)
+  return date?.toISOString() ?? ''
+}
+
+function parseDateValue(value: string | number): Date | null {
+  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatClock(date: Date): string {
+  return `${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0')
+}
+
+function getCalendarDayDiff(date: Date, now: Date): number {
+  const dateUtc = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate())
+  const nowUtc = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.floor((nowUtc - dateUtc) / 86400000)
 }
 
 /** 格式化日期（月日格式） */

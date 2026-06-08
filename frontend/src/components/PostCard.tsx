@@ -10,7 +10,7 @@ import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
 import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, StarIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
-import { formatRelativeTime } from '@/utils/date'
+import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './PostCard.module.css'
 
@@ -48,7 +48,7 @@ export function PostCard({
   onDeleteComment,
   onRerunComment,
 }: PostCardProps) {
-  const timeAgo = formatRelativeTime(post.ts)
+  const timeAgo = formatSmartTime(post.ts)
 
   return (
     <article className={styles.card}>
@@ -57,7 +57,7 @@ export function PostCard({
           <span className={styles.userAvatar}>我</span>
           <div>
             <span className={styles.userName}>你</span>
-            <time className={styles.time} dateTime={post.ts} title={post.ts}>
+            <time className={styles.time} dateTime={formatDateTimeAttribute(post.ts)} title={formatAbsoluteTime(post.ts)}>
               {timeAgo}
             </time>
           </div>
@@ -182,6 +182,13 @@ function CommentPreview({
         <div className={styles.commentBody}>
           <div className={styles.commentHeader}>
             <span className={styles.soulName}>{soulName}</span>
+            <time
+              className={styles.commentTime}
+              dateTime={formatDateTimeAttribute(comment.created_at)}
+              title={formatAbsoluteTime(comment.created_at)}
+            >
+              {formatSmartTime(comment.created_at)}
+            </time>
             <div className={styles.messageActions}>
               {regeneratedCommentId === comment.id && <span className={styles.messageMarker}>已重新生成</span>}
               {canRerunRoot && onRerun && (
@@ -298,6 +305,13 @@ function ThreadMessage({
     <div className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
       <div className={styles.threadHeader}>
         <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
+        <time
+          className={styles.threadTime}
+          dateTime={formatDateTimeAttribute(message.created_at)}
+          title={formatAbsoluteTime(message.created_at)}
+        >
+          {formatSmartTime(message.created_at)}
+        </time>
         <div className={styles.threadActionRow}>
           {regenerated && <span className={styles.threadMarker}>已重新生成</span>}
           {isPersisted && isLatest && message.role === 'assistant' && onRerun && (

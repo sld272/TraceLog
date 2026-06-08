@@ -180,6 +180,14 @@
   line-height: 20px;
 }
 
+.commentTime {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 20px;
+  white-space: nowrap;
+}
+
 .commentText {
   color: var(--color-text-primary);
   font-size: var(--text-sm);
@@ -314,6 +322,15 @@
   font-weight: 700;
   line-height: 20px;
   opacity: 0.68;
+}
+
+.threadTime {
+  flex-shrink: 0;
+  color: inherit;
+  font-size: var(--text-xs);
+  line-height: 20px;
+  opacity: 0.68;
+  white-space: nowrap;
 }
 
 .threadActionRow {
