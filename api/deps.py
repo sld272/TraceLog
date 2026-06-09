@@ -10,7 +10,7 @@ from openai import OpenAI
 from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
-from core import db, logging_service, record_service, vectorstore, workspace_service
+from core import db, logging_service, record_service, vector_index_service, vectorstore, workspace_service
 from core.app_services import job_service
 from core.app_services.api_runtime import ApiRuntime, JobWorker
 from core.cli.config import CONFIG_FILE, normalize_vision_config, normalize_web_search_config
@@ -104,10 +104,14 @@ def _start_configured_runtime(config: dict) -> ApiRuntime:
             config.get("embedding_api_key"),
         )
         vectorstore_initialized = True
-        if init_result.indexed_count == 0:
-            record_service.reindex_all_vector_docs()
-        else:
-            record_service.retry_pending_vector_docs()
+        vector_index_service.ensure_collection(
+            collection_name=init_result.collection_name,
+            embedding_config_hash=vectorstore.current_embedding_config_hash() or "",
+            embedding_model=config["embedding_model"],
+            embedding_base_url=config.get("embedding_base_url") or config["base_url"],
+        )
+        record_service.reindex_all_vector_docs()
+        record_service.retry_pending_vector_docs()
     except vectorstore.VectorStoreInitError as exc:
         logging_service.log_event("vectorstore_init_failed", level="ERROR", error=str(exc))
 

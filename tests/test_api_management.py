@@ -296,6 +296,8 @@ class ApiManagementTest(unittest.TestCase):
         self.assertGreaterEqual(status["counts"]["souls"], 1)
         self.assertIn("vision_cache", status["counts"])
         self.assertIn("web_search", status)
+        self.assertIn("vector_index", status)
+        self.assertIn("source_revision", status["vector_index"])
 
     def test_todo_routes_list_and_patch_status(self) -> None:
         db.execute(

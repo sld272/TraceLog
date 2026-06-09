@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from api import deps
 from api.deps import run_sync
-from core import db, vision_service, web_search_service
+from core import db, vector_index_service, vectorstore, vision_service, web_search_service
 from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
@@ -202,6 +202,7 @@ def _workspace_status() -> dict[str, Any]:
             "vision_cache": _count_table("vision_cache"),
         },
         "web_search": web_search_service.configured_status(_load_config_file()),
+        "vector_index": _vector_index_status(),
         "logs": {
             "current_log_path": str(current_log),
             "current_log_exists": current_log.exists(),
@@ -209,6 +210,21 @@ def _workspace_status() -> dict[str, Any]:
             "history_dir": str(history_dir),
             "history_count": len(list(history_dir.glob("*.jsonl"))) if history_dir.exists() else 0,
         },
+    }
+
+
+def _vector_index_status() -> dict[str, Any]:
+    state = vector_index_service.current_collection_state()
+    return {
+        "collection_name": vectorstore.current_collection_name(),
+        "embedding_config_hash": vectorstore.current_embedding_config_hash(),
+        "source_revision": vector_index_service.current_source_revision(),
+        "synced_revision": state.synced_revision if state is not None else 0,
+        "ready": state.query_ready if state is not None else False,
+        "pending_count": state.pending_count if state is not None else 0,
+        "failed_count": state.failed_count if state is not None else 0,
+        "missing_count": state.missing_count if state is not None else 0,
+        "stale_count": state.stale_count if state is not None else 0,
     }
 
 

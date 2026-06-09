@@ -35,12 +35,16 @@ class VectorStoreTest(unittest.TestCase):
         logging_service.init_logging({"enabled": True})
         self.old_collection = vectorstore._collection
         self.old_embedding_diagnostics = vectorstore._embedding_diagnostics
+        self.old_collection_name = vectorstore._collection_name
+        self.old_embedding_config_hash = vectorstore._embedding_config_hash
 
     def tearDown(self) -> None:
         logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         vectorstore._collection = self.old_collection
         vectorstore._embedding_diagnostics = self.old_embedding_diagnostics
+        vectorstore._collection_name = self.old_collection_name
+        vectorstore._embedding_config_hash = self.old_embedding_config_hash
         self.tmp.cleanup()
 
     def test_init_failure_raises_without_exiting_process(self) -> None:
@@ -161,7 +165,8 @@ class VectorStoreTest(unittest.TestCase):
             {"ids": [["p-1", "p-2"]], "distances": [[0.2, 0.7]]}
         )
 
-        hits = vectorstore.query_post_hits("焦虑", n_results=20)
+        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=True):
+            hits = vectorstore.query_post_hits("焦虑", n_results=20)
 
         self.assertEqual(
             [
@@ -177,7 +182,8 @@ class VectorStoreTest(unittest.TestCase):
             fail_with_include=True,
         )
 
-        hits = vectorstore.query_post_hits("焦虑", n_results=20)
+        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=True):
+            hits = vectorstore.query_post_hits("焦虑", n_results=20)
 
         self.assertEqual(
             [
@@ -186,6 +192,16 @@ class VectorStoreTest(unittest.TestCase):
             ],
             hits,
         )
+
+    def test_query_documents_skips_vector_search_when_collection_not_ready(self) -> None:
+        vectorstore._collection = FakeCollection(
+            {"ids": [["p-1"]], "distances": [[0.2]]}
+        )
+
+        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=False):
+            hits = vectorstore.query_documents("焦虑", n_results=20)
+
+        self.assertEqual([], hits)
 
     def test_query_post_hits_logs_when_query_fails_after_fallback(self) -> None:
         class FailingCollection:
@@ -202,7 +218,8 @@ class VectorStoreTest(unittest.TestCase):
             "embedding_base_url_source": "base_url",
         }
 
-        hits = vectorstore.query_post_hits("焦虑", n_results=20)
+        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=True):
+            hits = vectorstore.query_post_hits("焦虑", n_results=20)
         event = self._last_log_event("vector_query_failed")
 
         self.assertEqual([], hits)
@@ -216,7 +233,8 @@ class VectorStoreTest(unittest.TestCase):
             {"ids": [["p-1", "p-2"]], "distances": [[0.2, 0.7]]}
         )
 
-        self.assertEqual(["p-1", "p-2"], vectorstore.query_post_ids("焦虑", n_results=20))
+        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=True):
+            self.assertEqual(["p-1", "p-2"], vectorstore.query_post_ids("焦虑", n_results=20))
 
     def _last_log_event(self, event_name: str) -> dict:
         log_path = self.workspace / "logs" / "current.jsonl"

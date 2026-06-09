@@ -319,6 +319,17 @@ export interface WorkspaceStatus {
     vision_cache: number
   }
   web_search: ModelSettings['web_search']
+  vector_index: {
+    collection_name: string | null
+    embedding_config_hash: string | null
+    source_revision: number
+    synced_revision: number
+    ready: boolean
+    pending_count: number
+    failed_count: number
+    missing_count: number
+    stale_count: number
+  }
   logs: {
     current_log_path: string
     current_log_exists: boolean

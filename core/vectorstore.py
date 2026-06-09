@@ -12,6 +12,8 @@ from core import db, logging_service
 
 _collection = None
 _embedding_diagnostics: dict | None = None
+_collection_name: str | None = None
+_embedding_config_hash: str | None = None
 BASE_DIR = str(db.BASE_DIR)
 CHROMA_DB_DIR = str(db.WORKSPACE_DIR / "chroma_db")
 
@@ -49,6 +51,14 @@ def is_initialized() -> bool:
     return _collection is not None
 
 
+def current_collection_name() -> str | None:
+    return _collection_name if _collection is not None else None
+
+
+def current_embedding_config_hash() -> str | None:
+    return _embedding_config_hash if _collection is not None else None
+
+
 def indexed_count() -> int:
     if _collection is None:
         return 0
@@ -66,7 +76,7 @@ def init_vectorstore(
     embedding_api_key: str | None = None,
 ) -> VectorStoreInitResult:
     """初始化 ChromaDB 向量存储。失败时抛异常，由调用层决定如何处理。"""
-    global _collection, _embedding_diagnostics
+    global _collection, _embedding_diagnostics, _collection_name, _embedding_config_hash
     embedding_base_url_source = "embedding_base_url" if embedding_base_url else "base_url"
     embedding_api_key_source = "embedding_api_key" if embedding_api_key else "api_key"
     actual_api_key = embedding_api_key or api_key
@@ -112,9 +122,13 @@ def init_vectorstore(
         )
     except Exception as e:
         _collection = None
+        _collection_name = None
+        _embedding_config_hash = None
         error_fields = _external_api_error_fields(e, diagnostics)
         logging_service.log_event("external_api_error", level="ERROR", **error_fields)
         raise VectorStoreInitError(_format_diagnostic_message(error_fields)) from e
+    _collection_name = collection_name
+    _embedding_config_hash = embedding_config_hash
     return VectorStoreInitResult(
         collection_name=collection_name,
         indexed_count=int(_collection.count()),
@@ -124,7 +138,7 @@ def init_vectorstore(
 
 def index_post(post_id: str, content: str):
     """将帖子正文写入向量索引。"""
-    _index_document(
+    index_document(
         doc_id=f"post-{post_id}",
         content=content,
         metadata={"type": "post", "post_id": post_id},
@@ -133,7 +147,7 @@ def index_post(post_id: str, content: str):
 
 def index_post_vision(post_id: str, content: str, attachment_ids: list[str]) -> None:
     """Index visual understanding for one public post as a related retrieval doc."""
-    _index_document(
+    index_document(
         doc_id=f"post-vision-{post_id}",
         content=content,
         metadata={
@@ -146,7 +160,7 @@ def index_post_vision(post_id: str, content: str, attachment_ids: list[str]) -> 
 
 def index_comment(comment_id: int, post_id: str, soul_name: str, role: str, seq: int, content: str) -> None:
     """Index one public comment or comment follow-up message."""
-    _index_document(
+    index_document(
         doc_id=f"comment-{comment_id}",
         content=content,
         metadata={
@@ -162,7 +176,7 @@ def index_comment(comment_id: int, post_id: str, soul_name: str, role: str, seq:
 
 def index_chat_message(message_id: int, thread_id: int, soul_name: str, role: str, content: str) -> None:
     """Index one private chat message."""
-    _index_document(
+    index_document(
         doc_id=f"chat-{message_id}",
         content=content,
         metadata={
@@ -190,7 +204,31 @@ def delete_documents(doc_ids: list[str]) -> None:
     _collection.delete(ids=ids)
 
 
-def _index_document(doc_id: str, content: str, metadata: dict) -> None:
+def list_document_ids() -> list[str]:
+    """Return document ids currently present in the active vector collection."""
+    return list(list_document_records().keys())
+
+
+def list_document_records() -> dict[str, dict]:
+    """Return ids and metadata currently present in the active vector collection."""
+    if _collection is None:
+        return {}
+    try:
+        result = _collection.get(include=["metadatas"])
+    except Exception:
+        result = _collection.get()
+    ids = result.get("ids") if isinstance(result, dict) else []
+    metadatas = result.get("metadatas") if isinstance(result, dict) else []
+    records: dict[str, dict] = {}
+    for index, doc_id in enumerate(ids or []):
+        if not isinstance(doc_id, str) or not doc_id.strip():
+            continue
+        raw_metadata = metadatas[index] if isinstance(metadatas, list) and index < len(metadatas) else None
+        records[doc_id] = raw_metadata if isinstance(raw_metadata, dict) else {}
+    return records
+
+
+def index_document(doc_id: str, content: str, metadata: dict) -> None:
     if _collection is None:
         return
     body = content.strip()
@@ -229,6 +267,19 @@ def query_documents(
 ) -> list[VectorDocHit]:
     """Semantic search over all TraceLog vector documents."""
     if _collection is None:
+        return []
+    try:
+        from core import vector_index_service
+
+        if not vector_index_service.is_current_collection_query_ready():
+            logging_service.log_event(
+                "vector_query_skipped",
+                level="INFO",
+                reason="vector_index_not_ready",
+                collection_name=current_collection_name(),
+            )
+            return []
+    except Exception:
         return []
     try:
         count = _collection.count()

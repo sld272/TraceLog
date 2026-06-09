@@ -4,10 +4,11 @@ import tempfile
 import unittest
 import io
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
-from core import attachment_service, db, query_rewriter, record_service, retrieval, tool_config_service
+from core import attachment_service, db, query_rewriter, retrieval, tool_config_service, vector_index_service
 from core.app_services import event_service, job_service, public_post_pipeline
 from tests.helpers import require_not_none
 
@@ -15,12 +16,24 @@ from tests.helpers import require_not_none
 class FakeVectorStore:
     def __init__(self) -> None:
         self.indexed: list[tuple[str, str]] = []
+        self.document_records: dict[str, dict] = {}
 
     def is_initialized(self) -> bool:
         return True
 
-    def index_post(self, post_id: str, content: str) -> None:
-        self.indexed.append((post_id, content))
+    def current_collection_name(self) -> str:
+        return "tracelog_test"
+
+    def index_document(self, doc_id: str, content: str, metadata: dict) -> None:
+        self.indexed.append((str(metadata.get("post_id") or doc_id), content))
+        self.document_records[doc_id] = dict(metadata)
+
+    def delete_documents(self, doc_ids: list[str]) -> None:
+        for doc_id in doc_ids:
+            self.document_records.pop(doc_id, None)
+
+    def list_document_records(self) -> dict[str, dict]:
+        return {doc_id: dict(metadata) for doc_id, metadata in self.document_records.items()}
 
 
 class PublicPostPipelineTest(unittest.TestCase):
@@ -29,17 +42,21 @@ class PublicPostPipelineTest(unittest.TestCase):
         self.workspace = Path(self.tmp.name) / "workspace"
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_vectorstore = record_service._vectorstore
         self.old_rewrite = query_rewriter.rewrite_query
         self.old_search = retrieval.hybrid_search
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         db.init_db()
+        vector_index_service.ensure_collection(
+            collection_name="tracelog_test",
+            embedding_config_hash="hash",
+            embedding_model="embedding",
+            embedding_base_url="https://example.invalid/v1",
+        )
 
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        record_service._vectorstore = self.old_vectorstore
         query_rewriter.rewrite_query = self.old_rewrite
         retrieval.hybrid_search = self.old_search
         self.tmp.cleanup()
@@ -85,11 +102,17 @@ class PublicPostPipelineTest(unittest.TestCase):
 
     def test_index_post_embedding_job_indexes_and_emits_events(self) -> None:
         fake_vectorstore = FakeVectorStore()
-        record_service._vectorstore = lambda: fake_vectorstore
         created = public_post_pipeline.create_post("今天想练歌")
         job = require_not_none(job_service.claim_next_pending())
 
-        public_post_pipeline.execute_job(job, client=None, model="fake")  # type: ignore[arg-type]
+        with (
+            patch("core.vectorstore.is_initialized", fake_vectorstore.is_initialized),
+            patch("core.vectorstore.current_collection_name", fake_vectorstore.current_collection_name),
+            patch("core.vectorstore.index_document", fake_vectorstore.index_document),
+            patch("core.vectorstore.delete_documents", fake_vectorstore.delete_documents),
+            patch("core.vectorstore.list_document_records", fake_vectorstore.list_document_records),
+        ):
+            public_post_pipeline.execute_job(job, client=None, model="fake")  # type: ignore[arg-type]
 
         self.assertEqual([(created.post_id, "今天想练歌")], fake_vectorstore.indexed)
         self.assertEqual(

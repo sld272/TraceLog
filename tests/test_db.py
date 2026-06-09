@@ -65,6 +65,11 @@ class DbTest(unittest.TestCase):
         self.assertEqual("1", version["value"])
         self.assertIn("jobs", tables)
         self.assertIn("post_events", tables)
+        self.assertIn("vector_docs", tables)
+        self.assertIn("vector_doc_tombstones", tables)
+        self.assertIn("vector_index_collections", tables)
+        self.assertIn("vector_index_items", tables)
+        self.assertIn("vector_outbox", tables)
 
     def test_message_mutation_marker_columns_exist(self) -> None:
         comment_columns = {row["name"] for row in db.query_all("PRAGMA table_info(comments)")}

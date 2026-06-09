@@ -322,3 +322,73 @@ CREATE TABLE IF NOT EXISTS post_events (
 
 CREATE INDEX IF NOT EXISTS idx_post_events_post_id
     ON post_events(post_id, id);
+
+CREATE TABLE IF NOT EXISTS vector_docs (
+    doc_id          TEXT PRIMARY KEY,
+    doc_type        TEXT NOT NULL,
+    source_table    TEXT NOT NULL,
+    source_id       TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    metadata_json   TEXT NOT NULL,
+    source_revision INTEGER NOT NULL,
+    updated_at      REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_docs_revision
+    ON vector_docs(source_revision);
+CREATE INDEX IF NOT EXISTS idx_vector_docs_source
+    ON vector_docs(source_table, source_id);
+
+CREATE TABLE IF NOT EXISTS vector_doc_tombstones (
+    doc_id            TEXT PRIMARY KEY,
+    deleted_revision  INTEGER NOT NULL,
+    deleted_at        REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_doc_tombstones_revision
+    ON vector_doc_tombstones(deleted_revision);
+
+CREATE TABLE IF NOT EXISTS vector_index_collections (
+    collection_name       TEXT PRIMARY KEY,
+    embedding_config_hash TEXT NOT NULL,
+    embedding_model       TEXT NOT NULL,
+    embedding_base_url    TEXT NOT NULL,
+    synced_revision       INTEGER NOT NULL DEFAULT 0,
+    ready                 INTEGER NOT NULL DEFAULT 0,
+    last_audited_at       REAL,
+    audit_status          TEXT NOT NULL DEFAULT 'unknown',
+    updated_at            REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS vector_index_items (
+    collection_name TEXT NOT NULL REFERENCES vector_index_collections(collection_name) ON DELETE CASCADE,
+    doc_id          TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    source_revision INTEGER NOT NULL,
+    indexed_at      REAL NOT NULL,
+    PRIMARY KEY (collection_name, doc_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_index_items_doc
+    ON vector_index_items(doc_id);
+
+CREATE TABLE IF NOT EXISTS vector_outbox (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection_name TEXT NOT NULL REFERENCES vector_index_collections(collection_name) ON DELETE CASCADE,
+    doc_id          TEXT NOT NULL,
+    op              TEXT NOT NULL CHECK(op IN ('upsert', 'delete')),
+    target_hash     TEXT,
+    source_revision INTEGER NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'succeeded', 'failed')),
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    error           TEXT,
+    created_at      REAL NOT NULL,
+    updated_at      REAL NOT NULL,
+    finished_at     REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_vector_outbox_collection_status
+    ON vector_outbox(collection_name, status, id);
+CREATE INDEX IF NOT EXISTS idx_vector_outbox_doc_status
+    ON vector_outbox(collection_name, doc_id, status);

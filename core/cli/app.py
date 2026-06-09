@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from core import context_builder, logging_service, query_rewriter, record_service, reply_service, retrieval, todo_service, tool_config_service
+from core import context_builder, logging_service, query_rewriter, record_service, reply_service, retrieval, todo_service, tool_config_service, vector_index_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
 from core.cli.config import load_config
@@ -54,14 +54,16 @@ def main() -> None:
             path=vector_result.path,
         )
         print(f"[向量存储] 初始化成功，已索引 {vector_result.indexed_count} 篇帖子。")
-        if vector_result.indexed_count == 0:
-            reindexed_vector_docs = record_service.reindex_all_vector_docs()
-            if reindexed_vector_docs:
-                print(f"[向量存储] 已重建 {reindexed_vector_docs} 条向量文档。")
-        else:
-            fixed_vector_docs = record_service.retry_pending_vector_docs()
-            if fixed_vector_docs:
-                print(f"[向量存储] 已补齐 {fixed_vector_docs} 条待索引向量文档。")
+        vector_index_service.ensure_collection(
+            collection_name=vector_result.collection_name,
+            embedding_config_hash=vectorstore.current_embedding_config_hash() or "",
+            embedding_model=config["embedding_model"],
+            embedding_base_url=config.get("embedding_base_url") or config["base_url"],
+        )
+        reindexed_vector_docs = record_service.reindex_all_vector_docs()
+        fixed_vector_docs = record_service.retry_pending_vector_docs()
+        if reindexed_vector_docs or fixed_vector_docs:
+            print(f"[向量存储] 已同步 {reindexed_vector_docs + fixed_vector_docs} 条向量任务。")
         fixed_reflections = reflector.retry_pending_light_reflections(client, model)
         if fixed_reflections:
             print(f"[反思] 已处理 {fixed_reflections} 条待反思记录。")

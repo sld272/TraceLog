@@ -711,6 +711,30 @@ function DataSettingsPanel({ status }: { status: WorkspaceStatus | null }) {
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
+            <h2 className={styles.sectionTitle}>向量索引</h2>
+            <p className={styles.sectionMeta}>ChromaDB 派生索引与 SQLite 事实源的同步状态。</p>
+          </div>
+          <StatusPill ok={status.vector_index.ready} label={status.vector_index.ready ? '已同步' : '待同步'} />
+        </div>
+        <div className={styles.sectionBodyStack}>
+          <div className={styles.statGrid}>
+            <Stat label="源版本" value={status.vector_index.source_revision} />
+            <Stat label="已同步版本" value={status.vector_index.synced_revision} />
+            <Stat label="待处理" value={status.vector_index.pending_count} />
+            <Stat label="失败" value={status.vector_index.failed_count} />
+            <Stat label="缺失" value={status.vector_index.missing_count} />
+            <Stat label="滞后" value={status.vector_index.stale_count} />
+          </div>
+          <div className={styles.pathGrid}>
+            <PathRow label="Collection" value={status.vector_index.collection_name ?? '未初始化'} />
+            <PathRow label="Embedding 指纹" value={status.vector_index.embedding_config_hash ?? '未初始化'} />
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
             <h2 className={styles.sectionTitle}>存储</h2>
             <p className={styles.sectionMeta}>本地数据库当前占用。</p>
           </div>
