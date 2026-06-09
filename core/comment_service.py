@@ -483,10 +483,10 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
         },
     )
     if data is None:
-        raise RuntimeError("comment rerun failed")
+        return _mark_existing_assistant_failed(message, "comment rerun failed")
     reply = data.get("reply")
     if not isinstance(reply, str) or not reply.strip():
-        raise RuntimeError("comment rerun returned empty reply")
+        return _mark_existing_assistant_failed(message, "comment rerun returned empty reply")
 
     now = db.now_ts()
     metadata = {"status": "ok", "model": model, "rerun": True}
@@ -509,6 +509,27 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
         updated.seq,
         updated.content,
     )
+    return {
+        "message": updated,
+        "conversation": get_conversation(updated.post_id, updated.soul_name),
+        "messages": list_conversation_messages(updated.post_id, updated.soul_name),
+    }
+
+
+def _mark_existing_assistant_failed(message: CommentMessage, error: str) -> dict:
+    now = db.now_ts()
+    metadata = {"status": "failed", "error": error, "rerun": True}
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            UPDATE comments
+            SET content = '', metadata = ?, rerun_at = ?
+            WHERE id = ?
+            """,
+            (json.dumps(metadata, ensure_ascii=False), now, message.id),
+        )
+
+    updated = get_message(message.id)
     return {
         "message": updated,
         "conversation": get_conversation(updated.post_id, updated.soul_name),

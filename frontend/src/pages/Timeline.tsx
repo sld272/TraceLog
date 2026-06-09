@@ -305,9 +305,9 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
       // Also refresh post detail to get updated comment list
       await refreshPostDetail(postId)
       showRegeneratedComment(response.message.id)
-    } catch (err) {
+    } catch {
       setPostCommentConversations(previousConversations)
-      setError(err instanceof Error ? err.message : '重跑失败')
+      await refreshPostDetail(postId)
     } finally {
       setBusyCommentId(null)
     }
@@ -573,6 +573,7 @@ function withPendingCommentMessage(
       {
         ...targetMessage,
         content: '',
+        metadata: null,
         rerun_at: rerunAt,
         attachments: [],
       },

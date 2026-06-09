@@ -300,6 +300,22 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("重试后的回复", messages[-1].content)
         self.assertEqual("ok", json.loads(messages[-1].metadata or "{}")["status"])
 
+    def test_rerun_failed_assistant_comment_keeps_failure_on_same_message(self) -> None:
+        with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
+            result = comment_service.call_comment_reply("20260525-001", "默认", "这句先记下", FakeClient(), "fake-model")
+        self.assertIsNotNone(result.assistant_message_id)
+
+        with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
+            rerun = comment_service.rerun_latest_assistant_message(result.assistant_message_id, FakeClient(), "fake-model")
+
+        message = rerun["message"]
+        metadata = json.loads(message.metadata or "{}")
+        self.assertEqual(result.assistant_message_id, message.id)
+        self.assertEqual("", message.content)
+        self.assertEqual("failed", metadata["status"])
+        self.assertEqual("comment rerun failed", metadata["error"])
+        self.assertIsNotNone(message.rerun_at)
+
     def test_delete_assistant_comment_is_rejected(self) -> None:
         comment_service.append_comment("20260525-001", "默认", "user", "继续聊")
         comment_service.append_comment("20260525-001", "默认", "assistant", "继续聊的回复")
