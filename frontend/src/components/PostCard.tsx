@@ -152,7 +152,7 @@ function PipelineNotice({
           <summary>诊断信息</summary>
           <div className={styles.pipelineDiagnostics}>
             {failedJobs.map((job) => (
-              <p key={job.id}>{formatPipelineError(job.error, job.type)}</p>
+              <p key={job.id}>{formatPipelineError(job.error)}</p>
             ))}
           </div>
         </details>
@@ -187,24 +187,9 @@ function pipelineFailureTitle(failedJobs: PipelineJobSummary[]): string {
     : '处理失败'
 }
 
-function formatPipelineError(error: PipelineJobSummary['error'], jobType?: string): string {
+function formatPipelineError(error: PipelineJobSummary['error']): string {
   const text = (error ?? '').trim()
-  const hint = pipelineErrorHint(text, jobType)
-  if (!text) return hint
-  return `${hint}\n${text}`
-}
-
-function pipelineErrorHint(error: string, jobType?: string): string {
-  const text = error.toLowerCase()
-  if (
-    jobType === 'generate_post_replies'
-    || text.includes('invalid json')
-    || text.includes('model')
-    || text.includes('llm')
-  ) {
-    return '可能是模型配置或响应格式问题。'
-  }
-  return '处理时遇到错误。'
+  return text || '未知错误'
 }
 function CommentPreview({
   comment,
