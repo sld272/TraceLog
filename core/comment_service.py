@@ -27,7 +27,6 @@ from core.soul_service import SoulContext
 COMMENT_HISTORY_LIMIT = 30
 COMMENT_RELATED_MEMORY_LIMIT = 5
 RETRIEVAL_USER_MESSAGE_LIMIT = 3
-FAILED_COMMENT_REPLY = "这个 SOUL 暂时没有回复成功，稍后可以重试。"
 
 
 @dataclass(frozen=True)
@@ -342,7 +341,6 @@ def call_comment_reply(
             soul_name=soul_name,
             user_message_id=user_message_row.id,
             error=error,
-            fallback_reply=FAILED_COMMENT_REPLY,
         )
         return _failed_result(post_id, soul_name, user_message_row.id, error)
 
@@ -357,7 +355,6 @@ def call_comment_reply(
             soul_name=soul_name,
             user_message_id=user_message_row.id,
             error=error,
-            fallback_reply=FAILED_COMMENT_REPLY,
         )
         return _failed_result(post_id, soul_name, user_message_row.id, error)
 
@@ -512,7 +509,7 @@ def _failed_result(post_id: str, soul_name: str, user_message_id: int, error: st
         post_id=post_id,
         soul_name=soul_name,
         ok=False,
-        reply=FAILED_COMMENT_REPLY,
+        reply="",
         user_message_id=user_message_id,
         assistant_message_id=None,
         error=error,

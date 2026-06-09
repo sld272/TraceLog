@@ -13,9 +13,6 @@ from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 
-FAILED_REPLY = "这个 SOUL 暂时没有回复成功，稍后可以重试。"
-
-
 @dataclass(frozen=True)
 class SoulReplyResult:
     soul_name: str
@@ -89,7 +86,6 @@ def _call_one_soul(
             post_id=post_id,
             soul_name=soul.name,
             error=error,
-            fallback_reply=FAILED_REPLY,
         )
         return _failed_result(soul, error)
 
@@ -103,7 +99,6 @@ def _call_one_soul(
             post_id=post_id,
             soul_name=soul.name,
             error=error,
-            fallback_reply=FAILED_REPLY,
         )
         return _failed_result(soul, error)
 
@@ -120,7 +115,7 @@ def _failed_result(soul: SoulContext, error: str) -> SoulReplyResult:
         soul_name=soul.name,
         sort_order=soul.sort_order,
         ok=False,
-        reply=FAILED_REPLY,
+        reply="",
         error=error,
     )
 
@@ -142,6 +137,8 @@ def _save_comment(post_id: str, result: SoulReplyResult, model: str) -> None:
             (post_id, result.soul_name),
         ).fetchone()
         if existing is None:
+            if not result.ok:
+                return
             cursor = conn.execute(
                 """
                 INSERT INTO comments(post_id, soul_name, role, content, seq, metadata, created_at)

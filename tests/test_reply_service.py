@@ -100,6 +100,24 @@ class ReplyServiceTest(unittest.TestCase):
         self.assertEqual({"status": "ok"}, json.loads(row["metadata"]))
         index_comment.assert_not_called()
 
+    def test_failed_reply_does_not_create_placeholder_root_comment(self) -> None:
+        soul = SoulContext("默认", None, 1, "默认人格", "")
+        built_context = BuiltContext(
+            shared_context="共享上下文",
+            enabled_souls=[soul],
+            relevant_post_ids=[],
+        )
+
+        client = cast(LLMClient, SimpleNamespace(chat=SimpleNamespace()))
+        with patch("core.reply_service.reply_router.call_soul_post_reply", return_value=None):
+            with patch("core.reply_service.record_service.index_comment_embedding") as index_comment:
+                results = reply_service.fanout("p-1", "新的公开 post", client, "fake-model", built_context)
+
+        row = db.query_one("SELECT content, metadata FROM comments WHERE post_id = ? AND soul_name = ? AND seq = 0", ("p-1", "默认"))
+        self.assertFalse(results[0].ok)
+        self.assertIsNone(row)
+        index_comment.assert_not_called()
+
     def test_soul_post_reply_prompt_includes_virtual_friend_boundaries(self) -> None:
         soul = SoulContext("默认", None, 0, "默认人格", "")
         client = FakeClient()

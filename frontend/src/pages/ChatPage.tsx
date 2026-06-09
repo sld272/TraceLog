@@ -60,7 +60,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
       setMessages(detail.messages)
       setEditingMessageId(null)
       setEditDraft('')
-      setFailedReplies({})
+      setFailedReplies(failedRepliesFromMessages(detail.messages))
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
@@ -117,17 +117,22 @@ export function ChatPage({ soulName }: ChatPageProps) {
     try {
       const response = await sendChatMessage(soulName, body, attachments.map((attachment) => attachment.id))
       setThread(response.thread)
-      if (response.result.ok || response.result.assistant_message_id !== null) {
+      if (response.result.ok) {
         setMessages(response.messages)
-        setFailedReplies({})
+        setFailedReplies(failedRepliesFromMessages(response.messages))
       } else {
-        const failedAssistant = failedAssistantMessage(
-          optimisticAssistantId,
-          response.thread.id,
-          createdAt,
-        )
-        setMessages([...response.messages, failedAssistant])
-        setFailedReplies({ [failedAssistant.id]: response.result.error ?? '回复生成失败' })
+        const failedMessages = response.messages.length > 0
+          ? response.messages
+          : [
+              failedAssistantMessage(
+                optimisticAssistantId,
+                response.thread.id,
+                createdAt,
+                response.result.error ?? '回复生成失败',
+              ),
+            ]
+        setMessages(failedMessages)
+        setFailedReplies(failedRepliesFromMessages(failedMessages))
       }
       setError(null)
     } catch (err) {
@@ -197,17 +202,22 @@ export function ChatPage({ soulName }: ChatPageProps) {
         (message.attachments ?? []).map((attachment) => attachment.id),
       )
       setThread(response.thread)
-      if (response.result.ok || response.result.assistant_message_id !== null) {
+      if (response.result.ok) {
         setMessages(response.messages)
-        setFailedReplies({})
+        setFailedReplies(failedRepliesFromMessages(response.messages))
       } else {
-        const failedAssistant = failedAssistantMessage(
-          pendingAssistantId,
-          response.thread.id,
-          Date.now() / 1000,
-        )
-        setMessages([...response.messages, failedAssistant])
-        setFailedReplies({ [failedAssistant.id]: response.result.error ?? '回复生成失败' })
+        const failedMessages = response.messages.length > 0
+          ? response.messages
+          : [
+              failedAssistantMessage(
+                pendingAssistantId,
+                response.thread.id,
+                Date.now() / 1000,
+                response.result.error ?? '回复生成失败',
+              ),
+            ]
+        setMessages(failedMessages)
+        setFailedReplies(failedRepliesFromMessages(failedMessages))
       }
       setError(null)
     } catch (err) {
@@ -287,17 +297,22 @@ export function ChatPage({ soulName }: ChatPageProps) {
         ? await updateChatMessage(userMessage.id, userMessage.content, attachmentIds)
         : await sendChatMessage(soulName, userMessage.content, attachmentIds)
       setThread(response.thread)
-      if (response.result.ok || response.result.assistant_message_id !== null) {
+      if (response.result.ok) {
         setMessages(response.messages)
-        setFailedReplies({})
+        setFailedReplies(failedRepliesFromMessages(response.messages))
       } else {
-        const failedAssistant = failedAssistantMessage(
-          message.id,
-          response.thread.id,
-          Date.now() / 1000,
-        )
-        setMessages([...response.messages, failedAssistant])
-        setFailedReplies({ [failedAssistant.id]: response.result.error ?? '回复生成失败' })
+        const failedMessages = response.messages.length > 0
+          ? response.messages
+          : [
+              failedAssistantMessage(
+                message.id,
+                response.thread.id,
+                Date.now() / 1000,
+                response.result.error ?? '回复生成失败',
+              ),
+            ]
+        setMessages(failedMessages)
+        setFailedReplies(failedRepliesFromMessages(failedMessages))
       }
       setError(null)
     } catch (err) {
@@ -449,13 +464,14 @@ function withPendingReplyAfterUserEdit(
   ]
 }
 
-function failedAssistantMessage(id: number, threadId: number, createdAt: number): ChatMessage {
+function failedAssistantMessage(id: number, threadId: number, createdAt: number, error?: string): ChatMessage {
   return {
     id,
     thread_id: threadId,
     role: 'assistant',
     content: '',
     created_at: createdAt,
+    metadata: error ? JSON.stringify({ status: 'failed', error }) : null,
     attachments: [],
   }
 }
@@ -475,6 +491,28 @@ function withPendingReplyForAssistantRerun(messages: ChatMessage[], rerunMessage
       attachments: [],
     },
   ]
+}
+
+function failedRepliesFromMessages(messages: ChatMessage[]): Record<number, string> {
+  const failures: Record<number, string> = {}
+  for (const message of messages) {
+    const error = failedReplyError(message)
+    if (error) failures[message.id] = error
+  }
+  return failures
+}
+
+function failedReplyError(message: ChatMessage): string | null {
+  if (message.role !== 'assistant' || !message.metadata) return null
+  try {
+    const parsed = JSON.parse(message.metadata) as { status?: unknown; error?: unknown }
+    if (parsed.status !== 'failed') return null
+    return typeof parsed.error === 'string' && parsed.error.trim()
+      ? parsed.error.trim()
+      : '回复生成失败'
+  } catch {
+    return null
+  }
 }
 
 function MessageBubble({
@@ -528,7 +566,7 @@ function MessageBubble({
         >
           {formatSmartTime(message.created_at)}
         </time>
-        {isPersisted && editDraft === null && (
+        {isPersisted && editDraft === null && !isFailedAssistant && (
           <div className={styles.messageActions}>
             {isUser ? (
               <button className={styles.messageAction} onClick={() => onStartEdit(message)} disabled={busy} title="编辑" aria-label="编辑私聊消息">
@@ -593,16 +631,18 @@ function ReplyFailure({
 }) {
   return (
     <div className={styles.replyFailure}>
-      <strong>回复生成失败</strong>
-      <div className={styles.replyFailureActions}>
-        <button className={styles.messageTextAction} onClick={onRetry} disabled={busy}>
-          重试
-        </button>
-        <details className={styles.replyFailureDetails}>
-          <summary>诊断信息</summary>
-          <p>{error || '未知错误'}</p>
-        </details>
+      <div className={styles.replyFailureMain}>
+        <strong>回复生成失败</strong>
+        <div className={styles.replyFailureActions}>
+          <button className={styles.messageTextAction} onClick={onRetry} disabled={busy}>
+            重试
+          </button>
+        </div>
       </div>
+      <details className={styles.replyFailureDetails}>
+        <summary>诊断信息</summary>
+        <p>{error || '未知错误'}</p>
+      </details>
     </div>
   )
 }

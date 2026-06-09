@@ -61,6 +61,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "comments", "rerun_at", "REAL")
     _ensure_column(conn, "chat_messages", "edited_at", "REAL")
     _ensure_column(conn, "chat_messages", "rerun_at", "REAL")
+    _ensure_column(conn, "chat_messages", "metadata", "TEXT")
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

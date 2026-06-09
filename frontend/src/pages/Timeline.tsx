@@ -206,7 +206,9 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
         ...prev,
         [postId]: {
           ...(prev[postId] ?? {}),
-          [soulName]: toConversationState(response.conversation, response.messages),
+          [soulName]: response.result.ok
+            ? toConversationState(response.conversation, response.messages)
+            : failedCommentState(response.conversation, response.messages, response.result.error),
         },
       }))
     } catch (err) {
@@ -436,6 +438,19 @@ function toConversationState(conversation: CommentConversation, messages: Commen
     messages,
     sending: false,
     error: null,
+  }
+}
+
+function failedCommentState(
+  conversation: CommentConversation,
+  messages: CommentMessage[],
+  error: string | null,
+): CommentConversationState {
+  return {
+    conversation,
+    messages,
+    sending: false,
+    error: error || '回复生成失败',
   }
 }
 

@@ -137,6 +137,11 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
             },
             job_id=job_id,
         )
+    failed_results = [result for result in results if not result.ok]
+    if failed_results:
+        names = "、".join(result.soul_name for result in failed_results)
+        first_error = failed_results[0].error or "unknown error"
+        raise RuntimeError(f"reply generation failed for {names}: {first_error}")
 
 
 def _run_todo_tool(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:

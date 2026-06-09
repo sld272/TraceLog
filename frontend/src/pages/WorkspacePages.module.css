@@ -686,13 +686,22 @@
   color: var(--color-text-secondary);
 }
 
+.replyFailureMain {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
 .replyFailure strong {
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+  line-height: 28px;
 }
 
 .replyFailureActions {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);

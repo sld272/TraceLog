@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from core import attachment_service, db, evidence_service, logging_service, profile_service, record_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
 from core.attachment_service import Attachment
@@ -33,6 +34,7 @@ class ChatMessage:
     created_at: float
     edited_at: float | None
     rerun_at: float | None
+    metadata: str | None
     attachments: list[Attachment]
 
 
@@ -57,7 +59,7 @@ class ChatReplyResult:
     error: str | None
 
 
-FAILED_CHAT_REPLY = "这个 SOUL 暂时没有回复成功，稍后可以重试。"
+FAILED_REPLY_CONTENT = ""
 
 
 def list_chat_threads(soul_name: str | None = None) -> list[ChatThread]:
@@ -135,7 +137,7 @@ def list_thread_messages(thread_id: int, limit: int = 30, *, before_message_id: 
     params.append(limit)
     rows = db.query_all(
         f"""
-        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata
         FROM chat_messages
         WHERE thread_id = ?
         {before_clause}
@@ -152,7 +154,7 @@ def list_thread_messages_after(thread_id: int, after_id: int, limit: int = 100) 
     get_thread(thread_id)
     rows = db.query_all(
         """
-        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata
         FROM chat_messages
         WHERE thread_id = ? AND id > ?
         ORDER BY id ASC
@@ -286,7 +288,6 @@ def _call_assistant_reply_for_user_message(
             soul_name=chat_context.thread.soul_name,
             user_message_id=user_message_row.id,
             error=error,
-            fallback_reply=FAILED_CHAT_REPLY,
         )
         return _failed_result(chat_context.thread, user_message_row.id, error)
 
@@ -301,7 +302,6 @@ def _call_assistant_reply_for_user_message(
             soul_name=chat_context.thread.soul_name,
             user_message_id=user_message_row.id,
             error=error,
-            fallback_reply=FAILED_CHAT_REPLY,
         )
         return _failed_result(chat_context.thread, user_message_row.id, error)
 
@@ -323,20 +323,21 @@ def _append_message(
     content: str,
     *,
     attachment_ids: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> ChatMessage:
     thread = get_thread(thread_id)
     body = content.strip()
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
-    if not body and not attachment_ids:
+    if not body and not attachment_ids and not _is_failed_reply_metadata(metadata):
         raise ValueError("私聊消息不能为空")
     now = db.now_ts()
     with db.transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO chat_messages(thread_id, role, content, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO chat_messages(thread_id, role, content, created_at, metadata)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (thread_id, role, body, now),
+            (thread_id, role, body, now, json.dumps(metadata, ensure_ascii=False) if metadata else None),
         )
         message_id = db.require_lastrowid(cursor, "chat message insert")
         conn.execute(
@@ -350,14 +351,15 @@ def _append_message(
     message = get_message(message_id)
     attachment_service.attach_to_chat_message(message.id, attachment_ids)
     message = get_message(message_id)
-    record_service.index_chat_message_embedding(message.id, message.thread_id, thread.soul_name, message.role, message.content)
+    if message.content.strip():
+        record_service.index_chat_message_embedding(message.id, message.thread_id, thread.soul_name, message.role, message.content)
     return message
 
 
 def get_message(message_id: int) -> ChatMessage:
     row = db.query_one(
         """
-        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata
         FROM chat_messages
         WHERE id = ?
         """,
@@ -471,7 +473,7 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
         conn.execute(
             """
             UPDATE chat_messages
-            SET content = ?, rerun_at = ?
+            SET content = ?, metadata = NULL, rerun_at = ?
             WHERE id = ?
             """,
             (reply.strip(), now, message.id),
@@ -596,16 +598,26 @@ def _post_ids_from_hits(hits: list) -> list[str]:
     return post_ids
 
 
+def _is_failed_reply_metadata(metadata: dict | None) -> bool:
+    return isinstance(metadata, dict) and metadata.get("status") == "failed"
+
+
 
 
 def _failed_result(thread: ChatThread, user_message_id: int, error: str) -> ChatReplyResult:
+    assistant_message = _append_message(
+        thread.id,
+        "assistant",
+        FAILED_REPLY_CONTENT,
+        metadata={"status": "failed", "error": error},
+    )
     return ChatReplyResult(
         thread_id=thread.id,
         soul_name=thread.soul_name,
         ok=False,
-        reply=FAILED_CHAT_REPLY,
+        reply=FAILED_REPLY_CONTENT,
         user_message_id=user_message_id,
-        assistant_message_id=None,
+        assistant_message_id=assistant_message.id,
         error=error,
     )
 
@@ -631,6 +643,7 @@ def _message_from_row(row) -> ChatMessage:
         created_at=row["created_at"],
         edited_at=float(row["edited_at"]) if row["edited_at"] is not None else None,
         rerun_at=float(row["rerun_at"]) if row["rerun_at"] is not None else None,
+        metadata=row["metadata"],
         attachments=attachment_service.list_chat_message_attachments(message_id),
     )
 

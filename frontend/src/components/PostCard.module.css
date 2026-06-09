@@ -469,6 +469,7 @@
 
 .threadErrorActions {
   display: inline-flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-2);
@@ -554,15 +555,16 @@
 }
 
 .pipelineDetails {
+  display: block;
+  margin-top: var(--space-2);
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
 }
 
 .pipelineDetails summary {
-  display: inline-flex;
-  align-items: center;
   min-height: 30px;
   cursor: pointer;
+  line-height: 30px;
   white-space: nowrap;
 }
 

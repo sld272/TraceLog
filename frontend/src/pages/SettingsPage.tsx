@@ -766,11 +766,11 @@ function DataSettingsPanel({
             <div className={styles.inlineFailure}>
               <div className={styles.inlineFailureMain}>
                 <strong>记忆检索失败</strong>
-                <details className={styles.inlineDetails}>
-                  <summary>诊断信息</summary>
-                  <p>{vectorError}</p>
-                </details>
               </div>
+              <details className={styles.inlineDetails}>
+                <summary>诊断信息</summary>
+                <p>{vectorError}</p>
+              </details>
             </div>
           )}
           {vectorNeedsAttention && (

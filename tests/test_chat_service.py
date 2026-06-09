@@ -377,6 +377,22 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual(["user", "assistant"], [message.role for message in messages])
         self.assertEqual("先睡一下也行。", messages[-1].content)
 
+    def test_chat_reply_failure_persists_failed_assistant_metadata(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+
+        with patch("core.chat_service.reply_router.call_soul_chat_reply", return_value=None):
+            result = chat_service.call_chat_reply(thread.id, "我好累", FakeClient(), "bad-model")
+
+        messages = chat_service.list_thread_messages(thread.id)
+        self.assertFalse(result.ok)
+        self.assertIsNotNone(result.assistant_message_id)
+        self.assertEqual(["user", "assistant"], [message.role for message in messages])
+        self.assertEqual("", messages[-1].content)
+        self.assertIsNotNone(messages[-1].metadata)
+        metadata = json.loads(messages[-1].metadata or "{}")
+        self.assertEqual("failed", metadata["status"])
+        self.assertEqual("LLM call failed or returned invalid JSON", metadata["error"])
+
     def test_edit_user_message_truncates_later_chat_messages_and_marks_edit(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
         chat_service.call_chat_reply(thread.id, "第一句", FakeClient({"reply": "第一句回复"}), "fake-model")
@@ -564,7 +580,7 @@ class ChatServiceTest(unittest.TestCase):
 
         self.assertIsNone(data)
 
-    def test_chat_reply_failure_preserves_user_message_only(self) -> None:
+    def test_chat_reply_failure_preserves_user_message_and_failed_assistant(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
 
         with patch("core.chat_service.reply_router.call_soul_chat_reply", return_value=None):
@@ -572,8 +588,10 @@ class ChatServiceTest(unittest.TestCase):
         messages = chat_service.list_thread_messages(thread.id)
 
         self.assertFalse(result.ok)
-        self.assertIsNone(result.assistant_message_id)
-        self.assertEqual(["user"], [message.role for message in messages])
+        self.assertIsNotNone(result.assistant_message_id)
+        self.assertEqual(["user", "assistant"], [message.role for message in messages])
+        self.assertEqual("", messages[-1].content)
+        self.assertEqual("failed", json.loads(messages[-1].metadata or "{}")["status"])
 
     def test_private_chat_does_not_write_posts(self) -> None:
         thread = chat_service.get_or_create_thread("默认")

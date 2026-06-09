@@ -139,6 +139,41 @@ class PublicPostPipelineTest(unittest.TestCase):
         self.assertIn("reply_started", event_types)
         self.assertIn("reply_succeeded", event_types)
 
+    def test_reply_job_fails_when_soul_reply_fails(self) -> None:
+        db.execute(
+            """
+            INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+            VALUES (?, ?, 1, 0, ?, ?)
+            """,
+            ("默认", "souls/默认.md", 1.0, 1.0),
+        )
+        soul_dir = self.workspace / "souls"
+        soul_dir.mkdir(parents=True, exist_ok=True)
+        (soul_dir / "默认.md").write_text("默认人格", encoding="utf-8")
+        created = public_post_pipeline.create_post("今天想练歌")
+        first = require_not_none(job_service.claim_next_pending())
+        job_service.mark_succeeded(first["id"])
+        job = require_not_none(job_service.claim_next_pending())
+        query_rewriter.rewrite_query = lambda *args, **kwargs: query_rewriter.RewrittenQuery(
+            raw_query="今天想练歌",
+            semantic_query="今天想练歌",
+            keywords=[],
+            used_rewrite=False,
+        )
+        retrieval.hybrid_search = lambda *args, **kwargs: []
+
+        with self.assertRaisesRegex(RuntimeError, "reply generation failed"):
+            public_post_pipeline.execute_job(job, client=None, model="bad-model")  # type: ignore[arg-type]
+
+        event_types = [event["event_type"] for event in event_service.list_post_events(created.post_id)]
+        self.assertIn("reply_failed", event_types)
+        self.assertIsNone(
+            db.query_one(
+                "SELECT content FROM comments WHERE post_id = ? AND soul_name = ?",
+                (created.post_id, "默认"),
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

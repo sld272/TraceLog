@@ -249,7 +249,8 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     content     TEXT NOT NULL,
     created_at  REAL NOT NULL,
     edited_at   REAL,
-    rerun_at    REAL
+    rerun_at    REAL,
+    metadata    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);

@@ -146,16 +146,16 @@ function PipelineNotice({
                 <span>重试</span>
               </button>
             )}
-            <details className={styles.pipelineDetails}>
-              <summary>诊断信息</summary>
-              <div className={styles.pipelineDiagnostics}>
-                {failedJobs.map((job) => (
-                  <p key={job.id}>{formatPipelineError(job.error)}</p>
-                ))}
-              </div>
-            </details>
           </div>
         </div>
+        <details className={styles.pipelineDetails}>
+          <summary>诊断信息</summary>
+          <div className={styles.pipelineDiagnostics}>
+            {failedJobs.map((job) => (
+              <p key={job.id}>{formatPipelineError(job.error, job.type)}</p>
+            ))}
+          </div>
+        </details>
       </div>
     )
   }
@@ -187,9 +187,24 @@ function pipelineFailureTitle(failedJobs: PipelineJobSummary[]): string {
     : '部分整理失败'
 }
 
-function formatPipelineError(error: PipelineJobSummary['error']): string {
+function formatPipelineError(error: PipelineJobSummary['error'], jobType?: string): string {
   const text = (error ?? '').trim()
-  return text || '未知错误'
+  const hint = pipelineErrorHint(text, jobType)
+  if (!text) return hint
+  return `${hint}\n${text}`
+}
+
+function pipelineErrorHint(error: string, jobType?: string): string {
+  const text = error.toLowerCase()
+  if (
+    jobType === 'generate_post_replies'
+    || text.includes('invalid json')
+    || text.includes('model')
+    || text.includes('llm')
+  ) {
+    return '可能是模型配置或响应格式问题。'
+  }
+  return '处理时遇到错误。'
 }
 function CommentPreview({
   comment,
@@ -388,14 +403,14 @@ function ReplyFailureInline({
               <span>重试</span>
             </button>
           )}
-          <details className={styles.pipelineDetails}>
-            <summary>诊断信息</summary>
-            <div className={styles.pipelineDiagnostics}>
-              <p>{error}</p>
-            </div>
-          </details>
         </div>
       </div>
+      <details className={styles.pipelineDetails}>
+        <summary>诊断信息</summary>
+        <div className={styles.pipelineDiagnostics}>
+          <p>{error}</p>
+        </div>
+      </details>
     </div>
   )
 }
