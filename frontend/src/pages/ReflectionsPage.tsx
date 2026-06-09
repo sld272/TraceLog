@@ -55,6 +55,7 @@ export function ReflectionsPage() {
         souls.map((soul) => listSoulMemoryRevisions(soul.name, 5)),
       )
       const revisions = [...profileRevisions, ...soulRevisionGroups.flat()]
+        .filter(isRevisionOutput)
         .sort((a, b) => {
           const timeDelta = b.created_at - a.created_at
           return timeDelta === 0 ? b.id - a.id : timeDelta
@@ -231,6 +232,12 @@ function formatRevisionTarget(revision: MemoryRevisionSummary): string {
 
 function formatRevisionSource(source: string): string {
   return source === 'user' ? '用户编辑' : 'AI反思'
+}
+
+function isRevisionOutput(revision: MemoryRevisionSummary): boolean {
+  if (revision.source === 'system' || revision.source === 'init') return false
+  if (isRecord(revision.patch) && revision.patch.op === 'init') return false
+  return true
 }
 
 function summarizeRevisionPatch(patch: unknown): string {
