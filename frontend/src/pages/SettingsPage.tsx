@@ -156,10 +156,10 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       setModelSettings(saved)
       setModelForm(formFromModelSettings(saved))
       onModelSettingsChanged?.()
-      if (saved.runtime_reloaded) {
-        setNotice('配置已保存，并已尝试热加载；正在运行的任务可能仍使用旧配置，重启后端后完全一致。')
-      } else if (saved.restart_required) {
-        setNotice(saved.reload_error ? `配置已保存，但热加载失败：${saved.reload_error}` : '配置已保存，重启后端后完全生效。')
+      if (saved.config_reloaded ?? saved.runtime_reloaded) {
+        setNotice('配置已保存，应用已重新加载配置。')
+      } else if (saved.reload_error) {
+        setNotice(`配置已保存，但重新加载失败：${saved.reload_error}。当前仍在使用上一次可用配置。`)
       } else {
         setNotice('配置已保存。')
       }
@@ -300,7 +300,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
 
       {error && <div className={workspaceStyles.notice}>{error}</div>}
       {firstRun && (
-        <div className={workspaceStyles.notice}>首次使用 TraceLog，请先配置主模型和 Embedding。保存后会尝试热加载；如仍提示未配置，请重启后端。</div>
+        <div className={workspaceStyles.notice}>首次使用 TraceLog，请先配置主模型和 Embedding。保存后应用会自动重新加载配置。</div>
       )}
       {notice && <div className={styles.successNotice}>{notice}</div>}
 
@@ -549,7 +549,7 @@ function ModelSettingsPanel({
       </section>
 
       <div className={styles.saveBar}>
-        <span className={styles.saveHint}>保存会写入配置并尝试热加载；重启后端后可确保所有新任务使用最新模型配置。</span>
+        <span className={styles.saveHint}>保存后应用会自动重新加载配置；如果重新加载失败，将继续使用上一次可用配置。</span>
         <button className={workspaceStyles.button} type="submit" disabled={saving}>
           {saving ? '保存中...' : '保存配置'}
         </button>

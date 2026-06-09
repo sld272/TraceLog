@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+from api import deps
 from core.app_services.api_runtime import JobWorker
 
 
@@ -57,6 +58,83 @@ class JobWorkerCleanupTest(unittest.IsolatedAsyncioTestCase):
             await worker._run_orphan_attachment_cleanup()
 
         self.assertEqual(1, calls)
+
+
+class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self) -> None:
+        deps._runtime = None  # type: ignore[attr-defined]
+
+    async def test_reload_keeps_existing_runtime_when_new_runtime_fails(self) -> None:
+        class ExistingWorker:
+            def __init__(self) -> None:
+                self.stopped = False
+
+            async def stop(self) -> None:
+                self.stopped = True
+
+        worker = ExistingWorker()
+        existing_runtime = deps.ApiRuntime(
+            config={"model": "old-model"},
+            client=object(),
+            model="old-model",
+            worker=worker,  # type: ignore[arg-type]
+            vectorstore_initialized=True,
+            configured=True,
+        )
+        deps._runtime = existing_runtime  # type: ignore[attr-defined]
+
+        with (
+            patch("api.deps._load_api_config", return_value={"api_key": "sk", "base_url": "https://example.invalid/v1", "model": "new-model", "embedding_model": "embed"}),
+            patch("api.deps.logging_service.init_logging"),
+            patch("api.deps.workspace_service.init_workspace"),
+            patch("api.deps._is_model_configured", return_value=True),
+            patch("api.deps._start_configured_runtime", side_effect=RuntimeError("reload boom")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "reload boom"):
+                await deps.reload_runtime()
+
+        self.assertIs(existing_runtime, deps._runtime)  # type: ignore[attr-defined]
+        self.assertFalse(worker.stopped)
+
+    async def test_reload_swaps_runtime_after_new_runtime_is_ready(self) -> None:
+        class ExistingWorker:
+            def __init__(self) -> None:
+                self.stopped = False
+
+            async def stop(self) -> None:
+                self.stopped = True
+
+        worker = ExistingWorker()
+        existing_runtime = deps.ApiRuntime(
+            config={"model": "old-model"},
+            client=object(),
+            model="old-model",
+            worker=worker,  # type: ignore[arg-type]
+            vectorstore_initialized=True,
+            configured=True,
+        )
+        new_runtime = deps.ApiRuntime(
+            config={"model": "new-model"},
+            client=object(),
+            model="new-model",
+            worker=None,
+            vectorstore_initialized=True,
+            configured=True,
+        )
+        deps._runtime = existing_runtime  # type: ignore[attr-defined]
+
+        with (
+            patch("api.deps._load_api_config", return_value={"api_key": "sk", "base_url": "https://example.invalid/v1", "model": "new-model", "embedding_model": "embed"}),
+            patch("api.deps.logging_service.init_logging"),
+            patch("api.deps.workspace_service.init_workspace"),
+            patch("api.deps._is_model_configured", return_value=True),
+            patch("api.deps._start_configured_runtime", return_value=new_runtime),
+        ):
+            reloaded = await deps.reload_runtime()
+
+        self.assertIs(new_runtime, reloaded)
+        self.assertIs(new_runtime, deps._runtime)  # type: ignore[attr-defined]
+        self.assertTrue(worker.stopped)
 
 
 if __name__ == "__main__":

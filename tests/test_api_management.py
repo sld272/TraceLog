@@ -272,6 +272,7 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("updated-model", updated["model"])
         self.assertFalse(updated["restart_required"])
         self.assertTrue(updated["runtime_reloaded"])
+        self.assertTrue(updated["config_reloaded"])
         saved = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual("sk-test-secret-123456", saved["api_key"])
         self.assertEqual("https://updated.invalid/v1", saved["base_url"])
@@ -298,6 +299,28 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("web_search", status)
         self.assertIn("vector_index", status)
         self.assertIn("source_revision", status["vector_index"])
+
+    def test_settings_save_reports_reload_failure_without_requiring_restart(self) -> None:
+        with self._client() as client:
+            with patch("api.deps.reload_runtime", side_effect=RuntimeError("reload boom")):
+                response = client.put(
+                    "/settings/model",
+                    json={
+                        "api_key": "",
+                        "base_url": "https://updated.invalid/v1",
+                        "model": "updated-model",
+                        "embedding_model": "updated-embedding",
+                        "reuse_embedding_config": True,
+                        "logging": {"enabled": False, "level": "INFO", "history_retention": 3},
+                    },
+                )
+
+        self.assertEqual(200, response.status_code)
+        payload = response.json()
+        self.assertFalse(payload["config_reloaded"])
+        self.assertFalse(payload["runtime_reloaded"])
+        self.assertFalse(payload["restart_required"])
+        self.assertEqual("reload boom", payload["reload_error"])
 
     def test_todo_routes_list_and_patch_status(self) -> None:
         db.execute(

@@ -72,15 +72,14 @@ async def init_runtime() -> ApiRuntime:
 
 
 async def reload_runtime() -> ApiRuntime:
-    """Reload runtime after settings are saved, starting workers when possible."""
+    """Reload runtime after settings are saved, keeping the previous runtime on failure."""
     global _runtime
-    if _runtime is not None and _runtime.worker is not None:
-        await _runtime.worker.stop()
+    previous_runtime = _runtime
     config = _load_api_config(strict=False)
     logging_service.init_logging(config.get("logging"))
     workspace_service.init_workspace()
     if not _is_model_configured(config):
-        _runtime = ApiRuntime(
+        next_runtime = ApiRuntime(
             config=config,
             client=None,
             model=None,
@@ -88,8 +87,11 @@ async def reload_runtime() -> ApiRuntime:
             vectorstore_initialized=False,
             configured=False,
         )
-        return _runtime
-    _runtime = _start_configured_runtime(config)
+    else:
+        next_runtime = _start_configured_runtime(config)
+    _runtime = next_runtime
+    if previous_runtime is not None and previous_runtime.worker is not None:
+        await previous_runtime.worker.stop()
     return _runtime
 
 

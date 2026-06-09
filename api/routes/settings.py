@@ -70,9 +70,11 @@ async def update_model_settings(request: ModelSettingsRequest):
         runtime = await deps.reload_runtime()
         result["runtime_reloaded"] = runtime.configured
         result["restart_required"] = False
+        result["config_reloaded"] = runtime.configured
     except Exception as exc:
         result["runtime_reloaded"] = False
-        result["restart_required"] = True
+        result["restart_required"] = False
+        result["config_reloaded"] = False
         result["reload_error"] = str(exc)
     return result
 

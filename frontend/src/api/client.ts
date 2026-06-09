@@ -295,6 +295,7 @@ export interface ModelSettings {
     cache_ttl_s: number
   }
   config_path: string
+  config_reloaded?: boolean
   restart_required?: boolean
   runtime_reloaded?: boolean
   reload_error?: string
