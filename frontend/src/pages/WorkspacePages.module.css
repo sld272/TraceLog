@@ -157,6 +157,34 @@
   gap: var(--space-2);
 }
 
+.noticeDetails {
+  margin-top: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.noticeDetails summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.noticeDetails summary:hover {
+  color: var(--color-accent);
+}
+
+.noticeDetails p {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--color-error);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .todoWorkspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -649,6 +677,55 @@
   min-width: 36px;
   min-height: 22px;
   color: var(--color-text-tertiary);
+}
+
+.replyFailure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+}
+
+.replyFailure strong {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.replyFailureActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.replyFailureDetails {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.replyFailureDetails summary {
+  min-height: 28px;
+  cursor: pointer;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.replyFailureDetails summary:hover {
+  color: var(--color-accent);
+}
+
+.replyFailureDetails p {
+  max-width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-soft);
+  color: var(--color-error);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .messageEditInput {

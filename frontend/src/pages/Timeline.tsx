@@ -307,11 +307,13 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
     }
   }
 
-  const handleRetryPostJob = async (postId: string, jobId: number) => {
-    setRetryingJobId(jobId)
+  const handleRetryPostJobs = async (postId: string, jobIds: number[]) => {
+    const firstJobId = jobIds[0]
+    if (firstJobId === undefined) return
+    setRetryingJobId(firstJobId)
     setError(null)
     try {
-      await retryJob(jobId)
+      await Promise.all(jobIds.map((jobId) => retryJob(jobId)))
       await refreshPostDetail(postId)
       streamPostEvents(
         postId,
@@ -406,7 +408,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
               onDeletePost={() => handleDeletePost(post.post_id)}
               onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
               onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
-              onRetryJob={(jobId) => handleRetryPostJob(post.post_id, jobId)}
+      onRetryFailedJobs={(jobIds) => handleRetryPostJobs(post.post_id, jobIds)}
             />
           ))}
         </div>

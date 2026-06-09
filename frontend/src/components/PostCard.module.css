@@ -447,8 +447,31 @@
 
 .threadError {
   margin-left: 42px;
-  color: var(--color-error);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid rgba(190, 80, 70, 0.18);
+  border-radius: var(--radius-md);
+  background: rgba(190, 80, 70, 0.05);
+  color: var(--color-text-secondary);
   font-size: var(--text-xs);
+}
+
+.threadErrorMain {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.threadErrorMain strong {
+  line-height: 30px;
+  font-weight: var(--weight-semibold);
+}
+
+.threadErrorActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 .expandBtn {
@@ -485,10 +508,6 @@
 }
 
 .pipelineFailure {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
   margin-top: var(--space-3);
   padding: var(--space-3);
   border: 1px solid rgba(190, 80, 70, 0.24);
@@ -496,19 +515,34 @@
   background: rgba(190, 80, 70, 0.06);
 }
 
-.pipelineFailureText {
+.pipelineFailureMain {
   display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-  color: var(--color-error);
-  font-size: var(--text-xs);
-  line-height: var(--leading-normal);
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 
-.pipelineFailureText strong {
+.pipelineFailureMain strong {
   color: var(--color-text-secondary);
+  font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
+  line-height: 30px;
+}
+
+.pipelineDiagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--color-error);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
 }
 
 .pipelineActions {
@@ -517,6 +551,23 @@
   flex-wrap: wrap;
   gap: var(--space-2);
   justify-content: flex-end;
+}
+
+.pipelineDetails {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.pipelineDetails summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pipelineDetails summary:hover {
+  color: var(--color-accent);
 }
 
 .pipelineRetryButton {
@@ -546,8 +597,12 @@
 }
 
 @media (max-width: 640px) {
-  .pipelineFailure {
+  .pipelineFailureMain {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .pipelineActions {
+    justify-content: flex-start;
   }
 }

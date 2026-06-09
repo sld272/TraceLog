@@ -108,6 +108,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const [savingModel, setSavingModel] = useState(false)
   const [savingSoul, setSavingSoul] = useState<string | null>(null)
   const [vectorAction, setVectorAction] = useState<'retry' | 'reconcile' | null>(null)
+  const [vectorError, setVectorError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -269,6 +270,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const handleVectorAction = async (action: 'retry' | 'reconcile') => {
     setVectorAction(action)
     setNotice(null)
+    setVectorError(null)
     setError(null)
     try {
       const result = action === 'retry'
@@ -278,7 +280,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       setWorkspaceStatus(workspace)
       setNotice(`向量索引已处理 ${result.processed} 条任务。`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '向量索引处理失败')
+      setVectorError(err instanceof Error ? err.message : '记忆检索失败')
     } finally {
       setVectorAction(null)
     }
@@ -352,6 +354,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
             <DataSettingsPanel
               status={workspaceStatus}
               vectorAction={vectorAction}
+              vectorError={vectorError}
               onVectorAction={handleVectorAction}
             />
           )}
@@ -697,10 +700,12 @@ function SoulSettingsPanel({
 function DataSettingsPanel({
   status,
   vectorAction,
+  vectorError,
   onVectorAction,
 }: {
   status: WorkspaceStatus | null
   vectorAction: 'retry' | 'reconcile' | null
+  vectorError: string | null
   onVectorAction: (action: 'retry' | 'reconcile') => void
 }) {
   if (!status) {
@@ -757,6 +762,17 @@ function DataSettingsPanel({
           <StatusPill ok={status.vector_index.ready} label={status.vector_index.ready ? '已同步' : '待同步'} />
         </div>
         <div className={styles.sectionBodyStack}>
+          {vectorError && (
+            <div className={styles.inlineFailure}>
+              <div className={styles.inlineFailureMain}>
+                <strong>记忆检索失败</strong>
+                <details className={styles.inlineDetails}>
+                  <summary>诊断信息</summary>
+                  <p>{vectorError}</p>
+                </details>
+              </div>
+            </div>
+          )}
           {vectorNeedsAttention && (
             <div className={styles.actionRow}>
               <button

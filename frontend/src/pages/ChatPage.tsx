@@ -32,6 +32,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
   const [busyMessageId, setBusyMessageId] = useState<number | null>(null)
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
+  const [failedReplies, setFailedReplies] = useState<Record<number, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
@@ -59,6 +60,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
       setMessages(detail.messages)
       setEditingMessageId(null)
       setEditDraft('')
+      setFailedReplies({})
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
@@ -115,13 +117,31 @@ export function ChatPage({ soulName }: ChatPageProps) {
     try {
       const response = await sendChatMessage(soulName, body, attachments.map((attachment) => attachment.id))
       setThread(response.thread)
-      setMessages(response.messages)
-      setError(response.result.ok ? null : response.result.error ?? '回复失败')
+      if (response.result.ok || response.result.assistant_message_id !== null) {
+        setMessages(response.messages)
+        setFailedReplies({})
+      } else {
+        const failedAssistant = failedAssistantMessage(
+          optimisticAssistantId,
+          response.thread.id,
+          createdAt,
+        )
+        setMessages([...response.messages, failedAssistant])
+        setFailedReplies({ [failedAssistant.id]: response.result.error ?? '回复生成失败' })
+      }
+      setError(null)
     } catch (err) {
-      setMessages((prev) => prev.filter((message) => message.id !== optimisticUserId && message.id !== optimisticAssistantId))
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === optimisticAssistantId
+            ? { ...message, content: '' }
+            : message,
+        ),
+      )
       setDraft(submittedDraft)
       setAttachments(submittedAttachments)
-      setError(err instanceof Error ? err.message : '发送失败')
+      setFailedReplies({ [optimisticAssistantId]: err instanceof Error ? err.message : '发送失败' })
+      setError(null)
     } finally {
       setSending(false)
     }
@@ -177,8 +197,19 @@ export function ChatPage({ soulName }: ChatPageProps) {
         (message.attachments ?? []).map((attachment) => attachment.id),
       )
       setThread(response.thread)
-      setMessages(response.messages)
-      setError(response.result.ok ? null : response.result.error ?? '回复失败')
+      if (response.result.ok || response.result.assistant_message_id !== null) {
+        setMessages(response.messages)
+        setFailedReplies({})
+      } else {
+        const failedAssistant = failedAssistantMessage(
+          pendingAssistantId,
+          response.thread.id,
+          Date.now() / 1000,
+        )
+        setMessages([...response.messages, failedAssistant])
+        setFailedReplies({ [failedAssistant.id]: response.result.error ?? '回复生成失败' })
+      }
+      setError(null)
     } catch (err) {
       setMessages(previousMessages)
       setEditingMessageId(message.id)
@@ -220,12 +251,59 @@ export function ChatPage({ soulName }: ChatPageProps) {
       setMessages(response.messages)
       setEditingMessageId(null)
       setEditDraft('')
+      setFailedReplies({})
       setError(null)
     } catch (err) {
       setMessages(previousMessages)
       setEditingMessageId(previousEditingMessageId)
       setEditDraft(previousEditDraft)
       setError(err instanceof Error ? err.message : '重跑失败')
+    } finally {
+      setBusyMessageId(null)
+    }
+  }
+
+  const retryFailedReply = async (message: ChatMessage) => {
+    const userMessage = previousUserMessage(messages, message)
+    if (!userMessage) return
+    const previousMessages = messages
+    const previousFailedReplies = failedReplies
+    setBusyMessageId(message.id)
+    setFailedReplies((prev) => {
+      const next = { ...prev }
+      delete next[message.id]
+      return next
+    })
+    setMessages((prev) =>
+      prev.map((item) =>
+        item.id === message.id
+          ? { ...item, content: '' }
+          : item,
+      ),
+    )
+    try {
+      const attachmentIds = (userMessage.attachments ?? []).map((attachment) => attachment.id)
+      const response = userMessage.id > 0
+        ? await updateChatMessage(userMessage.id, userMessage.content, attachmentIds)
+        : await sendChatMessage(soulName, userMessage.content, attachmentIds)
+      setThread(response.thread)
+      if (response.result.ok || response.result.assistant_message_id !== null) {
+        setMessages(response.messages)
+        setFailedReplies({})
+      } else {
+        const failedAssistant = failedAssistantMessage(
+          message.id,
+          response.thread.id,
+          Date.now() / 1000,
+        )
+        setMessages([...response.messages, failedAssistant])
+        setFailedReplies({ [failedAssistant.id]: response.result.error ?? '回复生成失败' })
+      }
+      setError(null)
+    } catch (err) {
+      setMessages(previousMessages)
+      setFailedReplies(previousFailedReplies)
+      setError(null)
     } finally {
       setBusyMessageId(null)
     }
@@ -258,12 +336,19 @@ export function ChatPage({ soulName }: ChatPageProps) {
                 soulName={soulName}
                 message={message}
                 busy={busyMessageId === message.id}
+                failure={failedReplies[message.id] ?? null}
                 editDraft={editingMessageId === message.id ? editDraft : null}
                 onStartEdit={startEditMessage}
                 onChangeEditDraft={setEditDraft}
                 onCancelEdit={cancelEditMessage}
                 onSaveEdit={saveEditMessage}
-                onRerun={rerunMessage}
+                onRerun={(target) => {
+                  if (target.id < 0) {
+                    retryFailedReply(target)
+                    return
+                  }
+                  rerunMessage(target)
+                }}
               />
             ))
           )}
@@ -364,6 +449,17 @@ function withPendingReplyAfterUserEdit(
   ]
 }
 
+function failedAssistantMessage(id: number, threadId: number, createdAt: number): ChatMessage {
+  return {
+    id,
+    thread_id: threadId,
+    role: 'assistant',
+    content: '',
+    created_at: createdAt,
+    attachments: [],
+  }
+}
+
 function withPendingReplyForAssistantRerun(messages: ChatMessage[], rerunMessage: ChatMessage): ChatMessage[] {
   const targetIndex = messages.findIndex((message) => message.id === rerunMessage.id)
   if (targetIndex < 0) return messages
@@ -385,6 +481,7 @@ function MessageBubble({
   soulName,
   message,
   busy,
+  failure,
   editDraft,
   onStartEdit,
   onChangeEditDraft,
@@ -395,6 +492,7 @@ function MessageBubble({
   soulName: string
   message: ChatMessage
   busy: boolean
+  failure: string | null
   editDraft: string | null
   onStartEdit: (message: ChatMessage) => void
   onChangeEditDraft: (value: string) => void
@@ -404,7 +502,8 @@ function MessageBubble({
 }) {
   const isUser = message.role === 'user'
   const isPersisted = message.id > 0
-  const isPendingAssistant = message.role === 'assistant' && !message.content && (message.id < 0 || busy)
+  const isFailedAssistant = message.role === 'assistant' && Boolean(failure)
+  const isPendingAssistant = message.role === 'assistant' && !failure && !message.content && (message.id < 0 || busy)
   const editInputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -443,7 +542,13 @@ function MessageBubble({
           </div>
         )}
       </div>
-      {isPendingAssistant ? (
+      {isFailedAssistant ? (
+        <ReplyFailure
+          error={failure}
+          busy={busy}
+          onRetry={() => onRerun(message)}
+        />
+      ) : isPendingAssistant ? (
         <div className={styles.messagePending} aria-label={`${soulName} 正在回复`}>
           <LoadingDots />
         </div>
@@ -475,4 +580,39 @@ function MessageBubble({
       )}
     </article>
   )
+}
+
+function ReplyFailure({
+  error,
+  busy,
+  onRetry,
+}: {
+  error: string | null
+  busy: boolean
+  onRetry: () => void
+}) {
+  return (
+    <div className={styles.replyFailure}>
+      <strong>回复生成失败</strong>
+      <div className={styles.replyFailureActions}>
+        <button className={styles.messageTextAction} onClick={onRetry} disabled={busy}>
+          重试
+        </button>
+        <details className={styles.replyFailureDetails}>
+          <summary>诊断信息</summary>
+          <p>{error || '未知错误'}</p>
+        </details>
+      </div>
+    </div>
+  )
+}
+
+function previousUserMessage(messages: ChatMessage[], assistantMessage: ChatMessage): ChatMessage | null {
+  const index = messages.findIndex((message) => message.id === assistantMessage.id)
+  if (index <= 0) return null
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const candidate = messages[i]
+    if (candidate?.role === 'user') return candidate
+  }
+  return null
 }

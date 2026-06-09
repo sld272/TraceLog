@@ -86,6 +86,55 @@
   justify-content: flex-start;
 }
 
+.inlineFailure {
+  padding: var(--space-3);
+  border: 1px solid rgba(190, 80, 70, 0.2);
+  border-radius: var(--radius-md);
+  background: rgba(190, 80, 70, 0.05);
+}
+
+.inlineFailureMain {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.inlineFailureMain strong {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  line-height: 28px;
+}
+
+.inlineDetails {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.inlineDetails summary {
+  cursor: pointer;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.inlineDetails summary:hover {
+  color: var(--color-accent);
+}
+
+.inlineDetails p {
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--color-error);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .formGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

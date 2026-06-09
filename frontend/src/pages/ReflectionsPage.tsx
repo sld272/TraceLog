@@ -178,7 +178,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
       } else {
         setActiveJob(null)
         setLastFailedJob(job)
-        setError(job.error ?? '整理失败')
+        setError(null)
       }
     } catch (err) {
       if (err instanceof PollTimeoutError) {
@@ -364,11 +364,7 @@ function ReflectionJobNotice({
   return (
     <div className={styles.notice}>
       <div className={styles.noticeRow}>
-        <span>
-          {isFailed
-            ? `整理失败：#${job.id}`
-            : `整理进行中：#${job.id}${job.error ? '，正在自动重试' : ''}`}
-        </span>
+        <span>{isFailed ? '部分整理失败' : `整理进行中：#${job.id}${job.error ? '，正在自动重试' : ''}`}</span>
         <div className={styles.noticeActions}>
           {isFailed && (
             <button className={styles.ghostButton} onClick={() => onRetry(job)} disabled={busy}>
@@ -382,7 +378,12 @@ function ReflectionJobNotice({
           )}
         </div>
       </div>
-      {isFailed && job.error && <p className={styles.meta}>{job.error}</p>}
+      {isFailed && job.error && (
+        <details className={styles.noticeDetails}>
+          <summary>诊断信息</summary>
+          <p>{job.error}</p>
+        </details>
+      )}
     </div>
   )
 }

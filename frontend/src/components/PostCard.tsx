@@ -35,7 +35,7 @@ interface PostCardProps {
   onDeletePost?: () => Promise<void>
   onDeleteComment?: (commentId: number) => Promise<void>
   onRerunComment?: (commentId: number) => Promise<void>
-  onRetryJob?: (jobId: number) => Promise<void>
+  onRetryFailedJobs?: (jobIds: number[]) => Promise<void>
 }
 
 export function PostCard({
@@ -51,7 +51,7 @@ export function PostCard({
   onDeletePost,
   onDeleteComment,
   onRerunComment,
-  onRetryJob,
+  onRetryFailedJobs,
 }: PostCardProps) {
   const timeAgo = formatSmartTime(post.ts)
 
@@ -109,7 +109,7 @@ export function PostCard({
       <PipelineNotice
         post={post}
         retryingJobId={retryingJobId}
-        onRetryJob={onRetryJob}
+        onRetryFailedJobs={onRetryFailedJobs}
       />
     </article>
   )
@@ -118,43 +118,44 @@ export function PostCard({
 function PipelineNotice({
   post,
   retryingJobId,
-  onRetryJob,
+  onRetryFailedJobs,
 }: {
   post: Post
   retryingJobId: number | null
-  onRetryJob?: (jobId: number) => Promise<void>
+  onRetryFailedJobs?: (jobIds: number[]) => Promise<void>
 }) {
   const status = post.pipeline_status
   const failedJobs = status?.failed_jobs ?? []
+  const retryableJobIds = failedJobs.filter((job) => job.retryable).map((job) => job.id)
 
   if (failedJobs.length > 0) {
     return (
       <div className={styles.pipelineFailure}>
-        <div className={styles.pipelineFailureText}>
-          <strong>有任务失败</strong>
-          {failedJobs.slice(0, 2).map((job) => (
-            <span key={job.id}>
-              {formatPipelineJobType(job.type)}：{formatPipelineError(job.error)}
-            </span>
-          ))}
-        </div>
-        {onRetryJob && failedJobs.some((job) => job.retryable) && (
+        <div className={styles.pipelineFailureMain}>
+          <strong>{pipelineFailureTitle(failedJobs)}</strong>
           <div className={styles.pipelineActions}>
-            {failedJobs.filter((job) => job.retryable).slice(0, 2).map((job) => (
+            {onRetryFailedJobs && retryableJobIds.length > 0 && (
               <button
-                key={job.id}
                 className={styles.pipelineRetryButton}
-                onClick={() => onRetryJob(job.id)}
-                disabled={retryingJobId === job.id}
-                title={`重试${formatPipelineJobType(job.type)}`}
-                aria-label={`重试${formatPipelineJobType(job.type)}`}
+                onClick={() => onRetryFailedJobs(retryableJobIds)}
+                disabled={retryingJobId !== null}
+                title="重试"
+                aria-label="重试失败处理"
               >
-                {retryingJobId === job.id ? <LoadingDots /> : <RefreshCwIcon />}
+                {retryingJobId !== null ? <LoadingDots /> : <RefreshCwIcon />}
                 <span>重试</span>
               </button>
-            ))}
+            )}
+            <details className={styles.pipelineDetails}>
+              <summary>诊断信息</summary>
+              <div className={styles.pipelineDiagnostics}>
+                {failedJobs.map((job) => (
+                  <p key={job.id}>{formatPipelineError(job.error)}</p>
+                ))}
+              </div>
+            </details>
           </div>
-        )}
+        </div>
       </div>
     )
   }
@@ -180,23 +181,15 @@ function PipelineNotice({
   )
 }
 
-function formatPipelineJobType(type: string): string {
-  const labels: Record<string, string> = {
-    index_post_embedding: '索引',
-    generate_post_replies: '回复',
-    run_todo_tool: '待办',
-    run_light_reflection: '轻反思',
-    maybe_trigger_global_deep_reflection: '深反思',
-    trigger_global_deep_reflection: '全局整理',
-    trigger_soul_deep_reflections: '人格整理',
-  }
-  return labels[type] ?? type
+function pipelineFailureTitle(failedJobs: PipelineJobSummary[]): string {
+  return failedJobs.some((job) => job.type === 'generate_post_replies')
+    ? '记录已保存，AI 处理失败'
+    : '部分整理失败'
 }
 
 function formatPipelineError(error: PipelineJobSummary['error']): string {
   const text = (error ?? '').trim()
-  if (!text) return '未知错误'
-  return text.length > 80 ? `${text.slice(0, 80)}...` : text
+  return text || '未知错误'
 }
 function CommentPreview({
   comment,
@@ -364,7 +357,45 @@ function CommentPreview({
           </div>
         </div>
       </div>
-      {conversation?.error && <p className={styles.threadError}>{conversation.error}</p>}
+      {conversation?.error && (
+        <ReplyFailureInline
+          error={conversation.error}
+          onRetry={latestMessage.role === 'assistant' && onRerun ? () => onRerun(latestMessage.id) : undefined}
+          busy={replyBusy}
+        />
+      )}
+    </div>
+  )
+}
+
+function ReplyFailureInline({
+  error,
+  onRetry,
+  busy,
+}: {
+  error: string
+  onRetry?: () => void
+  busy: boolean
+}) {
+  return (
+    <div className={styles.threadError}>
+      <div className={styles.threadErrorMain}>
+        <strong>回复生成失败</strong>
+        <div className={styles.threadErrorActions}>
+          {onRetry && (
+            <button className={styles.pipelineRetryButton} onClick={onRetry} disabled={busy}>
+              <RefreshCwIcon />
+              <span>重试</span>
+            </button>
+          )}
+          <details className={styles.pipelineDetails}>
+            <summary>诊断信息</summary>
+            <div className={styles.pipelineDiagnostics}>
+              <p>{error}</p>
+            </div>
+          </details>
+        </div>
+      </div>
     </div>
   )
 }
