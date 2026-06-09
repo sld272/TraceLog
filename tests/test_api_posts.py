@@ -18,7 +18,13 @@ class ApiPostsTest(unittest.TestCase):
         from api.app import create_app
 
         async def fake_init_runtime():
-            deps._runtime = SimpleNamespace(vectorstore_initialized=False, worker=SimpleNamespace())  # type: ignore[attr-defined]
+            deps._runtime = SimpleNamespace(  # type: ignore[attr-defined]
+                configured=True,
+                client=object(),
+                model="test-model",
+                vectorstore_initialized=False,
+                worker=SimpleNamespace(),
+            )
             return deps._runtime
 
         async def fake_shutdown_runtime():
@@ -49,6 +55,18 @@ class ApiPostsTest(unittest.TestCase):
 
         self.assertEqual(422, response.status_code)
 
+    def test_post_posts_requires_model_configuration(self) -> None:
+        from api import deps
+
+        with self._client() as client:
+            deps._runtime.configured = False  # type: ignore[attr-defined]
+            deps._runtime.client = None  # type: ignore[attr-defined]
+            deps._runtime.model = None  # type: ignore[attr-defined]
+            response = client.post("/posts", json={"content": "今天想练歌"})
+
+        self.assertEqual(409, response.status_code)
+        self.assertIn("请先在设置页完成模型配置", response.json()["detail"])
+
     def test_sse_event_format_includes_id_event_and_payload(self) -> None:
         from api.routes.posts import _format_sse
 
@@ -76,6 +94,9 @@ class ApiPostsTest(unittest.TestCase):
             with patch("api.deps.CONFIG_FILE", missing):
                 with self.assertRaisesRegex(RuntimeError, "API 模式需要先配置"):
                     deps._load_api_config()
+
+                config = deps._load_api_config(strict=False)
+                self.assertFalse(deps._is_model_configured(config))
 
     def test_job_worker_concurrency_is_bounded(self) -> None:
         from api import deps

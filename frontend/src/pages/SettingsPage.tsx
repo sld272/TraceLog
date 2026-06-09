@@ -32,6 +32,8 @@ interface MarkdownSoulDraft {
 }
 
 interface SettingsPageProps {
+  firstRun?: boolean
+  onModelSettingsChanged?: () => void
   onSoulsChanged?: () => void
 }
 
@@ -91,7 +93,7 @@ const DEFAULT_MODEL_FORM: ModelForm = {
 
 const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语气、相处方式、边界、适合的场景，或任何灵感。系统会把它整理成完整的人格 Markdown 文件。'
 
-export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
+export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSoulsChanged }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('model')
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null)
   const [modelForm, setModelForm] = useState<ModelForm>(DEFAULT_MODEL_FORM)
@@ -149,7 +151,14 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
       const saved = await saveModelSettings(toModelUpdate(modelForm))
       setModelSettings(saved)
       setModelForm(formFromModelSettings(saved))
-      setNotice(saved.restart_required ? '配置已保存，重启后端后完全生效。' : '配置已保存。')
+      onModelSettingsChanged?.()
+      if (saved.runtime_reloaded) {
+        setNotice('配置已保存，后端已立即生效。')
+      } else if (saved.restart_required) {
+        setNotice(saved.reload_error ? `配置已保存，但热加载失败：${saved.reload_error}` : '配置已保存，重启后端后完全生效。')
+      } else {
+        setNotice('配置已保存。')
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存模型配置失败')
     } finally {
@@ -267,6 +276,9 @@ export function SettingsPage({ onSoulsChanged }: SettingsPageProps) {
       </header>
 
       {error && <div className={workspaceStyles.notice}>{error}</div>}
+      {firstRun && (
+        <div className={workspaceStyles.notice}>首次使用 TraceLog，请先配置主模型和 Embedding。保存后无需重启即可继续使用。</div>
+      )}
       {notice && <div className={styles.successNotice}>{notice}</div>}
 
       <div className={styles.tabs} role="tablist" aria-label="设置分类">

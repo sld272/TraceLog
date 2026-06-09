@@ -10,6 +10,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from api import deps
 from api.deps import run_sync
 from core import db, vision_service, web_search_service
 from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
@@ -62,9 +63,18 @@ async def get_model_settings():
 @router.put("/model")
 async def update_model_settings(request: ModelSettingsRequest):
     try:
-        return await run_sync(_write_model_settings, request.model_dump())
+        result = await run_sync(_write_model_settings, request.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        runtime = await deps.reload_runtime()
+        result["runtime_reloaded"] = runtime.configured
+        result["restart_required"] = False
+    except Exception as exc:
+        result["runtime_reloaded"] = False
+        result["restart_required"] = True
+        result["reload_error"] = str(exc)
+    return result
 
 
 @router.get("/workspace")

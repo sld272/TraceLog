@@ -4,6 +4,7 @@ import {
   type Soul,
   type SoulReflectionScope,
   type Todo,
+  getModelSettings,
   listSouls,
   listTodos,
   previewGlobalReflection,
@@ -21,6 +22,7 @@ import { TodosPage } from '@/pages/TodosPage'
 
 export function App() {
   const [activePage, setActivePage] = useState('home')
+  const [modelConfigured, setModelConfigured] = useState<boolean | null>(null)
   const [souls, setSouls] = useState<Soul[]>([])
   const [todos, setTodos] = useState<Todo[]>([])
   const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
@@ -77,9 +79,20 @@ export function App() {
     setActivePage('todos')
   }, [])
 
+  const checkModelConfiguration = useCallback(async () => {
+    try {
+      const settings = await getModelSettings()
+      setModelConfigured(settings.configured)
+      if (!settings.configured) setActivePage('settings')
+    } catch {
+      /* API might not be running yet */
+    }
+  }, [])
+
   useEffect(() => {
     fetchSouls()
-  }, [fetchSouls])
+    checkModelConfiguration()
+  }, [fetchSouls, checkModelConfiguration])
 
   useEffect(() => {
     if (showRightPanel) void refreshHomeContext()
@@ -94,7 +107,13 @@ export function App() {
       case 'reflections':
         return <ReflectionsPage onReflectionSettled={refreshHomeContext} />
       case 'settings':
-        return <SettingsPage onSoulsChanged={fetchSouls} />
+        return (
+          <SettingsPage
+            firstRun={modelConfigured === false}
+            onModelSettingsChanged={checkModelConfiguration}
+            onSoulsChanged={fetchSouls}
+          />
+        )
       default:
         if (activePage.startsWith('chat:')) {
           const soulName = activePage.replace('chat:', '')

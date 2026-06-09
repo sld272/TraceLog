@@ -271,6 +271,8 @@ export interface ModelSettings {
   }
   config_path: string
   restart_required?: boolean
+  runtime_reloaded?: boolean
+  reload_error?: string
 }
 
 export interface ModelSettingsUpdate {

@@ -17,10 +17,11 @@ ORPHAN_ATTACHMENT_CLEANUP_INTERVAL_SECONDS = 3600
 @dataclass(frozen=True)
 class ApiRuntime:
     config: dict
-    client: LLMClient
-    model: str
-    worker: "JobWorker"
+    client: LLMClient | None
+    model: str | None
+    worker: "JobWorker | None"
     vectorstore_initialized: bool
+    configured: bool
 
 
 class JobWorker:

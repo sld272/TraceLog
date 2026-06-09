@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from api.deps import get_runtime, run_sync
+from api.deps import MODEL_NOT_CONFIGURED_MESSAGE, get_runtime, require_configured_runtime, run_sync
 from core import attachment_service, db, vectorstore
 from core.app_services import event_service, job_service, post_mutation, public_post_pipeline
 
@@ -30,6 +30,7 @@ async def health():
     return {
         "ok": db_status == "ok",
         "db": db_status,
+        "configured": runtime.configured,
         "vectorstore_initialized": vectorstore.is_initialized() or runtime.vectorstore_initialized,
     }
 
@@ -39,6 +40,12 @@ async def create_post(request: CreatePostRequest):
     content = request.content.strip()
     if not content and not request.attachment_ids:
         raise HTTPException(status_code=422, detail="content 不能为空")
+    try:
+        require_configured_runtime()
+    except RuntimeError as exc:
+        if str(exc) == MODEL_NOT_CONFIGURED_MESSAGE:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise
     try:
         created = await run_sync(public_post_pipeline.create_post, content, request.attachment_ids)
     except ValueError as exc:

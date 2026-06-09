@@ -76,8 +76,9 @@ class ApiManagementTest(unittest.TestCase):
         async def fake_init_runtime():
             deps._runtime = SimpleNamespace(  # type: ignore[attr-defined]
                 config={},
-                client=None,
-                model=None,
+                configured=True,
+                client=object(),
+                model="test-model",
                 vectorstore_initialized=False,
                 worker=SimpleNamespace(),
             )
@@ -86,14 +87,28 @@ class ApiManagementTest(unittest.TestCase):
         async def fake_shutdown_runtime():
             deps._runtime = None  # type: ignore[attr-defined]
 
+        async def fake_reload_runtime():
+            deps._runtime = SimpleNamespace(  # type: ignore[attr-defined]
+                config={},
+                configured=True,
+                client=object(),
+                model="updated-model",
+                vectorstore_initialized=False,
+                worker=SimpleNamespace(),
+            )
+            return deps._runtime
+
         self.init_patch = patch("api.deps.init_runtime", fake_init_runtime)
         self.shutdown_patch = patch("api.deps.shutdown_runtime", fake_shutdown_runtime)
+        self.reload_patch = patch("api.deps.reload_runtime", fake_reload_runtime)
         self.config_patch = patch("api.routes.settings.CONFIG_FILE", str(self.config_path))
         self.init_patch.start()
         self.shutdown_patch.start()
+        self.reload_patch.start()
         self.config_patch.start()
         self.addCleanup(self.init_patch.stop)
         self.addCleanup(self.shutdown_patch.stop)
+        self.addCleanup(self.reload_patch.stop)
         self.addCleanup(self.config_patch.stop)
         return TestClient(create_app())
 
@@ -255,7 +270,8 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, put_response.status_code)
         updated = put_response.json()
         self.assertEqual("updated-model", updated["model"])
-        self.assertTrue(updated["restart_required"])
+        self.assertFalse(updated["restart_required"])
+        self.assertTrue(updated["runtime_reloaded"])
         saved = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual("sk-test-secret-123456", saved["api_key"])
         self.assertEqual("https://updated.invalid/v1", saved["base_url"])
