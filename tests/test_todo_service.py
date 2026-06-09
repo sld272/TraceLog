@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core import context_builder, db, profile_service, soul_memory_service, soul_service, todo_service, tool_config_service
+from core.llm import todo_router
 from tests.helpers import require_not_none
 
 
@@ -211,6 +212,50 @@ class TodoServiceTest(unittest.TestCase):
             """,
             (post_id, "2026-05-25T10:00:00+08:00", content, 1.0, 1.0),
         )
+
+
+class TodoRouterParseTest(unittest.TestCase):
+    def test_call_todo_tool_filters_invalid_items_and_defaults_status(self) -> None:
+        data = {
+            "todos_to_upsert": [
+                {
+                    "id": None,
+                    "task": "  交项目 PPT  ",
+                    "date": "2026-05-26",
+                    "start_time": "15:00",
+                    "end_time": None,
+                    "status": "乱填",
+                },
+                {"id": None, "task": "   "},
+                "bad-item",
+            ],
+            "todos_to_delete": [{"id": "todo-1"}, {"id": ""}, "bad-item"],
+        }
+        client = FakeClient(content=json.dumps(data, ensure_ascii=False))
+
+        parsed = todo_router.call_todo_tool(client, "fake-model", post="明天下午交项目 PPT", active_todos="")
+
+        self.assertEqual(
+            {
+                "todos_to_upsert": [
+                    {
+                        "id": None,
+                        "task": "交项目 PPT",
+                        "date": "2026-05-26",
+                        "start_time": "15:00",
+                        "end_time": None,
+                        "status": "未完成",
+                    }
+                ],
+                "todos_to_delete": [{"id": "todo-1"}],
+            },
+            parsed,
+        )
+
+    def test_call_todo_tool_returns_none_for_invalid_json(self) -> None:
+        client = FakeClient(content="不是 JSON")
+
+        self.assertIsNone(todo_router.call_todo_tool(client, "fake-model", post="随便写点", active_todos=""))
 
 
 if __name__ == "__main__":

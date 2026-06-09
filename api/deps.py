@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from openai import OpenAI
+from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from core import db, logging_service, record_service, vectorstore, workspace_service
@@ -37,6 +38,15 @@ def require_configured_runtime() -> ApiRuntime:
     if not runtime.configured or runtime.client is None or runtime.model is None:
         raise RuntimeError(MODEL_NOT_CONFIGURED_MESSAGE)
     return runtime
+
+
+def require_configured_runtime_or_409() -> ApiRuntime:
+    try:
+        return require_configured_runtime()
+    except RuntimeError as exc:
+        if str(exc) == MODEL_NOT_CONFIGURED_MESSAGE:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise
 
 
 async def init_runtime() -> ApiRuntime:

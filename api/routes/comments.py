@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from api.deps import MODEL_NOT_CONFIGURED_MESSAGE, require_configured_runtime, run_sync
+from api.deps import require_configured_runtime_or_409, run_sync
 from core import comment_service
 
 router = APIRouter(prefix="/comments", tags=["comments"])
@@ -71,7 +71,7 @@ async def send_comment_message(post_id: str, soul_name: str, request: SendCommen
     body = request.content.strip()
     if not body and not request.attachment_ids:
         raise HTTPException(status_code=422, detail="content 不能为空")
-    runtime = _runtime_or_409()
+    runtime = require_configured_runtime_or_409()
     try:
         result = await run_sync(comment_service.call_comment_reply, post_id, soul_name, body, runtime.client, runtime.model, request.attachment_ids)
         conversation = await run_sync(comment_service.get_conversation, post_id, soul_name)
@@ -96,7 +96,7 @@ async def delete_comment_message(comment_id: int):
 
 @router.post("/messages/{comment_id}/rerun")
 async def rerun_comment_message(comment_id: int):
-    runtime = _runtime_or_409()
+    runtime = require_configured_runtime_or_409()
     try:
         result = await run_sync(
             comment_service.rerun_latest_assistant_message,
@@ -128,12 +128,3 @@ async def _message_stream(post_id: str, soul_name: str, after_id: int):
 
 def _format_message_sse(message: dict[str, Any]) -> str:
     return f"id: {message['id']}\nevent: comment_message\ndata: {json.dumps(message, ensure_ascii=False)}\n\n"
-
-
-def _runtime_or_409():
-    try:
-        return require_configured_runtime()
-    except RuntimeError as exc:
-        if str(exc) == MODEL_NOT_CONFIGURED_MESSAGE:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        raise

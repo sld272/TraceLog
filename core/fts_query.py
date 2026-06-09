@@ -49,7 +49,7 @@ def keyword_candidates(keywords: list[str], *, max_terms: int = MAX_MATCH_TERMS)
         if len(clean) < 2:
             continue
         candidates.append(clean[:MAX_PHRASE_CHARS])
-    return _ordered_unique(candidates)[:max_terms]
+    return ordered_unique(candidates)[:max_terms]
 
 
 def quote_match_candidates(candidates: list[str]) -> str:
@@ -72,7 +72,7 @@ def match_candidates(query: str, *, max_terms: int = MAX_MATCH_TERMS) -> list[st
         candidates.extend(_cjk_window_candidates(clean, max_terms=max_terms * 4))
 
     candidates.extend(query_terms(clean))
-    return _ordered_unique([item for item in candidates if len(item.strip()) >= 2])[:max_terms]
+    return ordered_unique([item for item in candidates if len(item.strip()) >= 2])[:max_terms]
 
 
 def query_terms(query: str) -> list[str]:
@@ -110,8 +110,8 @@ def _cjk_window_candidates(query: str, *, max_terms: int) -> list[str]:
                 key=lambda item: (-item[0], item[1]),
             )
         ]
-        ordered.extend(_ordered_unique(ranked)[:quotas[size]])
-    return _ordered_unique(ordered)[:max_terms]
+        ordered.extend(ordered_unique(ranked)[:quotas[size]])
+    return ordered_unique(ordered)[:max_terms]
 
 
 def _cjk_candidate_score(term: str) -> int:
@@ -129,7 +129,7 @@ def _is_low_information_cjk(term: str) -> bool:
     return any(stop in term for stop in LOW_INFORMATION_CJK)
 
 
-def _ordered_unique(values: list[str]) -> list[str]:
+def ordered_unique(values: list[str]) -> list[str]:
     seen: set[str] = set()
     unique: list[str] = []
     for value in values:

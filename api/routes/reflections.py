@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
-from api.deps import MODEL_NOT_CONFIGURED_MESSAGE, require_configured_runtime, run_sync
+from api.deps import require_configured_runtime_or_409, run_sync
 from core import reflector
 from core.app_services import job_service
 
@@ -30,7 +30,7 @@ async def preview_global_reflection(limit: int = Query(default=100, ge=1, le=500
 
 @router.post("/global")
 async def trigger_global_reflection(request: TriggerGlobalReflectionRequest):
-    _require_runtime_or_409()
+    require_configured_runtime_or_409()
     job_id = await run_sync(
         job_service.enqueue,
         job_service.TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION,
@@ -47,19 +47,10 @@ async def preview_soul_reflections(limit_per_soul: int = Query(default=100, ge=1
 
 @router.post("/souls")
 async def trigger_soul_reflections(request: TriggerSoulReflectionsRequest):
-    _require_runtime_or_409()
+    require_configured_runtime_or_409()
     job_id = await run_sync(
         job_service.enqueue,
         job_service.TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS,
         {"trigger": "api_manual", "limit_per_soul": request.limit_per_soul},
     )
     return {"job_id": job_id, "status": "queued"}
-
-
-def _require_runtime_or_409() -> None:
-    try:
-        require_configured_runtime()
-    except RuntimeError as exc:
-        if str(exc) == MODEL_NOT_CONFIGURED_MESSAGE:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        raise

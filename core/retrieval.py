@@ -51,7 +51,7 @@ def fts_search_scored(
     trace_context: dict | None = None,
 ) -> list[RetrievalHit]:
     """Return FTS hits with source, rank position, and raw FTS rank for debug."""
-    clean = _sanitize_fts5(query)
+    clean = fts_query.sanitize_fts5(query)
     if not clean and not fts_keywords:
         return []
 
@@ -60,9 +60,9 @@ def fts_search_scored(
     deterministic_candidates: list[str] = []
     if keyword_match:
         match = keyword_match
-        table = "posts_fts_trigram" if any(_has_cjk(keyword) for keyword in fts_keywords or []) else "posts_fts"
+        table = "posts_fts_trigram" if any(fts_query.has_cjk(keyword) for keyword in fts_keywords or []) else "posts_fts"
         source = "fts_rewrite"
-    elif _has_cjk(clean):
+    elif fts_query.has_cjk(clean):
         if len(clean.replace(" ", "")) < 3:
             hits = _like_search_scored(clean, k)
             _log_fts_query_built(
@@ -261,7 +261,7 @@ def hybrid_search_scored(
         )
         return []
 
-    post_ids = _ordered_unique([hit.post_id for hit in fts_hits + vector_hits])
+    post_ids = fts_query.ordered_unique([hit.post_id for hit in fts_hits + vector_hits])
     contents = _read_candidate_contents(post_ids)
     fts_weight, vector_weight = _infer_query_weights(query)
     fts_scores = _score_fts_hits(fts_hits)
@@ -397,7 +397,7 @@ def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: 
         raw_score = vector_scores.get(doc_id, 0.0) * _type_weight(doc_type)
         existing = by_doc.get(doc_id)
         if existing is not None:
-            sources = _ordered_unique([*existing.sources, "vector"])
+            sources = fts_query.ordered_unique([*existing.sources, "vector"])
             reasons = [*existing.reasons, f"vector:rank={hit.rank}", "agreement"]
             by_doc[doc_id] = RetrievalDocHit(
                 doc_id=existing.doc_id,
@@ -502,7 +502,7 @@ def _infer_query_weights(query: str) -> tuple[float, float]:
         fts_weight += 0.35
     if _looks_descriptive(query):
         vector_weight += 0.35
-    if _has_cjk(query) and len(compact) >= 8:
+    if fts_query.has_cjk(query) and len(compact) >= 8:
         vector_weight += 0.20
 
     total = fts_weight + vector_weight
@@ -569,7 +569,7 @@ def _content_bonus(query: str, content: str) -> tuple[float, list[str]]:
 
     score = 0.0
     reasons: list[str] = []
-    clean = _sanitize_fts5(query)
+    clean = fts_query.sanitize_fts5(query)
     phrase = clean.lower()
     compact = clean.replace(" ", "")
     content_lower = content.lower()
@@ -578,7 +578,7 @@ def _content_bonus(query: str, content: str) -> tuple[float, list[str]]:
         score += 0.10
         reasons.append("exact_phrase")
 
-    terms = _query_terms(clean)
+    terms = fts_query.query_terms(clean)
     if terms:
         matched = sum(1 for term in terms if term.lower() in content_lower)
         coverage = matched / len(terms)
@@ -586,10 +586,6 @@ def _content_bonus(query: str, content: str) -> tuple[float, list[str]]:
             score += 0.08 * coverage
             reasons.append(f"coverage={coverage:.2f}")
     return score, reasons
-
-
-def _query_terms(query: str) -> list[str]:
-    return fts_query.query_terms(query)
 
 
 def _read_candidate_contents(post_ids: list[str]) -> dict[str, str]:
@@ -605,26 +601,6 @@ def _read_candidate_contents(post_ids: list[str]) -> dict[str, str]:
         tuple(post_ids),
     )
     return {row["id"]: row["content"] for row in rows}
-
-
-def _ordered_unique(values: list[str]) -> list[str]:
-    seen: set[str] = set()
-    unique: list[str] = []
-    for value in values:
-        if value in seen:
-            continue
-        seen.add(value)
-        unique.append(value)
-    return unique
-
-
-def _sanitize_fts5(query: str) -> str:
-    return fts_query.sanitize_fts5(query)
-
-
-def _has_cjk(text: str) -> bool:
-    return fts_query.has_cjk(text)
-
 
 def _log_fts_query_built(
     *,

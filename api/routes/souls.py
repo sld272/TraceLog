@@ -8,9 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from api import deps
-from api.deps import MODEL_NOT_CONFIGURED_MESSAGE
-from api.deps import run_sync
+from api.deps import require_configured_runtime_or_409, run_sync
 from core import memory_review_service, soul_service
 from core.llm import soul_router
 
@@ -63,7 +61,7 @@ async def create_soul(request: CreateSoulRequest):
 
 @router.post("/generate-soul")
 async def generate_soul(request: GenerateSoulRequest):
-    runtime = _runtime_or_409()
+    runtime = require_configured_runtime_or_409()
     result = await run_sync(
         soul_router.generate_soul,
         name=request.name,
@@ -129,12 +127,3 @@ async def get_soul_memory_revision(name: str, revision_id: int):
 
 def _record(record: Any) -> dict[str, Any]:
     return asdict(record)
-
-
-def _runtime_or_409():
-    try:
-        return deps.require_configured_runtime()
-    except RuntimeError as exc:
-        if str(exc) == MODEL_NOT_CONFIGURED_MESSAGE:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        raise

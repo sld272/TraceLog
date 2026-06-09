@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
-from api.deps import MODEL_NOT_CONFIGURED_MESSAGE, require_configured_runtime, run_sync
+from api.deps import require_configured_runtime_or_409, run_sync
 from core import chat_service
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -71,7 +71,7 @@ async def send_chat_message(soul_name: str, request: SendChatMessageRequest):
     body = request.content.strip()
     if not body and not request.attachment_ids:
         raise HTTPException(status_code=422, detail="content 不能为空")
-    runtime = _runtime_or_409()
+    runtime = require_configured_runtime_or_409()
     try:
         thread = await run_sync(chat_service.get_or_create_thread, soul_name)
         result = await run_sync(chat_service.call_chat_reply, thread.id, body, runtime.client, runtime.model, request.attachment_ids)
@@ -87,7 +87,7 @@ async def send_chat_message(soul_name: str, request: SendChatMessageRequest):
 
 @router.patch("/messages/{message_id}")
 async def update_chat_message(message_id: int, request: UpdateChatMessageRequest):
-    runtime = _runtime_or_409()
+    runtime = require_configured_runtime_or_409()
     try:
         result = await run_sync(
             chat_service.edit_user_message_and_reply,
@@ -110,7 +110,7 @@ async def update_chat_message(message_id: int, request: UpdateChatMessageRequest
 
 @router.post("/messages/{message_id}/rerun")
 async def rerun_chat_message(message_id: int):
-    runtime = _runtime_or_409()
+    runtime = require_configured_runtime_or_409()
     try:
         result = await run_sync(
             chat_service.rerun_assistant_message,
@@ -142,12 +142,3 @@ async def _message_stream(thread_id: int, after_id: int):
 
 def _format_message_sse(message: dict[str, Any]) -> str:
     return f"id: {message['id']}\nevent: chat_message\ndata: {json.dumps(message, ensure_ascii=False)}\n\n"
-
-
-def _runtime_or_409():
-    try:
-        return require_configured_runtime()
-    except RuntimeError as exc:
-        if str(exc) == MODEL_NOT_CONFIGURED_MESSAGE:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        raise
