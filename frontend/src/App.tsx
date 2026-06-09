@@ -20,8 +20,10 @@ import { SettingsPage } from '@/pages/SettingsPage'
 import { Timeline } from '@/pages/Timeline'
 import { TodosPage } from '@/pages/TodosPage'
 
+const DEFAULT_PAGE = 'home'
+
 export function App() {
-  const [activePage, setActivePage] = useState('home')
+  const [activePage, setActivePage] = useState(() => pageFromHash(window.location.hash))
   const [modelConfigured, setModelConfigured] = useState<boolean | null>(null)
   const [souls, setSouls] = useState<Soul[]>([])
   const [todos, setTodos] = useState<Todo[]>([])
@@ -58,6 +60,14 @@ export function App() {
     setTodos(todoData)
   }, [])
 
+  const navigateToPage = useCallback((page: string) => {
+    const nextHash = hashFromPage(page)
+    if (window.location.hash !== nextHash) {
+      window.location.hash = nextHash
+    }
+    setActivePage(page)
+  }, [])
+
   const handleTodosChanged = useCallback((nextTodos?: Todo[]) => {
     if (nextTodos) {
       setTodos(nextTodos)
@@ -72,27 +82,35 @@ export function App() {
   }, [refreshTodos])
 
   const openReflections = useCallback(() => {
-    setActivePage('reflections')
-  }, [])
+    navigateToPage('reflections')
+  }, [navigateToPage])
 
   const openTodos = useCallback(() => {
-    setActivePage('todos')
-  }, [])
+    navigateToPage('todos')
+  }, [navigateToPage])
 
   const checkModelConfiguration = useCallback(async () => {
     try {
       const settings = await getModelSettings()
       setModelConfigured(settings.configured)
-      if (!settings.configured) setActivePage('settings')
+      if (!settings.configured) navigateToPage('settings')
     } catch {
       /* API might not be running yet */
     }
-  }, [])
+  }, [navigateToPage])
 
   useEffect(() => {
     fetchSouls()
     checkModelConfiguration()
   }, [fetchSouls, checkModelConfiguration])
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setActivePage(pageFromHash(window.location.hash))
+    }
+    window.addEventListener('hashchange', handleHashChange)
+    return () => window.removeEventListener('hashchange', handleHashChange)
+  }, [])
 
   useEffect(() => {
     if (showRightPanel) void refreshHomeContext()
@@ -116,7 +134,7 @@ export function App() {
         )
       default:
         if (activePage.startsWith('chat:')) {
-          const soulName = activePage.replace('chat:', '')
+          const soulName = activePage.slice('chat:'.length)
           return <ChatPage soulName={soulName} />
         }
         return <Timeline onActivitySettled={refreshHomeContext} onTodosChanged={refreshTodos} />
@@ -129,7 +147,7 @@ export function App() {
         <LeftNav
           souls={souls}
           activePage={activePage}
-          onNavigate={setActivePage}
+          onNavigate={navigateToPage}
           onAfterNavigate={closeMobileNav}
         />
       )}
@@ -146,4 +164,39 @@ export function App() {
       ) : undefined}
     />
   )
+}
+
+function pageFromHash(hash: string): string {
+  const path = hash.replace(/^#/, '').replace(/^\//, '')
+  if (!path) return DEFAULT_PAGE
+  if (path === 'home') return 'home'
+  if (path === 'todos') return 'todos'
+  if (path === 'reflections') return 'reflections'
+  if (path === 'settings') return 'settings'
+  if (path.startsWith('chat/')) {
+    const encodedSoulName = path.slice('chat/'.length)
+    const soulName = decodeRouteSegment(encodedSoulName)
+    return soulName ? `chat:${soulName}` : DEFAULT_PAGE
+  }
+  return DEFAULT_PAGE
+}
+
+function hashFromPage(page: string): string {
+  if (page === 'home') return '#/'
+  if (page === 'todos') return '#/todos'
+  if (page === 'reflections') return '#/reflections'
+  if (page === 'settings') return '#/settings'
+  if (page.startsWith('chat:')) {
+    const soulName = page.slice('chat:'.length)
+    return `#/chat/${encodeURIComponent(soulName)}`
+  }
+  return '#/'
+}
+
+function decodeRouteSegment(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
 }
