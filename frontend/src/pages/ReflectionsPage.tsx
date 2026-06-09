@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  type Job,
   type MemoryRevisionSummary,
   type ReflectionScope,
   type SoulReflectionScope,
+  getJob,
   listProfileRevisions,
   listSoulMemoryRevisions,
   listSouls,
@@ -17,11 +19,19 @@ import {
   formatDateTimeAttribute,
   formatSmartTime,
 } from '@/utils/date'
+import { PollTimeoutError, pollUntil } from '@/utils/polling'
 import styles from './WorkspacePages.module.css'
 
 const RECENT_REVISION_LIMIT = 8
+const REFLECTION_POLL_INTERVAL_MS = 3000
+const REFLECTION_POLL_TIMEOUT_MS = 30000
+const TERMINAL_JOB_STATUSES = new Set<Job['status']>(['succeeded', 'failed', 'cancelled'])
 
-export function ReflectionsPage() {
+interface ReflectionsPageProps {
+  onReflectionSettled?: () => void
+}
+
+export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
   const [globalScope, setGlobalScope] = useState<ReflectionScope | null>(null)
   const [soulScopes, setSoulScopes] = useState<SoulReflectionScope[]>([])
   const [recentRevisions, setRecentRevisions] = useState<MemoryRevisionSummary[]>([])
@@ -30,6 +40,7 @@ export function ReflectionsPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [revisionError, setRevisionError] = useState<string | null>(null)
+  const pollAbortRef = useRef<AbortController | null>(null)
 
   const fetchPreview = useCallback(async () => {
     try {
@@ -85,30 +96,94 @@ export function ReflectionsPage() {
     refreshPage()
   }, [refreshPage])
 
+  useEffect(() => {
+    return () => {
+      pollAbortRef.current?.abort()
+    }
+  }, [])
+
   const runGlobal = async () => {
     setRunning('global')
+    setError(null)
+    pollAbortRef.current?.abort()
+    const controller = new AbortController()
+    pollAbortRef.current = controller
     try {
       const result = await triggerGlobalReflection()
       setNotice(`全局整理已加入队列：#${result.job_id}`)
-      await refreshPage()
+      await waitForReflectionJob(result.job_id, controller.signal)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '整理失败')
+      handleReflectionRunError(err, '全局整理')
     } finally {
+      if (pollAbortRef.current === controller) pollAbortRef.current = null
       setRunning(null)
     }
   }
 
   const runSouls = async () => {
     setRunning('souls')
+    setError(null)
+    pollAbortRef.current?.abort()
+    const controller = new AbortController()
+    pollAbortRef.current = controller
     try {
       const result = await triggerSoulReflections()
       setNotice(`人格记忆整理已加入队列：#${result.job_id}`)
-      await refreshPage()
+      await waitForReflectionJob(result.job_id, controller.signal)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '整理失败')
+      handleReflectionRunError(err, '人格记忆整理')
     } finally {
+      if (pollAbortRef.current === controller) pollAbortRef.current = null
       setRunning(null)
     }
+  }
+
+  const waitForReflectionJob = async (jobId: number, signal: AbortSignal) => {
+    try {
+      const job = await pollUntil({
+        intervalMs: REFLECTION_POLL_INTERVAL_MS,
+        timeoutMs: REFLECTION_POLL_TIMEOUT_MS,
+        signal,
+        tick: async () => {
+          const [job] = await Promise.all([
+            getJob(jobId),
+            fetchPreview(),
+          ])
+          return job
+        },
+        isDone: (job) => TERMINAL_JOB_STATUSES.has(job.status),
+      })
+
+      await Promise.all([
+        fetchPreview(),
+        fetchRecentRevisions(),
+      ])
+      onReflectionSettled?.()
+
+      if (job.status === 'succeeded') {
+        setNotice(`整理已完成：#${job.id}`)
+      } else if (job.status === 'cancelled') {
+        setNotice(`整理已取消：#${job.id}`)
+      } else {
+        setError(job.error ?? '整理失败')
+      }
+    } catch (err) {
+      if (err instanceof PollTimeoutError) {
+        await Promise.all([
+          fetchPreview(),
+          fetchRecentRevisions(),
+        ])
+        onReflectionSettled?.()
+        setNotice(`整理仍在后台运行：#${jobId}，可稍后刷新`)
+        return
+      }
+      throw err
+    }
+  }
+
+  const handleReflectionRunError = (err: unknown, fallbackLabel: string) => {
+    if (err instanceof DOMException && err.name === 'AbortError') return
+    setError(err instanceof Error ? err.message : `${fallbackLabel}失败`)
   }
 
   const postCount = globalScope?.post_ids.length ?? 0

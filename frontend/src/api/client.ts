@@ -212,6 +212,23 @@ export interface JobQueued {
   status: string
 }
 
+export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export interface Job {
+  id: number
+  type: string
+  status: JobStatus
+  payload_json: string | null
+  payload: unknown
+  attempts: number
+  max_attempts: number
+  error: string | null
+  created_at: number
+  updated_at: number
+  started_at: number | null
+  finished_at: number | null
+}
+
 export interface ModelSettings {
   configured: boolean
   has_api_key: boolean
@@ -559,6 +576,11 @@ export function triggerSoulReflections(limitPerSoul = DEFAULT_REFLECTION_LIMIT) 
     method: 'POST',
     body: JSON.stringify({ limit_per_soul: limitPerSoul }),
   })
+}
+
+/* Jobs */
+export function getJob(jobId: number) {
+  return request<Job>(`/jobs/${jobId}`)
 }
 
 /* Comment conversations */

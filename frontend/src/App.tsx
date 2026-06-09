@@ -92,7 +92,7 @@ export function App() {
       case 'todos':
         return <TodosPage onTodosChanged={handleTodosChanged} />
       case 'reflections':
-        return <ReflectionsPage />
+        return <ReflectionsPage onReflectionSettled={refreshHomeContext} />
       case 'settings':
         return <SettingsPage onSoulsChanged={fetchSouls} />
       default:

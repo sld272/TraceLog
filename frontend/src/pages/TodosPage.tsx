@@ -101,8 +101,9 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
     setError(null)
     try {
       const updated = await updateTodo(todo.id, { status: nextStatus })
-      setTodos((prev) => replaceTodo(prev, updated))
-      onTodosChanged?.()
+      const nextTodos = replaceTodo(todos, updated)
+      setTodos(nextTodos)
+      onTodosChanged?.(nextTodos)
     } catch (err) {
       setError(err instanceof Error ? err.message : '更新失败')
     } finally {
@@ -121,12 +122,14 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
     try {
       if (drawerMode === 'create') {
         const created = await createTodo(payload)
-        setTodos((prev) => [...prev, created])
-        onTodosChanged?.()
+        const nextTodos = [...todos, created]
+        setTodos(nextTodos)
+        onTodosChanged?.(nextTodos)
       } else if (drawerMode === 'edit' && selectedTodo) {
         const updated = await updateTodo(selectedTodo.id, payload)
-        setTodos((prev) => replaceTodo(prev, updated))
-        onTodosChanged?.()
+        const nextTodos = replaceTodo(todos, updated)
+        setTodos(nextTodos)
+        onTodosChanged?.(nextTodos)
       }
       closeDrawer()
     } catch (err) {
@@ -146,8 +149,9 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
     setError(null)
     try {
       await deleteTodo(selectedTodo.id)
-      setTodos((prev) => prev.filter((todo) => todo.id !== selectedTodo.id))
-      onTodosChanged?.()
+      const nextTodos = todos.filter((todo) => todo.id !== selectedTodo.id)
+      setTodos(nextTodos)
+      onTodosChanged?.(nextTodos)
       closeDrawer()
     } catch (err) {
       setError(err instanceof Error ? err.message : '删除失败')
