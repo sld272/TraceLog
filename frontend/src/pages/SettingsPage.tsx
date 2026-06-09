@@ -549,7 +549,7 @@ function ModelSettingsPanel({
       </section>
 
       <div className={styles.saveBar}>
-        <span className={styles.saveHint}>保存后应用会自动重新加载配置；如果重新加载失败，将继续使用上一次可用配置。</span>
+        <span className={styles.saveHint}>保存后应用会自动重新加载配置。</span>
         <button className={workspaceStyles.button} type="submit" disabled={saving}>
           {saving ? '保存中...' : '保存配置'}
         </button>
@@ -711,11 +711,8 @@ function DataSettingsPanel({
   if (!status) {
     return <div className={workspaceStyles.empty}>无法读取本地数据状态</div>
   }
-  const vectorNeedsAttention = !status.vector_index.ready
-    || status.vector_index.failed_count > 0
-    || status.vector_index.pending_count > 0
-    || status.vector_index.missing_count > 0
-    || status.vector_index.stale_count > 0
+  const vectorStatus = vectorIndexStatus(status.vector_index)
+  const vectorActionConfig = vectorIndexActionConfig(status.vector_index, vectorAction)
 
   return (
     <div className={styles.settingsStack}>
@@ -757,11 +754,12 @@ function DataSettingsPanel({
         <div className={styles.sectionHeader}>
           <div>
             <h2 className={styles.sectionTitle}>向量索引</h2>
-            <p className={styles.sectionMeta}>ChromaDB 派生索引与 SQLite 事实源的同步状态。</p>
+            <p className={styles.sectionMeta}>用于记忆检索。通常无需手动处理，异常时按提示同步即可。</p>
           </div>
-          <StatusPill ok={status.vector_index.ready} label={status.vector_index.ready ? '已同步' : '待同步'} />
+          <StatusPill ok={vectorStatus.ok} label={vectorStatus.label} />
         </div>
         <div className={styles.sectionBodyStack}>
+          <p className={styles.sectionMeta}>{vectorStatus.description}</p>
           {vectorError && (
             <div className={styles.inlineFailure}>
               <div className={styles.inlineFailureMain}>
@@ -773,38 +771,18 @@ function DataSettingsPanel({
               </details>
             </div>
           )}
-          {vectorNeedsAttention && (
+          {vectorActionConfig && (
             <div className={styles.actionRow}>
               <button
                 className={workspaceStyles.ghostButton}
                 type="button"
-                onClick={() => onVectorAction('retry')}
+                onClick={() => onVectorAction(vectorActionConfig.action)}
                 disabled={vectorAction !== null}
               >
-                {vectorAction === 'retry' ? '同步中...' : '重试同步'}
-              </button>
-              <button
-                className={workspaceStyles.ghostButton}
-                type="button"
-                onClick={() => onVectorAction('reconcile')}
-                disabled={vectorAction !== null}
-              >
-                {vectorAction === 'reconcile' ? '对账中...' : '重新对账'}
+                {vectorActionConfig.label}
               </button>
             </div>
           )}
-          <div className={styles.statGrid}>
-            <Stat label="源版本" value={status.vector_index.source_revision} />
-            <Stat label="已同步版本" value={status.vector_index.synced_revision} />
-            <Stat label="待处理" value={status.vector_index.pending_count} />
-            <Stat label="失败" value={status.vector_index.failed_count} />
-            <Stat label="缺失" value={status.vector_index.missing_count} />
-            <Stat label="滞后" value={status.vector_index.stale_count} />
-          </div>
-          <div className={styles.pathGrid}>
-            <PathRow label="Collection" value={status.vector_index.collection_name ?? '未初始化'} />
-            <PathRow label="Embedding 指纹" value={status.vector_index.embedding_config_hash ?? '未初始化'} />
-          </div>
         </div>
       </section>
 
@@ -821,6 +799,68 @@ function DataSettingsPanel({
       </section>
     </div>
   )
+}
+
+function vectorIndexStatus(vectorIndex: WorkspaceStatus['vector_index']): {
+  ok: boolean
+  label: string
+  description: string
+} {
+  if (!vectorIndex.ready) {
+    return {
+      ok: false,
+      label: '待同步',
+      description: '记忆检索索引还没有准备好，可以先同步一次。',
+    }
+  }
+  if (vectorIndex.failed_count > 0) {
+    return {
+      ok: false,
+      label: '需要处理',
+      description: '有部分记忆检索数据同步失败，可以重试同步。',
+    }
+  }
+  if (
+    vectorIndex.pending_count > 0
+    || vectorIndex.missing_count > 0
+    || vectorIndex.stale_count > 0
+    || vectorIndex.source_revision > vectorIndex.synced_revision
+  ) {
+    return {
+      ok: false,
+      label: '同步中',
+      description: '记忆检索索引正在追上最新记录。',
+    }
+  }
+  return {
+    ok: true,
+    label: '正常',
+    description: '记忆检索索引已准备好。',
+  }
+}
+
+function vectorIndexActionConfig(
+  vectorIndex: WorkspaceStatus['vector_index'],
+  vectorAction: 'retry' | 'reconcile' | null,
+): { action: 'retry' | 'reconcile'; label: string } | null {
+  if (!vectorIndex.ready || vectorIndex.failed_count > 0) {
+    return {
+      action: 'retry',
+      label: vectorAction === 'retry' ? '同步中...' : '重试同步',
+    }
+  }
+  if (
+    vectorIndex.pending_count > 0
+    || vectorIndex.missing_count > 0
+    || vectorIndex.stale_count > 0
+    || vectorIndex.source_revision > vectorIndex.synced_revision
+  ) {
+    return {
+      action: 'reconcile',
+      label: vectorAction === 'reconcile' ? '同步中...' : '同步索引',
+    }
+  }
+  return null
 }
 
 function TextField({
