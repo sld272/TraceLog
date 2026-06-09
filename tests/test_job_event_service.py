@@ -58,6 +58,23 @@ class JobEventServiceTest(unittest.TestCase):
         self.assertEqual("pending", pending["status"])
         self.assertEqual("first boom", pending["error"])
 
+    def test_enqueue_defaults_to_three_attempts(self) -> None:
+        job_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": "p-1"})
+
+        job = require_not_none(job_service.get_job(job_id))
+
+        self.assertEqual(3, job["max_attempts"])
+
+    def test_mark_failed_or_retry_does_not_retry_configuration_errors(self) -> None:
+        job_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": "p-1"})
+        job_service.claim_next_pending()
+
+        job_service.mark_failed_or_retry(job_id, "401 invalid api key")
+        failed = require_not_none(job_service.get_job(job_id))
+
+        self.assertEqual("failed", failed["status"])
+        self.assertEqual("401 invalid api key", failed["error"])
+
     def test_post_events_list_after_id(self) -> None:
         first = event_service.append_post_event("p-1", "post_created", {"ok": True})
         second = event_service.append_post_event("p-1", "reply_started", {"soul_name": "默认"})

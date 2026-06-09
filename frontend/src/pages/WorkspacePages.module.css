@@ -144,6 +144,19 @@
   margin-bottom: var(--space-4);
 }
 
+.noticeRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.noticeActions {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: var(--space-2);
+}
+
 .todoWorkspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

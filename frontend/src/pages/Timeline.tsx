@@ -13,6 +13,7 @@ import {
   getPost,
   listCommentConversations,
   listPosts,
+  retryJob,
   sendCommentMessage,
   streamPostEvents,
   rerunCommentMessage,
@@ -36,6 +37,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   const [error, setError] = useState<string | null>(null)
   const [deletingPostId, setDeletingPostId] = useState<string | null>(null)
   const [busyCommentId, setBusyCommentId] = useState<number | null>(null)
+  const [retryingJobId, setRetryingJobId] = useState<number | null>(null)
   const [regeneratedCommentId, setRegeneratedCommentId] = useState<number | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
@@ -79,6 +81,13 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
       importance: 0.5,
       comment_count: 0,
       latest_event_type: 'queued',
+      pipeline_status: {
+        state: 'running',
+        pending_count: result.job_ids.length,
+        running_count: 0,
+        retrying_count: 0,
+        failed_jobs: [],
+      },
       attachments,
     }
     setPosts((prev) => [newPost, ...prev])
@@ -132,7 +141,8 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
                 ...p,
                 importance: detail.post.importance,
                 comment_count: detail.comments.length,
-                latest_event_type: eventType ?? p.latest_event_type,
+                latest_event_type: detail.post.latest_event_type ?? eventType ?? p.latest_event_type,
+                pipeline_status: detail.post.pipeline_status,
                 attachments: detail.post.attachments,
               }
             : p,
@@ -297,6 +307,47 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
     }
   }
 
+  const handleRetryPostJob = async (postId: string, jobId: number) => {
+    setRetryingJobId(jobId)
+    setError(null)
+    try {
+      await retryJob(jobId)
+      await refreshPostDetail(postId)
+      streamPostEvents(
+        postId,
+        (event) => {
+          setPosts((prev) =>
+            prev.map((p) =>
+              p.post_id === postId
+                ? { ...p, latest_event_type: event.event_type }
+                : p,
+            ),
+          )
+          if (shouldRefreshPostDetail(event)) {
+            refreshPostDetail(postId, event.event_type)
+          }
+          if (event.event_type === 'todo_succeeded') {
+            onTodosChanged?.()
+          }
+        },
+        () => {
+          setPosts((prev) =>
+            prev.map((p) =>
+              p.post_id === postId
+                ? { ...p, latest_event_type: 'pipeline_done' }
+                : p,
+            ),
+          )
+          onActivitySettled?.()
+        },
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重试失败')
+    } finally {
+      setRetryingJobId(null)
+    }
+  }
+
   const showRegeneratedComment = (commentId: number) => {
     if (regeneratedCommentTimerRef.current !== null) {
       window.clearTimeout(regeneratedCommentTimerRef.current)
@@ -349,11 +400,13 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
               busyCommentId={busyCommentId}
               regeneratedCommentId={regeneratedCommentId}
               deletingPost={deletingPostId === post.post_id}
+              retryingJobId={retryingJobId}
               onExpand={() => handleExpand(post.post_id)}
               onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
               onDeletePost={() => handleDeletePost(post.post_id)}
               onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
               onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
+              onRetryJob={(jobId) => handleRetryPostJob(post.post_id, jobId)}
             />
           ))}
         </div>

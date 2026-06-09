@@ -9,7 +9,9 @@ import {
   getModelSettings,
   getWorkspaceStatus,
   listSouls,
+  reconcileVectorIndex,
   reorderSouls,
+  retryVectorIndex,
   saveModelSettings,
   updateSoul,
 } from '@/api/client'
@@ -105,6 +107,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const [loading, setLoading] = useState(true)
   const [savingModel, setSavingModel] = useState(false)
   const [savingSoul, setSavingSoul] = useState<string | null>(null)
+  const [vectorAction, setVectorAction] = useState<'retry' | 'reconcile' | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -263,6 +266,24 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
     setMarkdownSoulDraft((draft) => ({ ...draft, content }))
   }
 
+  const handleVectorAction = async (action: 'retry' | 'reconcile') => {
+    setVectorAction(action)
+    setNotice(null)
+    setError(null)
+    try {
+      const result = action === 'retry'
+        ? await retryVectorIndex()
+        : await reconcileVectorIndex()
+      const workspace = await getWorkspaceStatus()
+      setWorkspaceStatus(workspace)
+      setNotice(`向量索引已处理 ${result.processed} 条任务。`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '向量索引处理失败')
+    } finally {
+      setVectorAction(null)
+    }
+  }
+
   return (
     <div className={workspaceStyles.page}>
       <header className={workspaceStyles.header}>
@@ -327,7 +348,13 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
           {activeTab === 'memory' && (
             <MemorySettingsPanel souls={souls} workspaceStatus={workspaceStatus} />
           )}
-          {activeTab === 'data' && <DataSettingsPanel status={workspaceStatus} />}
+          {activeTab === 'data' && (
+            <DataSettingsPanel
+              status={workspaceStatus}
+              vectorAction={vectorAction}
+              onVectorAction={handleVectorAction}
+            />
+          )}
         </div>
       )}
     </div>
@@ -667,10 +694,23 @@ function SoulSettingsPanel({
   )
 }
 
-function DataSettingsPanel({ status }: { status: WorkspaceStatus | null }) {
+function DataSettingsPanel({
+  status,
+  vectorAction,
+  onVectorAction,
+}: {
+  status: WorkspaceStatus | null
+  vectorAction: 'retry' | 'reconcile' | null
+  onVectorAction: (action: 'retry' | 'reconcile') => void
+}) {
   if (!status) {
     return <div className={workspaceStyles.empty}>无法读取本地数据状态</div>
   }
+  const vectorNeedsAttention = !status.vector_index.ready
+    || status.vector_index.failed_count > 0
+    || status.vector_index.pending_count > 0
+    || status.vector_index.missing_count > 0
+    || status.vector_index.stale_count > 0
 
   return (
     <div className={styles.settingsStack}>
@@ -717,6 +757,26 @@ function DataSettingsPanel({ status }: { status: WorkspaceStatus | null }) {
           <StatusPill ok={status.vector_index.ready} label={status.vector_index.ready ? '已同步' : '待同步'} />
         </div>
         <div className={styles.sectionBodyStack}>
+          {vectorNeedsAttention && (
+            <div className={styles.actionRow}>
+              <button
+                className={workspaceStyles.ghostButton}
+                type="button"
+                onClick={() => onVectorAction('retry')}
+                disabled={vectorAction !== null}
+              >
+                {vectorAction === 'retry' ? '同步中...' : '重试同步'}
+              </button>
+              <button
+                className={workspaceStyles.ghostButton}
+                type="button"
+                onClick={() => onVectorAction('reconcile')}
+                disabled={vectorAction !== null}
+              >
+                {vectorAction === 'reconcile' ? '对账中...' : '重新对账'}
+              </button>
+            </div>
+          )}
           <div className={styles.statGrid}>
             <Stat label="源版本" value={status.vector_index.source_revision} />
             <Stat label="已同步版本" value={status.vector_index.synced_revision} />

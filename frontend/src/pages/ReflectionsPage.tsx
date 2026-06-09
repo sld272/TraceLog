@@ -10,6 +10,8 @@ import {
   listSouls,
   previewGlobalReflection,
   previewSoulReflections,
+  retryJob,
+  cancelJob,
   triggerGlobalReflection,
   triggerSoulReflections,
 } from '@/api/client'
@@ -37,6 +39,9 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
   const [recentRevisions, setRecentRevisions] = useState<MemoryRevisionSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [running, setRunning] = useState<'global' | 'souls' | null>(null)
+  const [activeJob, setActiveJob] = useState<Job | null>(null)
+  const [lastFailedJob, setLastFailedJob] = useState<Job | null>(null)
+  const [jobActionBusy, setJobActionBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [revisionError, setRevisionError] = useState<string | null>(null)
@@ -111,6 +116,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
     try {
       const result = await triggerGlobalReflection()
       setNotice(`全局整理已加入队列：#${result.job_id}`)
+      setLastFailedJob(null)
       await waitForReflectionJob(result.job_id, controller.signal)
     } catch (err) {
       handleReflectionRunError(err, '全局整理')
@@ -129,6 +135,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
     try {
       const result = await triggerSoulReflections()
       setNotice(`人格记忆整理已加入队列：#${result.job_id}`)
+      setLastFailedJob(null)
       await waitForReflectionJob(result.job_id, controller.signal)
     } catch (err) {
       handleReflectionRunError(err, '人格记忆整理')
@@ -149,6 +156,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
             getJob(jobId),
             fetchPreview(),
           ])
+          setActiveJob(job)
           return job
         },
         isDone: (job) => TERMINAL_JOB_STATUSES.has(job.status),
@@ -161,10 +169,15 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
       onReflectionSettled?.()
 
       if (job.status === 'succeeded') {
+        setActiveJob(null)
+        setLastFailedJob(null)
         setNotice(`整理已完成：#${job.id}`)
       } else if (job.status === 'cancelled') {
+        setActiveJob(null)
         setNotice(`整理已取消：#${job.id}`)
       } else {
+        setActiveJob(null)
+        setLastFailedJob(job)
         setError(job.error ?? '整理失败')
       }
     } catch (err) {
@@ -183,7 +196,47 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
 
   const handleReflectionRunError = (err: unknown, fallbackLabel: string) => {
     if (err instanceof DOMException && err.name === 'AbortError') return
+    setActiveJob(null)
     setError(err instanceof Error ? err.message : `${fallbackLabel}失败`)
+  }
+
+  const retryReflectionJob = async (job: Job) => {
+    setJobActionBusy(true)
+    setError(null)
+    pollAbortRef.current?.abort()
+    const controller = new AbortController()
+    pollAbortRef.current = controller
+    try {
+      const result = await retryJob(job.id)
+      setNotice(`整理已重新加入队列：#${result.job_id}`)
+      setLastFailedJob(null)
+      await waitForReflectionJob(result.job_id, controller.signal)
+    } catch (err) {
+      handleReflectionRunError(err, '重试整理')
+    } finally {
+      if (pollAbortRef.current === controller) pollAbortRef.current = null
+      setJobActionBusy(false)
+    }
+  }
+
+  const cancelReflectionJob = async (job: Job) => {
+    setJobActionBusy(true)
+    setError(null)
+    try {
+      await cancelJob(job.id)
+      pollAbortRef.current?.abort()
+      setActiveJob(null)
+      setNotice(`整理已取消：#${job.id}`)
+      await Promise.all([
+        fetchPreview(),
+        fetchRecentRevisions(),
+      ])
+      onReflectionSettled?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '取消失败')
+    } finally {
+      setJobActionBusy(false)
+    }
   }
 
   const postCount = globalScope?.post_ids.length ?? 0
@@ -203,6 +256,15 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
 
       {notice && <div className={styles.notice}>{notice}</div>}
       {error && <div className={styles.notice}>{error}</div>}
+      {(activeJob || lastFailedJob) && (
+        <ReflectionJobNotice
+          activeJob={activeJob}
+          failedJob={lastFailedJob}
+          busy={jobActionBusy}
+          onRetry={retryReflectionJob}
+          onCancel={cancelReflectionJob}
+        />
+      )}
 
       {loading ? (
         <div className={styles.empty}>加载中...</div>
@@ -277,6 +339,51 @@ function RecentRevisionsCard({
         </div>
       )}
     </section>
+  )
+}
+
+function ReflectionJobNotice({
+  activeJob,
+  failedJob,
+  busy,
+  onRetry,
+  onCancel,
+}: {
+  activeJob: Job | null
+  failedJob: Job | null
+  busy: boolean
+  onRetry: (job: Job) => void
+  onCancel: (job: Job) => void
+}) {
+  const job = failedJob ?? activeJob
+  if (!job) return null
+
+  const isFailed = job.status === 'failed'
+  const isPending = job.status === 'pending'
+
+  return (
+    <div className={styles.notice}>
+      <div className={styles.noticeRow}>
+        <span>
+          {isFailed
+            ? `整理失败：#${job.id}`
+            : `整理进行中：#${job.id}${job.error ? '，正在自动重试' : ''}`}
+        </span>
+        <div className={styles.noticeActions}>
+          {isFailed && (
+            <button className={styles.ghostButton} onClick={() => onRetry(job)} disabled={busy}>
+              重试
+            </button>
+          )}
+          {isPending && (
+            <button className={styles.ghostButton} onClick={() => onCancel(job)} disabled={busy}>
+              取消
+            </button>
+          )}
+        </div>
+      </div>
+      {isFailed && job.error && <p className={styles.meta}>{job.error}</p>}
+    </div>
   )
 }
 

@@ -4,6 +4,7 @@ import {
   type Comment,
   type CommentConversation,
   type CommentMessage,
+  type PipelineJobSummary,
   type Post,
 } from '@/api/client'
 import { ImageGrid } from './ImageGrid'
@@ -27,12 +28,14 @@ interface PostCardProps {
   commentConversations?: Record<string, CommentConversationState>
   busyCommentId?: number | null
   regeneratedCommentId?: number | null
+  retryingJobId?: number | null
   deletingPost?: boolean
   onExpand?: () => void
   onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
   onDeletePost?: () => Promise<void>
   onDeleteComment?: (commentId: number) => Promise<void>
   onRerunComment?: (commentId: number) => Promise<void>
+  onRetryJob?: (jobId: number) => Promise<void>
 }
 
 export function PostCard({
@@ -41,12 +44,14 @@ export function PostCard({
   commentConversations = {},
   busyCommentId = null,
   regeneratedCommentId = null,
+  retryingJobId = null,
   deletingPost = false,
   onExpand,
   onReply,
   onDeletePost,
   onDeleteComment,
   onRerunComment,
+  onRetryJob,
 }: PostCardProps) {
   const timeAgo = formatSmartTime(post.ts)
 
@@ -101,14 +106,97 @@ export function PostCard({
         </button>
       )}
 
-      {post.latest_event_type && post.latest_event_type !== 'pipeline_done' && (
-        <div className={styles.processing}>
-          <LoadingDots />
-          <span>TA 正在思考...</span>
-        </div>
-      )}
+      <PipelineNotice
+        post={post}
+        retryingJobId={retryingJobId}
+        onRetryJob={onRetryJob}
+      />
     </article>
   )
+}
+
+function PipelineNotice({
+  post,
+  retryingJobId,
+  onRetryJob,
+}: {
+  post: Post
+  retryingJobId: number | null
+  onRetryJob?: (jobId: number) => Promise<void>
+}) {
+  const status = post.pipeline_status
+  const failedJobs = status?.failed_jobs ?? []
+
+  if (failedJobs.length > 0) {
+    return (
+      <div className={styles.pipelineFailure}>
+        <div className={styles.pipelineFailureText}>
+          <strong>有任务失败</strong>
+          {failedJobs.slice(0, 2).map((job) => (
+            <span key={job.id}>
+              {formatPipelineJobType(job.type)}：{formatPipelineError(job.error)}
+            </span>
+          ))}
+        </div>
+        {onRetryJob && failedJobs.some((job) => job.retryable) && (
+          <div className={styles.pipelineActions}>
+            {failedJobs.filter((job) => job.retryable).slice(0, 2).map((job) => (
+              <button
+                key={job.id}
+                className={styles.pipelineRetryButton}
+                onClick={() => onRetryJob(job.id)}
+                disabled={retryingJobId === job.id}
+                title={`重试${formatPipelineJobType(job.type)}`}
+                aria-label={`重试${formatPipelineJobType(job.type)}`}
+              >
+                {retryingJobId === job.id ? <LoadingDots /> : <RefreshCwIcon />}
+                <span>重试</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (status?.state === 'retrying') {
+    return (
+      <div className={styles.processing}>
+        <LoadingDots />
+        <span>正在自动重试...</span>
+      </div>
+    )
+  }
+
+  const isProcessing = status?.state === 'running'
+    || (!status && post.latest_event_type && post.latest_event_type !== 'pipeline_done')
+  if (!isProcessing) return null
+
+  return (
+    <div className={styles.processing}>
+      <LoadingDots />
+      <span>TA 正在思考...</span>
+    </div>
+  )
+}
+
+function formatPipelineJobType(type: string): string {
+  const labels: Record<string, string> = {
+    index_post_embedding: '索引',
+    generate_post_replies: '回复',
+    run_todo_tool: '待办',
+    run_light_reflection: '轻反思',
+    maybe_trigger_global_deep_reflection: '深反思',
+    trigger_global_deep_reflection: '全局整理',
+    trigger_soul_deep_reflections: '人格整理',
+  }
+  return labels[type] ?? type
+}
+
+function formatPipelineError(error: PipelineJobSummary['error']): string {
+  const text = (error ?? '').trim()
+  if (!text) return '未知错误'
+  return text.length > 80 ? `${text.slice(0, 80)}...` : text
 }
 function CommentPreview({
   comment,

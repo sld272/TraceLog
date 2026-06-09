@@ -121,6 +121,7 @@ def _list_posts(limit: int, offset: int) -> list[dict[str, Any]]:
             "importance": row["importance"],
             "comment_count": row["comment_count"],
             "latest_event_type": event_service.latest_event_type(row["id"]),
+            "pipeline_status": public_post_pipeline.summarize_pipeline_status(row["id"]),
             "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(row["id"])],
         }
         for row in rows
@@ -155,6 +156,8 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
             "created_at": post["created_at"],
             "updated_at": post["updated_at"],
             "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(post_id)],
+            "latest_event_type": event_service.latest_event_type(post_id),
+            "pipeline_status": public_post_pipeline.summarize_pipeline_status(post_id),
         },
         "comments": comments,
         "jobs": job_service.list_jobs_for_post(post_id),

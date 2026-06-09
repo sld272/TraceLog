@@ -230,6 +230,45 @@ def maybe_emit_pipeline_done_for_job(job: dict[str, Any]) -> None:
     _maybe_emit_pipeline_done(post_id.strip())
 
 
+def summarize_pipeline_status(post_id: str) -> dict[str, Any]:
+    """Summarize background pipeline state for one public post."""
+    jobs = job_service.list_jobs_for_post(post_id)
+    pending_jobs = [job for job in jobs if job["status"] == job_service.STATUS_PENDING]
+    running_jobs = [job for job in jobs if job["status"] == job_service.STATUS_RUNNING]
+    retried_job_ids = {
+        int((job.get("payload") or {}).get("retry_of_job_id"))
+        for job in jobs
+        if (job.get("payload") or {}).get("retry_of_job_id") is not None
+    }
+    failed_jobs = [
+        job
+        for job in jobs
+        if job["status"] == job_service.STATUS_FAILED and int(job["id"]) not in retried_job_ids
+    ]
+    retrying_jobs = [
+        job
+        for job in pending_jobs
+        if job.get("error") and int(job.get("attempts") or 0) > 0
+    ]
+
+    if failed_jobs:
+        state = "failed"
+    elif running_jobs or pending_jobs:
+        state = "retrying" if retrying_jobs else "running"
+    elif jobs:
+        state = "done"
+    else:
+        state = "idle"
+
+    return {
+        "state": state,
+        "pending_count": len(pending_jobs),
+        "running_count": len(running_jobs),
+        "retrying_count": len(retrying_jobs),
+        "failed_jobs": [_job_summary(job) for job in failed_jobs],
+    }
+
+
 def _maybe_emit_pipeline_done(post_id: str) -> None:
     """Emit pipeline_done when no pending/running jobs remain for this post."""
     jobs = job_service.list_jobs_for_post(post_id)
@@ -241,11 +280,24 @@ def _maybe_emit_pipeline_done(post_id: str) -> None:
     )
     if has_unfinished:
         return
-    # Avoid duplicate pipeline_done events
+    # Avoid duplicate done events for the same quiet period, but allow a later
+    # manual retry cycle to emit its own done event.
     existing_events = event_service.list_post_events(post_id)
-    if any(event["event_type"] == "pipeline_done" for event in existing_events):
+    if existing_events and existing_events[-1]["event_type"] == "pipeline_done":
         return
     event_service.append_post_event(post_id, "pipeline_done", {"post_id": post_id})
+
+
+def _job_summary(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": job["id"],
+        "type": job["type"],
+        "status": job["status"],
+        "attempts": job["attempts"],
+        "max_attempts": job["max_attempts"],
+        "error": job.get("error"),
+        "retryable": job["status"] == job_service.STATUS_FAILED,
+    }
 
 
 def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClient, model: str) -> None:

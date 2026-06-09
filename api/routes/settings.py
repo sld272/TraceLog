@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from api import deps
 from api.deps import run_sync
-from core import db, vector_index_service, vectorstore, vision_service, web_search_service
+from core import db, record_service, vector_index_service, vectorstore, vision_service, web_search_service
 from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
@@ -80,6 +80,18 @@ async def update_model_settings(request: ModelSettingsRequest):
 @router.get("/workspace")
 async def get_workspace_status():
     return await run_sync(_workspace_status)
+
+
+@router.post("/vector-index/retry")
+async def retry_vector_index():
+    processed = await run_sync(record_service.retry_pending_vector_docs)
+    return {"processed": processed, "vector_index": await run_sync(_vector_index_status)}
+
+
+@router.post("/vector-index/reconcile")
+async def reconcile_vector_index():
+    processed = await run_sync(record_service.reindex_all_vector_docs)
+    return {"processed": processed, "vector_index": await run_sync(_vector_index_status)}
 
 
 def _read_model_settings() -> dict[str, Any]:

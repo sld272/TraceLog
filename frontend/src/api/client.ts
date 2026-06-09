@@ -22,6 +22,7 @@ export interface Post {
   importance: number
   comment_count: number
   latest_event_type: string | null
+  pipeline_status?: PipelineStatus
   attachments: Attachment[]
 }
 
@@ -48,10 +49,12 @@ export interface PostDetail {
     created_at: number
     updated_at: number
     attachments: Attachment[]
+    latest_event_type?: string | null
+    pipeline_status?: PipelineStatus
   }
   comments: Comment[]
-  jobs: unknown[]
-  events: unknown[]
+  jobs: Job[]
+  events: PostEvent[]
 }
 
 export interface Attachment {
@@ -229,6 +232,26 @@ export interface Job {
   finished_at: number | null
 }
 
+export interface PipelineJobSummary {
+  id: number
+  type: string
+  status: JobStatus
+  attempts: number
+  max_attempts: number
+  error: string | null
+  retryable: boolean
+}
+
+export type PipelineState = 'idle' | 'running' | 'retrying' | 'failed' | 'done'
+
+export interface PipelineStatus {
+  state: PipelineState
+  pending_count: number
+  running_count: number
+  retrying_count: number
+  failed_jobs: PipelineJobSummary[]
+}
+
 export interface ModelSettings {
   configured: boolean
   has_api_key: boolean
@@ -337,6 +360,11 @@ export interface WorkspaceStatus {
     history_dir: string
     history_count: number
   }
+}
+
+export interface VectorIndexActionResult {
+  processed: number
+  vector_index: WorkspaceStatus['vector_index']
 }
 
 /* Posts */
@@ -592,8 +620,32 @@ export function triggerSoulReflections(limitPerSoul = DEFAULT_REFLECTION_LIMIT) 
 }
 
 /* Jobs */
+export function listJobs(params: { status?: JobStatus; job_type?: string; limit?: number; offset?: number } = {}) {
+  const search = new URLSearchParams()
+  if (params.status) search.set('status', params.status)
+  if (params.job_type) search.set('job_type', params.job_type)
+  if (params.limit !== undefined) search.set('limit', String(params.limit))
+  if (params.offset !== undefined) search.set('offset', String(params.offset))
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return request<Job[]>(`/jobs${suffix}`)
+}
+
 export function getJob(jobId: number) {
   return request<Job>(`/jobs/${jobId}`)
+}
+
+export function retryJob(jobId: number) {
+  return request<JobQueued>(`/jobs/${jobId}/retry`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function cancelJob(jobId: number) {
+  return request<JobQueued>(`/jobs/${jobId}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
 }
 
 /* Comment conversations */
@@ -648,4 +700,18 @@ export function saveModelSettings(settings: ModelSettingsUpdate) {
 
 export function getWorkspaceStatus() {
   return request<WorkspaceStatus>('/settings/workspace')
+}
+
+export function retryVectorIndex() {
+  return request<VectorIndexActionResult>('/settings/vector-index/retry', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function reconcileVectorIndex() {
+  return request<VectorIndexActionResult>('/settings/vector-index/reconcile', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
 }

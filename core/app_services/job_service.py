@@ -21,6 +21,8 @@ TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION = "maybe_trigger_global_deep_reflectio
 TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION = "trigger_global_deep_reflection"
 TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS = "trigger_soul_deep_reflections"
 
+DEFAULT_MAX_ATTEMPTS = 3
+
 VALID_STATUSES = {STATUS_PENDING, STATUS_RUNNING, STATUS_SUCCEEDED, STATUS_FAILED, STATUS_CANCELLED}
 VALID_TYPES = {
     TYPE_INDEX_POST_EMBEDDING,
@@ -33,7 +35,7 @@ VALID_TYPES = {
 }
 
 
-def enqueue(job_type: str, payload: dict[str, Any], *, max_attempts: int = 1) -> int:
+def enqueue(job_type: str, payload: dict[str, Any], *, max_attempts: int = DEFAULT_MAX_ATTEMPTS) -> int:
     """Create one pending job and return its id."""
     if job_type not in VALID_TYPES:
         raise ValueError(f"unsupported job type: {job_type}")
@@ -105,7 +107,7 @@ def mark_failed_or_retry(job_id: int, error: str) -> None:
     job = get_job(job_id)
     if job is None:
         return
-    if int(job["attempts"]) < int(job["max_attempts"]):
+    if is_retryable_error(error) and int(job["attempts"]) < int(job["max_attempts"]):
         now = db.now_ts()
         db.execute(
             """
@@ -119,6 +121,35 @@ def mark_failed_or_retry(job_id: int, error: str) -> None:
     mark_failed(job_id, error)
 
 
+def is_retryable_error(error: str | None) -> bool:
+    """Return whether a failed job should be retried automatically."""
+    text = (error or "").strip().lower()
+    if not text:
+        return True
+    non_retryable_markers = (
+        "api key",
+        "apikey",
+        "invalid_api_key",
+        "incorrect api key",
+        "unauthorized",
+        "forbidden",
+        "permission denied",
+        "model_not_found",
+        "model not found",
+        "does not exist",
+        "unsupported job type",
+        "job payload missing",
+        "content 不能为空",
+        "post 不存在",
+        "not found",
+        "404",
+        "401",
+        "403",
+        "422",
+    )
+    return not any(marker in text for marker in non_retryable_markers)
+
+
 def retry_failed_job(job_id: int) -> int | None:
     """Create a fresh pending copy of a failed job for manual retry."""
     job = get_job(job_id)
@@ -126,7 +157,9 @@ def retry_failed_job(job_id: int) -> int | None:
         return None
     if job["status"] != STATUS_FAILED:
         raise ValueError("only failed jobs can be retried")
-    return enqueue(job["type"], job.get("payload") or {}, max_attempts=int(job["max_attempts"]))
+    payload = dict(job.get("payload") or {})
+    payload["retry_of_job_id"] = job_id
+    return enqueue(job["type"], payload, max_attempts=int(job["max_attempts"]))
 
 
 def cancel_pending_job(job_id: int) -> bool | None:

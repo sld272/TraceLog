@@ -421,6 +421,64 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, retry_response.status_code)
         self.assertNotEqual(failed_id, retry_response.json()["job_id"])
 
+    def test_posts_route_includes_pipeline_status_for_failed_jobs(self) -> None:
+        post_id = "post-pipeline-1"
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (post_id, "2026-06-05T12:00:00+08:00", "会失败的 post", 1.0, 1.0),
+        )
+        job_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id})
+        job_service.mark_failed(job_id, "boom")
+
+        with self._client() as client:
+            response = client.get("/posts")
+
+        self.assertEqual(200, response.status_code)
+        status = response.json()[0]["pipeline_status"]
+        self.assertEqual("failed", status["state"])
+        self.assertEqual(job_id, status["failed_jobs"][0]["id"])
+        self.assertEqual("boom", status["failed_jobs"][0]["error"])
+
+    def test_retry_job_clears_old_failed_job_from_pipeline_summary(self) -> None:
+        post_id = "post-pipeline-retry"
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (post_id, "2026-06-05T12:00:00+08:00", "重试中的 post", 1.0, 1.0),
+        )
+        failed_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id})
+        job_service.mark_failed(failed_id, "boom")
+
+        with self._client() as client:
+            retry_response = client.post(f"/jobs/{failed_id}/retry")
+            detail_response = client.get(f"/posts/{post_id}")
+
+        self.assertEqual(200, retry_response.status_code)
+        status = detail_response.json()["post"]["pipeline_status"]
+        self.assertEqual("running", status["state"])
+        self.assertEqual([], status["failed_jobs"])
+
+    def test_vector_index_retry_and_reconcile_routes_return_status(self) -> None:
+        with (
+            patch("api.routes.settings.record_service.retry_pending_vector_docs", return_value=2),
+            patch("api.routes.settings.record_service.reindex_all_vector_docs", return_value=3),
+        ):
+            with self._client() as client:
+                retry_response = client.post("/settings/vector-index/retry")
+                reconcile_response = client.post("/settings/vector-index/reconcile")
+
+        self.assertEqual(200, retry_response.status_code)
+        self.assertEqual(2, retry_response.json()["processed"])
+        self.assertIn("vector_index", retry_response.json())
+        self.assertEqual(200, reconcile_response.status_code)
+        self.assertEqual(3, reconcile_response.json()["processed"])
+        self.assertIn("vector_index", reconcile_response.json())
+
     def test_chat_route_sends_message_and_persists_reply(self) -> None:
         soul_name = quote("默认")
 
