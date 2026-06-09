@@ -16,6 +16,23 @@ class ReplyRouterPromptTest(unittest.TestCase):
         self.assertNotIn("相关记忆", prompt)
         self.assertNotIn("近期帖子", prompt)
 
+    def test_virtual_friend_boundaries_forbid_unsupported_specific_facts(self) -> None:
+        prompt = reply_router._chat_reply_task_prompt()
+
+        self.assertIn("具体事实禁补全", prompt)
+        self.assertIn("必须能被当前输入", prompt)
+        self.assertIn("直接支持", prompt)
+        self.assertIn("证据没有表达的内容", prompt)
+        self.assertIn("不要为了安慰或显得亲近而补全成确定事实", prompt)
+        self.assertIn("建议、提问、感受判断", prompt)
+        self.assertIn("明确的不确定推测", prompt)
+        self.assertIn("当前时间只能用于判断此刻日期时间", prompt)
+        self.assertIn("不能用来推断用户做过什么", prompt)
+        self.assertIn("进度", prompt)
+        self.assertIn("完成状态", prompt)
+        self.assertIn("准备过程", prompt)
+        self.assertIn("历史行为", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
