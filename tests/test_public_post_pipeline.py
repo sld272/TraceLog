@@ -81,7 +81,7 @@ class PublicPostPipelineTest(unittest.TestCase):
             ["generate_post_replies", "run_light_reflection", "maybe_trigger_global_deep_reflection"],
             [job["type"] for job in jobs],
         )
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_embedding:{created.post_id}",)))
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_vector_doc:post-{created.post_id}",)))
 
     def test_index_post_embedding_job_indexes_and_emits_events(self) -> None:
         fake_vectorstore = FakeVectorStore()

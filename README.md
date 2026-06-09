@@ -118,7 +118,7 @@ Web 与 CLI 最终共用同一组 core service，但调度方式不同：Web/API
 1. 保存公开 post 到 SQLite，并同步 FTS5 索引。
 2. 为正文索引、SOUL 首评、TodoTool、轻反思和可能的全局深反思排入后台 jobs；图片-only post 不会排正文 embedding job，但仍会排回复与反思 jobs。
 3. worker 串行领取 pending jobs；运行时通过 `post_events` 向前端报告 embedding、reply、todo、reflection 与 pipeline_done 状态。
-4. 正文 embedding job 尝试写入 ChromaDB；失败时记录 `pending_embedding:<post_id>` / `pending_vector_doc:*`，后续启动自动重试。
+4. 正文 embedding job 尝试写入 ChromaDB；失败时记录 `pending_vector_doc:post-<post_id>`，后续启动自动重试。
 5. 回复 job 中，如果带图片且 Vision 可用，生成图片理解摘要，写入 `vision_cache`，并把公开 post 的摘要作为 `post_vision` 文档写入 ChromaDB。
 6. 回复 job 对用户输入执行 query rewrite + FTS5 / ChromaDB hybrid search，找出 raw 相关 posts 和图片摘要。
 7. `context_builder.build_context()` 组装共享上下文：`user.md`、raw 相关 posts、活跃 todos，以及 Web/API 路径上的可选网页搜索结果。

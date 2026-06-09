@@ -42,7 +42,7 @@ class RecordServiceTest(unittest.TestCase):
         record_service._vectorstore = self.old_vectorstore
         self.tmp.cleanup()
 
-    def test_save_post_indexes_and_clears_pending_embedding(self) -> None:
+    def test_save_post_indexes_and_clears_pending_vector_doc(self) -> None:
         fake_vectorstore = FakeVectorStore()
         record_service._vectorstore = lambda: fake_vectorstore
 
@@ -51,17 +51,19 @@ class RecordServiceTest(unittest.TestCase):
         self.assertEqual([(post_id, "今天想练歌")], fake_vectorstore.indexed)
         post = require_not_none(db.query_one("SELECT content FROM posts WHERE id = ?", (post_id,)))
         self.assertEqual("今天想练歌", post["content"])
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_embedding:{post_id}",)))
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_vector_doc:post-{post_id}",)))
 
-    def test_save_post_keeps_pending_embedding_on_index_error(self) -> None:
+    def test_save_post_keeps_pending_vector_doc_on_index_error(self) -> None:
         fake_vectorstore = FakeVectorStore(error=RuntimeError("embedding failed"))
         record_service._vectorstore = lambda: fake_vectorstore
 
         post_id = record_service.save_post("今天想练歌")
-        pending = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_embedding:{post_id}",)))
+        pending = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_vector_doc:post-{post_id}",)))
         payload = json.loads(pending["value"])
 
-        self.assertEqual(post_id, payload["post_id"])
+        self.assertEqual(f"post-{post_id}", payload["doc_id"])
+        self.assertEqual(post_id, payload["metadata"]["post_id"])
+        self.assertEqual("post", payload["type"])
         self.assertEqual("今天想练歌", payload["content"])
         self.assertEqual("embedding failed", payload["error"])
         self.assertIsNotNone(db.query_one("SELECT content FROM posts WHERE id = ?", (post_id,)))
@@ -71,15 +73,17 @@ class RecordServiceTest(unittest.TestCase):
         record_service._vectorstore = lambda: fake_vectorstore
 
         post_id = record_service.save_post("今天想练歌", index_immediately=False)
-        pending = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_embedding:{post_id}",)))
+        pending = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_vector_doc:post-{post_id}",)))
         payload = json.loads(pending["value"])
 
         self.assertEqual([], fake_vectorstore.indexed)
-        self.assertEqual(post_id, payload["post_id"])
+        self.assertEqual(f"post-{post_id}", payload["doc_id"])
+        self.assertEqual(post_id, payload["metadata"]["post_id"])
+        self.assertEqual("post", payload["type"])
         self.assertEqual("今天想练歌", payload["content"])
         self.assertEqual("pending before embedding", payload["error"])
 
-    def test_save_post_preserves_pending_embedding_and_reraises_keyboard_interrupt(self) -> None:
+    def test_save_post_preserves_pending_vector_doc_and_reraises_keyboard_interrupt(self) -> None:
         fake_vectorstore = FakeVectorStore(error=KeyboardInterrupt())
         record_service._vectorstore = lambda: fake_vectorstore
 
@@ -87,34 +91,68 @@ class RecordServiceTest(unittest.TestCase):
             record_service.save_post("今天想练歌")
 
         post = require_not_none(db.query_one("SELECT id, content FROM posts"))
-        pending = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_embedding:{post['id']}",)))
+        pending = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_vector_doc:post-{post['id']}",)))
         payload = json.loads(pending["value"])
-        self.assertEqual(post["id"], payload["post_id"])
+        self.assertEqual(f"post-{post['id']}", payload["doc_id"])
+        self.assertEqual(post["id"], payload["metadata"]["post_id"])
+        self.assertEqual("post", payload["type"])
         self.assertEqual("今天想练歌", payload["content"])
         self.assertEqual("pending before embedding", payload["error"])
 
-    def test_retry_pending_embeddings_indexes_and_clears_pending(self) -> None:
+    def test_retry_pending_vector_docs_indexes_and_clears_pending(self) -> None:
         fake_vectorstore = FakeVectorStore()
         record_service._vectorstore = lambda: fake_vectorstore
-        self._insert_pending("p-1", "待补索引")
+        self._insert_pending_vector_doc("p-1", "待补索引")
 
-        fixed = record_service.retry_pending_embeddings()
+        fixed = record_service.retry_pending_vector_docs()
+
+        self.assertEqual(1, fixed)
+        self.assertEqual([("p-1", "待补索引")], fake_vectorstore.indexed)
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_vector_doc:post-p-1",)))
+
+    def test_retry_pending_vector_docs_keeps_pending_on_error(self) -> None:
+        fake_vectorstore = FakeVectorStore(error=RuntimeError("still failing"))
+        record_service._vectorstore = lambda: fake_vectorstore
+        self._insert_pending_vector_doc("p-1", "待补索引")
+
+        fixed = record_service.retry_pending_vector_docs()
+
+        self.assertEqual(0, fixed)
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_vector_doc:post-p-1",)))
+
+    def test_retry_pending_vector_docs_migrates_legacy_pending_embedding(self) -> None:
+        fake_vectorstore = FakeVectorStore()
+        record_service._vectorstore = lambda: fake_vectorstore
+        self._insert_legacy_pending_embedding("p-1", "待补索引")
+
+        fixed = record_service.retry_pending_vector_docs()
 
         self.assertEqual(1, fixed)
         self.assertEqual([("p-1", "待补索引")], fake_vectorstore.indexed)
         self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_embedding:p-1",)))
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_vector_doc:post-p-1",)))
 
-    def test_retry_pending_embeddings_keeps_pending_on_error(self) -> None:
-        fake_vectorstore = FakeVectorStore(error=RuntimeError("still failing"))
-        record_service._vectorstore = lambda: fake_vectorstore
-        self._insert_pending("p-1", "待补索引")
+    def _insert_pending_vector_doc(self, post_id: str, content: str) -> None:
+        db.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+            (
+                f"pending_vector_doc:post-{post_id}",
+                json.dumps(
+                    {
+                        "doc_id": f"post-{post_id}",
+                        "type": "post",
+                        "source_id": post_id,
+                        "content": content,
+                        "metadata": {"type": "post", "post_id": post_id},
+                        "error": "test",
+                        "updated_at": 1.0,
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
 
-        fixed = record_service.retry_pending_embeddings()
-
-        self.assertEqual(0, fixed)
-        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_embedding:p-1",)))
-
-    def _insert_pending(self, post_id: str, content: str) -> None:
+    def _insert_legacy_pending_embedding(self, post_id: str, content: str) -> None:
         db.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
             (

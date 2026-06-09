@@ -176,14 +176,6 @@ def _job_worker_concurrency(config: dict) -> int:
 
 def _enqueue_startup_retries() -> None:
     record_service.retry_pending_vector_docs()
-    for row in db.query_all("SELECT key, value FROM meta WHERE key LIKE ? ORDER BY key", ("pending_embedding:%",)):
-        try:
-            payload = json.loads(row["value"])
-        except (TypeError, json.JSONDecodeError):
-            continue
-        post_id = payload.get("post_id")
-        if isinstance(post_id, str) and post_id:
-            job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": post_id})
 
     for row in db.query_all("SELECT key FROM meta WHERE key LIKE ? ORDER BY key", ("pending_reflect:%",)):
         post_id = str(row["key"])[len("pending_reflect:"):]

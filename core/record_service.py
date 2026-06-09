@@ -23,12 +23,12 @@ def save_post(content: str, *, index_immediately: bool = True, track_embedding: 
             (post_id, now.isoformat(), body, now.timestamp(), now.timestamp()),
         )
         if track_embedding:
-            conn.execute(
-                "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-                (
-                    f"pending_embedding:{post_id}",
-                    _pending_embedding_payload(post_id, body, "pending before embedding"),
-                ),
+            _mark_pending_vector_doc_conn(
+                conn,
+                f"post-{post_id}",
+                body,
+                {"type": "post", "post_id": post_id},
+                "pending before embedding",
             )
 
     if index_immediately and track_embedding:
@@ -57,12 +57,10 @@ def index_post_embedding(post_id: str) -> None:
             raise RuntimeError("vectorstore is not initialized")
         vectorstore.index_post(post_id, body)
         _clear_pending_vector_doc(f"post-{post_id}")
-        _clear_pending_embedding(post_id)
         logging_service.log_event("post_indexed", post_id=post_id, content_length=len(body))
     except KeyboardInterrupt:
         raise
     except Exception as exc:
-        _mark_pending_embedding(post_id, body, str(exc))
         _mark_pending_vector_doc(
             f"post-{post_id}",
             body,
@@ -176,7 +174,6 @@ def index_post_vision_embedding(post_id: str, content: str, attachment_ids: list
 
 def delete_post_embedding(post_id: str) -> None:
     _delete_vector_doc(f"post-{post_id}", "post", post_id=post_id)
-    _clear_pending_embedding(post_id)
     _clear_pending_vector_doc(f"post-{post_id}")
 
 
@@ -242,48 +239,8 @@ def format_post(row) -> str:
     return frontmatter + f"\n{content}\n"
 
 
-def retry_pending_embeddings(limit: int | None = None) -> int:
-    """Retry pending ChromaDB indexing jobs. Returns the number fixed."""
-    vectorstore = _vectorstore()
-    if not vectorstore.is_initialized():
-        return 0
-
-    sql = """
-        SELECT key, value
-        FROM meta
-        WHERE key LIKE 'pending_embedding:%'
-        ORDER BY key
-    """
-    params: tuple = ()
-    if limit is not None:
-        sql += " LIMIT ?"
-        params = (limit,)
-
-    fixed = 0
-    for row in db.query_all(sql, params):
-        payload = None
-        try:
-            payload = json.loads(row["value"])
-            post_id = payload["post_id"]
-            content = payload["content"]
-            vectorstore.index_post(post_id, content)
-            db.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-            logging_service.log_event("post_indexed", post_id=post_id, retry=True, content_length=len(content))
-            fixed += 1
-        except Exception as exc:
-            logging_service.log_event(
-                "post_index_failed",
-                level="WARNING",
-                post_id=payload.get("post_id") if isinstance(payload, dict) else None,
-                retry=True,
-                error=str(exc),
-                **_external_api_error_fields(exc, operation="vector_index_post"),
-            )
-            continue
-    return fixed
-
-
 def retry_pending_vector_docs(limit: int | None = None) -> int:
+    migrate_pending_embeddings()
     vectorstore = _vectorstore()
     if not vectorstore.is_initialized():
         return 0
@@ -343,6 +300,47 @@ def retry_pending_vector_docs(limit: int | None = None) -> int:
                 **_external_api_error_fields(exc, operation="vector_index_retry"),
             )
     return fixed
+
+
+def migrate_pending_embeddings() -> int:
+    """Convert legacy pending_embedding markers into pending_vector_doc markers."""
+    rows = db.query_all(
+        """
+        SELECT key, value
+        FROM meta
+        WHERE key LIKE 'pending_embedding:%'
+        ORDER BY key
+        """
+    )
+    migrated = 0
+    with db.transaction() as conn:
+        for row in rows:
+            try:
+                payload = json.loads(row["value"])
+            except (TypeError, json.JSONDecodeError):
+                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
+                continue
+            if not isinstance(payload, dict):
+                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
+                continue
+            post_id = str(payload.get("post_id") or str(row["key"])[len("pending_embedding:"):]).strip()
+            content = str(payload.get("content") or "")
+            if not post_id:
+                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
+                continue
+            target_key = f"pending_vector_doc:post-{post_id}"
+            exists = conn.execute("SELECT 1 FROM meta WHERE key = ?", (target_key,)).fetchone()
+            if exists is None:
+                _mark_pending_vector_doc_conn(
+                    conn,
+                    f"post-{post_id}",
+                    content,
+                    {"type": "post", "post_id": post_id},
+                    str(payload.get("error") or "migrated from pending_embedding"),
+                )
+            conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
+            migrated += 1
+    return migrated
 
 
 def reindex_all_vector_docs() -> int:
@@ -464,14 +462,23 @@ def _next_post_id(today: str) -> str:
     return f"{today}-{seq:03d}"
 
 
-def _mark_pending_embedding(post_id: str, content: str, error: str) -> None:
+def _mark_pending_vector_doc(doc_id: str, content: str, metadata: dict, error: str) -> None:
+    payload = _pending_vector_doc_payload(doc_id, content, metadata, error)
     db.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-        (f"pending_embedding:{post_id}", _pending_embedding_payload(post_id, content, error)),
+        (f"pending_vector_doc:{doc_id}", payload),
     )
 
 
-def _mark_pending_vector_doc(doc_id: str, content: str, metadata: dict, error: str) -> None:
+def _mark_pending_vector_doc_conn(conn, doc_id: str, content: str, metadata: dict, error: str) -> None:
+    payload = _pending_vector_doc_payload(doc_id, content, metadata, error)
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+        (f"pending_vector_doc:{doc_id}", payload),
+    )
+
+
+def _pending_vector_doc_payload(doc_id: str, content: str, metadata: dict, error: str) -> str:
     payload = {
         "doc_id": doc_id,
         "type": metadata.get("type"),
@@ -481,10 +488,7 @@ def _mark_pending_vector_doc(doc_id: str, content: str, metadata: dict, error: s
         "error": error,
         "updated_at": db.now_ts(),
     }
-    db.execute(
-        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-        (f"pending_vector_doc:{doc_id}", json.dumps(payload, ensure_ascii=False)),
-    )
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _delete_vector_doc(doc_id: str, doc_type: str, **metadata) -> None:
@@ -504,20 +508,6 @@ def _delete_vector_doc(doc_id: str, doc_type: str, **metadata) -> None:
             **metadata,
             **_external_api_error_fields(exc, operation="vector_delete_doc"),
         )
-
-
-def _pending_embedding_payload(post_id: str, content: str, error: str) -> str:
-    payload = {
-        "post_id": post_id,
-        "content": content,
-        "error": error,
-        "created_at": db.now_ts(),
-    }
-    return json.dumps(payload, ensure_ascii=False)
-
-
-def _clear_pending_embedding(post_id: str) -> None:
-    db.execute("DELETE FROM meta WHERE key = ?", (f"pending_embedding:{post_id}",))
 
 
 def _clear_pending_vector_doc(doc_id: str) -> None:
