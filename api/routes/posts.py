@@ -76,14 +76,16 @@ async def delete_post(post_id: str):
 async def stream_post_events(
     post_id: str,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    after_id: int | None = Query(default=None, ge=0),
 ):
     exists = await run_sync(_post_exists, post_id)
     if not exists:
         raise HTTPException(status_code=404, detail="post not found")
-    try:
-        after_id = int(last_event_id or "0")
-    except ValueError:
-        after_id = 0
+    if after_id is None:
+        try:
+            after_id = int(last_event_id or "0")
+        except ValueError:
+            after_id = 0
     return StreamingResponse(
         _event_stream(post_id, after_id),
         media_type="text/event-stream",

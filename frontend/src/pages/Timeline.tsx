@@ -46,6 +46,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
     onConfirm: () => void
   } | null>(null)
   const regeneratedCommentTimerRef = useRef<number | null>(null)
+  const retryPollTokenRef = useRef(0)
 
   const fetchPosts = useCallback(async () => {
     try {
@@ -68,6 +69,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
       if (regeneratedCommentTimerRef.current !== null) {
         window.clearTimeout(regeneratedCommentTimerRef.current)
       }
+      retryPollTokenRef.current += 1
     }
   }, [])
 
@@ -148,8 +150,10 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
             : p,
         ),
       )
+      return detail
     } catch {
       /* keep the optimistic post visible if detail refresh fails */
+      return null
     }
   }
 
@@ -315,6 +319,8 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
     setRetryingJobId(firstJobId)
     setError(null)
     try {
+      const beforeRetry = await getPost(postId)
+      const afterEventId = latestEventId(beforeRetry.events)
       await Promise.all(jobIds.map((jobId) => retryJob(jobId)))
       await refreshPostDetail(postId)
       streamPostEvents(
@@ -342,13 +348,35 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
                 : p,
             ),
           )
+          refreshPostDetail(postId)
           onActivitySettled?.()
         },
+        { afterEventId },
       )
+      pollPostPipelineUntilSettled(postId)
     } catch (err) {
       setError(err instanceof Error ? err.message : '重试失败')
     } finally {
       setRetryingJobId(null)
+    }
+  }
+
+  const pollPostPipelineUntilSettled = async (postId: string) => {
+    const token = retryPollTokenRef.current + 1
+    retryPollTokenRef.current = token
+    const deadline = Date.now() + 30_000
+    while (Date.now() < deadline && retryPollTokenRef.current === token) {
+      await sleep(3_000)
+      if (retryPollTokenRef.current !== token) return
+      const detail = await refreshPostDetail(postId)
+      const state = detail?.post.pipeline_status?.state
+      if (state === 'failed' || state === 'done' || state === 'idle') {
+        onActivitySettled?.()
+        return
+      }
+    }
+    if (retryPollTokenRef.current === token) {
+      await refreshPostDetail(postId)
     }
   }
 
@@ -572,6 +600,14 @@ function shouldRefreshPostDetail(event: PostEvent): boolean {
     'light_reflection_succeeded',
     'pipeline_done',
   ].includes(event.event_type)
+}
+
+function latestEventId(events: PostEvent[]): number {
+  return events.reduce((latest, event) => Math.max(latest, event.id), 0)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 function EmptyIcon() {

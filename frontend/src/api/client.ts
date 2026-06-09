@@ -437,8 +437,10 @@ export function streamPostEvents(
   postId: string,
   onEvent: (event: PostEvent) => void,
   onDone?: () => void,
+  options: { afterEventId?: number } = {},
 ): () => void {
-  const es = new EventSource(`${BASE}/posts/${postId}/events`)
+  const query = options.afterEventId !== undefined ? `?after_id=${options.afterEventId}` : ''
+  const es = new EventSource(`${BASE}/posts/${postId}/events${query}`)
 
   POST_EVENT_TYPES.forEach((type) => {
     es.addEventListener(type, (e) => {

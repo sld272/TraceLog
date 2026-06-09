@@ -86,6 +86,43 @@ class ApiPostsTest(unittest.TestCase):
         self.assertIn('"soul_name": "默认"', payload)
         self.assertTrue(payload.endswith("\n\n"))
 
+    def test_sse_query_after_id_skips_previous_events(self) -> None:
+        from core import db
+        from core.app_services import event_service
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_workspace = db.WORKSPACE_DIR
+            old_db_path = db.DB_PATH
+            workspace = Path(tmp) / "workspace"
+            db.WORKSPACE_DIR = workspace
+            db.DB_PATH = workspace / "state.db"
+            try:
+                db.init_db()
+                db.execute(
+                    """
+                    INSERT INTO posts(id, ts, content, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    ("p-sse", "2026-06-09T10:00:00+08:00", "测试 SSE", 1.0, 1.0),
+                )
+                old_event_id = event_service.append_post_event("p-sse", "pipeline_done", {"old": True})
+                event_service.append_post_event("p-sse", "reply_failed", {"error": "boom"})
+                event_service.append_post_event("p-sse", "pipeline_done", {"new": True})
+
+                with self._client() as client:
+                    with client.stream("GET", f"/posts/p-sse/events?after_id={old_event_id}") as response:
+                        status_code = response.status_code
+                        body = "".join(response.iter_text())
+            finally:
+                db.WORKSPACE_DIR = old_workspace
+                db.DB_PATH = old_db_path
+
+        self.assertEqual(200, status_code)
+        self.assertIn("event: reply_failed", body)
+        self.assertIn('"error": "boom"', body)
+        self.assertIn('"new": true', body)
+        self.assertNotIn('"old": true', body)
+
     def test_api_config_missing_file_fails_clearly(self) -> None:
         from api import deps
 
