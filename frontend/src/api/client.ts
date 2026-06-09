@@ -134,6 +134,7 @@ export interface CommentMessage {
   created_at: number
   edited_at?: number | null
   rerun_at?: number | null
+  metadata?: string | null
   attachments: Attachment[]
 }
 

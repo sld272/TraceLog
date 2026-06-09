@@ -50,6 +50,7 @@ class CommentMessage:
     created_at: float
     edited_at: float | None
     rerun_at: float | None
+    metadata: str | None
     attachments: list[Attachment]
 
 
@@ -116,7 +117,7 @@ def list_conversation_messages(
     params.append(limit)
     rows = db.query_all(
         f"""
-        SELECT id, post_id, soul_name, role, content, seq, created_at, edited_at, rerun_at
+        SELECT id, post_id, soul_name, role, content, seq, metadata, created_at, edited_at, rerun_at
         FROM comments
         WHERE post_id = ? AND soul_name = ? AND seq >= ?
         {before_clause}
@@ -137,7 +138,7 @@ def list_conversation_messages_after(
     get_conversation(post_id, soul_name)
     rows = db.query_all(
         """
-        SELECT id, post_id, soul_name, role, content, seq, created_at, edited_at, rerun_at
+        SELECT id, post_id, soul_name, role, content, seq, metadata, created_at, edited_at, rerun_at
         FROM comments
         WHERE post_id = ? AND soul_name = ? AND id > ?
         ORDER BY id ASC
@@ -154,6 +155,7 @@ def append_comment(
     role: str,
     content: str,
     attachment_ids: list[str] | None = None,
+    metadata: dict | None = None,
 ) -> CommentMessage:
     if role not in {"user", "assistant"}:
         raise ValueError(f"非法评论角色：{role}")
@@ -163,7 +165,7 @@ def append_comment(
         raise ValueError(f"没有找到 {soul_name} 对 post {post_id} 的首条回复")
     body = content.strip()
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
-    if not body and not attachment_ids:
+    if not body and not attachment_ids and not _is_failed_reply_metadata(metadata):
         raise ValueError("评论消息不能为空")
     now = db.now_ts()
     with db.immediate_transaction() as conn:
@@ -175,14 +177,23 @@ def append_comment(
         cursor = conn.execute(
             """
             INSERT INTO comments(post_id, soul_name, role, content, seq, metadata, created_at)
-            VALUES (?, ?, ?, ?, ?, NULL, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (post_id, soul_name, role, body, seq, now),
+            (
+                post_id,
+                soul_name,
+                role,
+                body,
+                seq,
+                json.dumps(metadata, ensure_ascii=False) if metadata else None,
+                now,
+            ),
         )
         comment_id = db.require_lastrowid(cursor, "comment insert")
     attachment_service.attach_to_comment(comment_id, attachment_ids)
     message = get_message(comment_id)
-    record_service.index_comment_embedding(message.id, message.post_id, message.soul_name, message.role, message.seq, message.content)
+    if message.content.strip():
+        record_service.index_comment_embedding(message.id, message.post_id, message.soul_name, message.role, message.seq, message.content)
     return message
 
 
@@ -221,6 +232,7 @@ def build_comment_context(
             created_at=0,
             edited_at=None,
             rerun_at=None,
+            metadata=None,
             attachments=[],
         )
         llm_messages.append(user_msg)
@@ -373,7 +385,7 @@ def call_comment_reply(
 def get_message(message_id: int) -> CommentMessage:
     row = db.query_one(
         """
-        SELECT id, post_id, soul_name, role, content, seq, created_at, edited_at, rerun_at
+        SELECT id, post_id, soul_name, role, content, seq, metadata, created_at, edited_at, rerun_at
         FROM comments
         WHERE id = ?
         """,
@@ -505,13 +517,20 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
 
 
 def _failed_result(post_id: str, soul_name: str, user_message_id: int, error: str) -> CommentReplyResult:
+    assistant_message = append_comment(
+        post_id,
+        soul_name,
+        "assistant",
+        "",
+        metadata={"status": "failed", "error": error},
+    )
     return CommentReplyResult(
         post_id=post_id,
         soul_name=soul_name,
         ok=False,
         reply="",
         user_message_id=user_message_id,
-        assistant_message_id=None,
+        assistant_message_id=assistant_message.id,
         error=error,
     )
 
@@ -560,7 +579,7 @@ def _get_root_comment(post_id: str, soul_name: str):
 def _latest_conversation_message(post_id: str, soul_name: str) -> CommentMessage | None:
     row = db.query_one(
         """
-        SELECT id, post_id, soul_name, role, content, seq, created_at, edited_at, rerun_at
+        SELECT id, post_id, soul_name, role, content, seq, metadata, created_at, edited_at, rerun_at
         FROM comments
         WHERE post_id = ? AND soul_name = ?
         ORDER BY seq DESC, id DESC
@@ -603,8 +622,13 @@ def _message_from_row(row) -> CommentMessage:
         created_at=float(row["created_at"]),
         edited_at=float(row["edited_at"]) if row["edited_at"] is not None else None,
         rerun_at=float(row["rerun_at"]) if row["rerun_at"] is not None else None,
+        metadata=row["metadata"],
         attachments=attachment_service.list_comment_attachments(message_id),
     )
+
+
+def _is_failed_reply_metadata(metadata: dict | None) -> bool:
+    return isinstance(metadata, dict) and metadata.get("status") == "failed"
 
 
 def _message_for_llm(message: CommentMessage) -> CommentMessage:

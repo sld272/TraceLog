@@ -184,7 +184,7 @@ function PipelineNotice({
 function pipelineFailureTitle(failedJobs: PipelineJobSummary[]): string {
   return failedJobs.some((job) => job.type === 'generate_post_replies')
     ? 'AI 回复失败'
-    : '部分整理失败'
+    : '处理失败'
 }
 
 function formatPipelineError(error: PipelineJobSummary['error'], jobType?: string): string {
@@ -434,7 +434,9 @@ function ThreadMessage({
 }) {
   const isUser = message.role === 'user'
   const isPersisted = message.id > 0
-  const isPendingAssistant = message.role === 'assistant' && !message.content && (message.id < 0 || busy)
+  const failure = failedCommentReplyError(message)
+  const isFailedAssistant = message.role === 'assistant' && Boolean(failure)
+  const isPendingAssistant = message.role === 'assistant' && !failure && !message.content && (message.id < 0 || busy)
   return (
     <div className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
       <div className={styles.threadHeader}>
@@ -448,7 +450,7 @@ function ThreadMessage({
         </time>
         <div className={styles.threadActionRow}>
           {regenerated && <span className={styles.threadMarker}>已重新生成</span>}
-          {isPersisted && isLatest && message.role === 'assistant' && onRerun && (
+          {isPersisted && isLatest && message.role === 'assistant' && !isFailedAssistant && onRerun && (
             <button className={styles.threadAction} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
               <RefreshCwIcon />
             </button>
@@ -461,6 +463,13 @@ function ThreadMessage({
         </div>
       </div>
       {message.content && <p>{message.content}</p>}
+      {isFailedAssistant && (
+        <ReplyFailureBubble
+          error={failure}
+          onRetry={isPersisted && onRerun ? () => onRerun(message.id) : undefined}
+          busy={busy}
+        />
+      )}
       {isPendingAssistant && (
         <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
           <LoadingDots />
@@ -469,6 +478,51 @@ function ThreadMessage({
       <ImageGrid attachments={message.attachments ?? []} />
     </div>
   )
+}
+
+function ReplyFailureBubble({
+  error,
+  onRetry,
+  busy,
+}: {
+  error: string | null
+  onRetry?: () => void
+  busy: boolean
+}) {
+  return (
+    <div className={styles.threadFailureBubble}>
+      <div className={styles.threadErrorMain}>
+        <strong>回复生成失败</strong>
+        <div className={styles.threadErrorActions}>
+          {onRetry && (
+            <button className={styles.pipelineRetryButton} onClick={onRetry} disabled={busy}>
+              <RefreshCwIcon />
+              <span>重试</span>
+            </button>
+          )}
+        </div>
+      </div>
+      <details className={styles.pipelineDetails}>
+        <summary>诊断信息</summary>
+        <div className={styles.pipelineDiagnostics}>
+          <p>{error || '未知错误'}</p>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function failedCommentReplyError(message: CommentMessage): string | null {
+  if (message.role !== 'assistant' || !message.metadata) return null
+  try {
+    const parsed = JSON.parse(message.metadata) as { status?: unknown; error?: unknown }
+    if (parsed.status !== 'failed') return null
+    return typeof parsed.error === 'string' && parsed.error.trim()
+      ? parsed.error.trim()
+      : '回复生成失败'
+  } catch {
+    return null
+  }
 }
 
 function latestConversationMessage(root: Comment, messages: CommentMessage[]): Comment | CommentMessage {

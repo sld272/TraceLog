@@ -276,14 +276,29 @@ class CommentServiceTest(unittest.TestCase):
             [message["content"] for message in thread_messages],
         )
 
-    def test_comment_reply_failure_preserves_user_message_only(self) -> None:
+    def test_comment_reply_failure_preserves_user_message_and_failed_assistant(self) -> None:
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
             result = comment_service.call_comment_reply("20260525-001", "默认", "这句先记下", FakeClient(), "fake-model")
 
         messages = comment_service.list_conversation_messages("20260525-001", "默认", include_root=False)
         self.assertFalse(result.ok)
-        self.assertIsNone(result.assistant_message_id)
-        self.assertEqual(["user"], [message.role for message in messages])
+        self.assertIsNotNone(result.assistant_message_id)
+        self.assertEqual(["user", "assistant"], [message.role for message in messages])
+        self.assertEqual("", messages[-1].content)
+        self.assertEqual("failed", json.loads(messages[-1].metadata or "{}")["status"])
+
+    def test_rerun_failed_assistant_comment_updates_same_message(self) -> None:
+        with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
+            result = comment_service.call_comment_reply("20260525-001", "默认", "这句先记下", FakeClient(), "fake-model")
+        self.assertIsNotNone(result.assistant_message_id)
+
+        with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value={"reply": "重试后的回复"}):
+            rerun = comment_service.rerun_latest_assistant_message(result.assistant_message_id, FakeClient(), "fake-model")
+
+        messages = rerun["messages"]
+        self.assertEqual(["assistant", "user", "assistant"], [message.role for message in messages])
+        self.assertEqual("重试后的回复", messages[-1].content)
+        self.assertEqual("ok", json.loads(messages[-1].metadata or "{}")["status"])
 
     def test_delete_assistant_comment_is_rejected(self) -> None:
         comment_service.append_comment("20260525-001", "默认", "user", "继续聊")

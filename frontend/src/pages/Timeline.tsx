@@ -410,7 +410,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
               onDeletePost={() => handleDeletePost(post.post_id)}
               onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
               onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
-      onRetryFailedJobs={(jobIds) => handleRetryPostJobs(post.post_id, jobIds)}
+              onRetryFailedJobs={(jobIds) => handleRetryPostJobs(post.post_id, jobIds)}
             />
           ))}
         </div>
@@ -450,7 +450,7 @@ function failedCommentState(
     conversation,
     messages,
     sending: false,
-    error: error || '回复生成失败',
+    error: error && messages.length === 0 ? error : null,
   }
 }
 
