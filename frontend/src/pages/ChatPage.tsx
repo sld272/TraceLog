@@ -176,7 +176,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
       setConfirmDialog({
         isOpen: true,
         title: '编辑消息',
-        message: '保存后会移除这条消息之后的私聊内容，确定继续？',
+        message: '会根据修改后的消息重新生成后续回复。',
         onConfirm: async () => {
           setConfirmDialog(null)
           await performSaveEdit(message, body)

@@ -25,9 +25,19 @@ import { PollTimeoutError, pollUntil } from '@/utils/polling'
 import styles from './WorkspacePages.module.css'
 
 const RECENT_REVISION_LIMIT = 8
+const RECENT_PROFILE_REVISION_FETCH_LIMIT = 24
+const RECENT_SOUL_REVISION_FETCH_LIMIT = 12
 const REFLECTION_POLL_INTERVAL_MS = 3000
 const REFLECTION_POLL_TIMEOUT_MS = 30000
+const REVISION_GROUP_WINDOW_SECONDS = 60
 const TERMINAL_JOB_STATUSES = new Set<Job['status']>(['succeeded', 'failed', 'cancelled'])
+
+interface RevisionGroup {
+  key: string
+  revisions: MemoryRevisionSummary[]
+  latest: MemoryRevisionSummary
+  changeCount: number
+}
 
 interface ReflectionsPageProps {
   onReflectionSettled?: () => void
@@ -64,11 +74,11 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
   const fetchRecentRevisions = useCallback(async () => {
     try {
       const [profileRevisions, souls] = await Promise.all([
-        listProfileRevisions(10),
+        listProfileRevisions(RECENT_PROFILE_REVISION_FETCH_LIMIT),
         listSouls(false),
       ])
       const soulRevisionGroups = await Promise.all(
-        souls.map((soul) => listSoulMemoryRevisions(soul.name, 5)),
+        souls.map((soul) => listSoulMemoryRevisions(soul.name, RECENT_SOUL_REVISION_FETCH_LIMIT)),
       )
       const revisions = [...profileRevisions, ...soulRevisionGroups.flat()]
         .filter(isRevisionOutput)
@@ -76,7 +86,6 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
           const timeDelta = b.created_at - a.created_at
           return timeDelta === 0 ? b.id - a.id : timeDelta
         })
-        .slice(0, RECENT_REVISION_LIMIT)
       setRecentRevisions(revisions)
       setRevisionError(null)
     } catch {
@@ -319,6 +328,8 @@ function RecentRevisionsCard({
   revisions: MemoryRevisionSummary[]
   error: string | null
 }) {
+  const revisionGroups = groupRecentRevisions(revisions).slice(0, RECENT_REVISION_LIMIT)
+
   return (
     <section className={styles.card}>
       <div className={styles.cardHeader}>
@@ -326,14 +337,14 @@ function RecentRevisionsCard({
       </div>
       {error ? (
         <div className={styles.revisionEmpty}>{error}</div>
-      ) : revisions.length === 0 ? (
+      ) : revisionGroups.length === 0 ? (
         <div className={styles.revisionEmpty}>还没有整理产出</div>
       ) : (
         <div className={styles.revisionList}>
-          {revisions.map((revision) => (
+          {revisionGroups.map((group) => (
             <RevisionRow
-              key={`${revision.target_type}-${revision.target_name ?? 'user'}-${revision.id}`}
-              revision={revision}
+              key={group.key}
+              group={group}
             />
           ))}
         </div>
@@ -388,24 +399,59 @@ function ReflectionJobNotice({
   )
 }
 
-function RevisionRow({ revision }: { revision: MemoryRevisionSummary }) {
+function RevisionRow({ group }: { group: RevisionGroup }) {
+  const { latest } = group
+  const summary = group.revisions.length === 1
+    ? summarizeSingleRevision(latest)
+    : formatChangeCount(group.changeCount)
+
   return (
     <article className={styles.revisionRow}>
       <div className={styles.revisionBody}>
-        <h3>{formatRevisionTarget(revision)}</h3>
+        <h3>{formatRevisionTarget(latest)}</h3>
         <p>
-          <span>{formatRevisionSource(revision.source)}</span>
-          <span>{summarizeRevisionPatch(revision.patch)}</span>
+          <span>{formatRevisionSource(latest.source)}</span>
+          <span>{summary}</span>
           <time
-            dateTime={formatDateTimeAttribute(revision.created_at)}
-            title={formatAbsoluteTime(revision.created_at)}
+            dateTime={formatDateTimeAttribute(latest.created_at)}
+            title={formatAbsoluteTime(latest.created_at)}
           >
-            {formatSmartTime(revision.created_at)}
+            {formatSmartTime(latest.created_at)}
           </time>
         </p>
       </div>
     </article>
   )
+}
+
+function groupRecentRevisions(revisions: MemoryRevisionSummary[]): RevisionGroup[] {
+  const sorted = [...revisions].sort((a, b) => {
+    const timeDelta = b.created_at - a.created_at
+    return timeDelta === 0 ? b.id - a.id : timeDelta
+  })
+  const groups: RevisionGroup[] = []
+  for (const revision of sorted) {
+    const previous = groups[groups.length - 1]
+    if (previous && shouldMergeRevision(previous.latest, revision)) {
+      previous.revisions.push(revision)
+      previous.changeCount += revisionChangeCount(revision)
+      continue
+    }
+    groups.push({
+      key: `${revision.target_type}-${revision.target_name ?? 'user'}-${revision.source}-${revision.id}`,
+      revisions: [revision],
+      latest: revision,
+      changeCount: revisionChangeCount(revision),
+    })
+  }
+  return groups
+}
+
+function shouldMergeRevision(latest: MemoryRevisionSummary, next: MemoryRevisionSummary): boolean {
+  return latest.target_type === next.target_type
+    && latest.target_name === next.target_name
+    && latest.source === next.source
+    && Math.abs(latest.created_at - next.created_at) <= REVISION_GROUP_WINDOW_SECONDS
 }
 
 function formatRevisionTarget(revision: MemoryRevisionSummary): string {
@@ -423,15 +469,27 @@ function isRevisionOutput(revision: MemoryRevisionSummary): boolean {
   return true
 }
 
-function summarizeRevisionPatch(patch: unknown): string {
-  if (Array.isArray(patch)) return formatChangeCount(patch.length)
-  if (!isRecord(patch)) return '1 条变更'
-
-  if (Array.isArray(patch.patches)) return formatChangeCount(patch.patches.length)
-  if (patch.op === 'overwrite_user_memory' || patch.op === 'overwrite_soul_memory') {
+function summarizeSingleRevision(revision: MemoryRevisionSummary): string {
+  const patch = revision.patch
+  if (isRecord(patch) && (patch.op === 'overwrite_user_memory' || patch.op === 'overwrite_soul_memory')) {
     return '全文更新'
   }
-  return '1 条变更'
+  return formatChangeCount(revisionChangeCount(revision))
+}
+
+function revisionChangeCount(revision: MemoryRevisionSummary): number {
+  return patchChangeCount(revision.patch)
+}
+
+function patchChangeCount(patch: unknown): number {
+  if (Array.isArray(patch)) return Math.max(patch.length, 1)
+  if (!isRecord(patch)) return 1
+
+  if (Array.isArray(patch.patches)) return Math.max(patch.patches.length, 1)
+  if (patch.op === 'overwrite_user_memory' || patch.op === 'overwrite_soul_memory') {
+    return 1
+  }
+  return 1
 }
 
 function formatChangeCount(count: number): string {
