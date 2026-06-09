@@ -191,6 +191,9 @@ cython_debug/
 # Local visual brainstorming previews
 .superpowers/
 
+# Local code graph index
+.codegraph/
+
 # Ruff stuff:
 .ruff_cache/
 
