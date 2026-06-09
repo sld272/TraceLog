@@ -118,7 +118,7 @@ function ReflectionQueueCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader title="待整理线索" />
+      <PanelHeader title="待整理" />
       <div className={styles.itemList}>
         {hasQueue ? (
           <div className={styles.queueRows}>
@@ -130,10 +130,10 @@ function ReflectionQueueCard({
             <QueueRow label="人格回应" count={soulCount} detail={formatSoulScope(soulReflections)} />
           </div>
         ) : (
-          <p className={styles.empty}>没有待整理线索</p>
+          <p className={styles.empty}>没有待整理内容</p>
         )}
         <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
-          查看
+          去整理
         </button>
       </div>
     </section>

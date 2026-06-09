@@ -43,10 +43,10 @@ export function ReflectionsPage() {
     setRunning('global')
     try {
       const result = await triggerGlobalReflection()
-      setNotice(`全局反思已加入队列：#${result.job_id}`)
+      setNotice(`全局整理已加入队列：#${result.job_id}`)
       await fetchPreview()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '触发失败')
+      setError(err instanceof Error ? err.message : '整理失败')
     } finally {
       setRunning(null)
     }
@@ -56,10 +56,10 @@ export function ReflectionsPage() {
     setRunning('souls')
     try {
       const result = await triggerSoulReflections()
-      setNotice(`人格深反思已加入队列：#${result.job_id}`)
+      setNotice(`人格记忆整理已加入队列：#${result.job_id}`)
       await fetchPreview()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '触发失败')
+      setError(err instanceof Error ? err.message : '整理失败')
     } finally {
       setRunning(null)
     }
@@ -72,8 +72,8 @@ export function ReflectionsPage() {
     <div className={styles.page}>
       <header className={styles.header}>
         <div className={styles.titleGroup}>
-          <h1 className={styles.title}>反思</h1>
-          <p className={styles.subtitle}>全局画像与人格独立记忆</p>
+          <h1 className={styles.title}>整理</h1>
+          <p className={styles.subtitle}>整理公开记录与人格记忆</p>
         </div>
         <button className={styles.ghostButton} onClick={fetchPreview} disabled={loading}>
           刷新
@@ -89,9 +89,9 @@ export function ReflectionsPage() {
         <div className={styles.stack}>
           <section className={styles.card}>
             <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>全局深反思</h2>
+              <h2 className={styles.cardTitle}>全局画像整理</h2>
               <button className={styles.button} onClick={runGlobal} disabled={running !== null || postCount === 0}>
-                {running === 'global' ? '排队中...' : '触发'}
+                {running === 'global' ? '排队中...' : '开始整理'}
               </button>
             </div>
             <div className={styles.scopeGrid}>
@@ -103,9 +103,9 @@ export function ReflectionsPage() {
 
           <section className={styles.card}>
             <div className={styles.cardHeader}>
-              <h2 className={styles.cardTitle}>人格深反思</h2>
+              <h2 className={styles.cardTitle}>人格记忆整理</h2>
               <button className={styles.button} onClick={runSouls} disabled={running !== null || soulInteractionCount === 0}>
-                {running === 'souls' ? '排队中...' : '触发'}
+                {running === 'souls' ? '排队中...' : '开始整理'}
               </button>
             </div>
             {soulScopes.length === 0 ? (

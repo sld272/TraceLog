@@ -31,7 +31,7 @@ export function LeftNav({ souls, activePage, onNavigate, onAfterNavigate }: Left
         />
         <NavItem
           icon={<ReflectIcon />}
-          label="反思"
+          label="整理"
           active={activePage === 'reflections'}
           onClick={() => navigate('reflections')}
         />
