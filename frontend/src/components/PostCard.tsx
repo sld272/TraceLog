@@ -183,7 +183,7 @@ function PipelineNotice({
 
 function pipelineFailureTitle(failedJobs: PipelineJobSummary[]): string {
   return failedJobs.some((job) => job.type === 'generate_post_replies')
-    ? '记录已保存，AI 处理失败'
+    ? 'AI 回复失败'
     : '部分整理失败'
 }
 
