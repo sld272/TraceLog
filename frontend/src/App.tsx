@@ -4,7 +4,6 @@ import {
   type Soul,
   type SoulReflectionScope,
   type Todo,
-  getProfile,
   listSouls,
   listTodos,
   previewGlobalReflection,
@@ -23,7 +22,6 @@ import { TodosPage } from '@/pages/TodosPage'
 export function App() {
   const [activePage, setActivePage] = useState('home')
   const [souls, setSouls] = useState<Soul[]>([])
-  const [profileContent, setProfileContent] = useState<string | null>(null)
   const [todos, setTodos] = useState<Todo[]>([])
   const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
   const [soulReflections, setSoulReflections] = useState<SoulReflectionScope[]>([])
@@ -38,16 +36,7 @@ export function App() {
     }
   }, [])
 
-  const fetchProfile = useCallback(async () => {
-    try {
-      const data = await getProfile()
-      setProfileContent(data.content)
-    } catch {
-      /* API might not be running yet */
-    }
-  }, [])
-
-  const fetchRightPanelData = useCallback(async () => {
+  const refreshHomeContext = useCallback(async () => {
     try {
       const [todoData, globalData, soulData] = await Promise.all([
         listTodos(),
@@ -74,13 +63,6 @@ export function App() {
     }
     void refreshTodos()
   }, [refreshTodos])
-
-  const refreshHomeContext = useCallback(async () => {
-    await Promise.all([
-      fetchProfile(),
-      fetchRightPanelData(),
-    ])
-  }, [fetchProfile, fetchRightPanelData])
 
   const handleTodoToggle = useCallback(async (todo: Todo) => {
     await updateTodo(todo.id, { status: '已完成' })
@@ -135,7 +117,6 @@ export function App() {
       main={renderMain()}
       panel={showRightPanel ? (
         <RightPanel
-          profileContent={profileContent}
           todos={todos}
           globalReflection={globalReflection}
           soulReflections={soulReflections}

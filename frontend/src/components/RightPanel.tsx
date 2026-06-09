@@ -9,7 +9,6 @@ import { formatDateScope, formatUnixScope } from '@/utils/date'
 import styles from './RightPanel.module.css'
 
 interface RightPanelProps {
-  profileContent: string | null
   todos: Todo[]
   globalReflection: ReflectionScope | null
   soulReflections: SoulReflectionScope[]
@@ -19,7 +18,6 @@ interface RightPanelProps {
 }
 
 export function RightPanel({
-  profileContent,
   todos,
   globalReflection,
   soulReflections,
@@ -29,7 +27,6 @@ export function RightPanel({
 }: RightPanelProps) {
   return (
     <div className={styles.panel}>
-      <FocusCard profileContent={profileContent} />
       <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} onOpenTodos={onOpenTodos} />
       <ReflectionQueueCard
         globalReflection={globalReflection}
@@ -37,28 +34,6 @@ export function RightPanel({
         onOpenReflections={onOpenReflections}
       />
     </div>
-  )
-}
-
-function FocusCard({ profileContent }: { profileContent: string | null }) {
-  const focusItems = extractCurrentFocusItems(profileContent)
-
-  return (
-    <section className={styles.card}>
-      <PanelHeader title="当前关注" />
-      <div className={styles.itemList}>
-        {focusItems.length > 0 ? (
-          focusItems.map((item, index) => (
-            <div key={`${item}-${index}`} className={styles.focusItem}>
-              <span className={styles.focusMarker} aria-hidden="true" />
-              <span>{item}</span>
-            </div>
-          ))
-        ) : (
-          <p className={styles.empty}>还没有当前关注</p>
-        )}
-      </div>
-    </section>
   )
 }
 
@@ -183,29 +158,6 @@ function QueueRow({ label, count, detail }: { label: string; count: number; deta
       <strong>{count} 条</strong>
     </div>
   )
-}
-
-function extractCurrentFocusItems(content: string | null): string[] {
-  if (!content) return []
-  const lines = content.split('\n')
-  const focusIndex = lines.findIndex((line) => line.trim() === '## 当前状态与关注')
-  if (focusIndex < 0) return []
-  const items: string[] = []
-
-  for (const rawLine of lines.slice(focusIndex + 1)) {
-    if (items.length >= 3) break
-    const line = rawLine.trim()
-    if (/^##\s+/.test(line)) break
-    if (!line || /^#{1,6}\s/.test(line)) continue
-    const cleaned = line
-      .replace(/^[-*+]\s+/, '')
-      .replace(/^\d+[.)、]\s*/, '')
-      .replace(/^\[[ xX]\]\s*/, '')
-      .trim()
-    if (cleaned && !/^#{1,6}\s/.test(cleaned)) items.push(cleaned)
-  }
-
-  return items
 }
 
 function selectTodayTodos(todos: Todo[]): Todo[] {
