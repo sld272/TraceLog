@@ -61,6 +61,8 @@ class VectorStoreTest(unittest.TestCase):
 
         self.assertFalse(vectorstore.is_initialized())
         message = str(raised.exception)
+        self.assertRegex(message, r"collection_name=tracelog_[0-9a-f]{12}")
+        self.assertIn("embedding_config_hash=", message)
         self.assertIn("embedding_model=test-embedding", message)
         self.assertIn("embedding_base_url=https://example.invalid/v1", message)
         self.assertIn("embedding_base_url_source=base_url", message)
@@ -69,6 +71,7 @@ class VectorStoreTest(unittest.TestCase):
 
     def test_init_uses_configured_base_url_without_adding_v1(self) -> None:
         captured: list[dict] = []
+        collections: list[dict] = []
 
         class FakeOpenAIEmbeddingFunction:
             def __init__(self, **kwargs):
@@ -84,7 +87,7 @@ class VectorStoreTest(unittest.TestCase):
                 self.path = path
 
             def get_or_create_collection(self, **kwargs):
-                del kwargs
+                collections.append(kwargs)
                 return FakeCollection({"ids": [[]]})
 
         modules = {
@@ -111,11 +114,47 @@ class VectorStoreTest(unittest.TestCase):
                 embedding_base_url="https://api.openai.com/v1",
                 embedding_api_key="embedding-key",
             )
+            vectorstore.init_vectorstore(
+                api_key="rotated-main-key",
+                base_url="https://api.deepseek.com",
+                embedding_model="text-embedding-3-small",
+                embedding_base_url="https://api.openai.com/v1",
+                embedding_api_key="rotated-embedding-key",
+            )
 
         self.assertEqual("https://api.openai.com", captured[0]["api_base"])
         self.assertEqual("main-key", captured[0]["api_key"])
         self.assertEqual("https://api.openai.com/v1", captured[1]["api_base"])
         self.assertEqual("embedding-key", captured[1]["api_key"])
+        self.assertEqual("rotated-embedding-key", captured[2]["api_key"])
+        self.assertNotEqual(collections[0]["name"], collections[1]["name"])
+        self.assertEqual(collections[1]["name"], collections[2]["name"])
+        self.assertEqual("text-embedding-3-small", collections[0]["metadata"]["embedding_model"])
+        self.assertEqual("https://api.openai.com", collections[0]["metadata"]["embedding_base_url"])
+        self.assertEqual("https://api.openai.com/v1", collections[1]["metadata"]["embedding_base_url"])
+
+    def test_collection_name_isolated_by_embedding_model_and_base_url(self) -> None:
+        first = vectorstore._collection_name_for_embedding_config(
+            embedding_model="text-embedding-3-small",
+            embedding_base_url="https://api.openai.com/v1",
+        )
+        same_after_trim = vectorstore._collection_name_for_embedding_config(
+            embedding_model=" text-embedding-3-small ",
+            embedding_base_url="https://api.openai.com/v1/",
+        )
+        different_model = vectorstore._collection_name_for_embedding_config(
+            embedding_model="text-embedding-3-large",
+            embedding_base_url="https://api.openai.com/v1",
+        )
+        different_base_url = vectorstore._collection_name_for_embedding_config(
+            embedding_model="text-embedding-3-small",
+            embedding_base_url="https://embedding.example/v1",
+        )
+
+        self.assertRegex(first, r"^tracelog_[0-9a-f]{12}$")
+        self.assertEqual(first, same_after_trim)
+        self.assertNotEqual(first, different_model)
+        self.assertNotEqual(first, different_base_url)
 
     def test_query_post_hits_returns_ranks_and_distances(self) -> None:
         vectorstore._collection = FakeCollection(

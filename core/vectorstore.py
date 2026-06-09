@@ -3,6 +3,8 @@ TraceLog 拾迹 — Vector Store Layer
 ChromaDB + OpenAIEmbeddingFunction 封装
 """
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import cast
 
@@ -68,10 +70,21 @@ def init_vectorstore(
     embedding_base_url_source = "embedding_base_url" if embedding_base_url else "base_url"
     embedding_api_key_source = "embedding_api_key" if embedding_api_key else "api_key"
     actual_api_key = embedding_api_key or api_key
+    actual_embedding_model = str(embedding_model or "").strip()
     actual_base_url = _normalize_configured_base_url(embedding_base_url or base_url)
+    collection_name = _collection_name_for_embedding_config(
+        embedding_model=actual_embedding_model,
+        embedding_base_url=actual_base_url,
+    )
+    embedding_config_hash = _embedding_config_fingerprint(
+        embedding_model=actual_embedding_model,
+        embedding_base_url=actual_base_url,
+    )
     diagnostics = _embedding_config_diagnostics(
         operation="vectorstore_init",
-        embedding_model=embedding_model,
+        collection_name=collection_name,
+        embedding_config_hash=embedding_config_hash,
+        embedding_model=actual_embedding_model,
         embedding_base_url=actual_base_url,
         embedding_base_url_source=embedding_base_url_source,
         llm_base_url=_normalize_configured_base_url(base_url),
@@ -86,11 +99,15 @@ def init_vectorstore(
         embed_fn = OpenAIEmbeddingFunction(
             api_key=actual_api_key,
             api_base=actual_base_url,
-            model_name=embedding_model,
+            model_name=actual_embedding_model,
         )
         client = chromadb.PersistentClient(path=CHROMA_DB_DIR)
         _collection = client.get_or_create_collection(
-            name="tracelog",
+            name=collection_name,
+            metadata=_collection_metadata(
+                embedding_model=actual_embedding_model,
+                embedding_base_url=actual_base_url,
+            ),
             embedding_function=cast(EmbeddingFunction[Embeddable], embed_fn),
         )
     except Exception as e:
@@ -99,7 +116,7 @@ def init_vectorstore(
         logging_service.log_event("external_api_error", level="ERROR", **error_fields)
         raise VectorStoreInitError(_format_diagnostic_message(error_fields)) from e
     return VectorStoreInitResult(
-        collection_name="tracelog",
+        collection_name=collection_name,
         indexed_count=int(_collection.count()),
         path=CHROMA_DB_DIR,
     )
@@ -294,9 +311,42 @@ def _normalize_configured_base_url(base_url: str | None) -> str:
     return str(base_url or "").strip().rstrip("/")
 
 
+def _collection_name_for_embedding_config(*, embedding_model: str, embedding_base_url: str) -> str:
+    fingerprint = _embedding_config_fingerprint(
+        embedding_model=embedding_model,
+        embedding_base_url=embedding_base_url,
+    )
+    return f"tracelog_{fingerprint[:12]}"
+
+
+def _embedding_config_fingerprint(*, embedding_model: str, embedding_base_url: str) -> str:
+    payload = {
+        "embedding_function": "openai",
+        "embedding_model": str(embedding_model or "").strip(),
+        "embedding_base_url": _normalize_configured_base_url(embedding_base_url),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _collection_metadata(*, embedding_model: str, embedding_base_url: str) -> dict[str, str]:
+    return {
+        "app": "tracelog",
+        "embedding_function": "openai",
+        "embedding_model": str(embedding_model or "").strip(),
+        "embedding_base_url": _normalize_configured_base_url(embedding_base_url),
+        "embedding_config_hash": _embedding_config_fingerprint(
+            embedding_model=embedding_model,
+            embedding_base_url=embedding_base_url,
+        ),
+    }
+
+
 def _embedding_config_diagnostics(
     *,
     operation: str,
+    collection_name: str,
+    embedding_config_hash: str,
     embedding_model: str,
     embedding_base_url: str,
     embedding_base_url_source: str,
@@ -305,6 +355,8 @@ def _embedding_config_diagnostics(
 ) -> dict:
     return {
         "operation": operation,
+        "collection_name": collection_name,
+        "embedding_config_hash": embedding_config_hash,
         "embedding_model": embedding_model,
         "embedding_base_url": embedding_base_url,
         "embedding_base_url_source": embedding_base_url_source,
@@ -349,6 +401,8 @@ def _diagnostic_suggestions(fields: dict) -> list[str]:
 def _format_diagnostic_message(fields: dict) -> str:
     parts = [
         f"{fields.get('operation', 'external_api')} failed",
+        f"collection_name={fields.get('collection_name')}",
+        f"embedding_config_hash={fields.get('embedding_config_hash')}",
         f"embedding_model={fields.get('embedding_model')}",
         f"embedding_base_url={fields.get('embedding_base_url')}",
         f"embedding_base_url_source={fields.get('embedding_base_url_source')}",

@@ -54,9 +54,14 @@ def main() -> None:
             path=vector_result.path,
         )
         print(f"[向量存储] 初始化成功，已索引 {vector_result.indexed_count} 篇帖子。")
-        fixed_vector_docs = record_service.retry_pending_vector_docs()
-        if fixed_vector_docs:
-            print(f"[向量存储] 已补齐 {fixed_vector_docs} 条待索引向量文档。")
+        if vector_result.indexed_count == 0:
+            reindexed_vector_docs = record_service.reindex_all_vector_docs()
+            if reindexed_vector_docs:
+                print(f"[向量存储] 已重建 {reindexed_vector_docs} 条向量文档。")
+        else:
+            fixed_vector_docs = record_service.retry_pending_vector_docs()
+            if fixed_vector_docs:
+                print(f"[向量存储] 已补齐 {fixed_vector_docs} 条待索引向量文档。")
         fixed_reflections = reflector.retry_pending_light_reflections(client, model)
         if fixed_reflections:
             print(f"[反思] 已处理 {fixed_reflections} 条待反思记录。")

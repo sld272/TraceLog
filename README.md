@@ -40,7 +40,7 @@ npm install
 
 ## 配置
 
-TraceLog 使用 OpenAI SDK 调用主 LLM，因此主模型 provider 需要兼容 OpenAI Chat Completions 风格接口。ChromaDB 的 embedding function 会使用 `embedding_model` 和 embedding base/key 配置。
+TraceLog 使用 OpenAI SDK 调用主 LLM，因此主模型 provider 需要兼容 OpenAI Chat Completions 风格接口。ChromaDB 的 embedding function 会使用 `embedding_model` 和 embedding base/key 配置，并按 embedding 模型与 base URL 派生独立 collection，避免不同 embedding 空间混用。
 
 API 启动时会读取 `config.json`。如果是第一次使用、配置文件还不存在，Web 仍会启动，并自动引导你进入设置页配置主模型和 Embedding；保存后后端会尝试立即热加载配置，无需先退出到 CLI。CLI 向导仍可作为备用配置路径：
 
