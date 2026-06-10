@@ -135,7 +135,9 @@ class VectorStoreTest(unittest.TestCase):
         self.assertEqual(collections[1]["name"], collections[2]["name"])
         self.assertEqual("text-embedding-3-small", collections[0]["metadata"]["embedding_model"])
         self.assertEqual("https://api.openai.com", collections[0]["metadata"]["embedding_base_url"])
+        self.assertEqual("cosine", collections[0]["metadata"]["hnsw:space"])
         self.assertEqual("https://api.openai.com/v1", collections[1]["metadata"]["embedding_base_url"])
+        self.assertEqual("cosine", collections[1]["metadata"]["hnsw:space"])
 
     def test_collection_name_isolated_by_embedding_model_and_base_url(self) -> None:
         first = vectorstore._collection_name_for_embedding_config(
@@ -159,6 +161,23 @@ class VectorStoreTest(unittest.TestCase):
         self.assertEqual(first, same_after_trim)
         self.assertNotEqual(first, different_model)
         self.assertNotEqual(first, different_base_url)
+
+    def test_embedding_fingerprint_includes_cosine_space(self) -> None:
+        old_payload = {
+            "embedding_function": "openai",
+            "embedding_model": "text-embedding-3-small",
+            "embedding_base_url": "https://api.openai.com/v1",
+        }
+        old_fingerprint = vectorstore.hashlib.sha256(
+            json.dumps(old_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+        new_fingerprint = vectorstore._embedding_config_fingerprint(
+            embedding_model="text-embedding-3-small",
+            embedding_base_url="https://api.openai.com/v1",
+        )
+
+        self.assertNotEqual(old_fingerprint, new_fingerprint)
 
     def test_query_post_hits_returns_ranks_and_distances(self) -> None:
         vectorstore._collection = FakeCollection(

@@ -119,10 +119,12 @@ workspace/
 ```
 user input
   -> query rewrite（可选）
-  -> FTS5 + ChromaDB hybrid search
+  -> FTS5 + ChromaDB cosine hybrid search
   -> related post ids
   -> context_builder.build_context
 ```
+
+ChromaDB collection 使用 cosine distance；向量命中必须先通过绝对距离闸门（当前 `distance <= 0.65`）才会进入 hybrid merge。FTS5 命中不受该闸门影响，向量分数的 min-max 归一化只在幸存命中内进行。
 
 `build_context()` 当前只组装：
 
@@ -145,7 +147,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 
 - 当前 SOUL 人格与相处记忆。
 - `user.md`。
-- unified retrieval 命中的相关记忆：公开 posts、公开评论对话、当前 SOUL 的私聊片段。
+- unified retrieval 命中的相关记忆：通过绝对距离闸门的公开 posts、公开评论对话、当前 SOUL 的私聊片段。
 - 当前 thread 的最近消息序列。
 - 活跃 todos（工具开启时）。
 - 可选网页搜索结果。
@@ -160,7 +162,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 - 当前 SOUL 人格与相处记忆。
 - `user.md`。
 - 原始 post。
-- unified retrieval 命中的相关记忆：公开 posts、公开评论对话、当前 SOUL 的私聊片段。
+- unified retrieval 命中的相关记忆：通过绝对距离闸门的公开 posts、公开评论对话、当前 SOUL 的私聊片段。
 - 当前 SOUL 的首条回复。
 - 当前评论会话的最近追问/回复消息序列。
 - 活跃 todos（工具开启时）。

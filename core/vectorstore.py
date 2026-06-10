@@ -10,6 +10,7 @@ from typing import cast
 
 from core import db, logging_service
 
+VECTOR_DISTANCE_SPACE = "cosine"
 _collection = None
 _embedding_diagnostics: dict | None = None
 _collection_name: str | None = None
@@ -373,6 +374,7 @@ def _collection_name_for_embedding_config(*, embedding_model: str, embedding_bas
 def _embedding_config_fingerprint(*, embedding_model: str, embedding_base_url: str) -> str:
     payload = {
         "embedding_function": "openai",
+        "space": VECTOR_DISTANCE_SPACE,
         "embedding_model": str(embedding_model or "").strip(),
         "embedding_base_url": _normalize_configured_base_url(embedding_base_url),
     }
@@ -383,6 +385,7 @@ def _embedding_config_fingerprint(*, embedding_model: str, embedding_base_url: s
 def _collection_metadata(*, embedding_model: str, embedding_base_url: str) -> dict[str, str]:
     return {
         "app": "tracelog",
+        "hnsw:space": VECTOR_DISTANCE_SPACE,
         "embedding_function": "openai",
         "embedding_model": str(embedding_model or "").strip(),
         "embedding_base_url": _normalize_configured_base_url(embedding_base_url),

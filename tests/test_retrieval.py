@@ -5,7 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db, fts_query, logging_service, retrieval
+from core import db, fts_query, logging_service, query_rewriter, retrieval
+from core import reply_context, vectorstore
 
 
 class FtsQueryTest(unittest.TestCase):
@@ -159,6 +160,106 @@ class RetrievalFusionTest(unittest.TestCase):
         self.stub_search(fts_hits=[], vector_hits=[])
 
         self.assertEqual([], retrieval.hybrid_search_scored("nothing", k=3))
+
+
+class VectorDistanceFilterTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.old_query_post_hits = vectorstore.query_post_hits
+        self.old_query_documents = vectorstore.query_documents
+        self.old_fts_search_scored = retrieval.fts_search_scored
+        self.old_read_post_content = retrieval._read_post_content
+        self.old_log_event = retrieval.logging_service.log_event
+        self.logged_events: list[dict] = []
+
+        def capture_log_event(event: str, **fields) -> None:
+            self.logged_events.append({"event": event, **fields})
+
+        retrieval.logging_service.log_event = capture_log_event
+        retrieval.fts_search_scored = lambda *args, **kwargs: []
+        retrieval._read_post_content = lambda post_id: ""
+
+    def tearDown(self) -> None:
+        vectorstore.query_post_hits = self.old_query_post_hits
+        vectorstore.query_documents = self.old_query_documents
+        retrieval.fts_search_scored = self.old_fts_search_scored
+        retrieval._read_post_content = self.old_read_post_content
+        retrieval.logging_service.log_event = self.old_log_event
+
+    def test_vector_hit_beyond_threshold_dropped(self) -> None:
+        vectorstore.query_post_hits = lambda query, n_results=20: [
+            vectorstore.VectorHit("p-near", 1, 0.3),
+            vectorstore.VectorHit("p-far", 2, 0.9),
+        ]
+
+        hits = retrieval.vector_search_scored("焦虑", k=20)
+
+        self.assertEqual(["p-near"], [hit.post_id for hit in hits])
+
+    def test_all_vector_hits_filtered_returns_empty(self) -> None:
+        vectorstore.query_documents = lambda query, n_results=20, where=None: [
+            vectorstore.VectorDocHit("post-p-far", "post", "p-far", 1, 0.9, {"type": "post", "post_id": "p-far"})
+        ]
+
+        hits = retrieval.hybrid_search_documents("完全无关", k=3)
+
+        self.assertEqual([], hits)
+
+    def test_fts_hits_unaffected_by_vector_filter(self) -> None:
+        retrieval.fts_search_scored = lambda *args, **kwargs: [
+            retrieval.RetrievalHit("p-keyword", "fts", 1, -1.0)
+        ]
+        vectorstore.query_documents = lambda query, n_results=20, where=None: [
+            vectorstore.VectorDocHit("post-p-far", "post", "p-far", 1, 0.9, {"type": "post", "post_id": "p-far"})
+        ]
+
+        hits = retrieval.hybrid_search_documents("关键词", k=3)
+
+        self.assertEqual(["post-p-keyword"], [hit.doc_id for hit in hits])
+        self.assertEqual(["fts"], hits[0].sources)
+
+    def test_none_distance_kept(self) -> None:
+        vectorstore.query_post_hits = lambda query, n_results=20: [
+            vectorstore.VectorHit("p-unknown-distance", 1, None)
+        ]
+
+        hits = retrieval.vector_search_scored("焦虑", k=20)
+
+        self.assertEqual(["p-unknown-distance"], [hit.post_id for hit in hits])
+
+    def test_legacy_fallback_respects_filter(self) -> None:
+        vectorstore.query_documents = lambda query, n_results=20, where=None: []
+        vectorstore.query_post_hits = lambda query, n_results=20: [
+            vectorstore.VectorHit("p-far", 1, 0.9)
+        ]
+
+        hits = reply_context.hybrid_search_documents_with_rewrite(
+            "完全无关",
+            query_rewriter.RewrittenQuery(
+                raw_query="完全无关",
+                semantic_query="完全无关",
+                keywords=[],
+                used_rewrite=False,
+            ),
+            k=3,
+            channel="chat",
+            soul_name="小黑",
+        )
+
+        self.assertEqual([], hits)
+
+    def test_filtered_event_logged(self) -> None:
+        vectorstore.query_post_hits = lambda query, n_results=20: [
+            vectorstore.VectorHit("p-near", 1, 0.3),
+            vectorstore.VectorHit("p-far", 2, 0.9),
+        ]
+
+        retrieval.vector_search_scored("焦虑", k=20)
+
+        events = [event for event in self.logged_events if event["event"] == "vector_hits_filtered"]
+        self.assertTrue(events)
+        self.assertEqual("posts", events[-1]["target"])
+        self.assertEqual(1, events[-1]["dropped_count"])
+        self.assertEqual([0.9], events[-1]["dropped_distances"])
 
 
 class RetrievalDatabaseTest(unittest.TestCase):

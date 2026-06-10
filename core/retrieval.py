@@ -12,6 +12,7 @@ from core import fts_query
 from core import logging_service
 
 LIKE_FALLBACK_TRUST = 0.85
+MAX_VECTOR_DISTANCE = 0.65
 
 
 @dataclass(frozen=True)
@@ -144,7 +145,7 @@ def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
     try:
         from core import vectorstore
 
-        return [
+        hits = [
             RetrievalHit(
                 post_id=hit.post_id,
                 source="vector",
@@ -153,6 +154,7 @@ def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
             )
             for hit in vectorstore.query_post_hits(query, n_results=k)
         ]
+        return _filter_vector_hits(hits, key=lambda hit: hit.raw_score, trace="posts")
     except Exception:
         return []
 
@@ -205,9 +207,45 @@ def vector_search_documents_scored(
     try:
         from core import vectorstore
 
-        return vectorstore.query_documents(query, n_results=k, where=filter_dict)
+        hits = vectorstore.query_documents(query, n_results=k, where=filter_dict)
+        return _filter_vector_hits(hits, key=lambda hit: hit.distance, trace="documents")
     except Exception:
         return []
+
+
+def _within_vector_distance(distance: float | None) -> bool:
+    if distance is None:
+        return True
+    return distance <= MAX_VECTOR_DISTANCE
+
+
+def _filter_vector_hits(hits: list, *, key, trace: str) -> list:
+    kept = []
+    dropped_distances: list[float] = []
+    missing_distance_count = 0
+
+    for hit in hits:
+        distance = key(hit)
+        if distance is None:
+            missing_distance_count += 1
+            kept.append(hit)
+            continue
+        if _within_vector_distance(distance):
+            kept.append(hit)
+        else:
+            dropped_distances.append(float(distance))
+
+    if dropped_distances or missing_distance_count:
+        logging_service.log_event(
+            "vector_hits_filtered",
+            target=trace,
+            dropped_count=len(dropped_distances),
+            kept_count=len(kept),
+            missing_distance_count=missing_distance_count,
+            max_distance=MAX_VECTOR_DISTANCE,
+            dropped_distances=[round(distance, 4) for distance in dropped_distances[:10]],
+        )
+    return kept
 
 
 def hybrid_search(
