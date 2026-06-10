@@ -5,8 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db, fts_query, logging_service, query_rewriter, retrieval
-from core import reply_context, vectorstore
+from core import db, fts_query, logging_service, retrieval, vectorstore
 
 
 class FtsQueryTest(unittest.TestCase):
@@ -226,26 +225,41 @@ class VectorDistanceFilterTest(unittest.TestCase):
 
         self.assertEqual(["p-unknown-distance"], [hit.post_id for hit in hits])
 
-    def test_legacy_fallback_respects_filter(self) -> None:
-        vectorstore.query_documents = lambda query, n_results=20, where=None: []
-        vectorstore.query_post_hits = lambda query, n_results=20: [
-            vectorstore.VectorHit("p-far", 1, 0.9)
-        ]
+    def test_wide_candidate_pool_rescues_filtered_top_ranks(self) -> None:
+        captured: dict[str, int] = {}
 
-        hits = reply_context.hybrid_search_documents_with_rewrite(
-            "完全无关",
-            query_rewriter.RewrittenQuery(
-                raw_query="完全无关",
-                semantic_query="完全无关",
-                keywords=[],
-                used_rewrite=False,
-            ),
-            k=3,
-            channel="chat",
-            soul_name="小黑",
-        )
+        def fake_query_documents(query, n_results=20, where=None):
+            captured["n_results"] = n_results
+            return [
+                vectorstore.VectorDocHit("chat-far-1", "chat", "1", 1, 0.91, {"type": "chat"}),
+                vectorstore.VectorDocHit("comment-far-2", "comment", "2", 2, 0.82, {"type": "comment"}),
+                vectorstore.VectorDocHit("post-p-far", "post", "p-far", 3, 0.77, {"type": "post", "post_id": "p-far"}),
+                vectorstore.VectorDocHit(
+                    "post-p-relevant",
+                    "post",
+                    "p-relevant",
+                    4,
+                    0.40,
+                    {"type": "post", "post_id": "p-relevant"},
+                ),
+                vectorstore.VectorDocHit(
+                    "chat-12",
+                    "chat",
+                    "12",
+                    5,
+                    0.38,
+                    {"type": "chat", "thread_id": 7, "message_id": 12, "soul_name": "小黑"},
+                ),
+            ]
 
-        self.assertEqual([], hits)
+        vectorstore.query_documents = fake_query_documents
+
+        hits = retrieval.hybrid_search_documents("上次聊的比赛", k=3)
+
+        self.assertEqual(20, captured["n_results"])
+        self.assertEqual(["chat-12", "post-p-relevant"], [hit.doc_id for hit in hits])
+        self.assertEqual(["chat", "post"], [hit.type for hit in hits])
+        self.assertEqual([2, 1], [hit.rank for hit in hits])
 
     def test_filtered_event_logged(self) -> None:
         vectorstore.query_post_hits = lambda query, n_results=20: [

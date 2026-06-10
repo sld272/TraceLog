@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 import sqlite3
 from typing import Any
@@ -183,19 +183,21 @@ def build_retrieval_filter(channel: str, soul_name: str | None = None) -> dict |
 def hybrid_search_documents(
     query: str,
     k: int = 5,
+    candidate_k: int = 20,
     semantic_query: str | None = None,
     fts_keywords: list[str] | None = None,
     trace_context: dict | None = None,
     filter_dict: dict | None = None,
 ) -> list[RetrievalDocHit]:
     """Return mixed post/comment/chat retrieval hits."""
+    candidate_limit = max(k, candidate_k)
     fts_hits = (
-        fts_search_scored(query, k=k, fts_keywords=fts_keywords, trace_context=trace_context)
+        fts_search_scored(query, k=candidate_limit, fts_keywords=fts_keywords, trace_context=trace_context)
         if fts_keywords is not None
-        else fts_search_scored(query, k=k, trace_context=trace_context)
+        else fts_search_scored(query, k=candidate_limit, trace_context=trace_context)
     )
     vector_query = semantic_query or query
-    vector_hits = vector_search_documents_scored(vector_query, k=k, filter_dict=filter_dict)
+    vector_hits = vector_search_documents_scored(vector_query, k=candidate_limit, filter_dict=filter_dict)
     final_hits = _merge_document_hits(query, fts_hits, vector_hits, k)
     _log_hybrid_doc_retrieval_result(
         query=query,
@@ -255,7 +257,7 @@ def _filter_vector_hits(hits: list, *, key, trace: str) -> list:
             max_distance=MAX_VECTOR_DISTANCE,
             dropped_distances=[round(distance, 4) for distance in dropped_distances[:10]],
         )
-    return kept
+    return [replace(hit, rank=index + 1) for index, hit in enumerate(kept)]
 
 
 def hybrid_search(

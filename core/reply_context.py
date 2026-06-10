@@ -54,14 +54,13 @@ def hybrid_search_documents_with_rewrite(
 ) -> list[retrieval.RetrievalDocHit]:
     filter_dict = retrieval.build_retrieval_filter(channel, soul_name)
     if not rewritten_query.used_rewrite:
-        hits = retrieval.hybrid_search_documents(
+        return retrieval.hybrid_search_documents(
             retrieval_query,
             k=k,
             trace_context=trace_context,
             filter_dict=filter_dict,
         )
-        return hits or _legacy_post_hits(retrieval_query, k=k, trace_context=trace_context)
-    hits = retrieval.hybrid_search_documents(
+    return retrieval.hybrid_search_documents(
         retrieval_query,
         k=k,
         semantic_query=rewritten_query.semantic_query,
@@ -69,43 +68,6 @@ def hybrid_search_documents_with_rewrite(
         trace_context=trace_context,
         filter_dict=filter_dict,
     )
-    return hits or _legacy_post_hits(
-        retrieval_query,
-        k=k,
-        semantic_query=rewritten_query.semantic_query,
-        fts_keywords=rewritten_query.keywords,
-        trace_context=trace_context,
-    )
-
-
-def _legacy_post_hits(
-    retrieval_query: str,
-    *,
-    k: int,
-    semantic_query: str | None = None,
-    fts_keywords: list[str] | None = None,
-    trace_context: dict | None = None,
-) -> list[retrieval.RetrievalDocHit]:
-    post_ids = retrieval.hybrid_search(
-        retrieval_query,
-        k=k,
-        semantic_query=semantic_query,
-        fts_keywords=fts_keywords,
-        trace_context=trace_context,
-    )
-    return [
-        retrieval.RetrievalDocHit(
-            doc_id=f"post-{post_id}",
-            type="post",
-            source_id=post_id,
-            score=1.0,
-            rank=index + 1,
-            metadata={"type": "post", "post_id": post_id},
-            sources=["legacy"],
-            reasons=["legacy_post_id"],
-        )
-        for index, post_id in enumerate(post_ids)
-    ]
 
 
 def section_summaries(sections: list[str]) -> list[dict]:
