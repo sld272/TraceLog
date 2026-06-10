@@ -41,6 +41,8 @@ export function Timeline({ onActivitySettled, onTodosChanged, modelConfigured, o
   const [busyCommentId, setBusyCommentId] = useState<number | null>(null)
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null)
   const [regeneratedCommentId, setRegeneratedCommentId] = useState<number | null>(null)
+  const [expandingPostIds, setExpandingPostIds] = useState<Record<string, boolean>>({})
+  const [expandErrors, setExpandErrors] = useState<Record<string, string | null>>({})
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
     title: string
@@ -174,12 +176,19 @@ export function Timeline({ onActivitySettled, onTodosChanged, modelConfigured, o
   }
 
   const handleExpand = async (postId: string) => {
+    setExpandingPostIds((prev) => ({ ...prev, [postId]: true }))
+    setExpandErrors((prev) => ({ ...prev, [postId]: null }))
     try {
       const detail = await getPost(postId)
       setPostComments((prev) => ({ ...prev, [postId]: detail.comments }))
       await refreshCommentConversations(postId)
-    } catch {
-      /* silently fail for now */
+    } catch (err) {
+      setExpandErrors((prev) => ({
+        ...prev,
+        [postId]: err instanceof Error ? err.message : '加载失败',
+      }))
+    } finally {
+      setExpandingPostIds((prev) => ({ ...prev, [postId]: false }))
     }
   }
 
@@ -469,6 +478,8 @@ export function Timeline({ onActivitySettled, onTodosChanged, modelConfigured, o
                   regeneratedCommentId={regeneratedCommentId}
                   deletingPost={deletingPostId === post.post_id}
                   retryingJobId={retryingJobId}
+                  expandLoading={expandingPostIds[post.post_id] ?? false}
+                  expandError={expandErrors[post.post_id] ?? null}
                   onExpand={() => handleExpand(post.post_id)}
                   onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
                   onDeletePost={() => handleDeletePost(post.post_id)}

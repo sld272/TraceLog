@@ -31,6 +31,8 @@ interface PostCardProps {
   regeneratedCommentId?: number | null
   retryingJobId?: number | null
   deletingPost?: boolean
+  expandLoading?: boolean
+  expandError?: string | null
   onExpand?: () => void
   onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
   onDeletePost?: () => Promise<void>
@@ -47,6 +49,8 @@ export function PostCard({
   regeneratedCommentId = null,
   retryingJobId = null,
   deletingPost = false,
+  expandLoading = false,
+  expandError = null,
   onExpand,
   onReply,
   onDeletePost,
@@ -101,10 +105,17 @@ export function PostCard({
       )}
 
       {post.comment_count > 0 && comments.length === 0 && (
-        <button className={styles.expandBtn} onClick={onExpand}>
-          <ChatIcon />
-          <span>查看 {post.comment_count} 条回应</span>
-        </button>
+        <>
+          <button className={styles.expandBtn} onClick={onExpand} disabled={expandLoading}>
+            {expandLoading ? <LoadingDots /> : <ChatIcon />}
+            <span>{expandLoading ? '加载回应中...' : `查看 ${post.comment_count} 条回应`}</span>
+          </button>
+          {expandError && (
+            <p className={styles.expandError}>
+              加载失败，点击重试：{expandError}
+            </p>
+          )}
+        </>
       )}
 
       <PipelineNotice

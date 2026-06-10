@@ -497,9 +497,21 @@
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.expandBtn:hover {
+.expandBtn:hover:not(:disabled) {
   background: var(--color-accent-subtle);
   color: var(--color-accent);
+}
+
+.expandBtn:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.expandError {
+  margin-top: var(--space-2);
+  color: var(--color-error);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
 }
 
 .processing {
