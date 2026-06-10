@@ -33,6 +33,17 @@
   opacity: 0.6;
 }
 
+.submitError {
+  margin-top: var(--space-2);
+  border: 1px solid rgba(190, 48, 48, 0.24);
+  border-radius: var(--radius-md);
+  background: rgba(190, 48, 48, 0.08);
+  color: var(--color-error);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
 .footer {
   display: flex;
   align-items: center;

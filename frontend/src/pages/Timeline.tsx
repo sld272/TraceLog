@@ -74,7 +74,15 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   }, [])
 
   const handleSubmit = async (content: string, attachments: Attachment[]) => {
-    const result = await createPost(content, attachments.map((attachment) => attachment.id))
+    let result
+    try {
+      result = await createPost(content, attachments.map((attachment) => attachment.id))
+      setError(null)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '发布失败'
+      setError(message)
+      throw new Error(message)
+    }
     /* Optimistically add the post to the top */
     const newPost: Post = {
       post_id: result.post_id,
@@ -409,39 +417,48 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
       <TimelineHeader />
       <Composer onSubmit={handleSubmit} />
 
-      {error ? (
+      {error && posts.length === 0 ? (
         <div className={styles.error}>
           <p>无法加载时间线</p>
           <p className={styles.errorDetail}>{error}</p>
           <button className={styles.retryBtn} onClick={fetchPosts}>重试</button>
         </div>
-      ) : posts.length === 0 ? (
-        <div className={styles.empty}>
-          <EmptyIcon />
-          <p className={styles.emptyTitle}>还没有记录</p>
-          <p className={styles.emptyHint}>写下你的第一条想法，TA 们会回应你</p>
-        </div>
       ) : (
-        <div className={styles.feed}>
-          {posts.map((post) => (
-            <PostCard
-              key={post.post_id}
-              post={post}
-              comments={postComments[post.post_id]}
-              commentConversations={postCommentConversations[post.post_id]}
-              busyCommentId={busyCommentId}
-              regeneratedCommentId={regeneratedCommentId}
-              deletingPost={deletingPostId === post.post_id}
-              retryingJobId={retryingJobId}
-              onExpand={() => handleExpand(post.post_id)}
-              onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
-              onDeletePost={() => handleDeletePost(post.post_id)}
-              onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
-              onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
-              onRetryFailedJobs={(jobIds) => handleRetryPostJobs(post.post_id, jobIds)}
-            />
-          ))}
-        </div>
+        <>
+          {error && (
+            <div className={styles.inlineError} role="alert">
+              {error}
+            </div>
+          )}
+          {posts.length === 0 ? (
+            <div className={styles.empty}>
+              <EmptyIcon />
+              <p className={styles.emptyTitle}>还没有记录</p>
+              <p className={styles.emptyHint}>写下你的第一条想法，TA 们会回应你</p>
+            </div>
+          ) : (
+            <div className={styles.feed}>
+              {posts.map((post) => (
+                <PostCard
+                  key={post.post_id}
+                  post={post}
+                  comments={postComments[post.post_id]}
+                  commentConversations={postCommentConversations[post.post_id]}
+                  busyCommentId={busyCommentId}
+                  regeneratedCommentId={regeneratedCommentId}
+                  deletingPost={deletingPostId === post.post_id}
+                  retryingJobId={retryingJobId}
+                  onExpand={() => handleExpand(post.post_id)}
+                  onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
+                  onDeletePost={() => handleDeletePost(post.post_id)}
+                  onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
+                  onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
+                  onRetryFailedJobs={(jobIds) => handleRetryPostJobs(post.post_id, jobIds)}
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {confirmDialog && (

@@ -14,6 +14,7 @@ export function Composer({ onSubmit }: ComposerProps) {
   const [content, setContent] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const submitShortcutTitle = getSubmitShortcutTitle()
 
@@ -30,10 +31,13 @@ export function Composer({ onSubmit }: ComposerProps) {
     const trimmed = content.trim()
     if ((!trimmed && attachments.length === 0) || submitting) return
     setSubmitting(true)
+    setSubmitError(null)
     try {
       await onSubmit(trimmed, attachments)
       setContent('')
       setAttachments([])
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : '发布失败，请稍后重试')
     } finally {
       setSubmitting(false)
     }
@@ -59,6 +63,11 @@ export function Composer({ onSubmit }: ComposerProps) {
         disabled={submitting}
         aria-label="发帖内容"
       />
+      {submitError && (
+        <div className={styles.submitError} role="alert">
+          {submitError}
+        </div>
+      )}
       <ImageUploader
         attachments={attachments}
         disabled={submitting}
