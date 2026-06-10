@@ -63,6 +63,11 @@ class LoggingServiceTest(unittest.TestCase):
         history = sorted(path.name for path in history_dir.glob("*.jsonl"))
         self.assertEqual(5, len(history))
 
+    def test_default_history_retention_keeps_dogfood_logs(self) -> None:
+        self.assertEqual(100, logging_service.DEFAULT_HISTORY_RETENTION)
+        self.assertEqual(100, logging_service.default_config()["history_retention"])
+        self.assertEqual(100, logging_service.normalize_config({"enabled": True})["history_retention"])
+
     def test_log_event_redacts_sensitive_values(self) -> None:
         logging_service.init_logging({"enabled": True})
 

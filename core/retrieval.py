@@ -196,7 +196,17 @@ def hybrid_search_documents(
     )
     vector_query = semantic_query or query
     vector_hits = vector_search_documents_scored(vector_query, k=k, filter_dict=filter_dict)
-    return _merge_document_hits(query, fts_hits, vector_hits, k)
+    final_hits = _merge_document_hits(query, fts_hits, vector_hits, k)
+    _log_hybrid_doc_retrieval_result(
+        query=query,
+        semantic_query=semantic_query,
+        fts_keywords=fts_keywords,
+        fts_hits=fts_hits,
+        vector_hits=vector_hits,
+        final_hits=final_hits,
+        trace_context=trace_context,
+    )
+    return final_hits
 
 
 def vector_search_documents_scored(
@@ -691,6 +701,50 @@ def _log_hybrid_retrieval_result(
         vector_hits=[_retrieval_hit_payload(hit) for hit in vector_hits],
         final_hits=[_hybrid_hit_payload(hit) for hit in final_hits],
     )
+
+
+def _log_hybrid_doc_retrieval_result(
+    *,
+    query: str,
+    semantic_query: str | None,
+    fts_keywords: list[str] | None,
+    fts_hits: list[RetrievalHit],
+    vector_hits: list,
+    final_hits: list[RetrievalDocHit],
+    trace_context: dict | None,
+) -> None:
+    logging_service.log_event(
+        "hybrid_doc_retrieval_result",
+        **(trace_context or {}),
+        raw_query=query,
+        semantic_query=semantic_query or query,
+        fts_keywords=fts_keywords or [],
+        fts_hits=[_retrieval_hit_payload(hit) for hit in fts_hits],
+        vector_hits=[_vector_doc_hit_payload(hit) for hit in vector_hits],
+        final_hits=[_doc_hit_payload(hit) for hit in final_hits],
+    )
+
+
+def _vector_doc_hit_payload(hit) -> dict:
+    return {
+        "doc_id": str(getattr(hit, "doc_id", "")),
+        "type": str(getattr(hit, "type", "")),
+        "source_id": str(getattr(hit, "source_id", "")),
+        "rank": getattr(hit, "rank", None),
+        "distance": getattr(hit, "distance", None),
+    }
+
+
+def _doc_hit_payload(hit: RetrievalDocHit) -> dict:
+    return {
+        "doc_id": hit.doc_id,
+        "type": hit.type,
+        "source_id": hit.source_id,
+        "score": hit.score,
+        "rank": hit.rank,
+        "sources": hit.sources,
+        "reasons": hit.reasons,
+    }
 
 
 def _retrieval_hit_payload(hit: RetrievalHit) -> dict:

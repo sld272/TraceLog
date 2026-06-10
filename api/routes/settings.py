@@ -14,6 +14,7 @@ from api import deps
 from api.deps import run_sync
 from core import db, record_service, vector_index_service, vectorstore, vision_service, web_search_service
 from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
+from core.logging_service import DEFAULT_HISTORY_RETENTION
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
 
@@ -23,7 +24,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 class LoggingSettings(BaseModel):
     enabled: bool = True
     level: str = "INFO"
-    history_retention: int = Field(default=5, ge=0, le=100)
+    history_retention: int = Field(default=DEFAULT_HISTORY_RETENTION, ge=0, le=1000)
 
 
 class VisionSettings(BaseModel):

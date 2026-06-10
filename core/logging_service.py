@@ -14,16 +14,18 @@ from typing import Any
 
 from core import db
 
+DEFAULT_HISTORY_RETENTION = 100
+
 DEFAULT_LOGGING_CONFIG = {
     "enabled": True,
     "level": "INFO",
-    "history_retention": 5,
+    "history_retention": DEFAULT_HISTORY_RETENTION,
 }
 
 _lock = threading.RLock()
 _enabled = False
 _level = logging.INFO
-_history_retention = 5
+_history_retention = DEFAULT_HISTORY_RETENTION
 _current_log_path: Path | None = None
 _LOGGING_CONFIG_KEYS = set(DEFAULT_LOGGING_CONFIG)
 
@@ -53,9 +55,9 @@ def normalize_config(config: dict | None) -> dict:
     )
 
     try:
-        merged["history_retention"] = max(0, int(merged.get("history_retention", 5)))
+        merged["history_retention"] = max(0, int(merged.get("history_retention", DEFAULT_HISTORY_RETENTION)))
     except (TypeError, ValueError):
-        merged["history_retention"] = 5
+        merged["history_retention"] = DEFAULT_HISTORY_RETENTION
 
     level_name = str(merged.get("level", "INFO")).upper()
     merged["level"] = level_name if hasattr(logging, level_name) else "INFO"

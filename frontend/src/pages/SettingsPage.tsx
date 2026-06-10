@@ -75,7 +75,7 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   logging: {
     enabled: true,
     level: 'INFO',
-    history_retention: 5,
+    history_retention: 100,
   },
   vision: {
     enabled: false,

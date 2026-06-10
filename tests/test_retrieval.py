@@ -261,6 +261,52 @@ class VectorDistanceFilterTest(unittest.TestCase):
         self.assertEqual(1, events[-1]["dropped_count"])
         self.assertEqual([0.9], events[-1]["dropped_distances"])
 
+    def test_doc_retrieval_result_logged_with_hits(self) -> None:
+        vectorstore.query_documents = lambda query, n_results=20, where=None: [
+            vectorstore.VectorDocHit(
+                "chat-12",
+                "chat",
+                "12",
+                1,
+                0.25,
+                {"type": "chat", "thread_id": 7, "message_id": 12, "soul_name": "小黑"},
+            )
+        ]
+
+        hits = retrieval.hybrid_search_documents(
+            "上次聊的比赛", k=3, trace_context={"channel": "chat", "thread_id": 7}
+        )
+
+        self.assertEqual(["chat-12"], [hit.doc_id for hit in hits])
+        events = [event for event in self.logged_events if event["event"] == "hybrid_doc_retrieval_result"]
+        self.assertEqual(1, len(events))
+        event = events[0]
+        self.assertEqual("chat", event["channel"])
+        self.assertEqual(7, event["thread_id"])
+        self.assertEqual("上次聊的比赛", event["raw_query"])
+        self.assertEqual([], event["fts_hits"])
+        self.assertEqual(1, len(event["vector_hits"]))
+        self.assertEqual(0.25, event["vector_hits"][0]["distance"])
+        final = event["final_hits"]
+        self.assertEqual(1, len(final))
+        self.assertEqual("chat-12", final[0]["doc_id"])
+        self.assertEqual("chat", final[0]["type"])
+        self.assertIn("score", final[0])
+        self.assertIn("vector:rank=1", final[0]["reasons"])
+
+    def test_doc_retrieval_result_logged_when_empty(self) -> None:
+        vectorstore.query_documents = lambda query, n_results=20, where=None: [
+            vectorstore.VectorDocHit("post-p-far", "post", "p-far", 1, 0.9, {"type": "post", "post_id": "p-far"})
+        ]
+
+        hits = retrieval.hybrid_search_documents("完全无关", k=3, trace_context={"channel": "comment"})
+
+        self.assertEqual([], hits)
+        events = [event for event in self.logged_events if event["event"] == "hybrid_doc_retrieval_result"]
+        self.assertEqual(1, len(events))
+        self.assertEqual([], events[0]["final_hits"])
+        self.assertEqual([], events[0]["vector_hits"])
+
 
 class RetrievalDatabaseTest(unittest.TestCase):
     def setUp(self) -> None:
