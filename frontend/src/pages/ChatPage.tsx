@@ -36,6 +36,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [failedReplies, setFailedReplies] = useState<Record<number, string>>({})
+  const [retryErrors, setRetryErrors] = useState<Record<number, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
@@ -65,6 +66,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       setEditingMessageId(null)
       setEditDraft('')
       setFailedReplies(failedRepliesFromMessages(detail.messages))
+      setRetryErrors({})
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
@@ -124,6 +126,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       if (response.result.ok) {
         setMessages(response.messages)
         setFailedReplies(failedRepliesFromMessages(response.messages))
+        setRetryErrors({})
       } else {
         const failedMessages = response.messages.length > 0
           ? response.messages
@@ -137,6 +140,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
             ]
         setMessages(failedMessages)
         setFailedReplies(failedRepliesFromMessages(failedMessages))
+        setRetryErrors({})
       }
       setError(null)
     } catch (err) {
@@ -150,6 +154,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       setDraft(submittedDraft)
       setAttachments(submittedAttachments)
       setFailedReplies({ [optimisticAssistantId]: err instanceof Error ? err.message : '发送失败' })
+      setRetryErrors({})
       setError(null)
     } finally {
       setSending(false)
@@ -209,6 +214,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       if (response.result.ok) {
         setMessages(response.messages)
         setFailedReplies(failedRepliesFromMessages(response.messages))
+        setRetryErrors({})
       } else {
         const failedMessages = response.messages.length > 0
           ? response.messages
@@ -222,6 +228,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
             ]
         setMessages(failedMessages)
         setFailedReplies(failedRepliesFromMessages(failedMessages))
+        setRetryErrors({})
       }
       setError(null)
     } catch (err) {
@@ -266,6 +273,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       setEditingMessageId(null)
       setEditDraft('')
       setFailedReplies({})
+      setRetryErrors({})
       setError(null)
     } catch (err) {
       setMessages(previousMessages)
@@ -288,6 +296,11 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       delete next[message.id]
       return next
     })
+    setRetryErrors((prev) => {
+      const next = { ...prev }
+      delete next[message.id]
+      return next
+    })
     setMessages((prev) =>
       prev.map((item) =>
         item.id === message.id
@@ -304,6 +317,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       if (response.result.ok) {
         setMessages(response.messages)
         setFailedReplies(failedRepliesFromMessages(response.messages))
+        setRetryErrors({})
       } else {
         const failedMessages = response.messages.length > 0
           ? response.messages
@@ -317,12 +331,15 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
             ]
         setMessages(failedMessages)
         setFailedReplies(failedRepliesFromMessages(failedMessages))
+        setRetryErrors({})
       }
       setError(null)
     } catch (err) {
+      const retryError = err instanceof Error ? err.message : '重试失败'
       setMessages(previousMessages)
       setFailedReplies(previousFailedReplies)
-      setError(null)
+      setRetryErrors((prev) => ({ ...prev, [message.id]: retryError }))
+      setError(retryError)
     } finally {
       setBusyMessageId(null)
     }
@@ -369,6 +386,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
                 message={message}
                 busy={busyMessageId === message.id}
                 failure={failedReplies[message.id] ?? null}
+                retryError={retryErrors[message.id] ?? null}
                 editDraft={editingMessageId === message.id ? editDraft : null}
                 onStartEdit={startEditMessage}
                 onChangeEditDraft={setEditDraft}
@@ -537,6 +555,7 @@ function MessageBubble({
   message,
   busy,
   failure,
+  retryError,
   editDraft,
   onStartEdit,
   onChangeEditDraft,
@@ -548,6 +567,7 @@ function MessageBubble({
   message: ChatMessage
   busy: boolean
   failure: string | null
+  retryError: string | null
   editDraft: string | null
   onStartEdit: (message: ChatMessage) => void
   onChangeEditDraft: (value: string) => void
@@ -600,6 +620,7 @@ function MessageBubble({
       {isFailedAssistant ? (
         <ReplyFailure
           error={failure}
+          retryError={retryError}
           busy={busy}
           onRetry={() => onRerun(message)}
         />
@@ -642,10 +663,12 @@ function MessageBubble({
 
 function ReplyFailure({
   error,
+  retryError,
   busy,
   onRetry,
 }: {
   error: string | null
+  retryError: string | null
   busy: boolean
   onRetry: () => void
 }) {
@@ -659,6 +682,11 @@ function ReplyFailure({
           </button>
         </div>
       </div>
+      {retryError && (
+        <p className={styles.replyRetryError}>
+          重试也失败了：{retryError}
+        </p>
+      )}
       <details className={styles.replyFailureDetails}>
         <summary>诊断信息</summary>
         <p>{error || '未知错误'}</p>
