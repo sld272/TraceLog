@@ -8,9 +8,11 @@ import styles from './Composer.module.css'
 
 interface ComposerProps {
   onSubmit: (content: string, attachments: Attachment[]) => Promise<void>
+  disabled?: boolean
+  disabledReason?: string
 }
 
-export function Composer({ onSubmit }: ComposerProps) {
+export function Composer({ onSubmit, disabled = false, disabledReason }: ComposerProps) {
   const [content, setContent] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [submitting, setSubmitting] = useState(false)
@@ -29,7 +31,7 @@ export function Composer({ onSubmit }: ComposerProps) {
 
   const handleSubmit = async () => {
     const trimmed = content.trim()
-    if ((!trimmed && attachments.length === 0) || submitting) return
+    if ((!trimmed && attachments.length === 0) || submitting || disabled) return
     setSubmitting(true)
     setSubmitError(null)
     try {
@@ -60,9 +62,14 @@ export function Composer({ onSubmit }: ComposerProps) {
         onKeyDown={handleKeyDown}
         placeholder="写下你的想法..."
         rows={2}
-        disabled={submitting}
+        disabled={submitting || disabled}
         aria-label="发帖内容"
       />
+      {disabled && disabledReason && (
+        <div className={styles.disabledNotice}>
+          {disabledReason}
+        </div>
+      )}
       {submitError && (
         <div className={styles.submitError} role="alert">
           {submitError}
@@ -70,7 +77,7 @@ export function Composer({ onSubmit }: ComposerProps) {
       )}
       <ImageUploader
         attachments={attachments}
-        disabled={submitting}
+        disabled={submitting || disabled}
         onChange={setAttachments}
         showControls={false}
       />
@@ -83,7 +90,7 @@ export function Composer({ onSubmit }: ComposerProps) {
         <div className={styles.actions}>
           <ImageUploader
             attachments={attachments}
-            disabled={submitting}
+            disabled={submitting || disabled}
             onChange={setAttachments}
             showPreview={false}
           />
@@ -91,7 +98,7 @@ export function Composer({ onSubmit }: ComposerProps) {
             <button
               className={styles.submitBtn}
               onClick={handleSubmit}
-              disabled={(!content.trim() && attachments.length === 0) || submitting}
+              disabled={(!content.trim() && attachments.length === 0) || submitting || disabled}
               aria-label="发布"
             >
               {submitting ? (

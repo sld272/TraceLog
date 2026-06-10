@@ -115,3 +115,20 @@
   margin-top: var(--space-2);
   font-size: var(--text-sm);
 }
+
+.emptyAction {
+  min-height: 40px;
+  margin-top: var(--space-5);
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.emptyAction:hover {
+  background: var(--color-accent-hover);
+  transform: translateY(-1px);
+}

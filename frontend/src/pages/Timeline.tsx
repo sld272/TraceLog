@@ -27,9 +27,11 @@ import styles from './Timeline.module.css'
 interface TimelineProps {
   onActivitySettled?: () => void
   onTodosChanged?: () => void
+  modelConfigured?: boolean | null
+  onOpenSettings?: () => void
 }
 
-export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
+export function Timeline({ onActivitySettled, onTodosChanged, modelConfigured, onOpenSettings }: TimelineProps) {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
   const [postCommentConversations, setPostCommentConversations] = useState<Record<string, Record<string, CommentConversationState>>>({})
@@ -47,6 +49,7 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   } | null>(null)
   const regeneratedCommentTimerRef = useRef<number | null>(null)
   const retryPollTokenRef = useRef(0)
+  const modelUnavailable = modelConfigured === false
 
   const fetchPosts = useCallback(async () => {
     try {
@@ -74,6 +77,11 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   }, [])
 
   const handleSubmit = async (content: string, attachments: Attachment[]) => {
+    if (modelUnavailable) {
+      const message = '请先在设置中配置主模型和 Embedding，再发布记录。'
+      setError(message)
+      throw new Error(message)
+    }
     let result
     try {
       result = await createPost(content, attachments.map((attachment) => attachment.id))
@@ -415,7 +423,11 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
   return (
     <div className={styles.timeline}>
       <TimelineHeader />
-      <Composer onSubmit={handleSubmit} />
+      <Composer
+        onSubmit={handleSubmit}
+        disabled={modelUnavailable}
+        disabledReason="主模型和 Embedding 尚未配置，配置完成后才能发布记录。"
+      />
 
       {error && posts.length === 0 ? (
         <div className={styles.error}>
@@ -433,8 +445,17 @@ export function Timeline({ onActivitySettled, onTodosChanged }: TimelineProps) {
           {posts.length === 0 ? (
             <div className={styles.empty}>
               <EmptyIcon />
-              <p className={styles.emptyTitle}>还没有记录</p>
-              <p className={styles.emptyHint}>写下你的第一条想法，TA 们会回应你</p>
+              <p className={styles.emptyTitle}>{modelUnavailable ? '先配置模型' : '还没有记录'}</p>
+              <p className={styles.emptyHint}>
+                {modelUnavailable
+                  ? '配置主模型和 Embedding 后，就可以开始记录并生成回应。'
+                  : '写下你的第一条想法，TA 们会回应你'}
+              </p>
+              {modelUnavailable && onOpenSettings && (
+                <button className={styles.emptyAction} onClick={onOpenSettings}>
+                  去设置
+                </button>
+              )}
             </div>
           ) : (
             <div className={styles.feed}>

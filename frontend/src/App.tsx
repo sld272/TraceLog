@@ -89,6 +89,10 @@ export function App() {
     navigateToPage('todos')
   }, [navigateToPage])
 
+  const openSettings = useCallback(() => {
+    navigateToPage('settings')
+  }, [navigateToPage])
+
   const checkModelConfiguration = useCallback(async () => {
     try {
       const settings = await getModelSettings()
@@ -119,7 +123,14 @@ export function App() {
   const renderMain = () => {
     switch (activePage) {
       case 'home':
-        return <Timeline onActivitySettled={refreshHomeContext} onTodosChanged={refreshTodos} />
+        return (
+          <Timeline
+            modelConfigured={modelConfigured}
+            onOpenSettings={openSettings}
+            onActivitySettled={refreshHomeContext}
+            onTodosChanged={refreshTodos}
+          />
+        )
       case 'todos':
         return <TodosPage onTodosChanged={handleTodosChanged} />
       case 'reflections':
@@ -135,9 +146,16 @@ export function App() {
       default:
         if (activePage.startsWith('chat:')) {
           const soulName = activePage.slice('chat:'.length)
-          return <ChatPage soulName={soulName} />
+          return <ChatPage soulName={soulName} modelConfigured={modelConfigured} onOpenSettings={openSettings} />
         }
-        return <Timeline onActivitySettled={refreshHomeContext} onTodosChanged={refreshTodos} />
+        return (
+          <Timeline
+            modelConfigured={modelConfigured}
+            onOpenSettings={openSettings}
+            onActivitySettled={refreshHomeContext}
+            onTodosChanged={refreshTodos}
+          />
+        )
     }
   }
 

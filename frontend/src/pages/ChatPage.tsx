@@ -21,9 +21,11 @@ import styles from './WorkspacePages.module.css'
 
 interface ChatPageProps {
   soulName: string
+  modelConfigured?: boolean | null
+  onOpenSettings?: () => void
 }
 
-export function ChatPage({ soulName }: ChatPageProps) {
+export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPageProps) {
   const [thread, setThread] = useState<ChatThread | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
@@ -43,6 +45,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
   } | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const submitShortcutTitle = getSubmitShortcutTitle()
+  const modelUnavailable = modelConfigured === false
   const chatBusy = sending || busyMessageId !== null
 
   const fetchThread = useCallback(async () => {
@@ -88,7 +91,7 @@ export function ChatPage({ soulName }: ChatPageProps) {
 
   const submitDraft = async () => {
     const body = draft.trim()
-    if ((!body && attachments.length === 0) || chatBusy) return
+    if ((!body && attachments.length === 0) || chatBusy || modelUnavailable) return
 
     const submittedDraft = draft
     const submittedAttachments = attachments
@@ -338,6 +341,19 @@ export function ChatPage({ soulName }: ChatPageProps) {
           </button>
         </header>
 
+        {modelUnavailable && (
+          <div className={styles.notice}>
+            <div className={styles.noticeRow}>
+              <span>主模型和 Embedding 尚未配置，配置完成后才能发送私聊消息。</span>
+              {onOpenSettings && (
+                <button className={styles.ghostButton} onClick={onOpenSettings}>
+                  去设置
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {error && <div className={styles.notice}>{error}</div>}
 
         <div className={styles.messages}>
@@ -384,13 +400,13 @@ export function ChatPage({ soulName }: ChatPageProps) {
                 }
               }}
               placeholder={`和 ${soulName} 说点什么...`}
-              disabled={chatBusy}
+              disabled={chatBusy || modelUnavailable}
               rows={2}
               aria-label="私聊消息"
             />
             <ImageUploader
               attachments={attachments}
-              disabled={chatBusy}
+              disabled={chatBusy || modelUnavailable}
               onChange={setAttachments}
               showControls={false}
             />
@@ -404,14 +420,14 @@ export function ChatPage({ soulName }: ChatPageProps) {
             <div className={styles.chatActions}>
               <ImageUploader
                 attachments={attachments}
-                disabled={chatBusy}
+                disabled={chatBusy || modelUnavailable}
                 onChange={setAttachments}
                 showPreview={false}
               />
               <span className={styles.buttonTooltipWrap} title={submitShortcutTitle}>
                 <button
                   className={styles.chatSubmitButton}
-                  disabled={(!draft.trim() && attachments.length === 0) || chatBusy}
+                  disabled={(!draft.trim() && attachments.length === 0) || chatBusy || modelUnavailable}
                   aria-label="发送"
                 >
                   {chatBusy ? <LoadingDots /> : <SendIcon />}
