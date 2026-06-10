@@ -19,6 +19,7 @@ import { ReflectionsPage } from '@/pages/ReflectionsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { Timeline } from '@/pages/Timeline'
 import { TodosPage } from '@/pages/TodosPage'
+import { isTodoDone } from '@/utils/todo'
 
 const DEFAULT_PAGE = 'home'
 
@@ -77,7 +78,7 @@ export function App() {
   }, [refreshTodos])
 
   const handleTodoToggle = useCallback(async (todo: Todo) => {
-    await updateTodo(todo.id, { status: '已完成' })
+    await updateTodo(todo.id, { status: isTodoDone(todo) ? '未完成' : '已完成' })
     await refreshTodos()
   }, [refreshTodos])
 

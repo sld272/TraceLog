@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   type ReflectionScope,
   type SoulReflectionScope,
@@ -7,6 +7,11 @@ import {
 import { isTodoDone, getTodayKey } from '@/utils/todo'
 import { formatDateScope, formatUnixScope } from '@/utils/date'
 import styles from './RightPanel.module.css'
+
+interface PendingCompletedTodo {
+  todo: Todo
+  timeoutId: number
+}
 
 interface RightPanelProps {
   todos: Todo[]
@@ -48,15 +53,74 @@ function TodayTodosCard({
 }) {
   const [savingId, setSavingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [pendingCompleted, setPendingCompleted] = useState<Record<string, PendingCompletedTodo>>({})
+  const pendingTimeoutsRef = useRef<Record<string, number>>({})
   const todayTodos = selectTodayTodos(todos)
+  const displayTodos = [
+    ...todayTodos.filter((todo) => !pendingCompleted[todo.id]),
+    ...Object.values(pendingCompleted).map((entry) => entry.todo),
+  ]
+
+  useEffect(() => {
+    return () => {
+      Object.values(pendingTimeoutsRef.current).forEach((timeoutId) => window.clearTimeout(timeoutId))
+    }
+  }, [])
+
+  const removePendingCompleted = (todoId: string) => {
+    setPendingCompleted((prev) => {
+      const entry = prev[todoId]
+      if (entry) window.clearTimeout(entry.timeoutId)
+      delete pendingTimeoutsRef.current[todoId]
+      const next = { ...prev }
+      delete next[todoId]
+      return next
+    })
+  }
+
+  const holdCompletedTodo = (todo: Todo) => {
+    const completedTodo = { ...todo, status: '已完成' }
+    const timeoutId = window.setTimeout(() => {
+      setPendingCompleted((prev) => {
+        const next = { ...prev }
+        delete next[todo.id]
+        return next
+      })
+      delete pendingTimeoutsRef.current[todo.id]
+    }, 3000)
+
+    setPendingCompleted((prev) => {
+      const existing = prev[todo.id]
+      if (existing) window.clearTimeout(existing.timeoutId)
+      pendingTimeoutsRef.current[todo.id] = timeoutId
+      return {
+        ...prev,
+        [todo.id]: { todo: completedTodo, timeoutId },
+      }
+    })
+  }
 
   const completeTodo = async (todo: Todo) => {
     setSavingId(todo.id)
     setError(null)
     try {
       await onTodoToggle(todo)
+      holdCompletedTodo(todo)
     } catch {
       setError('更新失败，稍后再试')
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  const undoCompleteTodo = async (todo: Todo) => {
+    setSavingId(todo.id)
+    setError(null)
+    try {
+      await onTodoToggle(todo)
+      removePendingCompleted(todo.id)
+    } catch {
+      setError('撤销失败，稍后再试')
     } finally {
       setSavingId(null)
     }
@@ -66,24 +130,40 @@ function TodayTodosCard({
     <section className={styles.card}>
       <PanelHeader title="今日待办" />
       <div className={styles.itemList}>
-        {todayTodos.length > 0 ? (
-          todayTodos.map((todo) => {
+        {displayTodos.length > 0 ? (
+          displayTodos.map((todo) => {
             const meta = todoMeta(todo)
+            const completedPending = Boolean(pendingCompleted[todo.id])
 
             return (
-              <div key={todo.id} className={styles.todoItem}>
+              <div
+                key={todo.id}
+                className={`${styles.todoItem} ${completedPending ? styles.todoItemCompleted : ''}`}
+              >
                 <button
                   type="button"
-                  className={styles.todoCheckbox}
-                  disabled={savingId === todo.id}
-                  aria-label={`完成待办：${todo.task}`}
-                  onClick={() => completeTodo(todo)}
+                  className={`${styles.todoCheckbox} ${completedPending ? styles.todoCheckboxDone : ''}`}
+                  disabled={savingId === todo.id || completedPending}
+                  aria-label={completedPending ? `已完成待办：${todo.task}` : `完成待办：${todo.task}`}
+                  onClick={() => {
+                    if (!completedPending) completeTodo(todo)
+                  }}
                 >
-                  {savingId === todo.id ? '...' : ''}
+                  {savingId === todo.id ? '...' : completedPending ? '✓' : ''}
                 </button>
                 <div className={styles.todoBody}>
-                  <p>{todo.task}</p>
+                  <p className={completedPending ? styles.todoDoneText : undefined}>{todo.task}</p>
                   {meta && <span>{meta}</span>}
+                  {completedPending && (
+                    <button
+                      type="button"
+                      className={styles.undoButton}
+                      disabled={savingId === todo.id}
+                      onClick={() => undoCompleteTodo(todo)}
+                    >
+                      撤销
+                    </button>
+                  )}
                 </div>
               </div>
             )
