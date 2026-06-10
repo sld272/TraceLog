@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from core import attachment_service, db, evidence_service, logging_service, profile_service, record_service, reply_context, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, evidence_service, logging_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -201,6 +201,9 @@ def build_chat_context(
         channel="chat",
         soul_name=thread.soul_name,
         trace_context={"channel": "chat", "thread_id": thread_id, "soul_name": thread.soul_name},
+        exclusion=retrieval.RetrievalExclusion(
+            chat_message_ids=frozenset(message.id for message in llm_messages if message.id > 0),
+        ),
     )
     relevant_post_ids = _post_ids_from_hits(retrieval_hits)
     related_memory = evidence_service.format_retrieval_hits(retrieval_hits, current_soul=thread.soul_name)

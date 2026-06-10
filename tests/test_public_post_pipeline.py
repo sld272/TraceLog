@@ -139,6 +139,31 @@ class PublicPostPipelineTest(unittest.TestCase):
         self.assertIn("reply_started", event_types)
         self.assertIn("reply_succeeded", event_types)
 
+    def test_reply_job_excludes_current_post_from_retrieval(self) -> None:
+        created = public_post_pipeline.create_post("今天想练歌")
+        first = require_not_none(job_service.claim_next_pending())
+        job_service.mark_succeeded(first["id"])
+        job = require_not_none(job_service.claim_next_pending())
+        captured: dict[str, object] = {}
+        query_rewriter.rewrite_query = lambda *args, **kwargs: query_rewriter.RewrittenQuery(
+            raw_query="今天想练歌",
+            semantic_query="今天想练歌",
+            keywords=[],
+            used_rewrite=False,
+        )
+
+        def fake_search(*args, **kwargs):
+            captured["exclusion"] = kwargs.get("exclusion")
+            return []
+
+        retrieval.hybrid_search = fake_search
+
+        public_post_pipeline.execute_job(job, client=None, model="fake")  # type: ignore[arg-type]
+
+        exclusion = captured["exclusion"]
+        self.assertIsInstance(exclusion, retrieval.RetrievalExclusion)
+        self.assertEqual(frozenset({created.post_id}), exclusion.post_ids)
+
     def test_reply_job_fails_when_soul_reply_fails(self) -> None:
         db.execute(
             """

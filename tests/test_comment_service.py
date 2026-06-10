@@ -143,6 +143,24 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(expected, captured["query"])
         self.assertNotIn("这句不该进检索", context.retrieval_query)
 
+    def test_build_comment_context_excludes_current_post_and_post_comments_from_retrieval(self) -> None:
+        comment_service.append_comment("20260525-001", "默认", "user", "继续聊练歌")
+        captured: dict[str, object] = {}
+
+        def fake_search(query: str, **kwargs: object) -> list:
+            del query
+            captured["exclusion"] = kwargs.get("exclusion")
+            return []
+
+        retrieval.hybrid_search_documents = fake_search
+
+        comment_service.build_comment_context("20260525-001", "默认", "继续聊练歌")
+
+        exclusion = captured["exclusion"]
+        self.assertIsInstance(exclusion, retrieval.RetrievalExclusion)
+        self.assertEqual(frozenset({"20260525-001"}), exclusion.post_ids)
+        self.assertEqual(frozenset({"20260525-001"}), exclusion.comment_post_ids)
+
     def test_build_comment_context_loads_current_soul_memory_only(self) -> None:
         soul_memory_service.write_soul_memory("默认", "# 默认的相处记忆\n\n## 对用户的理解\n默认评论记忆\n", source="user")
         soul_memory_service.write_soul_memory("毒舌好友", "# 毒舌好友的相处记忆\n\n## 对用户的理解\n其他 SOUL 评论记忆\n", source="user")
@@ -426,18 +444,12 @@ class CommentServiceTest(unittest.TestCase):
         root_id = comment_service.get_conversation("20260525-001", "默认").root_comment_id
         self.assertIsNotNone(root_id)
         captured = {}
-        retrieval.hybrid_search_documents = lambda *args, **kwargs: [
-            retrieval.RetrievalDocHit(
-                doc_id=f"comment-{root_id}",
-                type="comment",
-                source_id=str(root_id),
-                score=1.0,
-                rank=1,
-                metadata={"type": "comment", "post_id": "20260525-001", "soul_name": "默认"},
-                sources=["vector"],
-                reasons=["test"],
-            )
-        ]
+
+        def fake_search(*args, **kwargs):
+            captured["exclusion"] = kwargs.get("exclusion")
+            return []
+
+        retrieval.hybrid_search_documents = fake_search
 
         def fake_reply(client, model, context, soul, *, trace_context=None):
             del client, model, soul, trace_context
@@ -451,6 +463,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("根评论重跑回复", rerun["message"].content)
         self.assertEqual(["user"], [message.role for message in captured["messages"]])
         self.assertIn("今天想认真练歌", captured["messages"][0].content)
+        self.assertEqual(frozenset({"20260525-001"}), captured["exclusion"].comment_post_ids)
         self.assertNotIn("公开评论对话 · post 20260525-001 · 默认", captured["context"])
         self.assertNotIn("我陪你继续拆", captured["context"])
         self.assertIsNotNone(rerun["message"].rerun_at)

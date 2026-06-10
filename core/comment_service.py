@@ -13,6 +13,7 @@ from core import (
     profile_service,
     record_service,
     reply_context,
+    retrieval,
     soul_memory_service,
     soul_service,
     todo_service,
@@ -264,11 +265,14 @@ def build_comment_context(
         channel="comment",
         soul_name=soul_name,
         trace_context={"channel": "comment", "post_id": post_id, "soul_name": soul_name},
+        exclusion=retrieval.RetrievalExclusion(
+            post_ids=frozenset({post_id}),
+            comment_post_ids=frozenset({post_id}),
+        ),
     )
     related_memory = evidence_service.format_retrieval_hits(
         retrieval_hits,
         current_soul=soul_name,
-        exclude_comment_conversations={(post_id, soul_name)},
     )
     if related_memory:
         sections.append(f"# 相关记忆\n\n{related_memory}")
@@ -295,7 +299,7 @@ def build_comment_context(
         sections.append(web_section)
 
     context_text = "\n\n---\n\n".join(sections)
-    relevant_post_ids = _post_ids_from_hits(retrieval_hits, exclude=post_id)
+    relevant_post_ids = _post_ids_from_hits(retrieval_hits)
     logging_service.log_event(
         "context_assembly_result",
         channel="comment",
@@ -716,7 +720,7 @@ def _recent_user_message_contents(messages: list[CommentMessage], limit: int) ->
     return contents[-limit:]
 
 
-def _post_ids_from_hits(hits: list, *, exclude: str | None = None) -> list[str]:
+def _post_ids_from_hits(hits: list) -> list[str]:
     post_ids: list[str] = []
     for hit in hits:
         post_id = None
@@ -725,6 +729,6 @@ def _post_ids_from_hits(hits: list, *, exclude: str | None = None) -> list[str]:
         else:
             metadata = getattr(hit, "metadata", {}) or {}
             post_id = metadata.get("post_id")
-        if post_id and post_id != exclude and post_id not in post_ids:
+        if post_id and post_id not in post_ids:
             post_ids.append(post_id)
     return post_ids

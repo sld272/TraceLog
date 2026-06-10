@@ -126,6 +126,8 @@ user input
 
 ChromaDB collection 使用 cosine distance；向量命中必须先通过绝对距离闸门（当前 `distance <= 0.65`）才会进入 hybrid merge。FTS5 命中不受该闸门影响，向量分数的 min-max 归一化只在幸存命中内进行。
 
+当前 post 的 post/post_vision 文档会在 FTS 与向量候选进入 hybrid merge 前排除，避免首评把原帖重复注入为历史相关帖。
+
 `build_context()` 当前只组装：
 
 - `# 用户档案`
@@ -155,6 +157,8 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 
 私聊消息不写 posts，不进 FTS5，不触发轻反思，不直接更新全局 `user.md`；但会进入 ChromaDB 统一检索池，并且只允许当前 SOUL 检索自己的私聊。
 
+当前 thread 已在最近消息窗口中的消息 id 会在 unified retrieval 候选进入 merge 前排除；窗口外旧私聊消息仍可作为长期记忆命中。
+
 ### 4.3 评论对话回复
 
 评论对话使用 `(post_id, soul_name)` 作为会话键，没有独立 `comment_threads` 表。上下文包含：
@@ -169,7 +173,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 - 可选网页搜索结果。
 - 如果原 post 或当前追问带图片且已有图片摘要，会作为客观视觉摘要注入；未启用或配置不可用时，只追加“有图但不能查看内容”的边界提示，避免模型假装看图。
 
-当前 post 本身会从 related post ids 中排除，避免重复注入。
+当前 post 的 post/post_vision 文档，以及当前 post 下所有 SOUL 的评论文档，会在 unified retrieval 候选进入 merge 前排除，避免 prompt、evidence 面板和日志出现自引用重复。
 
 ### 4.4 SOUL 有边界即兴
 

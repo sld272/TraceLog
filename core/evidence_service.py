@@ -13,11 +13,9 @@ def format_retrieval_hits(
     hits: list,
     *,
     current_soul: str | None = None,
-    exclude_comment_conversations: set[tuple[str, str]] | None = None,
 ) -> str:
     """Expand mixed retrieval hits into prompt-ready evidence blocks."""
     del current_soul
-    excluded_comment_conversations = exclude_comment_conversations or set()
     parts: list[str] = []
     seen_posts: set[str] = set()
     seen_comments: set[tuple[str, str]] = set()
@@ -36,8 +34,6 @@ def format_retrieval_hits(
             post_id = str(metadata.get("post_id") or "")
             soul_name = str(metadata.get("soul_name") or "")
             key = (post_id, soul_name)
-            if key in excluded_comment_conversations:
-                continue
             if post_id and soul_name and key not in seen_comments:
                 seen_comments.add(key)
                 expanded = expand_comment_conversation(post_id, soul_name)

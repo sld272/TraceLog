@@ -51,6 +51,7 @@ def hybrid_search_documents_with_rewrite(
     channel: str,
     soul_name: str | None = None,
     trace_context: dict | None = None,
+    exclusion: retrieval.RetrievalExclusion | None = None,
 ) -> list[retrieval.RetrievalDocHit]:
     filter_dict = retrieval.build_retrieval_filter(channel, soul_name)
     if not rewritten_query.used_rewrite:
@@ -59,6 +60,7 @@ def hybrid_search_documents_with_rewrite(
             k=k,
             trace_context=trace_context,
             filter_dict=filter_dict,
+            exclusion=exclusion,
         )
     return retrieval.hybrid_search_documents(
         retrieval_query,
@@ -67,6 +69,7 @@ def hybrid_search_documents_with_rewrite(
         fts_keywords=rewritten_query.keywords,
         trace_context=trace_context,
         filter_dict=filter_dict,
+        exclusion=exclusion,
     )
 
 

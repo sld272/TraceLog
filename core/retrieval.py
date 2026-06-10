@@ -46,6 +46,13 @@ class RetrievalDocHit:
     distance: float | None = None
 
 
+@dataclass(frozen=True)
+class RetrievalExclusion:
+    post_ids: frozenset[str] = frozenset()
+    comment_post_ids: frozenset[str] = frozenset()
+    chat_message_ids: frozenset[int] = frozenset()
+
+
 def fts_search_scored(
     query: str,
     k: int = 20,
@@ -189,6 +196,7 @@ def hybrid_search_documents(
     fts_keywords: list[str] | None = None,
     trace_context: dict | None = None,
     filter_dict: dict | None = None,
+    exclusion: RetrievalExclusion | None = None,
 ) -> list[RetrievalDocHit]:
     """Return mixed post/comment/chat retrieval hits."""
     candidate_limit = max(k, candidate_k)
@@ -199,6 +207,12 @@ def hybrid_search_documents(
     )
     vector_query = semantic_query or query
     vector_hits = vector_search_documents_scored(vector_query, k=candidate_limit, filter_dict=filter_dict)
+    fts_hits, vector_hits = _filter_excluded_document_candidates(
+        fts_hits,
+        vector_hits,
+        exclusion,
+        trace_context=trace_context,
+    )
     final_hits = _merge_document_hits(query, fts_hits, vector_hits, k)
     _log_hybrid_doc_retrieval_result(
         query=query,
@@ -267,6 +281,7 @@ def hybrid_search(
     semantic_query: str | None = None,
     fts_keywords: list[str] | None = None,
     trace_context: dict | None = None,
+    exclusion: RetrievalExclusion | None = None,
 ) -> list[str]:
     """Return top hybrid result ids for prompt context."""
     return [
@@ -278,6 +293,7 @@ def hybrid_search(
             semantic_query=semantic_query,
             fts_keywords=fts_keywords,
             trace_context=trace_context,
+            exclusion=exclusion,
         )
     ]
 
@@ -291,15 +307,22 @@ def hybrid_search_scored(
     semantic_query: str | None = None,
     fts_keywords: list[str] | None = None,
     trace_context: dict | None = None,
+    exclusion: RetrievalExclusion | None = None,
 ) -> list[HybridHit]:
     """Combine FTS5 and ChromaDB with dynamic weights and explainable scores."""
     fts_hits = (
-        fts_search_scored(query, k=candidate_k, fts_keywords=fts_keywords)
+        fts_search_scored(query, k=candidate_k, fts_keywords=fts_keywords, trace_context=trace_context)
         if fts_keywords is not None
-        else fts_search_scored(query, k=candidate_k)
+        else fts_search_scored(query, k=candidate_k, trace_context=trace_context)
     )
     vector_query = semantic_query or query
     vector_hits = vector_search_scored(vector_query, k=candidate_k)
+    fts_hits, vector_hits = _filter_excluded_post_candidates(
+        fts_hits,
+        vector_hits,
+        exclusion,
+        trace_context=trace_context,
+    )
     if not fts_hits and not vector_hits:
         _log_hybrid_retrieval_result(
             query=query,
@@ -476,6 +499,90 @@ def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: 
         )
 
     return sorted(by_doc.values(), key=lambda hit: (hit.score, -hit.rank, hit.doc_id), reverse=True)[:k]
+
+
+def _filter_excluded_post_candidates(
+    fts_hits: list[RetrievalHit],
+    vector_hits: list[RetrievalHit],
+    exclusion: RetrievalExclusion | None,
+    *,
+    trace_context: dict | None,
+) -> tuple[list[RetrievalHit], list[RetrievalHit]]:
+    if exclusion is None or not exclusion.post_ids:
+        return fts_hits, vector_hits
+
+    excluded_doc_ids: list[str] = []
+    filtered_fts = []
+    for hit in fts_hits:
+        doc_id = f"post-{hit.post_id}"
+        if hit.post_id in exclusion.post_ids:
+            excluded_doc_ids.append(doc_id)
+            continue
+        filtered_fts.append(hit)
+
+    filtered_vector = []
+    for hit in vector_hits:
+        doc_id = f"post-{hit.post_id}"
+        if hit.post_id in exclusion.post_ids:
+            excluded_doc_ids.append(doc_id)
+            continue
+        filtered_vector.append(hit)
+
+    _log_retrieval_self_excluded(excluded_doc_ids, trace_context=trace_context)
+    return filtered_fts, filtered_vector
+
+
+def _filter_excluded_document_candidates(
+    fts_hits: list[RetrievalHit],
+    vector_hits: list,
+    exclusion: RetrievalExclusion | None,
+    *,
+    trace_context: dict | None,
+) -> tuple[list[RetrievalHit], list]:
+    if exclusion is None:
+        return fts_hits, vector_hits
+
+    excluded_doc_ids: list[str] = []
+    filtered_fts = []
+    for hit in fts_hits:
+        doc_id = f"post-{hit.post_id}"
+        if hit.post_id in exclusion.post_ids:
+            excluded_doc_ids.append(doc_id)
+            continue
+        filtered_fts.append(hit)
+
+    filtered_vector = []
+    for hit in vector_hits:
+        doc_id = str(getattr(hit, "doc_id", ""))
+        if _is_document_excluded(hit, exclusion):
+            excluded_doc_ids.append(doc_id)
+            continue
+        filtered_vector.append(hit)
+
+    _log_retrieval_self_excluded(excluded_doc_ids, trace_context=trace_context)
+    return filtered_fts, filtered_vector
+
+
+def _is_document_excluded(hit, exclusion: RetrievalExclusion) -> bool:
+    doc_type = str(getattr(hit, "type", ""))
+    metadata = getattr(hit, "metadata", {}) or {}
+    if doc_type in {"post", "post_vision"}:
+        post_id = str(metadata.get("post_id") or getattr(hit, "source_id", ""))
+        return post_id in exclusion.post_ids
+    if doc_type == "comment":
+        post_id = str(metadata.get("post_id") or "")
+        return post_id in exclusion.comment_post_ids
+    if doc_type == "chat":
+        message_id = _int_or_none(metadata.get("message_id") or getattr(hit, "source_id", None))
+        return message_id in exclusion.chat_message_ids
+    return False
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _score_vector_doc_hits(hits: list) -> dict[str, float]:
@@ -728,6 +835,18 @@ def _log_hybrid_doc_retrieval_result(
         fts_hits=[_retrieval_hit_payload(hit) for hit in fts_hits],
         vector_hits=[_vector_doc_hit_payload(hit) for hit in vector_hits],
         final_hits=[_doc_hit_payload(hit) for hit in final_hits],
+    )
+
+
+def _log_retrieval_self_excluded(doc_ids: list[str], *, trace_context: dict | None) -> None:
+    excluded_doc_ids = fts_query.ordered_unique([doc_id for doc_id in doc_ids if doc_id])
+    if not excluded_doc_ids:
+        return
+    logging_service.log_event(
+        "retrieval_self_excluded",
+        **(trace_context or {}),
+        excluded_doc_ids=excluded_doc_ids,
+        excluded_count=len(excluded_doc_ids),
     )
 
 

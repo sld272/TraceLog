@@ -195,6 +195,29 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual("第二条\n第三条\n第四条", captured["query"])
         self.assertNotIn("这句不该进检索", context.retrieval_query)
 
+    def test_build_chat_context_excludes_only_window_message_ids_from_retrieval(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        message_ids = [
+            chat_service.append_user_message(thread.id, f"第 {index} 条").id
+            for index in range(1, 23)
+        ]
+        captured: dict[str, object] = {}
+
+        def fake_search(query: str, **kwargs: object) -> list:
+            del query
+            captured["exclusion"] = kwargs.get("exclusion")
+            return []
+
+        retrieval.hybrid_search_documents = fake_search
+
+        chat_service.build_chat_context(thread.id, "第 22 条")
+
+        exclusion = captured["exclusion"]
+        self.assertIsInstance(exclusion, retrieval.RetrievalExclusion)
+        self.assertEqual(frozenset(message_ids[-20:]), exclusion.chat_message_ids)
+        self.assertNotIn(message_ids[0], exclusion.chat_message_ids)
+        self.assertIn(message_ids[-1], exclusion.chat_message_ids)
+
     def test_build_chat_context_falls_back_to_current_message_without_user_history(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
         captured: dict[str, str] = {}

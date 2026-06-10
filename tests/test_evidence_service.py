@@ -69,7 +69,7 @@ class EvidenceServiceTest(unittest.TestCase):
         self.assertIn("图里是一张项目看板。", evidence)
         self.assertIn("可见文字: TODO", evidence)
 
-    def test_format_retrieval_hits_excludes_current_comment_conversation(self) -> None:
+    def test_format_retrieval_hits_dedupes_comment_conversations(self) -> None:
         self._insert_post("post-1", "今天想认真练歌。")
         self._insert_comment("post-1", "默认", "assistant", "我陪你继续拆。", seq=0)
         self._insert_comment("post-1", "毒舌好友", "assistant", "别装了，继续讲重点。", seq=0)
@@ -79,13 +79,10 @@ class EvidenceServiceTest(unittest.TestCase):
             SimpleNamespace(type="comment", source_id="2", metadata={"post_id": "post-1", "soul_name": "毒舌好友"}),
         ]
 
-        evidence = evidence_service.format_retrieval_hits(
-            hits,
-            exclude_comment_conversations={("post-1", "默认")},
-        )
+        evidence = evidence_service.format_retrieval_hits(hits)
 
-        self.assertNotIn("我陪你继续拆", evidence)
-        self.assertEqual(1, evidence.count("## 公开评论对话"))
+        self.assertIn("我陪你继续拆", evidence)
+        self.assertEqual(2, evidence.count("## 公开评论对话"))
         self.assertIn("毒舌好友 · 首评", evidence)
         self.assertIn("别装了，继续讲重点。", evidence)
         self.assertIn("[关于 post] 今天想认真练歌。", evidence)

@@ -55,11 +55,15 @@ class RetrievalFusionTest(unittest.TestCase):
         self.old_fts_search_scored = retrieval.fts_search_scored
         self.old_vector_search_scored = retrieval.vector_search_scored
         self.old_read_candidate_contents = retrieval._read_candidate_contents
+        self.old_log_event = retrieval.logging_service.log_event
+        self.logged_events: list[dict] = []
+        retrieval.logging_service.log_event = lambda event, **fields: self.logged_events.append({"event": event, **fields})
 
     def tearDown(self) -> None:
         retrieval.fts_search_scored = self.old_fts_search_scored
         retrieval.vector_search_scored = self.old_vector_search_scored
         retrieval._read_candidate_contents = self.old_read_candidate_contents
+        retrieval.logging_service.log_event = self.old_log_event
 
     def stub_search(
         self,
@@ -68,7 +72,7 @@ class RetrievalFusionTest(unittest.TestCase):
         vector_hits: list[retrieval.RetrievalHit],
         contents: dict[str, str] | None = None,
     ) -> None:
-        retrieval.fts_search_scored = lambda query, k=20: fts_hits
+        retrieval.fts_search_scored = lambda query, k=20, **kwargs: fts_hits
         retrieval.vector_search_scored = lambda query, k=20: vector_hits
         retrieval._read_candidate_contents = lambda post_ids: contents or {}
 
@@ -159,6 +163,32 @@ class RetrievalFusionTest(unittest.TestCase):
         self.stub_search(fts_hits=[], vector_hits=[])
 
         self.assertEqual([], retrieval.hybrid_search_scored("nothing", k=3))
+
+    def test_exclusion_filters_self_before_truncation_and_logs_event(self) -> None:
+        self.stub_search(
+            fts_hits=[
+                retrieval.RetrievalHit("p-self", "fts", 1, -2.0),
+                retrieval.RetrievalHit("p-fts", "fts", 2, -1.0),
+            ],
+            vector_hits=[
+                retrieval.RetrievalHit("p-self", "vector", 1, 0.1),
+                retrieval.RetrievalHit("p-vector", "vector", 2, 0.2),
+            ],
+        )
+
+        hits = retrieval.hybrid_search_scored(
+            "自引用查询",
+            k=2,
+            trace_context={"channel": "public_post", "post_id": "p-self"},
+            exclusion=retrieval.RetrievalExclusion(post_ids=frozenset({"p-self"})),
+        )
+
+        self.assertEqual({"p-fts", "p-vector"}, {hit.post_id for hit in hits})
+        self.assertNotIn("p-self", [hit.post_id for hit in hits])
+        event = next(event for event in self.logged_events if event["event"] == "retrieval_self_excluded")
+        self.assertEqual("public_post", event["channel"])
+        self.assertEqual("p-self", event["post_id"])
+        self.assertEqual(["post-p-self"], event["excluded_doc_ids"])
 
 
 class VectorDistanceFilterTest(unittest.TestCase):
@@ -320,6 +350,104 @@ class VectorDistanceFilterTest(unittest.TestCase):
         self.assertEqual(1, len(events))
         self.assertEqual([], events[0]["final_hits"])
         self.assertEqual([], events[0]["vector_hits"])
+
+    def test_document_exclusion_filters_current_post_and_all_comments_before_truncation(self) -> None:
+        retrieval.fts_search_scored = lambda *args, **kwargs: [
+            retrieval.RetrievalHit("p-current", "fts", 1, -2.0),
+            retrieval.RetrievalHit("p-history", "fts", 2, -1.0),
+        ]
+        vectorstore.query_documents = lambda query, n_results=20, where=None: [
+            vectorstore.VectorDocHit(
+                "post-vision-p-current",
+                "post_vision",
+                "p-current",
+                1,
+                0.1,
+                {"type": "post_vision", "post_id": "p-current"},
+            ),
+            vectorstore.VectorDocHit(
+                "comment-1",
+                "comment",
+                "1",
+                2,
+                0.2,
+                {"type": "comment", "post_id": "p-current", "soul_name": "默认"},
+            ),
+            vectorstore.VectorDocHit(
+                "comment-2",
+                "comment",
+                "2",
+                3,
+                0.3,
+                {"type": "comment", "post_id": "p-current", "soul_name": "毒舌好友"},
+            ),
+            vectorstore.VectorDocHit(
+                "comment-3",
+                "comment",
+                "3",
+                4,
+                0.4,
+                {"type": "comment", "post_id": "p-other", "soul_name": "默认"},
+            ),
+        ]
+
+        hits = retrieval.hybrid_search_documents(
+            "当前帖内容",
+            k=2,
+            trace_context={"channel": "comment", "post_id": "p-current"},
+            exclusion=retrieval.RetrievalExclusion(
+                post_ids=frozenset({"p-current"}),
+                comment_post_ids=frozenset({"p-current"}),
+            ),
+        )
+
+        self.assertEqual(["post-p-history", "comment-3"], [hit.doc_id for hit in hits])
+        events = [event for event in self.logged_events if event["event"] == "retrieval_self_excluded"]
+        self.assertEqual(1, len(events))
+        self.assertEqual("comment", events[0]["channel"])
+        self.assertEqual(
+            ["post-p-current", "post-vision-p-current", "comment-1", "comment-2"],
+            events[0]["excluded_doc_ids"],
+        )
+
+    def test_document_exclusion_filters_chat_window_but_keeps_older_chat_messages(self) -> None:
+        vectorstore.query_documents = lambda query, n_results=20, where=None: [
+            vectorstore.VectorDocHit(
+                "chat-1",
+                "chat",
+                "1",
+                1,
+                0.1,
+                {"type": "chat", "thread_id": 7, "message_id": 1, "soul_name": "默认"},
+            ),
+            vectorstore.VectorDocHit(
+                "chat-21",
+                "chat",
+                "21",
+                2,
+                0.2,
+                {"type": "chat", "thread_id": 7, "message_id": 21, "soul_name": "默认"},
+            ),
+            vectorstore.VectorDocHit(
+                "post-p-history",
+                "post",
+                "p-history",
+                3,
+                0.3,
+                {"type": "post", "post_id": "p-history"},
+            ),
+        ]
+
+        hits = retrieval.hybrid_search_documents(
+            "你好",
+            k=2,
+            trace_context={"channel": "chat", "thread_id": 7},
+            exclusion=retrieval.RetrievalExclusion(chat_message_ids=frozenset(range(2, 22))),
+        )
+
+        self.assertEqual(["chat-1", "post-p-history"], [hit.doc_id for hit in hits])
+        events = [event for event in self.logged_events if event["event"] == "retrieval_self_excluded"]
+        self.assertEqual(["chat-21"], events[-1]["excluded_doc_ids"])
 
 
 class RetrievalDatabaseTest(unittest.TestCase):
