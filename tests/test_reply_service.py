@@ -13,6 +13,7 @@ from core.context_builder import BuiltContext
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
+from tests.helpers import require_not_none
 
 
 class FakeClient:
@@ -117,6 +118,30 @@ class ReplyServiceTest(unittest.TestCase):
         self.assertFalse(results[0].ok)
         self.assertIsNone(row)
         index_comment.assert_not_called()
+
+    def test_successful_root_comment_metadata_includes_evidence_from_built_context(self) -> None:
+        self._insert_post("p-related")
+        soul = SoulContext("默认", None, 1, "默认人格", "")
+        built_context = BuiltContext(
+            shared_context="共享上下文",
+            enabled_souls=[soul],
+            relevant_post_ids=["p-related"],
+        )
+        client = cast(LLMClient, SimpleNamespace(chat=SimpleNamespace()))
+
+        with patch("core.reply_service.reply_router.call_soul_post_reply", return_value={"reply": "我记下这个关联。"}):
+            reply_service.fanout("p-1", "新的公开 post", client, "fake-model", built_context)
+
+        row = db.query_one(
+            "SELECT metadata FROM comments WHERE post_id = ? AND soul_name = ? AND seq = 0",
+            ("p-1", "默认"),
+        )
+        metadata = json.loads(require_not_none(row)["metadata"])
+        self.assertEqual("ok", metadata["status"])
+        item = metadata["evidence"]["items"][0]
+        self.assertEqual("post-p-related", item["doc_id"])
+        self.assertEqual("p-related", item["post_id"])
+        self.assertIn("新的公开 post", item["snippet"])
 
     def test_soul_post_reply_prompt_includes_virtual_friend_boundaries(self) -> None:
         soul = SoulContext("默认", None, 0, "默认人格", "")

@@ -129,6 +129,51 @@ class EvidenceServiceTest(unittest.TestCase):
         self.assertIn("用户附带了 1 张图片", evidence)
         self.assertIn("不要描述、推断或声称看到了图片内容", evidence)
 
+    def test_build_evidence_summary_uses_snippets_and_tolerates_deleted_sources(self) -> None:
+        self._insert_post("post-1", "这是一条会进入证据面板的公开记录。" * 8)
+        comment_id = self._insert_comment("post-1", "默认", "assistant", "评论证据内容", seq=0)
+        hits = [
+            SimpleNamespace(
+                doc_id="post-post-1",
+                type="post",
+                source_id="post-1",
+                score=0.81,
+                distance=0.38,
+                metadata={"type": "post", "post_id": "post-1"},
+                sources=["vector"],
+                reasons=["vector:rank=1"],
+            ),
+            SimpleNamespace(
+                doc_id=f"comment-{comment_id}",
+                type="comment",
+                source_id=str(comment_id),
+                score=0.72,
+                distance=None,
+                metadata={"type": "comment", "comment_id": comment_id, "post_id": "post-1", "soul_name": "默认"},
+                sources=["fts"],
+                reasons=["fts:rank=1"],
+            ),
+            SimpleNamespace(
+                doc_id="chat-999",
+                type="chat",
+                source_id="999",
+                score=0.5,
+                distance=0.2,
+                metadata={"type": "chat", "message_id": 999, "thread_id": 1},
+                sources=["vector"],
+                reasons=["vector:rank=3"],
+            ),
+        ]
+
+        items = evidence_service.build_evidence_summary(hits)
+
+        self.assertEqual(3, len(items))
+        self.assertEqual("post-post-1", items[0]["doc_id"])
+        self.assertLessEqual(len(items[0]["snippet"]), evidence_service.EVIDENCE_SNIPPET_CHARS + 3)
+        self.assertIn("公开记录", items[0]["snippet"])
+        self.assertEqual("评论证据内容", items[1]["snippet"])
+        self.assertEqual(evidence_service.DELETED_SNIPPET, items[2]["snippet"])
+
     def _insert_post(self, post_id: str, content: str) -> None:
         db.execute(
             """

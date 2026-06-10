@@ -377,6 +377,54 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual(["user", "assistant"], [message.role for message in messages])
         self.assertEqual("先睡一下也行。", messages[-1].content)
 
+    def test_chat_reply_metadata_includes_evidence_snapshot_and_rerun_refreshes_it(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        self._insert_post("p-old", "旧证据：我之前说过比赛准备到凌晨两点。")
+        self._insert_post("p-new", "新证据：我改成提前一天完成准备。")
+        retrieval.hybrid_search_documents = lambda *args, **kwargs: [
+            retrieval.RetrievalDocHit(
+                doc_id="post-p-old",
+                type="post",
+                source_id="p-old",
+                score=0.81,
+                rank=1,
+                metadata={"type": "post", "post_id": "p-old"},
+                sources=["vector"],
+                reasons=["vector:rank=1"],
+                distance=0.38,
+            )
+        ]
+
+        result = chat_service.call_chat_reply(thread.id, "比赛准备怎么样", FakeClient({"reply": "先看旧节奏。"}), "fake-model")
+        assistant = chat_service.get_message(require_not_none(result.assistant_message_id))
+        metadata = json.loads(assistant.metadata or "{}")
+
+        self.assertEqual("ok", metadata["status"])
+        item = metadata["evidence"]["items"][0]
+        self.assertEqual("post-p-old", item["doc_id"])
+        self.assertEqual(0.81, item["score"])
+        self.assertEqual(0.38, item["distance"])
+        self.assertIn("比赛准备到凌晨两点", item["snippet"])
+
+        retrieval.hybrid_search_documents = lambda *args, **kwargs: [
+            retrieval.RetrievalDocHit(
+                doc_id="post-p-new",
+                type="post",
+                source_id="p-new",
+                score=0.92,
+                rank=1,
+                metadata={"type": "post", "post_id": "p-new"},
+                sources=["fts"],
+                reasons=["fts:rank=1"],
+            )
+        ]
+        rerun = chat_service.rerun_assistant_message(assistant.id, FakeClient({"reply": "按新节奏来。"}), "fake-model")
+        rerun_metadata = json.loads(rerun["message"].metadata or "{}")
+
+        self.assertTrue(rerun_metadata["rerun"])
+        self.assertEqual("post-p-new", rerun_metadata["evidence"]["items"][0]["doc_id"])
+        self.assertIn("提前一天完成准备", rerun_metadata["evidence"]["items"][0]["snippet"])
+
     def test_chat_reply_failure_persists_failed_assistant_metadata(self) -> None:
         thread = chat_service.get_or_create_thread("默认")
 
@@ -718,6 +766,15 @@ class ChatServiceTest(unittest.TestCase):
             linked_at=float(row["linked_at"]) if row["linked_at"] is not None else None,
             created_at=float(row["created_at"]),
             url=f"/attachments/{row['id']}",
+        )
+
+    def _insert_post(self, post_id: str, content: str) -> None:
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (post_id, "2026-05-25T10:00:00+08:00", content, 1.0, 1.0),
         )
 
 if __name__ == "__main__":

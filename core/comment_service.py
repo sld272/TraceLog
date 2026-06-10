@@ -370,7 +370,16 @@ def call_comment_reply(
         )
         return _failed_result(post_id, soul_name, user_message_row.id, error)
 
-    assistant_message = append_comment(post_id, soul_name, "assistant", reply.strip())
+    assistant_message = append_comment(
+        post_id,
+        soul_name,
+        "assistant",
+        reply.strip(),
+        metadata={
+            "status": "ok",
+            "evidence": evidence_service.evidence_metadata(comment_context.retrieval_hits),
+        },
+    )
     return CommentReplyResult(
         post_id=post_id,
         soul_name=soul_name,
@@ -489,7 +498,12 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
         return _mark_existing_assistant_failed(message, "comment rerun returned empty reply")
 
     now = db.now_ts()
-    metadata = {"status": "ok", "model": model, "rerun": True}
+    metadata = {
+        "status": "ok",
+        "model": model,
+        "rerun": True,
+        "evidence": evidence_service.evidence_metadata(context.retrieval_hits),
+    }
     with db.transaction() as conn:
         conn.execute(
             """

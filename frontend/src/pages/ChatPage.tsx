@@ -10,6 +10,7 @@ import {
   updateChatMessage,
 } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { EvidencePanel } from '@/components/EvidencePanel'
 import { ImageGrid } from '@/components/ImageGrid'
 import { ImageUploader } from '@/components/ImageUploader'
 import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
@@ -604,6 +605,9 @@ function MessageBubble({
         />
       )}
       <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
+      {!isUser && !isFailedAssistant && !isPendingAssistant && editDraft === null && (
+        <EvidencePanel metadata={message.metadata} channel="chat" messageId={message.id} />
+      )}
       {editDraft !== null && (
         <div className={styles.messageMetaRow}>
           <div className={styles.messageActions}>

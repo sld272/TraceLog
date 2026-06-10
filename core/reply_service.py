@@ -6,7 +6,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from core import db, logging_service, record_service
+from core import db, evidence_service, logging_service, record_service
 from core.context_builder import BuiltContext
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -55,7 +55,7 @@ def fanout(
                 result = future.result()
             except Exception as exc:
                 result = _failed_result(soul, str(exc))
-            _save_comment(post_id, result, model)
+            _save_comment(post_id, result, model, built_context)
             results.append(result)
 
     return sorted(results, key=lambda result: (result.sort_order, result.soul_name))
@@ -120,12 +120,14 @@ def _failed_result(soul: SoulContext, error: str) -> SoulReplyResult:
     )
 
 
-def _save_comment(post_id: str, result: SoulReplyResult, model: str) -> None:
+def _save_comment(post_id: str, result: SoulReplyResult, model: str, built_context: BuiltContext) -> None:
     metadata = {
         "status": "ok" if result.ok else "failed",
         "model": model,
         "error": result.error,
     }
+    if result.ok:
+        metadata["evidence"] = evidence_service.post_id_evidence_metadata(built_context.relevant_post_ids)
     now = db.now_ts()
     with db.immediate_transaction() as conn:
         existing = conn.execute(

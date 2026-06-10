@@ -300,6 +300,39 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("重试后的回复", messages[-1].content)
         self.assertEqual("ok", json.loads(messages[-1].metadata or "{}")["status"])
 
+    def test_comment_reply_metadata_includes_evidence_snapshot(self) -> None:
+        root_id = require_not_none(comment_service.get_conversation("20260525-001", "毒舌好友").root_comment_id)
+        retrieval.hybrid_search_documents = lambda *args, **kwargs: [
+            retrieval.RetrievalDocHit(
+                doc_id=f"comment-{root_id}",
+                type="comment",
+                source_id=str(root_id),
+                score=0.73,
+                rank=1,
+                metadata={
+                    "type": "comment",
+                    "comment_id": root_id,
+                    "post_id": "20260525-001",
+                    "soul_name": "毒舌好友",
+                },
+                sources=["vector"],
+                reasons=["vector:rank=1"],
+                distance=0.42,
+            )
+        ]
+
+        result = comment_service.call_comment_reply("20260525-001", "默认", "继续聊", FakeClient({"reply": "继续拆。"}), "fake-model")
+        message = comment_service.get_message(require_not_none(result.assistant_message_id))
+        metadata = json.loads(message.metadata or "{}")
+
+        self.assertEqual("ok", metadata["status"])
+        item = metadata["evidence"]["items"][0]
+        self.assertEqual(f"comment-{root_id}", item["doc_id"])
+        self.assertEqual("comment", item["type"])
+        self.assertEqual(0.73, item["score"])
+        self.assertEqual(0.42, item["distance"])
+        self.assertIn("别装了，继续讲重点", item["snippet"])
+
     def test_rerun_failed_assistant_comment_keeps_failure_on_same_message(self) -> None:
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
             result = comment_service.call_comment_reply("20260525-001", "默认", "这句先记下", FakeClient(), "fake-model")

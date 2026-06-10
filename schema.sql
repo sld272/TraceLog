@@ -350,6 +350,16 @@ CREATE TABLE IF NOT EXISTS vector_doc_tombstones (
 CREATE INDEX IF NOT EXISTS idx_vector_doc_tombstones_revision
     ON vector_doc_tombstones(deleted_revision);
 
+CREATE TABLE IF NOT EXISTS evidence_feedback (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel    TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    doc_id     TEXT NOT NULL,
+    verdict    TEXT NOT NULL DEFAULT 'irrelevant',
+    created_at REAL NOT NULL,
+    UNIQUE(channel, message_id, doc_id)
+);
+
 CREATE TABLE IF NOT EXISTS vector_index_collections (
     collection_name       TEXT PRIMARY KEY,
     embedding_config_hash TEXT NOT NULL,

@@ -46,6 +46,7 @@ class ChatContext:
     messages: list[ChatMessage]
     retrieval_query: str
     relevant_post_ids: list[str]
+    retrieval_hits: list
 
 
 @dataclass(frozen=True)
@@ -242,6 +243,7 @@ def build_chat_context(
         messages=llm_messages,
         retrieval_query=retrieval_query,
         relevant_post_ids=relevant_post_ids,
+        retrieval_hits=retrieval_hits,
     )
 
 
@@ -305,7 +307,15 @@ def _call_assistant_reply_for_user_message(
         )
         return _failed_result(chat_context.thread, user_message_row.id, error)
 
-    assistant_message = _append_message(user_message_row.thread_id, "assistant", reply.strip())
+    assistant_message = _append_message(
+        user_message_row.thread_id,
+        "assistant",
+        reply.strip(),
+        metadata={
+            "status": "ok",
+            "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
+        },
+    )
     return ChatReplyResult(
         thread_id=user_message_row.thread_id,
         soul_name=chat_context.thread.soul_name,
@@ -469,14 +479,20 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
 
     deleted_ids = _message_ids_after(thread.id, message.id)
     now = db.now_ts()
+    metadata = {
+        "status": "ok",
+        "model": model,
+        "rerun": True,
+        "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
+    }
     with db.transaction() as conn:
         conn.execute(
             """
             UPDATE chat_messages
-            SET content = ?, metadata = NULL, rerun_at = ?
+            SET content = ?, metadata = ?, rerun_at = ?
             WHERE id = ?
             """,
-            (reply.strip(), now, message.id),
+            (reply.strip(), json.dumps(metadata, ensure_ascii=False), now, message.id),
         )
         if deleted_ids:
             conn.execute(

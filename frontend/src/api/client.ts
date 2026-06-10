@@ -186,6 +186,30 @@ export interface CommentReplyResult {
   error: string | null
 }
 
+export type EvidenceChannel = 'chat' | 'comment' | 'public_post'
+
+export interface EvidenceItem {
+  doc_id: string
+  type: 'post' | 'post_vision' | 'comment' | 'chat' | string
+  source_id: string
+  post_id: string | null
+  score: number | null
+  distance: number | null
+  sources: string[]
+  reasons: string[]
+  snippet: string
+}
+
+export interface EvidenceFeedbackResult {
+  id: number | null
+  channel: EvidenceChannel
+  message_id: number
+  doc_id: string
+  verdict: 'irrelevant'
+  created_at: number
+  created: boolean
+}
+
 export interface ReflectionScope {
   post_ids: string[]
   scope_start: string | null
@@ -411,6 +435,67 @@ export async function uploadAttachment(file: File): Promise<Attachment> {
 
 export function attachmentUrl(attachment: Attachment): string {
   return `${BASE}${attachment.url}`
+}
+
+export function parseMessageEvidence(metadata: string | null | undefined): EvidenceItem[] {
+  if (!metadata) return []
+  try {
+    const parsed = JSON.parse(metadata) as { evidence?: { items?: unknown } }
+    const items = parsed.evidence?.items
+    if (!Array.isArray(items)) return []
+    return items
+      .map(normalizeEvidenceItem)
+      .filter((item): item is EvidenceItem => item !== null)
+  } catch {
+    return []
+  }
+}
+
+export function submitEvidenceFeedback(channel: EvidenceChannel, messageId: number, docId: string) {
+  return request<EvidenceFeedbackResult>('/feedback/evidence', {
+    method: 'POST',
+    body: JSON.stringify({
+      channel,
+      message_id: messageId,
+      doc_id: docId,
+      verdict: 'irrelevant',
+    }),
+  })
+}
+
+function normalizeEvidenceItem(item: unknown): EvidenceItem | null {
+  if (!item || typeof item !== 'object') return null
+  const raw = item as Record<string, unknown>
+  const docId = stringValue(raw.doc_id)
+  if (!docId) return null
+  return {
+    doc_id: docId,
+    type: stringValue(raw.type) || 'post',
+    source_id: stringValue(raw.source_id),
+    post_id: nullableString(raw.post_id),
+    score: nullableNumber(raw.score),
+    distance: nullableNumber(raw.distance),
+    sources: stringArray(raw.sources),
+    reasons: stringArray(raw.reasons),
+    snippet: stringValue(raw.snippet) || '(原始内容已删除)',
+  }
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : value === null || value === undefined ? '' : String(value)
+}
+
+function nullableString(value: unknown): string | null {
+  const text = stringValue(value).trim()
+  return text ? text : null
+}
+
+function nullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(stringValue).filter(Boolean) : []
 }
 
 /* SSE stream for post events */

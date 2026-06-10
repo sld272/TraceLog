@@ -43,6 +43,7 @@ class RetrievalDocHit:
     metadata: dict[str, Any]
     sources: list[str]
     reasons: list[str]
+    distance: float | None = None
 
 
 def fts_search_scored(
@@ -439,6 +440,7 @@ def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: 
             metadata={"type": "post", "post_id": hit.post_id},
             sources=[hit.source],
             reasons=[f"{hit.source}:rank={hit.rank}", *bonus_reasons],
+            distance=None,
         )
 
     for hit in vector_hits:
@@ -458,6 +460,7 @@ def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: 
                 metadata={**dict(hit.metadata), **existing.metadata},
                 sources=sources,
                 reasons=reasons,
+                distance=hit.distance if hit.distance is not None else existing.distance,
             )
             continue
         by_doc[doc_id] = RetrievalDocHit(
@@ -469,6 +472,7 @@ def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: 
             metadata=dict(hit.metadata),
             sources=["vector"],
             reasons=[f"vector:rank={hit.rank}"],
+            distance=hit.distance,
         )
 
     return sorted(by_doc.values(), key=lambda hit: (hit.score, -hit.rank, hit.doc_id), reverse=True)[:k]
@@ -744,6 +748,7 @@ def _doc_hit_payload(hit: RetrievalDocHit) -> dict:
         "source_id": hit.source_id,
         "score": hit.score,
         "rank": hit.rank,
+        "distance": hit.distance,
         "sources": hit.sources,
         "reasons": hit.reasons,
     }

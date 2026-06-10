@@ -131,6 +131,20 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, revision_response.status_code)
         self.assertEqual(new_profile, revision_response.json()["snapshot"])
 
+    def test_evidence_feedback_route_is_idempotent(self) -> None:
+        payload = {"channel": "chat", "message_id": 12, "doc_id": "post-p-1"}
+
+        with self._client() as client:
+            first = client.post("/feedback/evidence", json=payload)
+            second = client.post("/feedback/evidence", json=payload)
+
+        self.assertEqual(200, first.status_code)
+        self.assertEqual(200, second.status_code)
+        self.assertTrue(first.json()["created"])
+        self.assertFalse(second.json()["created"])
+        row = db.query_one("SELECT COUNT(*) AS count FROM evidence_feedback")
+        self.assertEqual(1, row["count"])
+
     def test_soul_routes_create_patch_and_edit_memory(self) -> None:
         name = quote("测试好友")
         memory = "# 测试好友的相处记忆\n\n## 对用户的理解\nAPI 里写入的记忆\n"

@@ -62,6 +62,19 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "chat_messages", "edited_at", "REAL")
     _ensure_column(conn, "chat_messages", "rerun_at", "REAL")
     _ensure_column(conn, "chat_messages", "metadata", "TEXT")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS evidence_feedback (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel    TEXT NOT NULL,
+            message_id INTEGER NOT NULL,
+            doc_id     TEXT NOT NULL,
+            verdict    TEXT NOT NULL DEFAULT 'irrelevant',
+            created_at REAL NOT NULL,
+            UNIQUE(channel, message_id, doc_id)
+        )
+        """
+    )
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:

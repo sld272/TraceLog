@@ -7,6 +7,7 @@ import {
   type PipelineJobSummary,
   type Post,
 } from '@/api/client'
+import { EvidencePanel } from './EvidencePanel'
 import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
 import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, StarIcon, TrashIcon } from '@/components/icons'
@@ -287,6 +288,12 @@ function CommentPreview({
             <>
               {comment.content && <p className={styles.commentText}>{comment.content}</p>}
               <ImageGrid attachments={comment.attachments ?? []} />
+              <EvidencePanel
+                metadata={comment.metadata}
+                channel="public_post"
+                messageId={comment.id}
+                compact
+              />
             </>
           )}
         </div>
@@ -461,6 +468,9 @@ function ThreadMessage({
         </div>
       )}
       <ImageGrid attachments={message.attachments ?? []} />
+      {!isUser && !isFailedAssistant && !isPendingAssistant && (
+        <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
+      )}
     </div>
   )
 }
