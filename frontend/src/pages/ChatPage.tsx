@@ -180,7 +180,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       setConfirmDialog({
         isOpen: true,
         title: '编辑消息',
-        message: '会根据修改后的消息重新生成后续回复。',
+        message: '保存后会删除这条消息之后的全部私聊内容，并根据修改后的消息重新生成一条回复。确定继续？',
         onConfirm: async () => {
           setConfirmDialog(null)
           await performSaveEdit(message, body)
