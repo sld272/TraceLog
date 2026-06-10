@@ -128,7 +128,7 @@ function TodayTodosCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader title="今日待办" />
+      <PanelHeader title="待办速览" />
       <div className={styles.itemList}>
         {displayTodos.length > 0 ? (
           displayTodos.map((todo) => {
