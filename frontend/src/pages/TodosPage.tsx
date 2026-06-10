@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type Todo, createTodo, deleteTodo, listTodos, updateTodo } from '@/api/client'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CheckIcon, PlusIcon } from '@/components/icons'
 import { isTodoDone, getTodayKey, cleanOptionalField } from '@/utils/todo'
 import { formatDateLabel } from '@/utils/date'
@@ -41,7 +42,7 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
   const [savingId, setSavingId] = useState<string | null>(null)
   const [savingDrawer, setSavingDrawer] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [deleteArmed, setDeleteArmed] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [drawerMode, setDrawerMode] = useState<DrawerMode | null>(null)
   const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null)
@@ -76,7 +77,7 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
     setDrawerMode('create')
     setSelectedTodoId(null)
     setForm(EMPTY_FORM)
-    setDeleteArmed(false)
+    setDeleteConfirmOpen(false)
     setError(null)
   }
 
@@ -84,7 +85,7 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
     setDrawerMode('edit')
     setSelectedTodoId(todo.id)
     setForm(formFromTodo(todo))
-    setDeleteArmed(false)
+    setDeleteConfirmOpen(false)
     setError(null)
   }
 
@@ -92,7 +93,7 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
     setDrawerMode(null)
     setSelectedTodoId(null)
     setForm(EMPTY_FORM)
-    setDeleteArmed(false)
+    setDeleteConfirmOpen(false)
   }
 
   const toggleTodo = async (todo: Todo) => {
@@ -141,10 +142,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
 
   const removeSelectedTodo = async () => {
     if (!selectedTodo) return
-    if (!deleteArmed) {
-      setDeleteArmed(true)
-      return
-    }
     setDeleting(true)
     setError(null)
     try {
@@ -214,16 +211,28 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
                 selectedTodo={selectedTodo}
                 saving={savingDrawer}
                 deleting={deleting}
-                deleteArmed={deleteArmed}
                 onChange={setForm}
                 onClose={closeDrawer}
                 onSave={saveDrawer}
-                onDelete={removeSelectedTodo}
+                onDelete={() => setDeleteConfirmOpen(true)}
               />
             </div>
           )}
         </div>
       )}
+      <ConfirmDialog
+        isOpen={deleteConfirmOpen}
+        title="删除待办"
+        message="删除这条待办后不会自动恢复。确定删除吗？"
+        confirmText="删除"
+        cancelText="取消"
+        danger
+        onConfirm={async () => {
+          setDeleteConfirmOpen(false)
+          await removeSelectedTodo()
+        }}
+        onCancel={() => setDeleteConfirmOpen(false)}
+      />
     </div>
   )
 }
@@ -332,7 +341,6 @@ function TodoDrawer({
   selectedTodo,
   saving,
   deleting,
-  deleteArmed,
   onChange,
   onClose,
   onSave,
@@ -343,7 +351,6 @@ function TodoDrawer({
   selectedTodo: Todo | null
   saving: boolean
   deleting: boolean
-  deleteArmed: boolean
   onChange: (form: TodoForm) => void
   onClose: () => void
   onSave: () => void
@@ -422,7 +429,7 @@ function TodoDrawer({
             onClick={onDelete}
             disabled={saving || deleting}
           >
-            {deleting ? '删除中...' : deleteArmed ? '确认删除' : '删除'}
+            {deleting ? '删除中...' : '删除'}
           </button>
         ) : (
           <span />
