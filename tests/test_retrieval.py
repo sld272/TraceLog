@@ -512,6 +512,27 @@ class RetrievalDatabaseTest(unittest.TestCase):
 
         self.assertEqual([], retrieval.fts_search_scored('"""()^{}[]', k=5))
 
+    def test_keyword_search_posts_uses_fts_order(self) -> None:
+        self.insert_post("p-alpha", "alpha alpha alpha", 1.0)
+        self.insert_post("p-beta", "alpha", 2.0)
+
+        hits = retrieval.keyword_search_posts("alpha", k=2)
+
+        self.assertEqual(["p-alpha", "p-beta"], hits)
+
+    def test_keyword_search_posts_returns_empty_when_no_hits(self) -> None:
+        self.insert_post("p-1", "ChromaDB 和 FTS5。", 1.0)
+
+        self.assertEqual([], retrieval.keyword_search_posts("不存在的内容", k=5))
+
+    def test_keyword_search_posts_short_cjk_uses_like_fallback(self) -> None:
+        self.insert_post("p-new-like", "我买了电脑", 3.0)
+        self.insert_post("p-old-like", "我今天很累", 2.0)
+
+        hits = retrieval.keyword_search_posts("我", k=5)
+
+        self.assertEqual(["p-new-like", "p-old-like"], hits)
+
     def test_fts_keywords_can_drive_fts_search(self) -> None:
         self.insert_post("p-library", "晚上在图书馆学习时，我的效率确实更高。", 2.0)
         self.insert_post("p-other", "今天只是随便散步。", 1.0)

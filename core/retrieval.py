@@ -167,6 +167,17 @@ def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
         return []
 
 
+def keyword_search_posts(query: str, k: int = 20) -> list[str]:
+    """User-facing keyword search: FTS5 first, LIKE fallback."""
+    clean = str(query or "").strip()
+    if not clean:
+        return []
+    hits = fts_search_scored(clean, k=k)
+    if not hits:
+        hits = _like_search_scored(clean, k)
+    return fts_query.ordered_unique([hit.post_id for hit in hits])[:k]
+
+
 def build_retrieval_filter(channel: str, soul_name: str | None = None) -> dict | None:
     """Build a Chroma metadata filter for one reply context."""
     if channel == "public_post":

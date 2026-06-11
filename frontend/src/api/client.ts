@@ -401,6 +401,12 @@ export function listPosts(limit = DEFAULT_LIST_LIMIT, offset = 0) {
   return request<Post[]>(`/posts?limit=${limit}&offset=${offset}`)
 }
 
+export function searchPosts(q: string, limit = DEFAULT_LIST_LIMIT) {
+  return request<Post[]>(
+    `/posts/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+  )
+}
+
 export function getPost(postId: string) {
   return request<PostDetail>(`/posts/${postId}`)
 }

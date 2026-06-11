@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,6 +13,23 @@ from core.app_services.public_post_pipeline import CreatedPost
 
 @unittest.skipUnless(importlib.util.find_spec("fastapi"), "FastAPI is not installed")
 class ApiPostsTest(unittest.TestCase):
+    @contextmanager
+    def _temp_db(self):
+        from core import db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old_workspace = db.WORKSPACE_DIR
+            old_db_path = db.DB_PATH
+            workspace = Path(tmp) / "workspace"
+            db.WORKSPACE_DIR = workspace
+            db.DB_PATH = workspace / "state.db"
+            try:
+                db.init_db()
+                yield
+            finally:
+                db.WORKSPACE_DIR = old_workspace
+                db.DB_PATH = old_db_path
+
     def _client(self):
         from fastapi.testclient import TestClient
         from api import deps
@@ -66,6 +84,65 @@ class ApiPostsTest(unittest.TestCase):
 
         self.assertEqual(409, response.status_code)
         self.assertIn("请先在设置页完成模型配置", response.json()["detail"])
+
+    def test_search_posts_returns_list_shape_in_retrieval_order(self) -> None:
+        from core import db
+
+        with self._temp_db():
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, importance, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("p-1", "2026-06-01T10:00:00+08:00", "第一条 alpha", 0.4, 1.0, 1.0),
+            )
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, importance, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("p-2", "2026-06-02T10:00:00+08:00", "第二条 alpha", 0.8, 2.0, 2.0),
+            )
+            db.execute(
+                """
+                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("默认", "/tmp/default.md", 1, 1, 1.0, 1.0),
+            )
+            db.execute(
+                """
+                INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("p-2", "默认", "assistant", "回应", 0, 3.0),
+            )
+            with patch("api.routes.posts.retrieval.keyword_search_posts", return_value=["p-2", "p-1"]):
+                with self._client() as client:
+                    response = client.get("/posts/search?q=alpha&limit=2")
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual(["p-2", "p-1"], [item["post_id"] for item in body])
+        self.assertEqual(1, body[0]["comment_count"])
+        self.assertIn("pipeline_status", body[0])
+        self.assertEqual([], body[0]["attachments"])
+
+    def test_search_posts_empty_query_is_422(self) -> None:
+        with self._temp_db():
+            with self._client() as client:
+                response = client.get("/posts/search?q=")
+
+        self.assertEqual(422, response.status_code)
+
+    def test_search_route_does_not_fall_through_to_post_id(self) -> None:
+        with self._temp_db():
+            with patch("api.routes.posts.retrieval.keyword_search_posts", return_value=[]):
+                with self._client() as client:
+                    response = client.get("/posts/search?q=missing")
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([], response.json())
 
     def test_sse_event_format_includes_id_event_and_payload(self) -> None:
         from api.routes.posts import _format_sse

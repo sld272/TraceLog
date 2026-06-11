@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   type Attachment,
   type Comment,
@@ -11,6 +11,7 @@ import {
   listCommentConversations,
   listPosts,
   retryJob,
+  searchPosts,
   sendCommentMessage,
   streamPostEvents,
   rerunCommentMessage,
@@ -57,6 +58,10 @@ export function Timeline({
   const [regeneratedCommentId, setRegeneratedCommentId] = useState<number | null>(null)
   const [expandingPostIds, setExpandingPostIds] = useState<Record<string, boolean>>({})
   const [expandErrors, setExpandErrors] = useState<Record<string, string | null>>({})
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<Post[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
     title: string
@@ -65,7 +70,10 @@ export function Timeline({
   } | null>(null)
   const regeneratedCommentTimerRef = useRef<number | null>(null)
   const retryPollTokenRef = useRef(0)
+  const searchTokenRef = useRef(0)
   const modelUnavailable = modelConfigured === false
+  const trimmedSearchQuery = searchQuery.trim()
+  const searching = trimmedSearchQuery.length > 0
 
   const fetchPosts = useCallback(async () => {
     try {
@@ -83,14 +91,65 @@ export function Timeline({
     fetchPosts()
   }, [fetchPosts])
 
+  const runSearch = useCallback(async (query: string) => {
+    const clean = query.trim()
+    const token = searchTokenRef.current + 1
+    searchTokenRef.current = token
+    if (!clean) {
+      setSearchResults([])
+      setSearchError(null)
+      setSearchLoading(false)
+      return
+    }
+    setSearchLoading(true)
+    setSearchError(null)
+    try {
+      const results = await searchPosts(clean, 20)
+      if (searchTokenRef.current !== token) return
+      setSearchResults(results)
+    } catch (err) {
+      if (searchTokenRef.current !== token) return
+      setSearchError(err instanceof Error ? err.message : '搜索失败')
+    } finally {
+      if (searchTokenRef.current === token) setSearchLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void runSearch(searchQuery)
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [runSearch, searchQuery])
+
   useEffect(() => {
     return () => {
       if (regeneratedCommentTimerRef.current !== null) {
         window.clearTimeout(regeneratedCommentTimerRef.current)
       }
       retryPollTokenRef.current += 1
+      searchTokenRef.current += 1
     }
   }, [])
+
+  const clearSearch = () => {
+    searchTokenRef.current += 1
+    setSearchQuery('')
+    setSearchResults([])
+    setSearchError(null)
+    setSearchLoading(false)
+  }
+
+  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void runSearch(searchQuery)
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      clearSearch()
+    }
+  }
 
   const handleSubmit = async (content: string, attachments: Attachment[]) => {
     if (modelUnavailable) {
@@ -466,6 +525,22 @@ export function Timeline({
   return (
     <div className={styles.timeline}>
       <TimelineHeader />
+      <div className={styles.searchBox}>
+        <SearchIcon />
+        <input
+          value={searchQuery}
+          onChange={(event) => setSearchQuery(event.target.value)}
+          onKeyDown={handleSearchKeyDown}
+          placeholder="搜索记录"
+          aria-label="搜索记录"
+        />
+        {searchLoading && <span className={styles.searchLoading}>搜索中...</span>}
+        {searching && (
+          <button className={styles.searchClear} onClick={clearSearch} aria-label="清空搜索" title="清空搜索">
+            ×
+          </button>
+        )}
+      </div>
       <Composer
         onSubmit={handleSubmit}
         disabled={modelUnavailable}
@@ -485,7 +560,15 @@ export function Timeline({
               {error}
             </div>
           )}
-          {posts.length === 0 ? (
+          {searching ? (
+            <SearchResults
+              query={trimmedSearchQuery}
+              results={searchResults}
+              loading={searchLoading}
+              error={searchError}
+              onRetry={() => runSearch(searchQuery)}
+            />
+          ) : posts.length === 0 ? (
             <div className={styles.empty}>
               <EmptyIcon />
               <p className={styles.emptyTitle}>{modelUnavailable ? '先配置模型' : '还没有记录'}</p>
@@ -545,6 +628,67 @@ export function Timeline({
   )
 }
 
+function SearchResults({
+  query,
+  results,
+  loading,
+  error,
+  onRetry,
+}: {
+  query: string
+  results: Post[]
+  loading: boolean
+  error: string | null
+  onRetry: () => void
+}) {
+  return (
+    <div className={styles.searchResults}>
+      <div className={styles.searchSummary}>
+        {error ? (
+          <>
+            <span>搜索失败：{error}</span>
+            <button onClick={onRetry}>重试</button>
+          </>
+        ) : (
+          <span>{loading ? '正在搜索...' : `找到 ${results.length} 条记录`}</span>
+        )}
+      </div>
+      {!loading && !error && results.length === 0 && (
+        <div className={styles.empty}>
+          <p className={styles.emptyTitle}>没有找到与「{query}」相关的记录</p>
+        </div>
+      )}
+      {results.length > 0 && (
+        <div className={styles.feed}>
+          {results.map((post) => {
+            const href = formatRoute({ kind: 'post', postId: post.post_id })
+            return (
+              <div
+                key={post.post_id}
+                className={styles.searchResultCard}
+                role="link"
+                tabIndex={0}
+                onClick={() => { window.location.hash = href }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    window.location.hash = href
+                  }
+                }}
+              >
+                <PostCard
+                  post={post}
+                  detailHref={href}
+                />
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function TimelineHeader() {
   return (
     <header className={styles.header}>
@@ -553,6 +697,15 @@ function TimelineHeader() {
         <p>记录、回应、反思都流回这里</p>
       </div>
     </header>
+  )
+}
+
+function SearchIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.35-4.35" />
+    </svg>
   )
 }
 

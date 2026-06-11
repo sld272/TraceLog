@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from api.deps import get_runtime, require_configured_runtime_or_409, run_sync
-from core import attachment_service, db, vectorstore
+from core import attachment_service, db, retrieval, vectorstore
 from core.app_services import event_service, job_service, post_mutation, public_post_pipeline
 
 router = APIRouter(tags=["posts"])
@@ -54,6 +54,14 @@ async def list_posts(
     offset: int = Query(default=0, ge=0),
 ):
     return await run_sync(_list_posts, limit, offset)
+
+
+@router.get("/posts/search")
+async def search_posts(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=20, ge=1, le=50),
+):
+    return await run_sync(_search_posts, q, limit)
 
 
 @router.get("/posts/{post_id}")
@@ -115,19 +123,40 @@ def _list_posts(limit: int, offset: int) -> list[dict[str, Any]]:
         """,
         (limit, offset),
     )
-    return [
-        {
-            "post_id": row["id"],
-            "ts": row["ts"],
-            "content": row["content"],
-            "importance": row["importance"],
-            "comment_count": row["comment_count"],
-            "latest_event_type": event_service.latest_event_type(row["id"]),
-            "pipeline_status": public_post_pipeline.summarize_pipeline_status(row["id"]),
-            "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(row["id"])],
-        }
-        for row in rows
-    ]
+    return [_post_summary(row) for row in rows]
+
+
+def _search_posts(query: str, limit: int) -> list[dict[str, Any]]:
+    post_ids = retrieval.keyword_search_posts(query, k=limit)
+    if not post_ids:
+        return []
+    placeholders = ",".join("?" for _ in post_ids)
+    rows = db.query_all(
+        f"""
+        SELECT posts.id, posts.ts, posts.content, posts.importance,
+               COUNT(comments.id) AS comment_count
+        FROM posts
+        LEFT JOIN comments ON comments.post_id = posts.id AND comments.seq = 0
+        WHERE posts.id IN ({placeholders})
+        GROUP BY posts.id
+        """,
+        tuple(post_ids),
+    )
+    by_id = {row["id"]: _post_summary(row) for row in rows}
+    return [by_id[post_id] for post_id in post_ids if post_id in by_id]
+
+
+def _post_summary(row) -> dict[str, Any]:
+    return {
+        "post_id": row["id"],
+        "ts": row["ts"],
+        "content": row["content"],
+        "importance": row["importance"],
+        "comment_count": row["comment_count"],
+        "latest_event_type": event_service.latest_event_type(row["id"]),
+        "pipeline_status": public_post_pipeline.summarize_pipeline_status(row["id"]),
+        "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(row["id"])],
+    }
 
 
 def _get_post_detail(post_id: str) -> dict[str, Any] | None:
