@@ -288,7 +288,7 @@ function TodoGroupSection({
             ))}
           </div>
         ) : (
-          <p className={styles.groupEmpty}>没有待办</p>
+          <p className={styles.groupEmpty}>{groupEmptyText(group.key)}</p>
         )
       )}
     </section>
@@ -460,6 +460,13 @@ function TodoDrawer({
       </div>
     </aside>
   )
+}
+
+function groupEmptyText(key: string): string {
+  if (key === 'today') return '今天没有待办'
+  if (key === 'upcoming') return '之后暂无安排'
+  if (key === 'undated') return '没有未排期的待办'
+  return '还没有已完成的待办'
 }
 
 function groupTodos(todos: Todo[]): TodoGroup[] {

@@ -324,7 +324,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
               </button>
             </div>
             {soulScopes.length === 0 ? (
-              <div className={styles.empty}>暂无新增互动</div>
+              <div className={styles.empty}>暂无新增互动。TA 们的回应和私聊会积累到这里。</div>
             ) : (
               <div className={styles.soulScopeList}>
                 {soulScopes.map((scope) => (
@@ -414,7 +414,7 @@ function RecentRevisionsCard({
       {error ? (
         <div className={styles.revisionEmpty}>{error}</div>
       ) : revisionGroups.length === 0 ? (
-        <div className={styles.revisionEmpty}>还没有整理产出</div>
+        <div className={styles.revisionEmpty}>还没有整理产出。完成第一次整理后，更新内容会显示在这里。</div>
       ) : (
         <div className={styles.revisionList}>
           {revisionGroups.map((group) => (

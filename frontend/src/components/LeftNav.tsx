@@ -56,7 +56,7 @@ export function LeftNav({ souls, soulsLoadState = 'ready', activePage, onNavigat
           <p className={styles.emptySoul} role="alert">加载失败</p>
         )}
         {souls.length === 0 && soulsLoadState === 'ready' && (
-          <p className={styles.emptySoul}>还没有</p>
+          <p className={styles.emptySoul}>还没有人格，去设置里创建</p>
         )}
       </section>
 

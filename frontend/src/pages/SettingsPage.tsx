@@ -637,7 +637,7 @@ function SoulSettingsPanel({
               </div>
             </div>
           ))}
-          {souls.length === 0 && <div className={workspaceStyles.empty}>暂无人格</div>}
+          {souls.length === 0 && <div className={workspaceStyles.empty}>还没有人格，用下面的表单创建第一个。</div>}
         </div>
       </section>
 

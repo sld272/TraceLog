@@ -400,7 +400,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
           {loading ? (
             <div className={styles.empty}>加载中...</div>
           ) : messages.length === 0 ? (
-            <div className={styles.empty}>还没有消息</div>
+            <div className={styles.empty}>还没有消息。和 {soulName} 说点什么吧，TA 会记得你们的对话。</div>
           ) : (
             messages.map((message) => (
               <MessageBubble

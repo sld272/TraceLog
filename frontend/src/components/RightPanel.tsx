@@ -169,7 +169,7 @@ function TodayTodosCard({
             )
           })
         ) : (
-          <p className={styles.empty}>今天没有待办</p>
+          <p className={styles.empty}>今天没有待办。记录里提到的事会自动出现在这里。</p>
         )}
         <button type="button" className={styles.queueAction} onClick={onOpenTodos}>
           查看
