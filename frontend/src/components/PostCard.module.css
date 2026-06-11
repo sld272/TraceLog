@@ -68,6 +68,17 @@
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
 }
+
+.timeLink {
+  display: inline-block;
+  text-decoration: none;
+}
+
+.timeLink:hover .time {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
 .importanceBadge {
   display: flex;
   align-items: center;

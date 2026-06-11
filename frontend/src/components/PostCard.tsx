@@ -31,6 +31,8 @@ interface PostCardProps {
   regeneratedCommentId?: number | null
   retryingJobId?: number | null
   deletingPost?: boolean
+  detailHref?: string
+  modelConfigured?: boolean | null
   expandLoading?: boolean
   expandError?: string | null
   onExpand?: () => void
@@ -49,6 +51,8 @@ export function PostCard({
   regeneratedCommentId = null,
   retryingJobId = null,
   deletingPost = false,
+  detailHref,
+  modelConfigured = true,
   expandLoading = false,
   expandError = null,
   onExpand,
@@ -67,9 +71,17 @@ export function PostCard({
           <span className={styles.userAvatar}>我</span>
           <div>
             <span className={styles.userName}>你</span>
-            <time className={styles.time} dateTime={formatDateTimeAttribute(post.ts)} title={formatAbsoluteTime(post.ts)}>
-              {timeAgo}
-            </time>
+            {detailHref ? (
+              <a className={styles.timeLink} href={detailHref}>
+                <time className={styles.time} dateTime={formatDateTimeAttribute(post.ts)} title={formatAbsoluteTime(post.ts)}>
+                  {timeAgo}
+                </time>
+              </a>
+            ) : (
+              <time className={styles.time} dateTime={formatDateTimeAttribute(post.ts)} title={formatAbsoluteTime(post.ts)}>
+                {timeAgo}
+              </time>
+            )}
           </div>
         </div>
         {post.importance > 0.7 && (
@@ -99,6 +111,7 @@ export function PostCard({
               onReply={onReply}
               onDelete={onDeleteComment}
               onRerun={onRerunComment}
+              modelConfigured={modelConfigured}
             />
           ))}
         </div>
@@ -211,6 +224,7 @@ function CommentPreview({
   onReply,
   onDelete,
   onRerun,
+  modelConfigured,
 }: {
   comment: Comment
   conversation?: CommentConversationState
@@ -219,6 +233,7 @@ function CommentPreview({
   onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
   onDelete?: (commentId: number) => Promise<void>
   onRerun?: (commentId: number) => Promise<void>
+  modelConfigured: boolean | null
 }) {
   const [reply, setReply] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -233,6 +248,7 @@ function CommentPreview({
   const rootBusy = busyCommentId === comment.id
   const rootPending = rootBusy && comment.role === 'assistant'
   const replyBusy = Boolean(conversation?.sending || rootBusy)
+  const replyDisabled = replyBusy || !onReply || modelConfigured === false
 
   useEffect(() => {
     const el = replyInputRef.current
@@ -243,7 +259,7 @@ function CommentPreview({
   }, [reply])
 
   const handleSubmit = async () => {
-    if ((!trimmed && attachments.length === 0) || replyBusy || !onReply) return
+    if ((!trimmed && attachments.length === 0) || replyDisabled) return
     const submittedReply = reply
     const submittedAttachments = attachments
     setReply('')
@@ -337,13 +353,13 @@ function CommentPreview({
             onKeyDown={handleKeyDown}
             placeholder={`回复 ${soulName}...`}
             rows={1}
-            disabled={replyBusy}
+            disabled={replyDisabled}
             aria-label={`回复 ${soulName}`}
           />
           <ImageUploader
             attachments={attachments}
             compact
-            disabled={replyBusy}
+            disabled={replyDisabled}
             onChange={setAttachments}
             showControls={false}
           />
@@ -358,7 +374,7 @@ function CommentPreview({
             <ImageUploader
               attachments={attachments}
               compact
-              disabled={replyBusy}
+              disabled={replyDisabled}
               onChange={setAttachments}
               showPreview={false}
             />
@@ -366,7 +382,7 @@ function CommentPreview({
               <button
                 className={styles.replyButton}
                 onClick={handleSubmit}
-                disabled={(!trimmed && attachments.length === 0) || replyBusy || !onReply}
+                disabled={(!trimmed && attachments.length === 0) || replyDisabled}
                 aria-label={`发送给 ${soulName}`}
               >
                 {replyBusy ? <LoadingDots /> : <SendIcon width={14} height={14} />}

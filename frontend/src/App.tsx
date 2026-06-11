@@ -16,18 +16,14 @@ import { LeftNav } from '@/components/LeftNav'
 import { RightPanel } from '@/components/RightPanel'
 import { ChatPage } from '@/pages/ChatPage'
 import { ReflectionsPage } from '@/pages/ReflectionsPage'
+import { PostDetailPage } from '@/pages/PostDetailPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { Timeline } from '@/pages/Timeline'
 import { TodosPage } from '@/pages/TodosPage'
 import { formatRoute, parseRoute, type Route } from '@/router'
+import { type PostMutationKind, type PostMutationSignal } from '@/types/postMutation'
 import { isTodoDone } from '@/utils/todo'
 import styles from '@/components/AppShell.module.css'
-
-export type PostMutationSignal = {
-  postId: string
-  kind: 'updated' | 'deleted'
-  nonce: number
-}
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash))
@@ -36,7 +32,7 @@ export function App() {
   const [todos, setTodos] = useState<Todo[]>([])
   const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
   const [soulReflections, setSoulReflections] = useState<SoulReflectionScope[]>([])
-  const postMutationSignal: PostMutationSignal | null = null
+  const [postMutationSignal, setPostMutationSignal] = useState<PostMutationSignal | null>(null)
   const homeScrollTopRef = useRef(0)
   const previousRouteKindRef = useRef(route.kind)
   const showRightPanel = route.kind === 'home'
@@ -82,6 +78,10 @@ export function App() {
   const navigateToPage = useCallback((page: string) => {
     navigate(routeFromNavKey(page))
   }, [navigate])
+
+  const notifyPostMutated = useCallback((postId: string, kind: PostMutationKind) => {
+    setPostMutationSignal({ postId, kind, nonce: Date.now() })
+  }, [])
 
   const handleTodosChanged = useCallback((nextTodos?: Todo[]) => {
     if (nextTodos) {
@@ -164,13 +164,15 @@ export function App() {
           />
         </div>
         {route.kind === 'post' && (
-          <div className={styles.placeholderPage}>
-            <button className={styles.backButton} onClick={() => navigate({ kind: 'home' })}>
-              返回首页
-            </button>
-            <h1>记录详情</h1>
-            <p>正在接入详情页：{route.postId}</p>
-          </div>
+          <PostDetailPage
+            key={route.postId}
+            postId={route.postId}
+            highlight={route.highlight}
+            modelConfigured={modelConfigured}
+            onOpenSettings={openSettings}
+            onPostMutated={notifyPostMutated}
+            onTodosChanged={refreshTodos}
+          />
         )}
         {route.kind === 'todos' && <TodosPage onTodosChanged={handleTodosChanged} />}
         {route.kind === 'reflections' && <ReflectionsPage onReflectionSettled={refreshHomeContext} />}
