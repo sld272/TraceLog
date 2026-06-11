@@ -568,10 +568,6 @@ export function streamPostEvents(
     })
   })
 
-  es.onerror = () => {
-    es.close()
-  }
-
   return () => es.close()
 }
 
