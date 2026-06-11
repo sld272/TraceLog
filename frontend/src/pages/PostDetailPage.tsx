@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { deletePost, type Attachment, type Post } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { LoadingDots } from '@/components/icons'
 import { PostCard } from '@/components/PostCard'
 import { usePostDetail } from '@/hooks/usePostDetail'
@@ -180,22 +181,28 @@ export function PostDetailPage({
         </div>
       )}
       {postForCard && (
-        <PostCard
-          post={postForCard}
-          variant="detail"
-          comments={detail.comments}
-          commentConversations={detail.conversations}
-          busyCommentId={detail.busyCommentId}
-          regeneratedCommentId={detail.regeneratedCommentId}
-          deletingPost={deletingPost}
-          retryingJobId={detail.retryingJobId}
-          modelConfigured={modelConfigured}
-          onReply={handleReply}
-          onDeletePost={handleDeletePost}
-          onDeleteComment={handleDeleteComment}
-          onRerunComment={handleRerunComment}
-          onRetryFailedJobs={handleRetryJobs}
-        />
+        <ErrorBoundary
+          variant="inline"
+          title="此条内容无法显示"
+          message="记录仍然保留，可以返回首页或刷新页面后再试。"
+        >
+          <PostCard
+            post={postForCard}
+            variant="detail"
+            comments={detail.comments}
+            commentConversations={detail.conversations}
+            busyCommentId={detail.busyCommentId}
+            regeneratedCommentId={detail.regeneratedCommentId}
+            deletingPost={deletingPost}
+            retryingJobId={detail.retryingJobId}
+            modelConfigured={modelConfigured}
+            onReply={handleReply}
+            onDeletePost={handleDeletePost}
+            onDeleteComment={handleDeleteComment}
+            onRerunComment={handleRerunComment}
+            onRetryFailedJobs={handleRetryJobs}
+          />
+        </ErrorBoundary>
       )}
       {confirmDialog && (
         <ConfirmDialog

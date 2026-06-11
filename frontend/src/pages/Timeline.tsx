@@ -21,6 +21,7 @@ import {
 } from '@/api/client'
 import { Composer } from '@/components/Composer'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { type CommentConversationState, PostCard } from '@/components/PostCard'
 import { formatRoute } from '@/router'
 import { type PostMutationSignal } from '@/types/postMutation'
@@ -665,26 +666,32 @@ export function Timeline({
           ) : (
             <div className={styles.feed}>
               {posts.map((post) => (
-                <PostCard
+                <ErrorBoundary
                   key={post.post_id}
-                  post={post}
-                  comments={postComments[post.post_id]}
-                  commentConversations={postCommentConversations[post.post_id]}
-                  busyCommentId={busyCommentId}
-                  regeneratedCommentId={regeneratedCommentId}
-                  deletingPost={deletingPostId === post.post_id}
-                  retryingJobId={retryingJobId}
-                  detailHref={formatRoute({ kind: 'post', postId: post.post_id })}
-                  modelConfigured={modelConfigured}
-                  expandLoading={expandingPostIds[post.post_id] ?? false}
-                  expandError={expandErrors[post.post_id] ?? null}
-                  onExpand={() => handleExpand(post.post_id)}
-                  onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
-                  onDeletePost={() => handleDeletePost(post.post_id)}
-                  onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
-                  onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
-                  onRetryFailedJobs={(jobIds) => handleRetryPostJobs(post.post_id, jobIds)}
-                />
+                  variant="inline"
+                  title="此条内容无法显示"
+                  message="其他记录不受影响，可以刷新页面后再试。"
+                >
+                  <PostCard
+                    post={post}
+                    comments={postComments[post.post_id]}
+                    commentConversations={postCommentConversations[post.post_id]}
+                    busyCommentId={busyCommentId}
+                    regeneratedCommentId={regeneratedCommentId}
+                    deletingPost={deletingPostId === post.post_id}
+                    retryingJobId={retryingJobId}
+                    detailHref={formatRoute({ kind: 'post', postId: post.post_id })}
+                    modelConfigured={modelConfigured}
+                    expandLoading={expandingPostIds[post.post_id] ?? false}
+                    expandError={expandErrors[post.post_id] ?? null}
+                    onExpand={() => handleExpand(post.post_id)}
+                    onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
+                    onDeletePost={() => handleDeletePost(post.post_id)}
+                    onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
+                    onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
+                    onRetryFailedJobs={(jobIds) => handleRetryPostJobs(post.post_id, jobIds)}
+                  />
+                </ErrorBoundary>
               ))}
             </div>
           )}
