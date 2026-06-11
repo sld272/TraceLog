@@ -13,6 +13,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EvidencePanel } from '@/components/EvidencePanel'
 import { ImageGrid } from '@/components/ImageGrid'
 import { ImageUploader } from '@/components/ImageUploader'
+import { Notice } from '@/components/Notice'
 import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
@@ -382,19 +383,19 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
         </header>
 
         {modelUnavailable && (
-          <div className={styles.notice}>
-            <div className={styles.noticeRow}>
-              <span>主模型和 Embedding 尚未配置，配置完成后才能发送私聊消息。</span>
-              {onOpenSettings && (
-                <button className={styles.ghostButton} onClick={onOpenSettings}>
-                  去设置
-                </button>
-              )}
-            </div>
-          </div>
+          <Notice
+            kind="info"
+            actions={onOpenSettings && (
+              <button className={styles.ghostButton} onClick={onOpenSettings}>
+                去设置
+              </button>
+            )}
+          >
+            主模型和 Embedding 尚未配置，配置完成后才能发送私聊消息。
+          </Notice>
         )}
 
-        {error && <div className={styles.notice}>{error}</div>}
+        {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
 
         <div className={styles.messages} ref={messagesRef} onScroll={handleMessagesScroll}>
           {loading ? (

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type Todo, createTodo, deleteTodo, listTodos, updateTodo } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { Notice } from '@/components/Notice'
 import { CheckIcon, PlusIcon } from '@/components/icons'
 import { formatRoute } from '@/router'
 import { isTodoDone, getTodayKey, cleanOptionalField } from '@/utils/todo'
@@ -176,7 +177,7 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
         </div>
       </header>
 
-      {error && <div className={styles.notice}>{error}</div>}
+      {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
 
       {loading ? (
         <div className={styles.empty}>加载中...</div>

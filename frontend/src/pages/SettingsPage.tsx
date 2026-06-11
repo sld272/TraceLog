@@ -16,6 +16,7 @@ import {
   updateSoul,
 } from '@/api/client'
 import { MemorySettingsPanel } from './MemorySettingsPanel'
+import { Notice } from '@/components/Notice'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
@@ -299,11 +300,11 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
         </button>
       </header>
 
-      {error && <div className={workspaceStyles.notice}>{error}</div>}
+      {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
       {firstRun && (
-        <div className={workspaceStyles.notice}>首次使用 TraceLog，请先配置主模型和 Embedding。保存后应用会自动重新加载配置。</div>
+        <Notice kind="info">首次使用 TraceLog，请先配置主模型和 Embedding。保存后应用会自动重新加载配置。</Notice>
       )}
-      {notice && <div className={styles.successNotice}>{notice}</div>}
+      {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
 
       <div className={styles.tabs} role="tablist" aria-label="设置分类">
         {tabs.map((tab) => (

@@ -123,38 +123,10 @@
   opacity: 0.45;
 }
 
-.empty,
-.error {
+.empty {
   padding: var(--space-12) var(--space-4);
   text-align: center;
   color: var(--color-text-tertiary);
-}
-
-.error {
-  color: var(--color-error);
-}
-
-.notice {
-  border: 1px solid var(--color-accent-border);
-  background: var(--color-accent-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-4);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  margin-bottom: var(--space-4);
-}
-
-.noticeRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.noticeActions {
-  display: inline-flex;
-  flex-shrink: 0;
-  gap: var(--space-2);
 }
 
 .noticeDetails {

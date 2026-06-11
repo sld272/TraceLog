@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { deletePost, type Attachment, type Post } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { Notice } from '@/components/Notice'
 import { LoadingDots } from '@/components/icons'
 import { PostCard } from '@/components/PostCard'
 import { usePostDetail } from '@/hooks/usePostDetail'
@@ -170,15 +171,17 @@ export function PostDetailPage({
     <section className={styles.page}>
       <DetailHeader onBack={goBack} />
       {modelUnavailable && (
-        <div className={styles.notice}>
-          <span>主模型和 Embedding 尚未配置，配置完成后才能继续追问。</span>
-          {onOpenSettings && <button onClick={onOpenSettings}>去设置</button>}
-        </div>
+        <Notice
+          kind="info"
+          actions={onOpenSettings && <button onClick={onOpenSettings}>去设置</button>}
+        >
+          主模型和 Embedding 尚未配置，配置完成后才能继续追问。
+        </Notice>
       )}
       {(actionError ?? detail.error) && (
-        <div className={styles.error} role="alert">
+        <Notice kind="error" onClose={actionError ? () => setActionError(null) : undefined}>
           {actionError ?? detail.error}
-        </div>
+        </Notice>
       )}
       {postForCard && (
         <ErrorBoundary

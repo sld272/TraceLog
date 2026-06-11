@@ -22,6 +22,7 @@ import {
 import { Composer } from '@/components/Composer'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { Notice } from '@/components/Notice'
 import { type CommentConversationState, PostCard } from '@/components/PostCard'
 import { formatRoute } from '@/router'
 import { type PostMutationSignal } from '@/types/postMutation'
@@ -616,9 +617,9 @@ export function Timeline({
       ) : (
         <>
           {error && (
-            <div className={styles.inlineError} role="alert">
+            <Notice kind="error" onClose={() => setError(null)}>
               {error}
-            </div>
+            </Notice>
           )}
           {searching ? (
             <SearchResults

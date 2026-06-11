@@ -7,6 +7,7 @@ import {
   updateProfile,
   updateSoulMemory,
 } from '@/api/client'
+import { Notice } from '@/components/Notice'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
@@ -145,8 +146,8 @@ export function MemorySettingsPanel({
 
   return (
     <div className={styles.settingsStack}>
-      {error && <div className={workspaceStyles.notice}>{error}</div>}
-      {notice && <div className={styles.successNotice}>{notice}</div>}
+      {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
+      {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
 
       <section className={styles.memoryHero}>
         <div>

@@ -24,6 +24,7 @@ import {
   formatDateTimeAttribute,
   formatSmartTime,
 } from '@/utils/date'
+import { Notice } from '@/components/Notice'
 import { PollTimeoutError, pollUntil } from '@/utils/polling'
 import styles from './WorkspacePages.module.css'
 
@@ -286,8 +287,8 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
         </button>
       </header>
 
-      {notice && <div className={styles.notice}>{notice}</div>}
-      {error && <div className={styles.notice}>{error}</div>}
+      {notice && <Notice kind="info" onClose={() => setNotice(null)}>{notice}</Notice>}
+      {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
       {(activeJob || lastFailedJob) && (
         <ReflectionJobNotice
           activeJob={activeJob}
@@ -456,29 +457,28 @@ function ReflectionJobNotice({
   const isPending = job.status === 'pending'
 
   return (
-    <div className={styles.notice}>
-      <div className={styles.noticeRow}>
-        <span>{isFailed ? '部分整理失败' : `整理进行中...${job.error ? '（正在自动重试）' : ''}`}</span>
-        <div className={styles.noticeActions}>
-          {isFailed && (
-            <button className={styles.ghostButton} onClick={() => onRetry(job)} disabled={busy}>
-              重试
-            </button>
-          )}
-          {isPending && (
-            <button className={styles.ghostButton} onClick={() => onCancel(job)} disabled={busy}>
-              取消
-            </button>
-          )}
-        </div>
-      </div>
+    <Notice
+      kind={isFailed ? 'error' : 'info'}
+      actions={
+        isFailed ? (
+          <button className={styles.ghostButton} onClick={() => onRetry(job)} disabled={busy}>
+            重试
+          </button>
+        ) : isPending ? (
+          <button className={styles.ghostButton} onClick={() => onCancel(job)} disabled={busy}>
+            取消
+          </button>
+        ) : undefined
+      }
+    >
+      <span>{isFailed ? '部分整理失败' : `整理进行中...${job.error ? '（正在自动重试）' : ''}`}</span>
       {isFailed && job.error && (
         <details className={styles.noticeDetails}>
           <summary>诊断信息</summary>
           <p>{job.error}</p>
         </details>
       )}
-    </div>
+    </Notice>
   )
 }
 
