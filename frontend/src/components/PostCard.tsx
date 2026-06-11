@@ -16,6 +16,8 @@ import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './PostCard.module.css'
 
+const FEED_MAX_THREAD_MESSAGES = 4
+
 export interface CommentConversationState {
   conversation?: CommentConversation
   messages: CommentMessage[]
@@ -32,6 +34,7 @@ interface PostCardProps {
   retryingJobId?: number | null
   deletingPost?: boolean
   detailHref?: string
+  variant?: 'feed' | 'detail'
   modelConfigured?: boolean | null
   expandLoading?: boolean
   expandError?: string | null
@@ -52,6 +55,7 @@ export function PostCard({
   retryingJobId = null,
   deletingPost = false,
   detailHref,
+  variant = 'feed',
   modelConfigured = true,
   expandLoading = false,
   expandError = null,
@@ -112,6 +116,8 @@ export function PostCard({
               onDelete={onDeleteComment}
               onRerun={onRerunComment}
               modelConfigured={modelConfigured}
+              detailHref={detailHref}
+              variant={variant}
             />
           ))}
         </div>
@@ -225,6 +231,8 @@ function CommentPreview({
   onDelete,
   onRerun,
   modelConfigured,
+  detailHref,
+  variant,
 }: {
   comment: Comment
   conversation?: CommentConversationState
@@ -234,6 +242,8 @@ function CommentPreview({
   onDelete?: (commentId: number) => Promise<void>
   onRerun?: (commentId: number) => Promise<void>
   modelConfigured: boolean | null
+  detailHref?: string
+  variant: 'feed' | 'detail'
 }) {
   const [reply, setReply] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -243,6 +253,9 @@ function CommentPreview({
   const trimmed = reply.trim()
   const submitShortcutTitle = getSubmitShortcutTitle()
   const messages = conversation?.messages ?? []
+  const threadMessages = messages.filter((message) => message.seq > 0)
+  const visibleThreadMessages = visibleMessagesForVariant(threadMessages, variant)
+  const isThreadTruncated = visibleThreadMessages.length < threadMessages.length
   const latestMessage = latestConversationMessage(comment, messages)
   const canRerunRoot = latestMessage?.id === comment.id && latestMessage.role === 'assistant'
   const rootBusy = busyCommentId === comment.id
@@ -326,9 +339,14 @@ function CommentPreview({
         </div>
       </div>
 
-      {messages.some((message) => message.seq > 0) && (
+      {threadMessages.length > 0 && (
         <div className={styles.threadMessages}>
-          {messages.filter((message) => message.seq > 0).map((message) => (
+          {isThreadTruncated && detailHref && (
+            <a className={styles.threadMoreLink} href={detailHref}>
+              在详情中查看完整对话（共 {threadMessages.length + 1} 条）→
+            </a>
+          )}
+          {visibleThreadMessages.map((message) => (
             <ThreadMessage
               key={message.id}
               message={message}
@@ -400,6 +418,17 @@ function CommentPreview({
       )}
     </div>
   )
+}
+
+function visibleMessagesForVariant(
+  messages: CommentMessage[],
+  variant: 'feed' | 'detail',
+): CommentMessage[] {
+  if (variant === 'detail' || messages.length <= FEED_MAX_THREAD_MESSAGES - 1) return messages
+  const tail = messages.slice(-(FEED_MAX_THREAD_MESSAGES - 1))
+  const optimistic = messages.filter((message) => message.id < 0 && !tail.some((item) => item.id === message.id))
+  const visibleIds = new Set([...tail, ...optimistic].map((message) => message.id))
+  return messages.filter((message) => visibleIds.has(message.id))
 }
 
 function ReplyFailureInline({

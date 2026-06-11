@@ -360,6 +360,25 @@
   color: var(--color-error);
 }
 
+.todoSourceLink,
+.drawerSourceLink {
+  color: var(--color-accent);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.todoSourceLink:hover,
+.drawerSourceLink:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.drawerSourceLink {
+  display: inline-flex;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+}
+
 .todoEditButton,
 .textButton {
   color: var(--color-accent);

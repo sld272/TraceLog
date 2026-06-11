@@ -282,6 +282,19 @@
   border-left: 1px solid var(--color-border);
 }
 
+.threadMoreLink {
+  align-self: flex-start;
+  color: var(--color-accent);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+}
+
+.threadMoreLink:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
 .threadMessage {
   width: fit-content;
   max-width: min(100%, 540px);

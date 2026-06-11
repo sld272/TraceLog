@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type Todo, createTodo, deleteTodo, listTodos, updateTodo } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { CheckIcon, PlusIcon } from '@/components/icons'
+import { formatRoute } from '@/router'
 import { isTodoDone, getTodayKey, cleanOptionalField } from '@/utils/todo'
 import { formatDateLabel } from '@/utils/date'
 import styles from './WorkspacePages.module.css'
@@ -326,6 +327,17 @@ function TodoRow({
               {item}
             </span>
           ))}
+          {todo.source_post ? (
+            <a
+              className={styles.todoSourceLink}
+              href={formatRoute({ kind: 'post', postId: todo.source_post })}
+              onClick={(event) => event.stopPropagation()}
+            >
+              来自记录
+            </a>
+          ) : (
+            <span>手动新增</span>
+          )}
         </div>
       </div>
       <button className={styles.todoEditButton} onClick={onEdit}>
@@ -365,7 +377,15 @@ function TodoDrawer({
       <div className={styles.drawerHeader}>
         <div>
           <h2>{mode === 'create' ? '新增待办' : '编辑待办'}</h2>
-          {selectedTodo?.source_post && <p>来自记录</p>}
+          {selectedTodo?.source_post && (
+            <a
+              className={styles.drawerSourceLink}
+              href={formatRoute({ kind: 'post', postId: selectedTodo.source_post })}
+              onClick={onClose}
+            >
+              查看来源记录 →
+            </a>
+          )}
         </div>
         <button className={styles.ghostButton} onClick={onClose} disabled={saving || deleting}>
           关闭
@@ -506,6 +526,5 @@ function todoMeta(todo: Todo): string[] {
   const time = [todo.start_time, todo.end_time].filter(Boolean).join(' - ')
   if (time) items.push(time)
   items.push(isTodoDone(todo) ? '已完成' : todo.status)
-  items.push(todo.source_post ? '来自记录' : '手动新增')
   return items
 }

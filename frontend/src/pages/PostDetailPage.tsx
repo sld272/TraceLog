@@ -160,6 +160,7 @@ export function PostDetailPage({
       {postForCard && (
         <PostCard
           post={postForCard}
+          variant="detail"
           comments={detail.comments}
           commentConversations={detail.conversations}
           busyCommentId={detail.busyCommentId}
