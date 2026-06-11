@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   type ReflectionScope,
   type Soul,
@@ -19,18 +19,28 @@ import { ReflectionsPage } from '@/pages/ReflectionsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { Timeline } from '@/pages/Timeline'
 import { TodosPage } from '@/pages/TodosPage'
+import { formatRoute, parseRoute, type Route } from '@/router'
 import { isTodoDone } from '@/utils/todo'
+import styles from '@/components/AppShell.module.css'
 
-const DEFAULT_PAGE = 'home'
+export type PostMutationSignal = {
+  postId: string
+  kind: 'updated' | 'deleted'
+  nonce: number
+}
 
 export function App() {
-  const [activePage, setActivePage] = useState(() => pageFromHash(window.location.hash))
+  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash))
   const [modelConfigured, setModelConfigured] = useState<boolean | null>(null)
   const [souls, setSouls] = useState<Soul[]>([])
   const [todos, setTodos] = useState<Todo[]>([])
   const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
   const [soulReflections, setSoulReflections] = useState<SoulReflectionScope[]>([])
-  const showRightPanel = activePage === 'home'
+  const postMutationSignal: PostMutationSignal | null = null
+  const homeScrollTopRef = useRef(0)
+  const previousRouteKindRef = useRef(route.kind)
+  const showRightPanel = route.kind === 'home'
+  const navKey = navKeyFromRoute(route)
 
   const fetchSouls = useCallback(async () => {
     try {
@@ -61,13 +71,17 @@ export function App() {
     setTodos(todoData)
   }, [])
 
-  const navigateToPage = useCallback((page: string) => {
-    const nextHash = hashFromPage(page)
+  const navigate = useCallback((nextRoute: Route) => {
+    const nextHash = formatRoute(nextRoute)
     if (window.location.hash !== nextHash) {
       window.location.hash = nextHash
     }
-    setActivePage(page)
+    setRoute(nextRoute)
   }, [])
+
+  const navigateToPage = useCallback((page: string) => {
+    navigate(routeFromNavKey(page))
+  }, [navigate])
 
   const handleTodosChanged = useCallback((nextTodos?: Todo[]) => {
     if (nextTodos) {
@@ -111,53 +125,72 @@ export function App() {
 
   useEffect(() => {
     const handleHashChange = () => {
-      setActivePage(pageFromHash(window.location.hash))
+      setRoute(parseRoute(window.location.hash))
     }
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
   }, [])
 
   useEffect(() => {
+    const previousKind = previousRouteKindRef.current
+    if (previousKind === 'home' && route.kind !== 'home') {
+      homeScrollTopRef.current = window.scrollY
+    }
+    if (previousKind !== 'home' && route.kind === 'home') {
+      window.requestAnimationFrame(() => window.scrollTo({ top: homeScrollTopRef.current }))
+    }
+    previousRouteKindRef.current = route.kind
+  }, [route.kind])
+
+  useEffect(() => {
     if (showRightPanel) void refreshHomeContext()
   }, [showRightPanel, refreshHomeContext])
 
   const renderMain = () => {
-    switch (activePage) {
-      case 'home':
-        return (
+    const isHome = route.kind === 'home'
+    return (
+      <>
+        <div
+          className={isHome ? undefined : styles.hiddenPage}
+          inert={!isHome || undefined}
+          aria-hidden={!isHome || undefined}
+        >
           <Timeline
             modelConfigured={modelConfigured}
             onOpenSettings={openSettings}
             onActivitySettled={refreshHomeContext}
             onTodosChanged={refreshTodos}
+            postMutationSignal={postMutationSignal}
           />
-        )
-      case 'todos':
-        return <TodosPage onTodosChanged={handleTodosChanged} />
-      case 'reflections':
-        return <ReflectionsPage onReflectionSettled={refreshHomeContext} />
-      case 'settings':
-        return (
+        </div>
+        {route.kind === 'post' && (
+          <div className={styles.placeholderPage}>
+            <button className={styles.backButton} onClick={() => navigate({ kind: 'home' })}>
+              返回首页
+            </button>
+            <h1>记录详情</h1>
+            <p>正在接入详情页：{route.postId}</p>
+          </div>
+        )}
+        {route.kind === 'todos' && <TodosPage onTodosChanged={handleTodosChanged} />}
+        {route.kind === 'reflections' && <ReflectionsPage onReflectionSettled={refreshHomeContext} />}
+        {route.kind === 'settings' && (
           <SettingsPage
             firstRun={modelConfigured === false}
             onModelSettingsChanged={checkModelConfiguration}
             onSoulsChanged={fetchSouls}
           />
-        )
-      default:
-        if (activePage.startsWith('chat:')) {
-          const soulName = activePage.slice('chat:'.length)
-          return <ChatPage key={soulName} soulName={soulName} modelConfigured={modelConfigured} onOpenSettings={openSettings} />
-        }
-        return (
-          <Timeline
+        )}
+        {route.kind === 'chat' && (
+          <ChatPage
+            key={route.soulName}
+            soulName={route.soulName}
             modelConfigured={modelConfigured}
             onOpenSettings={openSettings}
-            onActivitySettled={refreshHomeContext}
-            onTodosChanged={refreshTodos}
           />
-        )
-    }
+        )}
+      </>
+    )
   }
 
   return (
@@ -165,7 +198,7 @@ export function App() {
       nav={(closeMobileNav) => (
         <LeftNav
           souls={souls}
-          activePage={activePage}
+          activePage={navKey}
           onNavigate={navigateToPage}
           onAfterNavigate={closeMobileNav}
         />
@@ -185,37 +218,16 @@ export function App() {
   )
 }
 
-function pageFromHash(hash: string): string {
-  const path = hash.replace(/^#/, '').replace(/^\//, '')
-  if (!path) return DEFAULT_PAGE
-  if (path === 'home') return 'home'
-  if (path === 'todos') return 'todos'
-  if (path === 'reflections') return 'reflections'
-  if (path === 'settings') return 'settings'
-  if (path.startsWith('chat/')) {
-    const encodedSoulName = path.slice('chat/'.length)
-    const soulName = decodeRouteSegment(encodedSoulName)
-    return soulName ? `chat:${soulName}` : DEFAULT_PAGE
-  }
-  return DEFAULT_PAGE
+function navKeyFromRoute(route: Route): string {
+  if (route.kind === 'chat') return `chat:${route.soulName}`
+  if (route.kind === 'post') return 'home'
+  return route.kind
 }
 
-function hashFromPage(page: string): string {
-  if (page === 'home') return '#/'
-  if (page === 'todos') return '#/todos'
-  if (page === 'reflections') return '#/reflections'
-  if (page === 'settings') return '#/settings'
-  if (page.startsWith('chat:')) {
-    const soulName = page.slice('chat:'.length)
-    return `#/chat/${encodeURIComponent(soulName)}`
-  }
-  return '#/'
-}
-
-function decodeRouteSegment(value: string): string {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
+function routeFromNavKey(page: string): Route {
+  if (page === 'todos') return { kind: 'todos' }
+  if (page === 'reflections') return { kind: 'reflections' }
+  if (page === 'settings') return { kind: 'settings' }
+  if (page.startsWith('chat:')) return { kind: 'chat', soulName: page.slice('chat:'.length) }
+  return { kind: 'home' }
 }

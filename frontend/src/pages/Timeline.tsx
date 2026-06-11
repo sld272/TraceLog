@@ -21,6 +21,7 @@ import {
 import { Composer } from '@/components/Composer'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { type CommentConversationState, PostCard } from '@/components/PostCard'
+import { type PostMutationSignal } from '@/App'
 import { API_LIMITS } from '@/utils/constants'
 import styles from './Timeline.module.css'
 
@@ -29,9 +30,16 @@ interface TimelineProps {
   onTodosChanged?: () => void
   modelConfigured?: boolean | null
   onOpenSettings?: () => void
+  postMutationSignal?: PostMutationSignal | null
 }
 
-export function Timeline({ onActivitySettled, onTodosChanged, modelConfigured, onOpenSettings }: TimelineProps) {
+export function Timeline({
+  onActivitySettled,
+  onTodosChanged,
+  modelConfigured,
+  onOpenSettings,
+  postMutationSignal,
+}: TimelineProps) {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
   const [postCommentConversations, setPostCommentConversations] = useState<Record<string, Record<string, CommentConversationState>>>({})
@@ -174,6 +182,26 @@ export function Timeline({ onActivitySettled, onTodosChanged, modelConfigured, o
       return null
     }
   }
+
+  useEffect(() => {
+    if (!postMutationSignal) return
+    const { postId, kind } = postMutationSignal
+    if (kind === 'deleted') {
+      setPosts((prev) => prev.filter((post) => post.post_id !== postId))
+      setPostComments((prev) => {
+        const next = { ...prev }
+        delete next[postId]
+        return next
+      })
+      setPostCommentConversations((prev) => {
+        const next = { ...prev }
+        delete next[postId]
+        return next
+      })
+      return
+    }
+    void refreshPostDetail(postId)
+  }, [postMutationSignal])
 
   const handleExpand = async (postId: string) => {
     setExpandingPostIds((prev) => ({ ...prev, [postId]: true }))
