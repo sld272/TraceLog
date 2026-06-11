@@ -5,12 +5,21 @@ import styles from './LeftNav.module.css'
 interface LeftNavProps {
   souls: Soul[]
   soulsLoadState?: 'loading' | 'ready' | 'error'
+  /** 待整理条目数，>0 时在「整理」项上显示 badge（右栏隐藏的窄屏也能看到队列） */
+  reflectionQueueCount?: number
   activePage: string
   onNavigate: (page: string) => void
   onAfterNavigate?: () => void
 }
 
-export function LeftNav({ souls, soulsLoadState = 'ready', activePage, onNavigate, onAfterNavigate }: LeftNavProps) {
+export function LeftNav({
+  souls,
+  soulsLoadState = 'ready',
+  reflectionQueueCount = 0,
+  activePage,
+  onNavigate,
+  onAfterNavigate,
+}: LeftNavProps) {
   const navigate = (page: string) => {
     onNavigate(page)
     onAfterNavigate?.()
@@ -34,6 +43,7 @@ export function LeftNav({ souls, soulsLoadState = 'ready', activePage, onNavigat
         <NavItem
           icon={<ReflectIcon />}
           label="整理"
+          badge={reflectionQueueCount > 0 ? reflectionQueueCount : undefined}
           active={activePage === 'reflections'}
           onClick={() => navigate('reflections')}
         />
@@ -76,11 +86,12 @@ export function LeftNav({ souls, soulsLoadState = 'ready', activePage, onNavigat
 interface NavItemProps {
   icon: React.ReactNode
   label: string
+  badge?: number
   active: boolean
   onClick: () => void
 }
 
-function NavItem({ icon, label, active, onClick }: NavItemProps) {
+function NavItem({ icon, label, badge, active, onClick }: NavItemProps) {
   return (
     <button
       className={`${styles.item} ${active ? styles.active : ''}`}
@@ -89,6 +100,11 @@ function NavItem({ icon, label, active, onClick }: NavItemProps) {
     >
       <span className={styles.icon}>{icon}</span>
       <span className={styles.label}>{label}</span>
+      {badge !== undefined && (
+        <span className={styles.badge} aria-label={`${badge} 条待处理`}>
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </button>
   )
 }

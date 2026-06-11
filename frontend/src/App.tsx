@@ -42,6 +42,8 @@ export function App() {
   const previousRouteKindRef = useRef(route.kind)
   const showRightPanel = route.kind === 'home'
   const navKey = navKeyFromRoute(route)
+  const reflectionQueueCount = (globalReflection?.post_ids.length ?? 0)
+    + soulReflections.reduce((total, scope) => total + Math.max(scope.interaction_count, 0), 0)
 
   const loadSouls = useCallback(async () => {
     const data = await listSouls(true)
@@ -209,9 +211,14 @@ export function App() {
     previousRouteKindRef.current = route.kind
   }, [route.kind])
 
+  /* 进入首页时刷新右栏；挂载时也拉一次，保证导航 badge 在任意入口路由下有数据 */
   useEffect(() => {
     if (showRightPanel) void refreshHomeContext()
   }, [showRightPanel, refreshHomeContext])
+
+  useEffect(() => {
+    void refreshHomeContext()
+  }, [refreshHomeContext])
 
   const renderMain = () => {
     const isHome = route.kind === 'home'
@@ -268,6 +275,7 @@ export function App() {
         <LeftNav
           souls={souls}
           soulsLoadState={soulsLoadState}
+          reflectionQueueCount={reflectionQueueCount}
           activePage={navKey}
           onNavigate={navigateToPage}
           onAfterNavigate={closeMobileNav}
