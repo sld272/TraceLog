@@ -147,7 +147,7 @@ export function App() {
       default:
         if (activePage.startsWith('chat:')) {
           const soulName = activePage.slice('chat:'.length)
-          return <ChatPage soulName={soulName} modelConfigured={modelConfigured} onOpenSettings={openSettings} />
+          return <ChatPage key={soulName} soulName={soulName} modelConfigured={modelConfigured} onOpenSettings={openSettings} />
         }
         return (
           <Timeline

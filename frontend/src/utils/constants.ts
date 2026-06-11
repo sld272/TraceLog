@@ -30,4 +30,6 @@ export const LAYOUT = {
   TEXTAREA_MAX_HEIGHT: 200,
   /** 回复框文本区域最大高度 */
   REPLY_TEXTAREA_MAX_HEIGHT: 120,
+  /** 私聊消息列表距底部多少像素内视为"在底部"，新消息到达时自动跟随 */
+  CHAT_STICK_BOTTOM_THRESHOLD: 120,
 } as const

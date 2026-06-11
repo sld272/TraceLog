@@ -73,7 +73,7 @@ export function PostCard({
           </div>
         </div>
         {post.importance > 0.7 && (
-          <span className={styles.importanceBadge} title={`重要性: ${post.importance.toFixed(2)}`}>
+          <span className={styles.importanceBadge} title="这条记录被标记为重要">
             <StarIcon />
           </span>
         )}

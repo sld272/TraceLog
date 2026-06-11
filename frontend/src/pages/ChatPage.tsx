@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   type Attachment,
   type ChatMessage,
@@ -45,6 +45,9 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     onConfirm: () => void
   } | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
+  const messagesRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+  const forceScrollRef = useRef(false)
   const submitShortcutTitle = getSubmitShortcutTitle()
   const modelUnavailable = modelConfigured === false
   const chatBusy = sending || busyMessageId !== null
@@ -61,6 +64,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
         return
       }
       const detail = await getChatThread(latestThread.id)
+      forceScrollRef.current = true
       setThread(detail.thread)
       setMessages(detail.messages)
       setEditingMessageId(null)
@@ -91,6 +95,24 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     }
   }, [draft])
 
+  const handleMessagesScroll = () => {
+    const el = messagesRef.current
+    if (!el) return
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <= LAYOUT.CHAT_STICK_BOTTOM_THRESHOLD
+  }
+
+  // 初次加载、自己发送后强制滚到底;其余更新(新回复、重跑)仅当用户本就在底部附近时跟随
+  useLayoutEffect(() => {
+    const el = messagesRef.current
+    if (!el) return
+    if (forceScrollRef.current || stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight
+      forceScrollRef.current = false
+      stickToBottomRef.current = true
+    }
+  }, [loading, messages])
+
   const submitDraft = async () => {
     const body = draft.trim()
     if ((!body && attachments.length === 0) || chatBusy || modelUnavailable) return
@@ -117,6 +139,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       attachments: [],
     }
     setMessages((prev) => [...prev, optimisticUser, optimisticAssistant])
+    forceScrollRef.current = true
     setDraft('')
     setAttachments([])
     setSending(true)
@@ -373,7 +396,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
 
         {error && <div className={styles.notice}>{error}</div>}
 
-        <div className={styles.messages}>
+        <div className={styles.messages} ref={messagesRef} onScroll={handleMessagesScroll}>
           {loading ? (
             <div className={styles.empty}>加载中...</div>
           ) : messages.length === 0 ? (

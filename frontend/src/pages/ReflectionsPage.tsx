@@ -124,7 +124,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
     pollAbortRef.current = controller
     try {
       const result = await triggerGlobalReflection()
-      setNotice(`全局整理已加入队列：#${result.job_id}`)
+      setNotice('全局整理已开始，完成后会在下方显示更新内容')
       setLastFailedJob(null)
       await waitForReflectionJob(result.job_id, controller.signal)
     } catch (err) {
@@ -143,7 +143,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
     pollAbortRef.current = controller
     try {
       const result = await triggerSoulReflections()
-      setNotice(`人格记忆整理已加入队列：#${result.job_id}`)
+      setNotice('人格记忆整理已开始，完成后会在下方显示更新内容')
       setLastFailedJob(null)
       await waitForReflectionJob(result.job_id, controller.signal)
     } catch (err) {
@@ -180,10 +180,10 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
       if (job.status === 'succeeded') {
         setActiveJob(null)
         setLastFailedJob(null)
-        setNotice(`整理已完成：#${job.id}`)
+        setNotice('整理已完成，更新内容显示在下方')
       } else if (job.status === 'cancelled') {
         setActiveJob(null)
-        setNotice(`整理已取消：#${job.id}`)
+        setNotice('整理已取消')
       } else {
         setActiveJob(null)
         setLastFailedJob(job)
@@ -196,7 +196,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
           fetchRecentRevisions(),
         ])
         onReflectionSettled?.()
-        setNotice(`整理仍在后台运行：#${jobId}，可稍后刷新`)
+        setNotice('整理仍在后台运行，可稍后刷新查看结果')
         return
       }
       throw err
@@ -217,7 +217,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
     pollAbortRef.current = controller
     try {
       const result = await retryJob(job.id)
-      setNotice(`整理已重新加入队列：#${result.job_id}`)
+      setNotice('整理已重新开始')
       setLastFailedJob(null)
       await waitForReflectionJob(result.job_id, controller.signal)
     } catch (err) {
@@ -235,7 +235,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
       await cancelJob(job.id)
       pollAbortRef.current?.abort()
       setActiveJob(null)
-      setNotice(`整理已取消：#${job.id}`)
+      setNotice('整理已取消')
       await Promise.all([
         fetchPreview(),
         fetchRecentRevisions(),
@@ -256,7 +256,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
       <header className={styles.header}>
         <div className={styles.titleGroup}>
           <h1 className={styles.title}>整理</h1>
-          <p className={styles.subtitle}>整理公开记录与人格记忆</p>
+          <p className={styles.subtitle}>整理会让 AI 阅读新增记录，更新它对你的长期理解；每次更新的内容都会显示在下方</p>
         </div>
         <button className={styles.ghostButton} onClick={refreshPage} disabled={loading}>
           刷新
@@ -375,7 +375,7 @@ function ReflectionJobNotice({
   return (
     <div className={styles.notice}>
       <div className={styles.noticeRow}>
-        <span>{isFailed ? '部分整理失败' : `整理进行中：#${job.id}${job.error ? '，正在自动重试' : ''}`}</span>
+        <span>{isFailed ? '部分整理失败' : `整理进行中...${job.error ? '（正在自动重试）' : ''}`}</span>
         <div className={styles.noticeActions}>
           {isFailed && (
             <button className={styles.ghostButton} onClick={() => onRetry(job)} disabled={busy}>

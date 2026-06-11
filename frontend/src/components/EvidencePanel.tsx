@@ -65,7 +65,6 @@ function EvidenceRow({
   onMarkIrrelevant: () => void
 }) {
   const clickable = item.type === 'post' || item.type === 'post_vision'
-  const metrics = formatMetrics(item)
   return (
     <div className={`${styles.item} ${marked ? styles.marked : ''}`}>
       <button
@@ -74,11 +73,10 @@ function EvidenceRow({
           if (clickable) window.location.hash = '#/'
         }}
         disabled={!clickable}
-        title={item.reasons.join(' · ') || undefined}
+        title={item.snippet}
       >
         <span className={styles.badge}>{typeLabel(item.type)}</span>
         <span className={styles.snippet}>{item.snippet}</span>
-        {metrics && <span className={styles.metrics}>{metrics}</span>}
       </button>
       <button
         className={styles.feedbackButton}
@@ -99,11 +97,4 @@ function typeLabel(type: string): string {
   if (type === 'comment') return '评论'
   if (type === 'chat') return '私聊'
   return '记忆'
-}
-
-function formatMetrics(item: EvidenceItem): string {
-  const parts: string[] = []
-  if (item.score !== null) parts.push(`score ${item.score.toFixed(2)}`)
-  if (item.distance !== null) parts.push(`dist ${item.distance.toFixed(2)}`)
-  return parts.join(' · ')
 }
