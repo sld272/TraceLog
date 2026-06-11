@@ -19,7 +19,7 @@ export function formatSmartTime(value: string | number, now = new Date()): strin
     return `${date.getMonth() + 1}月${date.getDate()}日 ${formatClock(date)}`
   }
 
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${formatClock(date)}`
 }
 
 /** 格式化绝对时间，用于悬停提示 */
@@ -62,12 +62,11 @@ export function formatDate(value: string | null | undefined): string {
   return formatDateFromMs(date.getTime())
 }
 
-/** 从毫秒时间戳格式化日期 */
-export function formatDateFromMs(value: number): string {
-  return new Date(value).toLocaleDateString('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-  })
+/** 从毫秒时间戳格式化日期（M月D日，跨年带年份前缀） */
+export function formatDateFromMs(value: number, now = new Date()): string {
+  const date = new Date(value)
+  const base = `${date.getMonth() + 1}月${date.getDate()}日`
+  return date.getFullYear() === now.getFullYear() ? base : `${date.getFullYear()}年${base}`
 }
 
 /** 格式化日期范围 */
@@ -83,13 +82,15 @@ export function formatUnixScope(start: number, end: number): string {
   return `${formatDateFromMs(start * 1000)} - ${formatDateFromMs(end * 1000)}`
 }
 
-/** 格式化日期标签（今天 / 月日） */
+/** 格式化日期标签（今天 / 明天 / M月D日，跨年带年份前缀） */
 export function formatDateLabel(date: string, todayKey: string): string {
   if (date === todayKey) return '今天'
   const parsed = new Date(`${date}T00:00:00`)
   if (Number.isNaN(parsed.getTime())) return date
-  return parsed.toLocaleDateString('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-  })
+  const today = new Date(`${todayKey}T00:00:00`)
+  if (!Number.isNaN(today.getTime())) {
+    const diffDays = Math.round((parsed.getTime() - today.getTime()) / 86400000)
+    if (diffDays === 1) return '明天'
+  }
+  return formatDateFromMs(parsed.getTime())
 }

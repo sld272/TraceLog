@@ -5,7 +5,7 @@ import {
   type Todo,
 } from '@/api/client'
 import { isTodoDone, getTodayKey } from '@/utils/todo'
-import { formatDateScope, formatUnixScope } from '@/utils/date'
+import { formatDateLabel, formatDateScope, formatUnixScope } from '@/utils/date'
 import styles from './RightPanel.module.css'
 
 interface PendingCompletedTodo {
@@ -250,8 +250,9 @@ function selectTodayTodos(todos: Todo[]): Todo[] {
 
 function todoMeta(todo: Todo): string {
   const time = [todo.start_time, todo.end_time].filter(Boolean).join(' - ')
-  if (todo.date && time) return `${todo.date} ${time}`
-  return todo.date || time
+  if (!todo.date) return time ? `无日期 · ${time}` : '无日期'
+  const dateLabel = formatDateLabel(todo.date, getTodayKey())
+  return time ? `${dateLabel} ${time}` : dateLabel
 }
 
 function formatSoulScope(soulReflections: SoulReflectionScope[]): string {
