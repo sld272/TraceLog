@@ -12,7 +12,7 @@ from core import fts_query
 from core import logging_service
 
 LIKE_FALLBACK_TRUST = 0.85
-MAX_VECTOR_DISTANCE = 0.65
+MAX_VECTOR_DISTANCE = 0.73
 
 
 @dataclass(frozen=True)

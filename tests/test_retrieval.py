@@ -253,12 +253,13 @@ class VectorDistanceFilterTest(unittest.TestCase):
     def test_vector_hit_beyond_threshold_dropped(self) -> None:
         vectorstore.query_post_hits = lambda query, n_results=20: [
             vectorstore.VectorHit("p-near", 1, 0.3),
-            vectorstore.VectorHit("p-far", 2, 0.9),
+            vectorstore.VectorHit("p-edge", 2, 0.72),
+            vectorstore.VectorHit("p-far", 3, 0.74),
         ]
 
         hits = retrieval.vector_search_scored("焦虑", k=20)
 
-        self.assertEqual(["p-near"], [hit.post_id for hit in hits])
+        self.assertEqual(["p-near", "p-edge"], [hit.post_id for hit in hits])
 
     def test_all_vector_hits_filtered_returns_empty(self) -> None:
         vectorstore.query_documents = lambda query, n_results=20, where=None: [
