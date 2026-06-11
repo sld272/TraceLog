@@ -108,6 +108,21 @@
   color: var(--color-error);
 }
 
+:global(.post-detail-flash) {
+  animation: postDetailFlash 2.2s ease-out;
+}
+
+@keyframes postDetailFlash {
+  0% {
+    background-color: rgba(250, 204, 21, 0.45);
+    box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.22);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
 @media (max-width: 560px) {
   .header {
     flex-direction: column;

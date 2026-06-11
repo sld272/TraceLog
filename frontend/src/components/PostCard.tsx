@@ -65,7 +65,7 @@ export function PostCard({
   const timeAgo = formatSmartTime(post.ts)
 
   return (
-    <article className={styles.card}>
+    <article id={`post-${post.post_id}`} className={styles.card}>
       <div className={styles.header}>
         <div className={styles.author}>
           <span className={styles.userAvatar}>我</span>
@@ -96,7 +96,7 @@ export function PostCard({
         )}
       </div>
 
-      {post.content && <div className={styles.content}>{post.content}</div>}
+      {post.content && <div id={`post-content-${post.post_id}`} className={styles.content}>{post.content}</div>}
       <ImageGrid attachments={post.attachments ?? []} />
 
       {comments.length > 0 && (
@@ -280,7 +280,7 @@ function CommentPreview({
   }
 
   return (
-    <div className={styles.commentThread}>
+    <div id={`comment-${comment.id}`} className={styles.commentThread}>
       <div className={styles.comment} style={{ backgroundColor: `hsl(${hue}, 30%, 97%)` }}>
         <span
           className={styles.soulBadge}
@@ -457,7 +457,7 @@ function ThreadMessage({
   const isFailedAssistant = message.role === 'assistant' && Boolean(failure)
   const isPendingAssistant = message.role === 'assistant' && !failure && !message.content && (message.id < 0 || busy)
   return (
-    <div className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
+    <div id={`comment-${message.id}`} className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
       <div className={styles.threadHeader}>
         <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
         <time

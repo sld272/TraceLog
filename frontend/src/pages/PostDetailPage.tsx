@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { deletePost, type Attachment, type Post } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { LoadingDots } from '@/components/icons'
@@ -18,6 +18,7 @@ interface PostDetailPageProps {
 
 export function PostDetailPage({
   postId,
+  highlight,
   modelConfigured,
   onOpenSettings,
   onPostMutated,
@@ -44,6 +45,21 @@ export function PostDetailPage({
       attachments: detail.post.attachments,
     }
   }, [detail.comments.length, detail.post])
+
+  useEffect(() => {
+    if (!highlight || detail.loading || !detail.post) return
+    const targetId = highlightTargetId(highlight, postId)
+    if (!targetId) return
+    const target = document.getElementById(targetId) ?? document.getElementById(`post-${postId}`)
+    if (!target) return
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    target.classList.add('post-detail-flash')
+    const timer = window.setTimeout(() => target.classList.remove('post-detail-flash'), 2200)
+    return () => {
+      window.clearTimeout(timer)
+      target.classList.remove('post-detail-flash')
+    }
+  }, [detail.loading, detail.post, highlight, postId])
 
   const goBack = () => {
     if (window.history.length > 1) {
@@ -172,6 +188,15 @@ export function PostDetailPage({
       )}
     </section>
   )
+}
+
+function highlightTargetId(docId: string, postId: string): string | null {
+  if (docId === `post-${postId}` || docId === `post-vision-${postId}`) {
+    return `post-content-${postId}`
+  }
+  const commentMatch = /^comment-(\d+)$/.exec(docId)
+  if (commentMatch?.[1]) return `comment-${commentMatch[1]}`
+  return null
 }
 
 function DetailHeader({ onBack }: { onBack: () => void }) {

@@ -5,6 +5,7 @@ import {
   parseMessageEvidence,
   submitEvidenceFeedback,
 } from '@/api/client'
+import { formatRoute } from '@/router'
 import styles from './EvidencePanel.module.css'
 
 interface EvidencePanelProps {
@@ -64,16 +65,19 @@ function EvidenceRow({
   pending: boolean
   onMarkIrrelevant: () => void
 }) {
-  const clickable = item.type === 'post' || item.type === 'post_vision'
+  const clickable = item.post_id !== null
+  const title = clickable ? item.snippet : '来自私聊的记忆片段，暂不支持跳转'
   return (
     <div className={`${styles.item} ${marked ? styles.marked : ''}`}>
       <button
         className={`${styles.itemMain} ${clickable ? styles.clickable : ''}`}
         onClick={() => {
-          if (clickable) window.location.hash = '#/'
+          if (item.post_id) {
+            window.location.hash = formatRoute({ kind: 'post', postId: item.post_id, highlight: item.doc_id })
+          }
         }}
         disabled={!clickable}
-        title={item.snippet}
+        title={title}
       >
         <span className={styles.badge}>{typeLabel(item.type)}</span>
         <span className={styles.snippet}>{item.snippet}</span>
