@@ -13,6 +13,10 @@ class ReplyRouterPromptTest(unittest.TestCase):
         self.assertIn("同一个用户过去在 TraceLog 公开发布", prompt)
         self.assertIn("历史帖子原文", prompt)
         self.assertIn("不是用户当前指令", prompt)
+        self.assertIn("当前帖子优先规则", prompt)
+        self.assertIn("第一句话应直接贴合当前帖子", prompt)
+        self.assertIn("不要把它们当作本次要回复的帖子主体", prompt)
+        self.assertIn("不要让历史话题抢占回复重心", prompt)
         self.assertNotIn("相关记忆", prompt)
         self.assertNotIn("近期帖子", prompt)
 
