@@ -10,10 +10,12 @@ import {
 import { EvidencePanel } from './EvidencePanel'
 import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
+import { SoulAvatar } from './SoulAvatar'
 import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, StarIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
+import { soulColors } from '@/utils/soulColor'
 import styles from './PostCard.module.css'
 
 const FEED_MAX_THREAD_MESSAGES = 4
@@ -249,7 +251,7 @@ function CommentPreview({
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const soulName = comment.soul_name
-  const hue = soulName.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
+  const colors = soulColors(soulName)
   const trimmed = reply.trim()
   const submitShortcutTitle = getSubmitShortcutTitle()
   const messages = conversation?.messages ?? []
@@ -295,13 +297,8 @@ function CommentPreview({
 
   return (
     <div id={`comment-${comment.id}`} className={styles.commentThread}>
-      <div className={styles.comment} style={{ backgroundColor: `hsl(${hue}, 30%, 97%)` }}>
-        <span
-          className={styles.soulBadge}
-          style={{ backgroundColor: `hsl(${hue}, 35%, 88%)`, color: `hsl(${hue}, 40%, 35%)` }}
-        >
-          {soulName.charAt(0).toUpperCase()}
-        </span>
+      <div className={styles.comment} style={{ backgroundColor: colors.tint }}>
+        <SoulAvatar name={soulName} className={styles.soulBadge} />
         <div className={styles.commentBody}>
           <div className={styles.commentHeader}>
             <span className={styles.soulName}>{soulName}</span>

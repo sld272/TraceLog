@@ -16,6 +16,7 @@ import {
   updateSoul,
 } from '@/api/client'
 import { MemorySettingsPanel } from './MemorySettingsPanel'
+import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
@@ -598,7 +599,7 @@ function SoulSettingsPanel({
         <div className={styles.soulList}>
           {souls.map((soul, index) => (
             <div className={styles.soulRow} key={soul.name}>
-              <div className={styles.soulAvatar}>{soul.name.charAt(0).toUpperCase()}</div>
+              <SoulAvatar name={soul.name} className={styles.soulAvatar} />
               <div className={styles.soulBody}>
                 <div className={styles.soulTitleRow}>
                   <span className={styles.soulName}>{soul.name}</span>

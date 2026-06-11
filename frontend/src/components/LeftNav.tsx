@@ -1,4 +1,5 @@
 import { type Soul } from '@/api/client'
+import { SoulAvatar } from './SoulAvatar'
 import styles from './LeftNav.module.css'
 
 interface LeftNavProps {
@@ -43,7 +44,7 @@ export function LeftNav({ souls, soulsLoadState = 'ready', activePage, onNavigat
         {souls.map((soul) => (
           <NavItem
             key={soul.name}
-            icon={<SoulIcon name={soul.name} />}
+            icon={<SoulAvatar name={soul.name} className={styles.soulIcon} />}
             label={soul.name}
             active={activePage === `chat:${soul.name}`}
             onClick={() => navigate(`chat:${soul.name}`)}
@@ -118,19 +119,6 @@ function ReflectIcon() {
       <path d="M12 16v-4" />
       <path d="M12 8h.01" />
     </svg>
-  )
-}
-
-function SoulIcon({ name }: { name: string }) {
-  const initial = name.charAt(0).toUpperCase()
-  const hue = name.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
-  return (
-    <span
-      className={styles.soulIcon}
-      style={{ backgroundColor: `hsl(${hue}, 35%, 88%)`, color: `hsl(${hue}, 40%, 35%)` }}
-    >
-      {initial}
-    </span>
   )
 }
 
