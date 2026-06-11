@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import styles from './ConfirmDialog.module.css'
 
 interface ConfirmDialogProps {
@@ -22,32 +22,74 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const cancelButtonRef = useRef<HTMLButtonElement>(null)
+  const restoreFocusRef = useRef<HTMLElement | null>(null)
+  const titleId = useId()
+  const messageId = useId()
+
+  /* 打开时焦点移入（危险操作默认落在取消上），关闭时还原到触发元素 */
+  useEffect(() => {
+    if (!isOpen) return
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    cancelButtonRef.current?.focus()
+    return () => {
+      restoreFocusRef.current?.focus()
+    }
+  }, [isOpen])
+
   useEffect(() => {
     if (!isOpen) return
 
-    const handleEscape = (e: KeyboardEvent) => {
+    const handleKeydown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onCancel()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const dialog = dialogRef.current
+      if (!dialog) return
+      const focusable = dialog.querySelectorAll<HTMLElement>('button:not([disabled])')
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (!first || !last) return
+      const active = document.activeElement
+      if (e.shiftKey) {
+        if (active === first || !dialog.contains(active)) {
+          e.preventDefault()
+          last.focus()
+        }
+      } else if (active === last || !dialog.contains(active)) {
+        e.preventDefault()
+        first.focus()
       }
     }
 
-    document.addEventListener('keydown', handleEscape)
-    return () => document.removeEventListener('keydown', handleEscape)
+    document.addEventListener('keydown', handleKeydown)
+    return () => document.removeEventListener('keydown', handleKeydown)
   }, [isOpen, onCancel])
 
   if (!isOpen) return null
 
   return (
     <div className={styles.overlay} onClick={onCancel}>
-      <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        className={styles.dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={messageId}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className={styles.header}>
-          <h2 className={styles.title}>{title}</h2>
+          <h2 id={titleId} className={styles.title}>{title}</h2>
         </div>
         <div className={styles.body}>
-          <p className={styles.message}>{message}</p>
+          <p id={messageId} className={styles.message}>{message}</p>
         </div>
         <div className={styles.footer}>
-          <button className={styles.cancelButton} onClick={onCancel}>
+          <button ref={cancelButtonRef} className={styles.cancelButton} onClick={onCancel}>
             {cancelText}
           </button>
           <button className={danger ? styles.dangerButton : styles.confirmButton} onClick={onConfirm}>
