@@ -25,6 +25,8 @@ import { type PostMutationKind, type PostMutationSignal } from '@/types/postMuta
 import { isTodoDone } from '@/utils/todo'
 import styles from '@/components/AppShell.module.css'
 
+const MODEL_CONFIG_RETRY_DELAYS = [2_000, 5_000, 10_000, 30_000]
+
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash))
   const [modelConfigured, setModelConfigured] = useState<boolean | null>(null)
@@ -108,20 +110,51 @@ export function App() {
     navigateToPage('settings')
   }, [navigateToPage])
 
-  const checkModelConfiguration = useCallback(async () => {
-    try {
-      const settings = await getModelSettings()
-      setModelConfigured(settings.configured)
-      if (!settings.configured) navigateToPage('settings')
-    } catch {
-      /* API might not be running yet */
-    }
+  const loadModelConfiguration = useCallback(async () => {
+    const settings = await getModelSettings()
+    setModelConfigured(settings.configured)
+    if (!settings.configured) navigateToPage('settings')
+    return settings.configured
   }, [navigateToPage])
+
+  const checkModelConfiguration = useCallback(() => {
+    void loadModelConfiguration().catch(() => {
+      /* API might not be running yet */
+    })
+  }, [loadModelConfiguration])
 
   useEffect(() => {
     fetchSouls()
-    checkModelConfiguration()
-  }, [fetchSouls, checkModelConfiguration])
+  }, [fetchSouls])
+
+  useEffect(() => {
+    let cancelled = false
+    let retryTimer: number | null = null
+    let retryIndex = 0
+
+    const check = async () => {
+      try {
+        await loadModelConfiguration()
+      } catch {
+        if (cancelled) return
+        const delay = MODEL_CONFIG_RETRY_DELAYS[Math.min(retryIndex, MODEL_CONFIG_RETRY_DELAYS.length - 1)]
+        retryIndex += 1
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null
+          void check()
+        }, delay)
+      }
+    }
+
+    void check()
+
+    return () => {
+      cancelled = true
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+      }
+    }
+  }, [loadModelConfiguration])
 
   useEffect(() => {
     const handleHashChange = () => {
