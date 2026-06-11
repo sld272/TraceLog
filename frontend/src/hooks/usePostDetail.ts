@@ -3,6 +3,7 @@ import {
   type Attachment,
   type Comment,
   type PostDetail,
+  ApiError,
   deleteCommentMessage,
   getCommentConversation,
   getPost,
@@ -68,7 +69,15 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
         return [conversation.soul_name, toConversationState(detail.conversation, detail.messages)] as const
       }),
     )
-    setConversations(Object.fromEntries(details))
+    setConversations((prev) => {
+      const next: Record<string, CommentConversationState> = Object.fromEntries(details)
+      /* Keep in-flight optimistic threads: a server snapshot taken mid-send
+         would wipe the pending bubble and let it flash back later. */
+      for (const [soulName, state] of Object.entries(prev)) {
+        if (state.sending) next[soulName] = state
+      }
+      return next
+    })
   }, [postId])
 
   const refresh = useCallback(async () => {
@@ -81,14 +90,13 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
       await refreshConversations()
       return detail
     } catch (err) {
-      const message = err instanceof Error ? err.message : '加载失败'
-      if (message.includes('404') || message.toLowerCase().includes('not found')) {
+      if (err instanceof ApiError && err.status === 404) {
         setNotFound(true)
         setPost(null)
         setComments([])
         setConversations({})
       } else {
-        setError(message)
+        setError(err instanceof Error ? err.message : '加载失败')
       }
       return null
     }

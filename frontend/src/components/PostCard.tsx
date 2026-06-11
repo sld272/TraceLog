@@ -123,7 +123,7 @@ export function PostCard({
         </div>
       )}
 
-      {post.comment_count > 0 && comments.length === 0 && (
+      {post.comment_count > 0 && comments.length === 0 && onExpand && (
         <>
           <button className={styles.expandBtn} onClick={onExpand} disabled={expandLoading}>
             {expandLoading ? <LoadingDots /> : <ChatIcon />}

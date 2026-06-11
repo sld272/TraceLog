@@ -71,6 +71,7 @@ export function Timeline({
   const regeneratedCommentTimerRef = useRef<number | null>(null)
   const retryPollTokenRef = useRef(0)
   const searchTokenRef = useRef(0)
+  const searchTimerRef = useRef<number | null>(null)
   const modelUnavailable = modelConfigured === false
   const trimmedSearchQuery = searchQuery.trim()
   const searching = trimmedSearchQuery.length > 0
@@ -115,12 +116,20 @@ export function Timeline({
     }
   }, [])
 
+  const clearSearchTimer = useCallback(() => {
+    if (searchTimerRef.current !== null) {
+      window.clearTimeout(searchTimerRef.current)
+      searchTimerRef.current = null
+    }
+  }, [])
+
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    searchTimerRef.current = window.setTimeout(() => {
+      searchTimerRef.current = null
       void runSearch(searchQuery)
     }, 300)
-    return () => window.clearTimeout(timer)
-  }, [runSearch, searchQuery])
+    return clearSearchTimer
+  }, [clearSearchTimer, runSearch, searchQuery])
 
   useEffect(() => {
     return () => {
@@ -143,6 +152,8 @@ export function Timeline({
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       event.preventDefault()
+      /* Cancel the pending debounce so the same query is not fetched twice. */
+      clearSearchTimer()
       void runSearch(searchQuery)
     }
     if (event.key === 'Escape') {
@@ -248,6 +259,29 @@ export function Timeline({
     }
   }
 
+  /* Refresh list-row fields only, without expanding the post's comments. */
+  const refreshPostSummary = async (postId: string) => {
+    try {
+      const detail = await getPost(postId)
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.post_id === postId
+            ? {
+                ...p,
+                importance: detail.post.importance,
+                comment_count: detail.comments.length,
+                latest_event_type: detail.post.latest_event_type ?? p.latest_event_type,
+                pipeline_status: detail.post.pipeline_status,
+                attachments: detail.post.attachments,
+              }
+            : p,
+        ),
+      )
+    } catch {
+      /* keep the stale summary if refresh fails */
+    }
+  }
+
   useEffect(() => {
     if (!postMutationSignal) return
     const { postId, kind } = postMutationSignal
@@ -265,7 +299,13 @@ export function Timeline({
       })
       return
     }
-    void refreshPostDetail(postId)
+    /* Only posts the user already expanded get their comments refreshed;
+       collapsed posts stay collapsed and just update their summary row. */
+    if (postComments[postId]) {
+      void refreshPostDetail(postId)
+    } else {
+      void refreshPostSummary(postId)
+    }
   }, [postMutationSignal])
 
   const handleExpand = async (postId: string) => {
@@ -294,10 +334,15 @@ export function Timeline({
           return [conversation.soul_name, toConversationState(detail.conversation, detail.messages)] as const
         }),
       )
-      setPostCommentConversations((prev) => ({
-        ...prev,
-        [postId]: Object.fromEntries(details),
-      }))
+      setPostCommentConversations((prev) => {
+        const next: Record<string, CommentConversationState> = Object.fromEntries(details)
+        /* Keep in-flight optimistic threads: a server snapshot taken mid-send
+           would wipe the pending bubble and let it flash back later. */
+        for (const [soulName, state] of Object.entries(prev[postId] ?? {})) {
+          if (state.sending) next[soulName] = state
+        }
+        return { ...prev, [postId]: next }
+      })
     } catch {
       /* Keep root comments visible even if thread history is unavailable. */
     }

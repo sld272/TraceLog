@@ -108,27 +108,6 @@
   display: none;
 }
 
-.placeholderPage {
-  display: grid;
-  gap: var(--space-3);
-  color: var(--color-text-secondary);
-}
-
-.placeholderPage h1 {
-  color: var(--color-text-primary);
-  font-size: var(--text-2xl);
-}
-
-.backButton {
-  justify-self: start;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-}
-
-.backButton:hover {
-  color: var(--color-text-primary);
-}
-
 .panel {
   position: sticky;
   top: var(--topbar-height);

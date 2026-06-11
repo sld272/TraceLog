@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { deletePost, type Attachment, type Post } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { LoadingDots } from '@/components/icons'
@@ -26,6 +26,8 @@ export function PostDetailPage({
 }: PostDetailPageProps) {
   const detail = usePostDetail(postId, onTodosChanged)
   const [deletingPost, setDeletingPost] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const highlightDoneRef = useRef(false)
   const [confirmDialog, setConfirmDialog] = useState<{
     title: string
     message: string
@@ -46,12 +48,19 @@ export function PostDetailPage({
     }
   }, [detail.comments.length, detail.post])
 
+  /* The feed may be scrolled deep when the user jumps in; without this the
+     browser only clamps the old scroll offset to the new page height. */
   useEffect(() => {
-    if (!highlight || detail.loading || !detail.post) return
+    window.scrollTo({ top: 0 })
+  }, [])
+
+  useEffect(() => {
+    if (!highlight || detail.loading || detail.notFound || highlightDoneRef.current) return
     const targetId = highlightTargetId(highlight, postId)
     if (!targetId) return
     const target = document.getElementById(targetId) ?? document.getElementById(`post-${postId}`)
     if (!target) return
+    highlightDoneRef.current = true
     target.scrollIntoView({ block: 'center', behavior: 'smooth' })
     target.classList.add('post-detail-flash')
     const timer = window.setTimeout(() => target.classList.remove('post-detail-flash'), 2200)
@@ -59,7 +68,7 @@ export function PostDetailPage({
       window.clearTimeout(timer)
       target.classList.remove('post-detail-flash')
     }
-  }, [detail.loading, detail.post, highlight, postId])
+  }, [detail.loading, detail.notFound, highlight, postId])
 
   const goBack = () => {
     if (window.history.length > 1) {
@@ -80,11 +89,14 @@ export function PostDetailPage({
       onConfirm: async () => {
         setConfirmDialog(null)
         setDeletingPost(true)
+        setActionError(null)
         try {
           await deletePost(postId)
           onPostMutated?.(postId, 'deleted')
           onTodosChanged?.()
           goHome()
+        } catch (err) {
+          setActionError(err instanceof Error ? err.message : '删除失败')
         } finally {
           setDeletingPost(false)
         }
@@ -98,8 +110,13 @@ export function PostDetailPage({
       message: '删除这条评论会同时删除它之后的同一段对话，且不会自动恢复。确定删除吗？',
       onConfirm: async () => {
         setConfirmDialog(null)
-        await detail.deleteComment(commentId)
-        onPostMutated?.(postId, 'updated')
+        setActionError(null)
+        try {
+          await detail.deleteComment(commentId)
+          onPostMutated?.(postId, 'updated')
+        } catch (err) {
+          setActionError(err instanceof Error ? err.message : '删除评论失败')
+        }
       },
     })
   }
@@ -110,8 +127,13 @@ export function PostDetailPage({
   }
 
   const handleRerunComment = async (commentId: number) => {
-    await detail.rerunComment(commentId)
-    onPostMutated?.(postId, 'updated')
+    setActionError(null)
+    try {
+      await detail.rerunComment(commentId)
+      onPostMutated?.(postId, 'updated')
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : '重新生成失败')
+    }
   }
 
   const handleRetryJobs = async (jobIds: number[]) => {
@@ -152,9 +174,9 @@ export function PostDetailPage({
           {onOpenSettings && <button onClick={onOpenSettings}>去设置</button>}
         </div>
       )}
-      {detail.error && (
+      {(actionError ?? detail.error) && (
         <div className={styles.error} role="alert">
-          {detail.error}
+          {actionError ?? detail.error}
         </div>
       )}
       {postForCard && (
