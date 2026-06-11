@@ -85,8 +85,8 @@ export function PostDetailPage({
 
   const handleDeletePost = async () => {
     setConfirmDialog({
-      title: '删除 Post',
-      message: '删除这条 post 会同时删除所有 SOUL 回复和评论对话，关联待办会保留但不再指向来源记录，且不会自动恢复。确定删除吗？',
+      title: '删除记录',
+      message: '删除这条记录会同时删除所有 SOUL 回复和评论对话，关联待办会保留但不再指向来源记录，且不会自动恢复。确定删除吗？',
       onConfirm: async () => {
         setConfirmDialog(null)
         setDeletingPost(true)

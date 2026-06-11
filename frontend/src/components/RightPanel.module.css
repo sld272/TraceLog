@@ -143,6 +143,12 @@
   white-space: nowrap;
 }
 
+.queueHint {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
 .queueAction {
   width: 100%;
   min-height: 32px;

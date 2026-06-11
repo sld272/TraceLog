@@ -310,7 +310,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
               </button>
             </div>
             <div className={styles.scopeGrid}>
-              <ScopeStat value={String(postCount)} label="待处理帖子" />
+              <ScopeStat value={String(postCount)} label="待处理记录" />
               <ScopeStat value={formatDate(globalScope?.scope_start)} label="起点" />
               <ScopeStat value={formatDate(globalScope?.scope_end)} label="终点" />
             </div>

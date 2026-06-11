@@ -212,6 +212,7 @@ function ReflectionQueueCard({
         ) : (
           <p className={styles.empty}>没有待整理内容</p>
         )}
+        <p className={styles.queueHint}>让 AI 阅读新增记录，更新对你的长期理解。</p>
         <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
           去整理
         </button>

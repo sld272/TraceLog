@@ -174,8 +174,8 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
             : message,
         ),
       )
-      setDraft(submittedDraft)
-      setAttachments(submittedAttachments)
+      setDraft((current) => current ? current : submittedDraft)
+      setAttachments((current) => current.length > 0 ? current : submittedAttachments)
       setFailedReplies({ [optimisticAssistantId]: err instanceof Error ? err.message : '发送失败' })
       setRetryErrors({})
       setError(null)
@@ -374,7 +374,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
         <header className={styles.header}>
           <div className={styles.titleGroup}>
             <h1 className={styles.title}>{soulName}</h1>
-            <p className={styles.subtitle}>{thread?.title ?? '私聊'}</p>
+            {thread?.title && <p className={styles.subtitle}>{thread.title}</p>}
           </div>
           <button className={styles.ghostButton} onClick={fetchThread} disabled={loading || chatBusy}>
             刷新
@@ -441,13 +441,13 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
                 }
               }}
               placeholder={`和 ${soulName} 说点什么...`}
-              disabled={chatBusy || modelUnavailable}
+              disabled={modelUnavailable}
               rows={2}
               aria-label="私聊消息"
             />
             <ImageUploader
               attachments={attachments}
-              disabled={chatBusy || modelUnavailable}
+              disabled={modelUnavailable}
               onChange={setAttachments}
               showControls={false}
             />
@@ -461,7 +461,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
             <div className={styles.chatActions}>
               <ImageUploader
                 attachments={attachments}
-                disabled={chatBusy || modelUnavailable}
+                disabled={modelUnavailable}
                 onChange={setAttachments}
                 showPreview={false}
               />

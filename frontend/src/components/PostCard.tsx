@@ -94,7 +94,7 @@ export function PostCard({
           </span>
         )}
         {onDeletePost && (
-          <button className={styles.postAction} onClick={onDeletePost} disabled={deletingPost} title="删除 post" aria-label="删除 post">
+          <button className={styles.postAction} onClick={onDeletePost} disabled={deletingPost} title="删除记录" aria-label="删除记录">
             <TrashIcon />
           </button>
         )}
@@ -261,7 +261,8 @@ function CommentPreview({
   const rootBusy = busyCommentId === comment.id
   const rootPending = rootBusy && comment.role === 'assistant'
   const replyBusy = Boolean(conversation?.sending || rootBusy)
-  const replyDisabled = replyBusy || !onReply || modelConfigured === false
+  const replyInputDisabled = !onReply || modelConfigured === false
+  const replySubmitDisabled = replyInputDisabled || replyBusy
 
   useEffect(() => {
     const el = replyInputRef.current
@@ -272,7 +273,7 @@ function CommentPreview({
   }, [reply])
 
   const handleSubmit = async () => {
-    if ((!trimmed && attachments.length === 0) || replyDisabled) return
+    if ((!trimmed && attachments.length === 0) || replySubmitDisabled) return
     const submittedReply = reply
     const submittedAttachments = attachments
     setReply('')
@@ -280,8 +281,8 @@ function CommentPreview({
     try {
       await onReply(soulName, trimmed, attachments)
     } catch (err) {
-      setReply(submittedReply)
-      setAttachments(submittedAttachments)
+      setReply((current) => current ? current : submittedReply)
+      setAttachments((current) => current.length > 0 ? current : submittedAttachments)
     }
   }
 
@@ -371,13 +372,13 @@ function CommentPreview({
             onKeyDown={handleKeyDown}
             placeholder={`回复 ${soulName}...`}
             rows={1}
-            disabled={replyDisabled}
+            disabled={replyInputDisabled}
             aria-label={`回复 ${soulName}`}
           />
           <ImageUploader
             attachments={attachments}
             compact
-            disabled={replyDisabled}
+            disabled={replyInputDisabled}
             onChange={setAttachments}
             showControls={false}
           />
@@ -392,7 +393,7 @@ function CommentPreview({
             <ImageUploader
               attachments={attachments}
               compact
-              disabled={replyDisabled}
+              disabled={replyInputDisabled}
               onChange={setAttachments}
               showPreview={false}
             />
@@ -400,7 +401,7 @@ function CommentPreview({
               <button
                 className={styles.replyButton}
                 onClick={handleSubmit}
-                disabled={(!trimmed && attachments.length === 0) || replyDisabled}
+                disabled={(!trimmed && attachments.length === 0) || replySubmitDisabled}
                 aria-label={`发送给 ${soulName}`}
               >
                 {replyBusy ? <LoadingDots /> : <SendIcon width={14} height={14} />}

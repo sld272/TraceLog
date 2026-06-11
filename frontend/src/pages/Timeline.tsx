@@ -459,8 +459,8 @@ export function Timeline({
   const handleDeletePost = async (postId: string) => {
     setConfirmDialog({
       isOpen: true,
-      title: '删除 Post',
-      message: '删除这条 post 会同时删除所有 SOUL 回复和评论对话，且不会自动恢复。确定删除吗？',
+      title: '删除记录',
+      message: '删除这条记录会同时删除所有 SOUL 回复和评论对话，且不会自动恢复。确定删除吗？',
       onConfirm: async () => {
         setConfirmDialog(null)
         setDeletingPostId(postId)
