@@ -402,7 +402,7 @@ function RecentRevisionsCard({
     const group = revisionGroups.find((item) => item.key === expandedGroupKey)
     if (!group) return
     const state = detailStates[expandedGroupKey]
-    if (state?.loading || state?.items.length) return
+    if (state?.loading || state?.error || state?.items.length) return
     void loadGroupDetails(group)
   }, [detailStates, expandedGroupKey, loadGroupDetails, revisionGroups])
 
