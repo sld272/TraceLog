@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -60,8 +60,9 @@ async def list_posts(
 async def search_posts(
     q: str = Query(min_length=1, max_length=200),
     limit: int = Query(default=20, ge=1, le=50),
+    mode: Literal["keyword", "hybrid"] = Query(default="keyword"),
 ):
-    return await run_sync(_search_posts, q, limit)
+    return await run_sync(_search_posts, q, limit, mode)
 
 
 @router.get("/posts/{post_id}")
@@ -126,10 +127,12 @@ def _list_posts(limit: int, offset: int) -> list[dict[str, Any]]:
     return [_post_summary(row) for row in rows]
 
 
-def _search_posts(query: str, limit: int) -> list[dict[str, Any]]:
-    post_ids = retrieval.keyword_search_posts(query, k=limit)
-    if not post_ids:
-        return []
+def _search_posts(query: str, limit: int, mode: Literal["keyword", "hybrid"]) -> dict[str, Any]:
+    search_result = retrieval.user_search_posts(query, k=limit, semantic=(mode == "hybrid"))
+    if not search_result.hits:
+        return {"items": [], "semantic_available": search_result.semantic_available, "mode": mode}
+    post_ids = [hit.post_id for hit in search_result.hits]
+    matches_by_id = {hit.post_id: hit.match for hit in search_result.hits}
     placeholders = ",".join("?" for _ in post_ids)
     rows = db.query_all(
         f"""
@@ -143,7 +146,13 @@ def _search_posts(query: str, limit: int) -> list[dict[str, Any]]:
         tuple(post_ids),
     )
     by_id = {row["id"]: _post_summary(row) for row in rows}
-    return [by_id[post_id] for post_id in post_ids if post_id in by_id]
+    items = []
+    for post_id in post_ids:
+        item = by_id.get(post_id)
+        if item is None:
+            continue
+        items.append({**item, "match": matches_by_id.get(post_id, "keyword")})
+    return {"items": items, "semantic_available": search_result.semantic_available, "mode": mode}
 
 
 def _post_summary(row) -> dict[str, Any]:

@@ -54,16 +54,20 @@ class RetrievalFusionTest(unittest.TestCase):
     def setUp(self) -> None:
         self.old_fts_search_scored = retrieval.fts_search_scored
         self.old_vector_search_scored = retrieval.vector_search_scored
+        self.old_keyword_search_posts = retrieval.keyword_search_posts
         self.old_read_candidate_contents = retrieval._read_candidate_contents
         self.old_log_event = retrieval.logging_service.log_event
+        self.old_vectorstore_is_initialized = vectorstore.is_initialized
         self.logged_events: list[dict] = []
         retrieval.logging_service.log_event = lambda event, **fields: self.logged_events.append({"event": event, **fields})
 
     def tearDown(self) -> None:
         retrieval.fts_search_scored = self.old_fts_search_scored
         retrieval.vector_search_scored = self.old_vector_search_scored
+        retrieval.keyword_search_posts = self.old_keyword_search_posts
         retrieval._read_candidate_contents = self.old_read_candidate_contents
         retrieval.logging_service.log_event = self.old_log_event
+        vectorstore.is_initialized = self.old_vectorstore_is_initialized
 
     def stub_search(
         self,
@@ -163,6 +167,38 @@ class RetrievalFusionTest(unittest.TestCase):
         self.stub_search(fts_hits=[], vector_hits=[])
 
         self.assertEqual([], retrieval.hybrid_search_scored("nothing", k=3))
+
+    def test_user_search_semantic_hit_is_labeled_semantic(self) -> None:
+        vectorstore.is_initialized = lambda: True
+        self.stub_search(
+            fts_hits=[],
+            vector_hits=[retrieval.RetrievalHit("p-semantic", "vector", 1, 0.1)],
+        )
+
+        result = retrieval.user_search_posts("低落但不含关键词", k=3, semantic=True)
+
+        self.assertTrue(result.semantic_available)
+        self.assertEqual([retrieval.UserSearchHit("p-semantic", "semantic")], result.hits)
+
+    def test_user_search_dual_hit_is_labeled_both(self) -> None:
+        vectorstore.is_initialized = lambda: True
+        self.stub_search(
+            fts_hits=[retrieval.RetrievalHit("p-both", "fts_trigram", 1, -1.0)],
+            vector_hits=[retrieval.RetrievalHit("p-both", "vector", 1, 0.1)],
+        )
+
+        result = retrieval.user_search_posts("考试压力", k=3, semantic=True)
+
+        self.assertEqual([retrieval.UserSearchHit("p-both", "both")], result.hits)
+
+    def test_user_search_semantic_unavailable_uses_keyword_path(self) -> None:
+        vectorstore.is_initialized = lambda: False
+        retrieval.keyword_search_posts = lambda query, k=20: ["p-keyword"]  # type: ignore[method-assign]
+
+        result = retrieval.user_search_posts("alpha", k=3, semantic=True)
+
+        self.assertFalse(result.semantic_available)
+        self.assertEqual([retrieval.UserSearchHit("p-keyword", "keyword")], result.hits)
 
     def test_exclusion_filters_self_before_truncation_and_logs_event(self) -> None:
         self.stub_search(
@@ -456,7 +492,9 @@ class RetrievalDatabaseTest(unittest.TestCase):
         self.workspace = Path(self.tmp.name) / "workspace"
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
+        self.old_fts_search_scored = retrieval.fts_search_scored
         self.old_vector_search_scored = retrieval.vector_search_scored
+        self.old_vectorstore_is_initialized = vectorstore.is_initialized
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         db.init_db()
@@ -466,7 +504,9 @@ class RetrievalDatabaseTest(unittest.TestCase):
         logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
+        retrieval.fts_search_scored = self.old_fts_search_scored
         retrieval.vector_search_scored = self.old_vector_search_scored
+        vectorstore.is_initialized = self.old_vectorstore_is_initialized
         self.tmp.cleanup()
 
     def insert_post(self, post_id: str, content: str, created_at: float) -> None:
@@ -532,6 +572,24 @@ class RetrievalDatabaseTest(unittest.TestCase):
         hits = retrieval.keyword_search_posts("我", k=5)
 
         self.assertEqual(["p-new-like", "p-old-like"], hits)
+
+    def test_user_search_hybrid_empty_falls_back_to_like_keyword_results(self) -> None:
+        self.insert_post("p-new-like", "我买了电脑", 3.0)
+        self.insert_post("p-old-like", "我今天很累", 2.0)
+        vectorstore.is_initialized = lambda: True
+        retrieval.fts_search_scored = lambda *args, **kwargs: []
+        retrieval.vector_search_scored = lambda query, k=20: []
+
+        result = retrieval.user_search_posts("我", k=5, semantic=True)
+
+        self.assertTrue(result.semantic_available)
+        self.assertEqual(
+            [
+                retrieval.UserSearchHit("p-new-like", "keyword"),
+                retrieval.UserSearchHit("p-old-like", "keyword"),
+            ],
+            result.hits,
+        )
 
     def test_fts_keywords_can_drive_fts_search(self) -> None:
         self.insert_post("p-library", "晚上在图书馆学习时，我的效率确实更高。", 2.0)

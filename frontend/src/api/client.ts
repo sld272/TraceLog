@@ -36,6 +36,19 @@ export interface Post {
   attachments: Attachment[]
 }
 
+export type SearchMatchKind = 'keyword' | 'semantic' | 'both'
+export type SearchMode = 'keyword' | 'hybrid'
+
+export interface SearchResultItem extends Post {
+  match: SearchMatchKind
+}
+
+export interface SearchPostsResponse {
+  items: SearchResultItem[]
+  semantic_available: boolean
+  mode: SearchMode
+}
+
 export interface Comment {
   id: number
   post_id: string
@@ -411,9 +424,9 @@ export function listPosts(limit = DEFAULT_LIST_LIMIT, offset = 0) {
   return request<Post[]>(`/posts?limit=${limit}&offset=${offset}`)
 }
 
-export function searchPosts(q: string, limit = DEFAULT_LIST_LIMIT) {
-  return request<Post[]>(
-    `/posts/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+export function searchPosts(q: string, limit = DEFAULT_LIST_LIMIT, mode: SearchMode = 'keyword') {
+  return request<SearchPostsResponse>(
+    `/posts/search?q=${encodeURIComponent(q)}&limit=${limit}&mode=${mode}`,
   )
 }
 

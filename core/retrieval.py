@@ -34,6 +34,18 @@ class HybridHit:
 
 
 @dataclass(frozen=True)
+class UserSearchHit:
+    post_id: str
+    match: str
+
+
+@dataclass(frozen=True)
+class UserSearchResult:
+    hits: list[UserSearchHit]
+    semantic_available: bool
+
+
+@dataclass(frozen=True)
 class RetrievalDocHit:
     doc_id: str
     type: str
@@ -176,6 +188,49 @@ def keyword_search_posts(query: str, k: int = 20) -> list[str]:
     if not hits:
         hits = _like_search_scored(clean, k)
     return fts_query.ordered_unique([hit.post_id for hit in hits])[:k]
+
+
+def user_search_posts(query: str, k: int = 20, semantic: bool = False) -> UserSearchResult:
+    """User-facing search.
+
+    Keyword mode stays on SQLite FTS5 + LIKE fallback. Semantic mode uses the
+    existing hybrid scorer without LLM query rewrite; the AI reply pipeline is
+    intentionally richer and remains separate.
+    """
+    clean = str(query or "").strip()
+    semantic_available = _semantic_search_available()
+    if not clean:
+        return UserSearchResult([], semantic_available)
+
+    if not semantic or not semantic_available:
+        ids = keyword_search_posts(clean, k=k)
+        return UserSearchResult([UserSearchHit(post_id, "keyword") for post_id in ids], semantic_available)
+
+    hits = hybrid_search_scored(clean, k=k, candidate_k=max(20, k), min_score=None)
+    if not hits:
+        ids = keyword_search_posts(clean, k=k)
+        return UserSearchResult([UserSearchHit(post_id, "keyword") for post_id in ids], semantic_available)
+    return UserSearchResult(
+        [UserSearchHit(hit.post_id, _user_search_match_kind(hit.sources)) for hit in hits],
+        semantic_available,
+    )
+
+
+def _user_search_match_kind(sources: list[str]) -> str:
+    has_vector = "vector" in sources
+    has_keyword = any(source != "vector" for source in sources)
+    if has_vector and has_keyword:
+        return "both"
+    return "semantic" if has_vector else "keyword"
+
+
+def _semantic_search_available() -> bool:
+    try:
+        from core import vectorstore
+
+        return vectorstore.is_initialized()
+    except Exception:
+        return False
 
 
 def build_retrieval_filter(channel: str, soul_name: str | None = None) -> dict | None:

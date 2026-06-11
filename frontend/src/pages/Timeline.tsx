@@ -3,6 +3,8 @@ import {
   type Attachment,
   type Comment,
   type Post,
+  type SearchMode,
+  type SearchResultItem,
   createPost,
   deleteCommentMessage,
   deletePost,
@@ -59,7 +61,9 @@ export function Timeline({
   const [expandingPostIds, setExpandingPostIds] = useState<Record<string, boolean>>({})
   const [expandErrors, setExpandErrors] = useState<Record<string, string | null>>({})
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<Post[]>([])
+  const [searchResults, setSearchResults] = useState<SearchResultItem[]>([])
+  const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
+  const [semanticAvailable, setSemanticAvailable] = useState<boolean | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -72,6 +76,7 @@ export function Timeline({
   const retryPollTokenRef = useRef(0)
   const searchTokenRef = useRef(0)
   const searchTimerRef = useRef<number | null>(null)
+  const lastHybridQueryRef = useRef<string | null>(null)
   const modelUnavailable = modelConfigured === false
   const trimmedSearchQuery = searchQuery.trim()
   const searching = trimmedSearchQuery.length > 0
@@ -92,24 +97,30 @@ export function Timeline({
     fetchPosts()
   }, [fetchPosts])
 
-  const runSearch = useCallback(async (query: string) => {
+  const runSearch = useCallback(async (query: string, mode: SearchMode = 'keyword') => {
     const clean = query.trim()
     const token = searchTokenRef.current + 1
     searchTokenRef.current = token
     if (!clean) {
       setSearchResults([])
       setSearchError(null)
+      setSearchMode('keyword')
+      setSemanticAvailable(null)
       setSearchLoading(false)
       return
     }
+    setSearchMode(mode)
     setSearchLoading(true)
     setSearchError(null)
     try {
-      const results = await searchPosts(clean, 20)
+      const response = await searchPosts(clean, 20, mode)
       if (searchTokenRef.current !== token) return
-      setSearchResults(results)
+      setSearchResults(Array.isArray(response.items) ? response.items : [])
+      setSearchMode(response.mode ?? mode)
+      setSemanticAvailable(response.semantic_available ?? null)
     } catch (err) {
       if (searchTokenRef.current !== token) return
+      if (mode === 'hybrid') lastHybridQueryRef.current = null
       setSearchError(err instanceof Error ? err.message : '搜索失败')
     } finally {
       if (searchTokenRef.current === token) setSearchLoading(false)
@@ -126,7 +137,7 @@ export function Timeline({
   useEffect(() => {
     searchTimerRef.current = window.setTimeout(() => {
       searchTimerRef.current = null
-      void runSearch(searchQuery)
+      void runSearch(searchQuery, 'keyword')
     }, 300)
     return clearSearchTimer
   }, [clearSearchTimer, runSearch, searchQuery])
@@ -143,18 +154,35 @@ export function Timeline({
 
   const clearSearch = () => {
     searchTokenRef.current += 1
+    lastHybridQueryRef.current = null
     setSearchQuery('')
     setSearchResults([])
+    setSearchMode('keyword')
+    setSemanticAvailable(null)
     setSearchError(null)
     setSearchLoading(false)
   }
 
+  const handleSearchChange = (value: string) => {
+    setSearchQuery(value)
+    setSearchMode('keyword')
+    lastHybridQueryRef.current = null
+  }
+
+  const runDeepSearch = () => {
+    const clean = searchQuery.trim()
+    if (!clean) return
+    if (lastHybridQueryRef.current === clean && searchMode === 'hybrid') return
+    clearSearchTimer()
+    lastHybridQueryRef.current = clean
+    void runSearch(clean, 'hybrid')
+  }
+
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing) return
     if (event.key === 'Enter') {
       event.preventDefault()
-      /* Cancel the pending debounce so the same query is not fetched twice. */
-      clearSearchTimer()
-      void runSearch(searchQuery)
+      runDeepSearch()
     }
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -287,6 +315,7 @@ export function Timeline({
     const { postId, kind } = postMutationSignal
     if (kind === 'deleted') {
       setPosts((prev) => prev.filter((post) => post.post_id !== postId))
+      setSearchResults((prev) => prev.filter((post) => post.post_id !== postId))
       setPostComments((prev) => {
         const next = { ...prev }
         delete next[postId]
@@ -408,6 +437,7 @@ export function Timeline({
         try {
           await deletePost(postId)
           setPosts((prev) => prev.filter((post) => post.post_id !== postId))
+          setSearchResults((prev) => prev.filter((post) => post.post_id !== postId))
           setPostComments((prev) => {
             const next = { ...prev }
             delete next[postId]
@@ -574,7 +604,7 @@ export function Timeline({
         <SearchIcon />
         <input
           value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
+          onChange={(event) => handleSearchChange(event.target.value)}
           onKeyDown={handleSearchKeyDown}
           placeholder="搜索记录"
           aria-label="搜索记录"
@@ -609,9 +639,12 @@ export function Timeline({
             <SearchResults
               query={trimmedSearchQuery}
               results={searchResults}
+              mode={searchMode}
+              semanticAvailable={semanticAvailable}
               loading={searchLoading}
               error={searchError}
-              onRetry={() => runSearch(searchQuery)}
+              onDeepSearch={runDeepSearch}
+              onRetry={() => runSearch(searchQuery, searchMode)}
             />
           ) : posts.length === 0 ? (
             <div className={styles.empty}>
@@ -676,16 +709,25 @@ export function Timeline({
 function SearchResults({
   query,
   results,
+  mode,
+  semanticAvailable,
   loading,
   error,
+  onDeepSearch,
   onRetry,
 }: {
   query: string
-  results: Post[]
+  results: SearchResultItem[]
+  mode: SearchMode
+  semanticAvailable: boolean | null
   loading: boolean
   error: string | null
+  onDeepSearch: () => void
   onRetry: () => void
 }) {
+  const deepDisabled = semanticAvailable === false
+  const summary = searchSummaryText(results.length, mode, loading, semanticAvailable)
+
   return (
     <div className={styles.searchResults}>
       <div className={styles.searchSummary}>
@@ -695,9 +737,24 @@ function SearchResults({
             <button onClick={onRetry}>重试</button>
           </>
         ) : (
-          <span>{loading ? '正在搜索...' : `找到 ${results.length} 条记录`}</span>
+          <>
+            <span>{summary}</span>
+            {mode === 'keyword' && (
+              <button
+                className={styles.searchDeepButton}
+                onClick={onDeepSearch}
+                disabled={deepDisabled}
+                title={deepDisabled ? '需要先在设置中配置 Embedding' : '使用语义检索扩展搜索结果'}
+              >
+                深度搜索
+              </button>
+            )}
+          </>
         )}
       </div>
+      {mode === 'hybrid' && semanticAvailable === false && !error && (
+        <p className={styles.searchHint}>语义检索暂不可用，以下为关键词结果</p>
+      )}
       {!loading && !error && results.length === 0 && (
         <div className={styles.empty}>
           <p className={styles.emptyTitle}>没有找到与「{query}」相关的记录</p>
@@ -721,6 +778,9 @@ function SearchResults({
                   }
                 }}
               >
+                {post.match === 'semantic' && (
+                  <span className={styles.semanticBadge}>语义相关</span>
+                )}
                 <PostCard
                   post={post}
                   detailHref={href}
@@ -732,6 +792,19 @@ function SearchResults({
       )}
     </div>
   )
+}
+
+function searchSummaryText(
+  count: number,
+  mode: SearchMode,
+  loading: boolean,
+  semanticAvailable: boolean | null,
+): string {
+  if (loading && mode === 'hybrid') return '正在语义检索...'
+  if (loading) return '正在搜索...'
+  if (mode === 'hybrid' && semanticAvailable === false) return `找到 ${count} 条记录`
+  if (mode === 'hybrid') return `共 ${count} 条 · 已深度搜索`
+  return `找到 ${count} 条记录`
 }
 
 function TimelineHeader() {

@@ -85,8 +85,8 @@ class ApiPostsTest(unittest.TestCase):
         self.assertEqual(409, response.status_code)
         self.assertIn("请先在设置页完成模型配置", response.json()["detail"])
 
-    def test_search_posts_returns_list_shape_in_retrieval_order(self) -> None:
-        from core import db
+    def test_search_posts_returns_wrapped_keyword_shape_in_retrieval_order(self) -> None:
+        from core import db, retrieval
 
         with self._temp_db():
             db.execute(
@@ -117,16 +117,58 @@ class ApiPostsTest(unittest.TestCase):
                 """,
                 ("p-2", "默认", "assistant", "回应", 0, 3.0),
             )
-            with patch("api.routes.posts.retrieval.keyword_search_posts", return_value=["p-2", "p-1"]):
+            with patch(
+                "api.routes.posts.retrieval.user_search_posts",
+                return_value=retrieval.UserSearchResult(
+                    [
+                        retrieval.UserSearchHit("p-2", "keyword"),
+                        retrieval.UserSearchHit("p-1", "keyword"),
+                    ],
+                    semantic_available=True,
+                ),
+            ) as search:
                 with self._client() as client:
                     response = client.get("/posts/search?q=alpha&limit=2")
 
         self.assertEqual(200, response.status_code)
         body = response.json()
-        self.assertEqual(["p-2", "p-1"], [item["post_id"] for item in body])
-        self.assertEqual(1, body[0]["comment_count"])
-        self.assertIn("pipeline_status", body[0])
-        self.assertEqual([], body[0]["attachments"])
+        self.assertEqual("keyword", body["mode"])
+        self.assertTrue(body["semantic_available"])
+        self.assertEqual(["p-2", "p-1"], [item["post_id"] for item in body["items"]])
+        self.assertEqual(["keyword", "keyword"], [item["match"] for item in body["items"]])
+        self.assertEqual(1, body["items"][0]["comment_count"])
+        self.assertIn("pipeline_status", body["items"][0])
+        self.assertEqual([], body["items"][0]["attachments"])
+        search.assert_called_once_with("alpha", k=2, semantic=False)
+
+    def test_search_posts_hybrid_mode_returns_wrapped_shape(self) -> None:
+        from core import db, retrieval
+
+        with self._temp_db():
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, importance, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("p-1", "2026-06-01T10:00:00+08:00", "语义命中", 0.4, 1.0, 1.0),
+            )
+            with patch(
+                "api.routes.posts.retrieval.user_search_posts",
+                return_value=retrieval.UserSearchResult(
+                    [retrieval.UserSearchHit("p-1", "semantic")],
+                    semantic_available=True,
+                ),
+            ) as search:
+                with self._client() as client:
+                    response = client.get("/posts/search?q=低落&limit=2&mode=hybrid")
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual("hybrid", body["mode"])
+        self.assertTrue(body["semantic_available"])
+        self.assertEqual(["p-1"], [item["post_id"] for item in body["items"]])
+        self.assertEqual("semantic", body["items"][0]["match"])
+        search.assert_called_once_with("低落", k=2, semantic=True)
 
     def test_search_posts_empty_query_is_422(self) -> None:
         with self._temp_db():
@@ -136,13 +178,25 @@ class ApiPostsTest(unittest.TestCase):
         self.assertEqual(422, response.status_code)
 
     def test_search_route_does_not_fall_through_to_post_id(self) -> None:
+        from core import retrieval
+
         with self._temp_db():
-            with patch("api.routes.posts.retrieval.keyword_search_posts", return_value=[]):
+            with patch(
+                "api.routes.posts.retrieval.user_search_posts",
+                return_value=retrieval.UserSearchResult([], semantic_available=False),
+            ):
                 with self._client() as client:
                     response = client.get("/posts/search?q=missing")
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual([], response.json())
+        self.assertEqual({"items": [], "semantic_available": False, "mode": "keyword"}, response.json())
+
+    def test_search_posts_invalid_mode_is_422(self) -> None:
+        with self._temp_db():
+            with self._client() as client:
+                response = client.get("/posts/search?q=alpha&mode=invalid")
+
+        self.assertEqual(422, response.status_code)
 
     def test_sse_event_format_includes_id_event_and_payload(self) -> None:
         from api.routes.posts import _format_sse
