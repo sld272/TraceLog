@@ -3,6 +3,7 @@ import {
   type Attachment,
   type Comment,
   type Post,
+  type PostDetail,
   type SearchMode,
   type SearchResultItem,
   createPost,
@@ -73,6 +74,7 @@ export function Timeline({
     onConfirm: () => void
   } | null>(null)
   const regeneratedCommentTimerRef = useRef<number | null>(null)
+  const postStreamUnsubscribersRef = useRef<Map<string, () => void>>(new Map())
   const retryPollTokenRef = useRef(0)
   const searchTokenRef = useRef(0)
   const searchTimerRef = useRef<number | null>(null)
@@ -86,6 +88,9 @@ export function Timeline({
       const data = await listPosts(API_LIMITS.POSTS_DEFAULT, 0)
       setPosts(data)
       setError(null)
+      data.forEach((post) => {
+        if (isActivePipeline(post)) void restorePostStream(post.post_id)
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
     } finally {
@@ -147,6 +152,7 @@ export function Timeline({
       if (regeneratedCommentTimerRef.current !== null) {
         window.clearTimeout(regeneratedCommentTimerRef.current)
       }
+      stopAllPostStreams()
       retryPollTokenRef.current += 1
       searchTokenRef.current += 1
     }
@@ -224,20 +230,65 @@ export function Timeline({
     }
     setPosts((prev) => [newPost, ...prev])
 
-    /* Subscribe to SSE for real-time comment updates */
-    streamPostEvents(
-      result.post_id,
+    subscribeToPost(result.post_id)
+  }
+
+  const stopPostStream = (postId: string) => {
+    postStreamUnsubscribersRef.current.get(postId)?.()
+    postStreamUnsubscribersRef.current.delete(postId)
+  }
+
+  const stopAllPostStreams = () => {
+    postStreamUnsubscribersRef.current.forEach((unsubscribe) => unsubscribe())
+    postStreamUnsubscribersRef.current.clear()
+  }
+
+  const applyPostDetailToSummary = (detail: PostDetail, eventType?: string) => {
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.post_id === detail.post.post_id
+          ? {
+              ...p,
+              importance: detail.post.importance,
+              comment_count: detail.comments.length,
+              latest_event_type: detail.post.latest_event_type ?? eventType ?? p.latest_event_type,
+              pipeline_status: detail.post.pipeline_status,
+              attachments: detail.post.attachments,
+            }
+          : p,
+      ),
+    )
+  }
+
+  const restorePostStream = async (postId: string) => {
+    try {
+      const detail = await getPost(postId)
+      applyPostDetailToSummary(detail)
+      if (!isActivePipeline(detail.post)) {
+        stopPostStream(postId)
+        return
+      }
+      subscribeToPost(postId, latestEventId(detail.events))
+    } catch {
+      /* Keep the row visible; the next list refresh can try restoring again. */
+    }
+  }
+
+  const subscribeToPost = (postId: string, afterEventId?: number) => {
+    stopPostStream(postId)
+    const unsubscribe = streamPostEvents(
+      postId,
       (event) => {
         setPosts((prev) =>
           prev.map((p) =>
-            p.post_id === result.post_id
+            p.post_id === postId
               ? { ...p, latest_event_type: event.event_type }
               : p,
           ),
         )
 
         if (shouldRefreshPostDetail(event)) {
-          refreshPostDetail(result.post_id, event.event_type)
+          void refreshPostDetail(postId, event.event_type)
         }
 
         if (event.event_type === 'todo_succeeded') {
@@ -245,17 +296,20 @@ export function Timeline({
         }
       },
       () => {
-        /* Pipeline done — mark post as complete */
         setPosts((prev) =>
           prev.map((p) =>
-            p.post_id === result.post_id
+            p.post_id === postId
               ? { ...p, latest_event_type: 'pipeline_done' }
               : p,
           ),
         )
+        stopPostStream(postId)
+        void refreshPostDetail(postId)
         onActivitySettled?.()
       },
+      afterEventId === undefined ? {} : { afterEventId },
     )
+    postStreamUnsubscribersRef.current.set(postId, unsubscribe)
   }
 
   const refreshPostDetail = async (postId: string, eventType?: string) => {
@@ -266,20 +320,7 @@ export function Timeline({
         [postId]: detail.comments,
       }))
       await refreshCommentConversations(postId)
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.post_id === postId
-            ? {
-                ...p,
-                importance: detail.post.importance,
-                comment_count: detail.comments.length,
-                latest_event_type: detail.post.latest_event_type ?? eventType ?? p.latest_event_type,
-                pipeline_status: detail.post.pipeline_status,
-                attachments: detail.post.attachments,
-              }
-            : p,
-        ),
-      )
+      applyPostDetailToSummary(detail, eventType)
       return detail
     } catch {
       /* keep the optimistic post visible if detail refresh fails */
@@ -291,20 +332,7 @@ export function Timeline({
   const refreshPostSummary = async (postId: string) => {
     try {
       const detail = await getPost(postId)
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.post_id === postId
-            ? {
-                ...p,
-                importance: detail.post.importance,
-                comment_count: detail.comments.length,
-                latest_event_type: detail.post.latest_event_type ?? p.latest_event_type,
-                pipeline_status: detail.post.pipeline_status,
-                attachments: detail.post.attachments,
-              }
-            : p,
-        ),
-      )
+      applyPostDetailToSummary(detail)
     } catch {
       /* keep the stale summary if refresh fails */
     }
@@ -314,6 +342,7 @@ export function Timeline({
     if (!postMutationSignal) return
     const { postId, kind } = postMutationSignal
     if (kind === 'deleted') {
+      stopPostStream(postId)
       setPosts((prev) => prev.filter((post) => post.post_id !== postId))
       setSearchResults((prev) => prev.filter((post) => post.post_id !== postId))
       setPostComments((prev) => {
@@ -436,6 +465,7 @@ export function Timeline({
         setDeletingPostId(postId)
         try {
           await deletePost(postId)
+          stopPostStream(postId)
           setPosts((prev) => prev.filter((post) => post.post_id !== postId))
           setSearchResults((prev) => prev.filter((post) => post.post_id !== postId))
           setPostComments((prev) => {
@@ -516,36 +546,7 @@ export function Timeline({
       const afterEventId = latestEventId(beforeRetry.events)
       await Promise.all(jobIds.map((jobId) => retryJob(jobId)))
       await refreshPostDetail(postId)
-      streamPostEvents(
-        postId,
-        (event) => {
-          setPosts((prev) =>
-            prev.map((p) =>
-              p.post_id === postId
-                ? { ...p, latest_event_type: event.event_type }
-                : p,
-            ),
-          )
-          if (shouldRefreshPostDetail(event)) {
-            refreshPostDetail(postId, event.event_type)
-          }
-          if (event.event_type === 'todo_succeeded') {
-            onTodosChanged?.()
-          }
-        },
-        () => {
-          setPosts((prev) =>
-            prev.map((p) =>
-              p.post_id === postId
-                ? { ...p, latest_event_type: 'pipeline_done' }
-                : p,
-            ),
-          )
-          refreshPostDetail(postId)
-          onActivitySettled?.()
-        },
-        { afterEventId },
-      )
+      subscribeToPost(postId, afterEventId)
       pollPostPipelineUntilSettled(postId)
     } catch (err) {
       setError(err instanceof Error ? err.message : '重试失败')
@@ -829,6 +830,11 @@ function SearchIcon() {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function isActivePipeline(post: Pick<Post, 'pipeline_status'>): boolean {
+  const state = post.pipeline_status?.state
+  return state === 'running' || state === 'retrying'
 }
 
 function EmptyIcon() {
