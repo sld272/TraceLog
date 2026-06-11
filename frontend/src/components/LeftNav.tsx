@@ -3,12 +3,13 @@ import styles from './LeftNav.module.css'
 
 interface LeftNavProps {
   souls: Soul[]
+  soulsLoadState?: 'loading' | 'ready' | 'error'
   activePage: string
   onNavigate: (page: string) => void
   onAfterNavigate?: () => void
 }
 
-export function LeftNav({ souls, activePage, onNavigate, onAfterNavigate }: LeftNavProps) {
+export function LeftNav({ souls, soulsLoadState = 'ready', activePage, onNavigate, onAfterNavigate }: LeftNavProps) {
   const navigate = (page: string) => {
     onNavigate(page)
     onAfterNavigate?.()
@@ -48,7 +49,13 @@ export function LeftNav({ souls, activePage, onNavigate, onAfterNavigate }: Left
             onClick={() => navigate(`chat:${soul.name}`)}
           />
         ))}
-        {souls.length === 0 && (
+        {souls.length === 0 && soulsLoadState === 'loading' && (
+          <p className={styles.emptySoul}>加载中...</p>
+        )}
+        {souls.length === 0 && soulsLoadState === 'error' && (
+          <p className={styles.emptySoul} role="alert">加载失败</p>
+        )}
+        {souls.length === 0 && soulsLoadState === 'ready' && (
           <p className={styles.emptySoul}>还没有</p>
         )}
       </section>

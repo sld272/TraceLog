@@ -26,11 +26,14 @@ import { isTodoDone } from '@/utils/todo'
 import styles from '@/components/AppShell.module.css'
 
 const MODEL_CONFIG_RETRY_DELAYS = [2_000, 5_000, 10_000, 30_000]
+const SOULS_RETRY_DELAYS = [2_000, 5_000, 10_000, 30_000]
+type SoulsLoadState = 'loading' | 'ready' | 'error'
 
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.hash))
   const [modelConfigured, setModelConfigured] = useState<boolean | null>(null)
   const [souls, setSouls] = useState<Soul[]>([])
+  const [soulsLoadState, setSoulsLoadState] = useState<SoulsLoadState>('loading')
   const [todos, setTodos] = useState<Todo[]>([])
   const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
   const [soulReflections, setSoulReflections] = useState<SoulReflectionScope[]>([])
@@ -40,14 +43,19 @@ export function App() {
   const showRightPanel = route.kind === 'home'
   const navKey = navKeyFromRoute(route)
 
-  const fetchSouls = useCallback(async () => {
-    try {
-      const data = await listSouls(true)
-      setSouls(data)
-    } catch {
-      /* API might not be running yet */
-    }
+  const loadSouls = useCallback(async () => {
+    const data = await listSouls(true)
+    setSouls(data)
+    setSoulsLoadState('ready')
+    return data
   }, [])
+
+  const fetchSouls = useCallback(() => {
+    if (souls.length === 0) setSoulsLoadState('loading')
+    void loadSouls().catch(() => {
+      setSoulsLoadState('error')
+    })
+  }, [loadSouls, souls.length])
 
   const refreshHomeContext = useCallback(async () => {
     try {
@@ -124,8 +132,34 @@ export function App() {
   }, [loadModelConfiguration])
 
   useEffect(() => {
-    fetchSouls()
-  }, [fetchSouls])
+    let cancelled = false
+    let retryTimer: number | null = null
+    let retryIndex = 0
+
+    const load = async () => {
+      try {
+        await loadSouls()
+      } catch {
+        if (cancelled) return
+        setSoulsLoadState('error')
+        const delay = SOULS_RETRY_DELAYS[Math.min(retryIndex, SOULS_RETRY_DELAYS.length - 1)]
+        retryIndex += 1
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null
+          void load()
+        }, delay)
+      }
+    }
+
+    void load()
+
+    return () => {
+      cancelled = true
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer)
+      }
+    }
+  }, [loadSouls])
 
   useEffect(() => {
     let cancelled = false
@@ -233,6 +267,7 @@ export function App() {
       nav={(closeMobileNav) => (
         <LeftNav
           souls={souls}
+          soulsLoadState={soulsLoadState}
           activePage={navKey}
           onNavigate={navigateToPage}
           onAfterNavigate={closeMobileNav}
