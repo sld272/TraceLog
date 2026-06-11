@@ -59,7 +59,6 @@ export function Timeline({
   const [deletingPostId, setDeletingPostId] = useState<string | null>(null)
   const [busyCommentId, setBusyCommentId] = useState<number | null>(null)
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null)
-  const [regeneratedCommentId, setRegeneratedCommentId] = useState<number | null>(null)
   const [expandingPostIds, setExpandingPostIds] = useState<Record<string, boolean>>({})
   const [expandErrors, setExpandErrors] = useState<Record<string, string | null>>({})
   const [searchQuery, setSearchQuery] = useState('')
@@ -74,7 +73,6 @@ export function Timeline({
     message: string
     onConfirm: () => void
   } | null>(null)
-  const regeneratedCommentTimerRef = useRef<number | null>(null)
   const postStreamUnsubscribersRef = useRef<Map<string, () => void>>(new Map())
   const retryPollTokenRef = useRef(0)
   const searchTokenRef = useRef(0)
@@ -150,9 +148,6 @@ export function Timeline({
 
   useEffect(() => {
     return () => {
-      if (regeneratedCommentTimerRef.current !== null) {
-        window.clearTimeout(regeneratedCommentTimerRef.current)
-      }
       stopAllPostStreams()
       retryPollTokenRef.current += 1
       searchTokenRef.current += 1
@@ -528,7 +523,6 @@ export function Timeline({
       }))
       // Also refresh post detail to get updated comment list
       await refreshPostDetail(postId)
-      showRegeneratedComment(response.message.id)
     } catch {
       setPostCommentConversations(previousConversations)
       await refreshPostDetail(postId)
@@ -573,17 +567,6 @@ export function Timeline({
     if (retryPollTokenRef.current === token) {
       await refreshPostDetail(postId)
     }
-  }
-
-  const showRegeneratedComment = (commentId: number) => {
-    if (regeneratedCommentTimerRef.current !== null) {
-      window.clearTimeout(regeneratedCommentTimerRef.current)
-    }
-    setRegeneratedCommentId(commentId)
-    regeneratedCommentTimerRef.current = window.setTimeout(() => {
-      setRegeneratedCommentId(null)
-      regeneratedCommentTimerRef.current = null
-    }, 3000)
   }
 
   if (loading) {
@@ -677,7 +660,6 @@ export function Timeline({
                     comments={postComments[post.post_id]}
                     commentConversations={postCommentConversations[post.post_id]}
                     busyCommentId={busyCommentId}
-                    regeneratedCommentId={regeneratedCommentId}
                     deletingPost={deletingPostId === post.post_id}
                     retryingJobId={retryingJobId}
                     detailHref={formatRoute({ kind: 'post', postId: post.post_id })}

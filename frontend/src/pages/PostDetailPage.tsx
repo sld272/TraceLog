@@ -192,7 +192,6 @@ export function PostDetailPage({
             comments={detail.comments}
             commentConversations={detail.conversations}
             busyCommentId={detail.busyCommentId}
-            regeneratedCommentId={detail.regeneratedCommentId}
             deletingPost={deletingPost}
             retryingJobId={detail.retryingJobId}
             modelConfigured={modelConfigured}

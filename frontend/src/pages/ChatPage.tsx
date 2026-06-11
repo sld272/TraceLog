@@ -626,6 +626,15 @@ function MessageBubble({
         >
           {formatSmartTime(message.created_at)}
         </time>
+        {!isPendingAssistant && message.rerun_at ? (
+          <span className={styles.messageMarker} title={formatAbsoluteTime(message.rerun_at)}>
+            已重新生成 · {formatSmartTime(message.rerun_at)}
+          </span>
+        ) : isUser && message.edited_at ? (
+          <span className={styles.messageMarker} title={formatAbsoluteTime(message.edited_at)}>
+            已编辑
+          </span>
+        ) : null}
         {isPersisted && editDraft === null && !isFailedAssistant && (
           <div className={styles.messageActions}>
             {isUser ? (

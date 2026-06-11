@@ -34,7 +34,6 @@ export interface UsePostDetailResult {
   error: string | null
   busyCommentId: number | null
   retryingJobId: number | null
-  regeneratedCommentId: number | null
   reply(soulName: string, content: string, attachments: Attachment[]): Promise<void>
   deleteComment(commentId: number): Promise<void>
   rerunComment(commentId: number): Promise<void>
@@ -51,9 +50,7 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
   const [error, setError] = useState<string | null>(null)
   const [busyCommentId, setBusyCommentId] = useState<number | null>(null)
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null)
-  const [regeneratedCommentId, setRegeneratedCommentId] = useState<number | null>(null)
   const unsubscribeRef = useRef<(() => void) | null>(null)
-  const regeneratedTimerRef = useRef<number | null>(null)
   const retryPollTokenRef = useRef(0)
 
   const stopStream = useCallback(() => {
@@ -144,25 +141,6 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
     }
   }, [postId, refresh, stopStream, subscribeIfRunning])
 
-  useEffect(() => {
-    return () => {
-      if (regeneratedTimerRef.current !== null) {
-        window.clearTimeout(regeneratedTimerRef.current)
-      }
-    }
-  }, [])
-
-  const showRegeneratedComment = useCallback((commentId: number) => {
-    if (regeneratedTimerRef.current !== null) {
-      window.clearTimeout(regeneratedTimerRef.current)
-    }
-    setRegeneratedCommentId(commentId)
-    regeneratedTimerRef.current = window.setTimeout(() => {
-      setRegeneratedCommentId(null)
-      regeneratedTimerRef.current = null
-    }, 3000)
-  }, [])
-
   const reply = useCallback(async (soulName: string, content: string, attachments: Attachment[]) => {
     const optimisticUserId = -Date.now()
     const optimisticAssistantId = optimisticUserId - 1
@@ -225,7 +203,6 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
         [response.conversation.soul_name]: toConversationState(response.conversation, response.messages),
       }))
       await refresh()
-      showRegeneratedComment(response.message.id)
     } catch (err) {
       setConversations(previousConversations)
       await refresh()
@@ -233,7 +210,7 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
     } finally {
       setBusyCommentId(null)
     }
-  }, [comments, conversations, postId, refresh, showRegeneratedComment])
+  }, [comments, conversations, postId, refresh])
 
   const pollPostPipelineUntilSettled = useCallback(async () => {
     const token = retryPollTokenRef.current + 1
@@ -290,7 +267,6 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
     error,
     busyCommentId,
     retryingJobId,
-    regeneratedCommentId,
     reply,
     deleteComment,
     rerunComment,
