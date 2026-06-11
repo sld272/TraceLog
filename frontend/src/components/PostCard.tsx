@@ -505,7 +505,7 @@ function ThreadMessage({
             </button>
           )}
           {isPersisted && isUser && onDelete && (
-            <button className={styles.threadDanger} onClick={() => onDelete(message.id)} disabled={busy} title="删除评论" aria-label="删除评论">
+            <button className={styles.threadDanger} onClick={() => onDelete(message.id)} disabled={busy} title="删除追问" aria-label="删除追问">
               <TrashIcon />
             </button>
           )}

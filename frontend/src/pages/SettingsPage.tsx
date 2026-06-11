@@ -387,7 +387,7 @@ function ModelSettingsPanel({
         <div className={styles.sectionHeader}>
           <div>
             <h2 className={styles.sectionTitle}>主模型</h2>
-            <p className={styles.sectionMeta}>用于公开回应、私聊、评论和反思。</p>
+            <p className={styles.sectionMeta}>用于公开回应、追问、私聊和整理。</p>
           </div>
           <StatusPill ok={settings?.configured ?? false} label={settings?.configured ? '已配置' : '未完成'} />
         </div>
@@ -740,7 +740,7 @@ function DataSettingsPanel({
           </div>
         </div>
         <div className={styles.statGrid}>
-          <Stat label="动态" value={status.counts.posts} />
+          <Stat label="记录" value={status.counts.posts} />
           <Stat label="回应" value={status.counts.comments} />
           <Stat label="人格" value={status.counts.souls} />
           <Stat label="启用人格" value={status.counts.enabled_souls} />

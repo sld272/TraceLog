@@ -460,7 +460,7 @@ export function Timeline({
     setConfirmDialog({
       isOpen: true,
       title: '删除记录',
-      message: '删除这条记录会同时删除所有 SOUL 回复和评论对话，且不会自动恢复。确定删除吗？',
+      message: '删除这条记录会同时删除 TA 们的所有回应和追问，且不会自动恢复。确定删除吗？',
       onConfirm: async () => {
         setConfirmDialog(null)
         setDeletingPostId(postId)
@@ -493,8 +493,8 @@ export function Timeline({
   const handleDeleteComment = async (postId: string, commentId: number) => {
     setConfirmDialog({
       isOpen: true,
-      title: '删除评论',
-      message: '删除这条评论会同时删除它之后的同一段对话，且不会自动恢复。确定删除吗？',
+      title: '删除追问',
+      message: '删除这条追问会同时删除它之后的这段对话，且不会自动恢复。确定删除吗？',
       onConfirm: async () => {
         setConfirmDialog(null)
         setBusyCommentId(commentId)
@@ -502,7 +502,7 @@ export function Timeline({
           await deleteCommentMessage(commentId)
           await refreshPostDetail(postId)
         } catch (err) {
-          setError(err instanceof Error ? err.message : '删除评论失败')
+          setError(err instanceof Error ? err.message : '删除追问失败')
         } finally {
           setBusyCommentId(null)
         }
@@ -820,7 +820,7 @@ function TimelineHeader() {
     <header className={styles.header}>
       <div>
         <h1>首页</h1>
-        <p>记录、回应、反思都流回这里</p>
+        <p>记录、回应、整理都流回这里</p>
       </div>
     </header>
   )

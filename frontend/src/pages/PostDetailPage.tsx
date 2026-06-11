@@ -86,7 +86,7 @@ export function PostDetailPage({
   const handleDeletePost = async () => {
     setConfirmDialog({
       title: '删除记录',
-      message: '删除这条记录会同时删除所有 SOUL 回复和评论对话，关联待办会保留但不再指向来源记录，且不会自动恢复。确定删除吗？',
+      message: '删除这条记录会同时删除 TA 们的所有回应和追问，关联待办会保留但不再指向来源记录，且不会自动恢复。确定删除吗？',
       onConfirm: async () => {
         setConfirmDialog(null)
         setDeletingPost(true)
@@ -107,8 +107,8 @@ export function PostDetailPage({
 
   const handleDeleteComment = async (commentId: number) => {
     setConfirmDialog({
-      title: '删除评论',
-      message: '删除这条评论会同时删除它之后的同一段对话，且不会自动恢复。确定删除吗？',
+      title: '删除追问',
+      message: '删除这条追问会同时删除它之后的这段对话，且不会自动恢复。确定删除吗？',
       onConfirm: async () => {
         setConfirmDialog(null)
         setActionError(null)
@@ -116,7 +116,7 @@ export function PostDetailPage({
           await detail.deleteComment(commentId)
           onPostMutated?.(postId, 'updated')
         } catch (err) {
-          setActionError(err instanceof Error ? err.message : '删除评论失败')
+          setActionError(err instanceof Error ? err.message : '删除追问失败')
         }
       },
     })

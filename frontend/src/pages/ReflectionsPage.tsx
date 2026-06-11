@@ -744,7 +744,7 @@ function formatRevisionTarget(revision: MemoryRevisionSummary): string {
 }
 
 function formatRevisionSource(source: string): string {
-  return source === 'user' ? '用户编辑' : 'AI反思'
+  return source === 'user' ? '用户编辑' : 'AI 整理'
 }
 
 function isRevisionOutput(revision: MemoryRevisionSummary): boolean {

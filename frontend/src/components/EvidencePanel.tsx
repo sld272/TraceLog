@@ -98,7 +98,7 @@ function EvidenceRow({
 function typeLabel(type: string): string {
   if (type === 'post') return '记录'
   if (type === 'post_vision') return '图片'
-  if (type === 'comment') return '评论'
+  if (type === 'comment') return '回应'
   if (type === 'chat') return '私聊'
   return '记忆'
 }

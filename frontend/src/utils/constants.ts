@@ -1,6 +1,6 @@
 /** API 相关常量 */
 export const API_LIMITS = {
-  /** 默认帖子列表数量 */
+  /** 默认记录列表数量 */
   POSTS_DEFAULT: 30,
   /** 默认消息历史数量 */
   MESSAGES_DEFAULT: 30,
