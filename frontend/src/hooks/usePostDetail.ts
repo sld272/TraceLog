@@ -82,7 +82,7 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
       return detail
     } catch (err) {
       const message = err instanceof Error ? err.message : '加载失败'
-      if (message.includes('404')) {
+      if (message.includes('404') || message.toLowerCase().includes('not found')) {
         setNotFound(true)
         setPost(null)
         setComments([])
