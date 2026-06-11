@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   type Job,
+  type MemoryRevisionDetail,
   type MemoryRevisionSummary,
   type ReflectionScope,
   type SoulReflectionScope,
+  getProfileRevision,
+  getSoulMemoryRevision,
   getJob,
   listProfileRevisions,
   listSoulMemoryRevisions,
@@ -37,6 +40,27 @@ interface RevisionGroup {
   revisions: MemoryRevisionSummary[]
   latest: MemoryRevisionSummary
   changeCount: number
+}
+
+interface RevisionDetailItem {
+  revision: MemoryRevisionSummary
+  detail: MemoryRevisionDetail
+  previousDetail: MemoryRevisionDetail | null
+}
+
+interface RevisionDetailState {
+  loading: boolean
+  error: string | null
+  items: RevisionDetailItem[]
+}
+
+interface RevisionChangeView {
+  kind: string
+  label: string
+  section?: string
+  anchor?: string
+  before?: string
+  after?: string
 }
 
 interface ReflectionsPageProps {
@@ -81,7 +105,6 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
         souls.map((soul) => listSoulMemoryRevisions(soul.name, RECENT_SOUL_REVISION_FETCH_LIMIT)),
       )
       const revisions = [...profileRevisions, ...soulRevisionGroups.flat()]
-        .filter(isRevisionOutput)
         .sort((a, b) => {
           const timeDelta = b.created_at - a.created_at
           return timeDelta === 0 ? b.id - a.id : timeDelta
@@ -328,7 +351,60 @@ function RecentRevisionsCard({
   revisions: MemoryRevisionSummary[]
   error: string | null
 }) {
-  const revisionGroups = groupRecentRevisions(revisions).slice(0, RECENT_REVISION_LIMIT)
+  const revisionGroups = groupRecentRevisions(revisions.filter(isRevisionOutput)).slice(0, RECENT_REVISION_LIMIT)
+  const [expandedGroupKey, setExpandedGroupKey] = useState<string | null>(null)
+  const [detailStates, setDetailStates] = useState<Record<string, RevisionDetailState>>({})
+  const firstGroupKey = revisionGroups[0]?.key ?? null
+
+  useEffect(() => {
+    if (firstGroupKey) setExpandedGroupKey(firstGroupKey)
+  }, [firstGroupKey])
+
+  const loadGroupDetails = useCallback(async (group: RevisionGroup) => {
+    setDetailStates((prev) => {
+      const existing = prev[group.key]
+      return {
+        ...prev,
+        [group.key]: existing?.items.length
+          ? existing
+          : { loading: true, error: null, items: [] },
+      }
+    })
+    try {
+      const items = await Promise.all(
+        group.revisions.map(async (revision) => {
+          const detail = await fetchRevisionDetail(revision)
+          const previousRevision = findPreviousRevision(revisions, revision)
+          const previousDetail = previousRevision
+            ? await fetchRevisionDetail(previousRevision).catch(() => null)
+            : null
+          return { revision, detail, previousDetail }
+        }),
+      )
+      setDetailStates((prev) => ({
+        ...prev,
+        [group.key]: { loading: false, error: null, items },
+      }))
+    } catch (err) {
+      setDetailStates((prev) => ({
+        ...prev,
+        [group.key]: {
+          loading: false,
+          error: err instanceof Error ? err.message : '详情加载失败',
+          items: prev[group.key]?.items ?? [],
+        },
+      }))
+    }
+  }, [revisions])
+
+  useEffect(() => {
+    if (!expandedGroupKey) return
+    const group = revisionGroups.find((item) => item.key === expandedGroupKey)
+    if (!group) return
+    const state = detailStates[expandedGroupKey]
+    if (state?.loading || state?.items.length) return
+    void loadGroupDetails(group)
+  }, [detailStates, expandedGroupKey, loadGroupDetails, revisionGroups])
 
   return (
     <section className={styles.card}>
@@ -345,6 +421,13 @@ function RecentRevisionsCard({
             <RevisionRow
               key={group.key}
               group={group}
+              detailState={detailStates[group.key]}
+              expanded={expandedGroupKey === group.key}
+              onToggle={() => {
+                setExpandedGroupKey((current) => current === group.key ? null : group.key)
+                if (!detailStates[group.key]) void loadGroupDetails(group)
+              }}
+              onRetry={() => loadGroupDetails(group)}
             />
           ))}
         </div>
@@ -399,7 +482,19 @@ function ReflectionJobNotice({
   )
 }
 
-function RevisionRow({ group }: { group: RevisionGroup }) {
+function RevisionRow({
+  group,
+  expanded,
+  detailState,
+  onToggle,
+  onRetry,
+}: {
+  group: RevisionGroup
+  expanded: boolean
+  detailState?: RevisionDetailState
+  onToggle: () => void
+  onRetry: () => void
+}) {
   const { latest } = group
   const summary = group.revisions.length === 1
     ? summarizeSingleRevision(latest)
@@ -407,20 +502,113 @@ function RevisionRow({ group }: { group: RevisionGroup }) {
 
   return (
     <article className={styles.revisionRow}>
-      <div className={styles.revisionBody}>
-        <h3>{formatRevisionTarget(latest)}</h3>
-        <p>
-          <span>{formatRevisionSource(latest.source)}</span>
-          <span>{summary}</span>
-          <time
-            dateTime={formatDateTimeAttribute(latest.created_at)}
-            title={formatAbsoluteTime(latest.created_at)}
-          >
-            {formatSmartTime(latest.created_at)}
-          </time>
-        </p>
-      </div>
+      <button className={styles.revisionToggle} onClick={onToggle} aria-expanded={expanded}>
+        <div className={styles.revisionBody}>
+          <h3>{formatRevisionTarget(latest)}</h3>
+          <p>
+            <span>{formatRevisionSource(latest.source)}</span>
+            <span>{summary}</span>
+            <time
+              dateTime={formatDateTimeAttribute(latest.created_at)}
+              title={formatAbsoluteTime(latest.created_at)}
+            >
+              {formatSmartTime(latest.created_at)}
+            </time>
+          </p>
+        </div>
+        <span className={styles.revisionChevron}>{expanded ? '收起' : '展开'}</span>
+      </button>
+      {expanded && (
+        <RevisionDetails
+          state={detailState}
+          onRetry={onRetry}
+        />
+      )}
     </article>
+  )
+}
+
+function RevisionDetails({
+  state,
+  onRetry,
+}: {
+  state?: RevisionDetailState
+  onRetry: () => void
+}) {
+  if (!state || state.loading) {
+    return <div className={styles.revisionDetails}>加载整理详情...</div>
+  }
+  if (state.error) {
+    return (
+      <div className={styles.revisionDetails}>
+        <div className={styles.revisionDetailError}>
+          <span>{state.error}</span>
+          <button className={styles.ghostButton} onClick={onRetry}>重试</button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className={styles.revisionDetails}>
+      {state.items.map((item) => (
+        <RevisionDetailBlock key={`${item.revision.target_type}-${item.revision.target_name ?? 'user'}-${item.revision.id}`} item={item} />
+      ))}
+    </div>
+  )
+}
+
+function RevisionDetailBlock({ item }: { item: RevisionDetailItem }) {
+  const changes = describePatchChanges(item.detail.patch, item.previousDetail?.snapshot ?? '', item.detail.snapshot)
+
+  return (
+    <div className={styles.revisionDetailBlock}>
+      <div className={styles.revisionDetailHeader}>
+        <span>{formatRevisionTarget(item.revision)}</span>
+        <time
+          dateTime={formatDateTimeAttribute(item.revision.created_at)}
+          title={formatAbsoluteTime(item.revision.created_at)}
+        >
+          {formatSmartTime(item.revision.created_at)}
+        </time>
+      </div>
+      {changes.length === 0 ? (
+        <div className={styles.revisionChange}>
+          <span className={styles.revisionChangeLabel}>全文更新</span>
+          <p>这次整理更新了完整记忆文本。</p>
+        </div>
+      ) : (
+        <div className={styles.revisionChanges}>
+          {changes.map((change, index) => (
+            <div className={styles.revisionChange} key={`${change.kind}-${index}`}>
+              <span className={styles.revisionChangeLabel}>{change.label}</span>
+              {change.section && <p className={styles.revisionChangeSection}>{change.section}</p>}
+              {change.before && (
+                <p>
+                  <strong>原来</strong>
+                  {change.before}
+                </p>
+              )}
+              {change.after && (
+                <p>
+                  <strong>{change.before ? '改为' : '内容'}</strong>
+                  {change.after}
+                </p>
+              )}
+              {!change.before && !change.after && change.anchor && (
+                <p>
+                  <strong>条目</strong>
+                  {change.anchor}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <details className={styles.revisionSnapshot}>
+        <summary>查看整理后的完整记忆</summary>
+        <pre>{item.detail.snapshot}</pre>
+      </details>
+    </div>
   )
 }
 
@@ -445,6 +633,102 @@ function groupRecentRevisions(revisions: MemoryRevisionSummary[]): RevisionGroup
     })
   }
   return groups
+}
+
+async function fetchRevisionDetail(revision: MemoryRevisionSummary): Promise<MemoryRevisionDetail> {
+  if (revision.target_type === 'user') return getProfileRevision(revision.id)
+  if (!revision.target_name) throw new Error('人格记忆名称缺失')
+  return getSoulMemoryRevision(revision.target_name, revision.id)
+}
+
+function findPreviousRevision(
+  revisions: MemoryRevisionSummary[],
+  current: MemoryRevisionSummary,
+): MemoryRevisionSummary | null {
+  const candidates = revisions
+    .filter((revision) =>
+      revision.target_type === current.target_type
+      && revision.target_name === current.target_name
+      && (
+        revision.created_at < current.created_at
+        || (revision.created_at === current.created_at && revision.id < current.id)
+      ),
+    )
+    .sort((a, b) => {
+      const timeDelta = b.created_at - a.created_at
+      return timeDelta === 0 ? b.id - a.id : timeDelta
+    })
+  return candidates[0] ?? null
+}
+
+function describePatchChanges(patch: unknown, previousSnapshot: string, currentSnapshot: string): RevisionChangeView[] {
+  const patches = normalizePatchList(patch)
+  const changes: RevisionChangeView[] = []
+  for (const item of patches) {
+    if (isRecord(item) && Array.isArray(item.ops)) {
+      const section = stringField(item.section)
+      for (const op of item.ops) {
+        if (!isRecord(op)) continue
+        const kind = stringField(op.op) ?? 'update'
+        const anchor = stringField(op.anchor)
+        const value = stringField(op.value)
+        changes.push({
+          kind,
+          label: operationLabel(kind),
+          section,
+          anchor,
+          before: anchor ? findAnchoredMemoryLine(previousSnapshot, anchor) : undefined,
+          after: value || (anchor ? findAnchoredMemoryLine(currentSnapshot, anchor) : undefined),
+        })
+      }
+      continue
+    }
+    if (isRecord(item)) {
+      const kind = stringField(item.op) || stringField(item.type)
+      if (kind && kind !== 'overwrite_user_memory' && kind !== 'overwrite_soul_memory') {
+        changes.push({
+          kind,
+          label: operationLabel(kind),
+          section: stringField(item.section),
+          anchor: stringField(item.anchor),
+          before: stringField(item.before),
+          after: stringField(item.after) || stringField(item.value),
+        })
+      }
+    }
+  }
+  return changes
+}
+
+function normalizePatchList(patch: unknown): unknown[] {
+  if (Array.isArray(patch)) return patch
+  if (isRecord(patch) && Array.isArray(patch.patches)) return patch.patches
+  if (isRecord(patch) && (patch.op === 'overwrite_user_memory' || patch.op === 'overwrite_soul_memory')) return []
+  return [patch]
+}
+
+function operationLabel(kind: string): string {
+  if (kind === 'add') return '新增记忆'
+  if (kind === 'update' || kind === 'revise') return '修正记忆'
+  if (kind === 'remove' || kind === 'retract') return '移除记忆'
+  if (kind === 'confirm') return '确认记忆'
+  return '更新记忆'
+}
+
+function findAnchoredMemoryLine(snapshot: string, anchor: string): string | undefined {
+  if (!anchor) return undefined
+  const lines = snapshot.split(/\r?\n/)
+  const marker = `<!-- id: ${anchor} -->`
+  const line = lines.find((item) => item.includes(marker))
+  if (!line) return undefined
+  return line
+    .replace(marker, '')
+    .replace(/^\s*[-*]\s*/, '')
+    .trim()
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
 function shouldMergeRevision(latest: MemoryRevisionSummary, next: MemoryRevisionSummary): boolean {
@@ -485,6 +769,7 @@ function patchChangeCount(patch: unknown): number {
   if (Array.isArray(patch)) return Math.max(patch.length, 1)
   if (!isRecord(patch)) return 1
 
+  if (Array.isArray(patch.ops)) return Math.max(patch.ops.length, 1)
   if (Array.isArray(patch.patches)) return Math.max(patch.patches.length, 1)
   if (patch.op === 'overwrite_user_memory' || patch.op === 'overwrite_soul_memory') {
     return 1
