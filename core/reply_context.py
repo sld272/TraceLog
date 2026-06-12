@@ -61,6 +61,8 @@ def hybrid_search_documents_with_rewrite(
             trace_context=trace_context,
             filter_dict=filter_dict,
             exclusion=exclusion,
+            channel=channel,
+            soul_name=soul_name,
         )
     return retrieval.hybrid_search_documents(
         retrieval_query,
@@ -70,6 +72,8 @@ def hybrid_search_documents_with_rewrite(
         trace_context=trace_context,
         filter_dict=filter_dict,
         exclusion=exclusion,
+        channel=channel,
+        soul_name=soul_name,
     )
 
 

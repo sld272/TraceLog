@@ -14,6 +14,39 @@ from core import logging_service
 LIKE_FALLBACK_TRUST = 0.85
 MAX_VECTOR_DISTANCE = 0.73
 
+DOC_WEIGHT_BY_CHANNEL = {
+    "comment": {
+        ("comment", "user", "same"): 0.90,
+        ("comment", "user", "other"): 0.77,
+        ("comment", "assistant", "same"): 0.70,
+        ("comment", "assistant", "other"): 0.60,
+        ("chat", "user", "same"): 0.80,
+        ("chat", "assistant", "same"): 0.65,
+    },
+    "comment_thread": {
+        ("comment", "user", "same"): 0.90,
+        ("comment", "user", "other"): 0.77,
+        ("comment", "assistant", "same"): 0.70,
+        ("comment", "assistant", "other"): 0.60,
+        ("chat", "user", "same"): 0.80,
+        ("chat", "assistant", "same"): 0.65,
+    },
+    "chat": {
+        ("comment", "user", "same"): 0.85,
+        ("comment", "user", "other"): 0.60,
+        ("comment", "assistant", "same"): 0.65,
+        ("comment", "assistant", "other"): 0.45,
+        ("chat", "user", "same"): 0.90,
+        ("chat", "assistant", "same"): 0.70,
+    },
+}
+
+DOC_TYPE_CAPS_BY_CHANNEL = {
+    "comment": {"post": 3, "comment": 2, "chat": 1},
+    "comment_thread": {"post": 3, "comment": 2, "chat": 1},
+    "chat": {"post": 3, "comment": 1, "chat": 2},
+}
+
 
 @dataclass(frozen=True)
 class RetrievalHit:
@@ -263,6 +296,8 @@ def hybrid_search_documents(
     trace_context: dict | None = None,
     filter_dict: dict | None = None,
     exclusion: RetrievalExclusion | None = None,
+    channel: str | None = None,
+    soul_name: str | None = None,
 ) -> list[RetrievalDocHit]:
     """Return mixed post/comment/chat retrieval hits."""
     candidate_limit = max(k, candidate_k)
@@ -279,7 +314,14 @@ def hybrid_search_documents(
         exclusion,
         trace_context=trace_context,
     )
-    final_hits = _merge_document_hits(query, fts_hits, vector_hits, k)
+    final_hits = _merge_document_hits(
+        query,
+        fts_hits,
+        vector_hits,
+        k,
+        channel=channel,
+        current_soul=soul_name,
+    )
     _log_hybrid_doc_retrieval_result(
         query=query,
         semantic_query=semantic_query,
@@ -511,7 +553,15 @@ def _like_search_scored(query: str, k: int) -> list[RetrievalHit]:
     ]
 
 
-def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: list, k: int) -> list[RetrievalDocHit]:
+def _merge_document_hits(
+    query: str,
+    fts_hits: list[RetrievalHit],
+    vector_hits: list,
+    k: int,
+    *,
+    channel: str | None = None,
+    current_soul: str | None = None,
+) -> list[RetrievalDocHit]:
     fts_scores = _score_fts_hits(fts_hits)
     vector_scores = _score_vector_doc_hits(vector_hits)
     by_doc: dict[str, RetrievalDocHit] = {}
@@ -535,7 +585,8 @@ def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: 
     for hit in vector_hits:
         doc_id = str(hit.doc_id)
         doc_type = str(hit.type)
-        raw_score = vector_scores.get(doc_id, 0.0) * _type_weight(doc_type)
+        metadata = dict(hit.metadata)
+        raw_score = vector_scores.get(doc_id, 0.0) * _doc_weight(doc_type, metadata, current_soul, channel)
         existing = by_doc.get(doc_id)
         if existing is not None:
             sources = fts_query.ordered_unique([*existing.sources, "vector"])
@@ -546,7 +597,7 @@ def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: 
                 source_id=existing.source_id,
                 score=round(max(existing.score, raw_score), 6),
                 rank=min(existing.rank, int(hit.rank)),
-                metadata={**dict(hit.metadata), **existing.metadata},
+                metadata={**metadata, **existing.metadata},
                 sources=sources,
                 reasons=reasons,
                 distance=hit.distance if hit.distance is not None else existing.distance,
@@ -558,13 +609,14 @@ def _merge_document_hits(query: str, fts_hits: list[RetrievalHit], vector_hits: 
             source_id=str(hit.source_id),
             score=round(raw_score, 6),
             rank=int(hit.rank),
-            metadata=dict(hit.metadata),
+            metadata=metadata,
             sources=["vector"],
             reasons=[f"vector:rank={hit.rank}"],
             distance=hit.distance,
         )
 
-    return sorted(by_doc.values(), key=lambda hit: (hit.score, -hit.rank, hit.doc_id), reverse=True)[:k]
+    ordered = sorted(by_doc.values(), key=lambda hit: (hit.score, -hit.rank, hit.doc_id), reverse=True)
+    return _apply_doc_type_caps(ordered, k, channel)
 
 
 def _filter_excluded_post_candidates(
@@ -665,6 +717,49 @@ def _score_vector_doc_hits(hits: list) -> dict[str, float]:
             distance_score = 1.0 - ((hit.distance - min_distance) / (max_distance - min_distance))
         scores[str(hit.doc_id)] = 0.7 * distance_score + 0.3 * rank_score
     return scores
+
+
+def _doc_weight(doc_type: str, metadata: dict[str, Any], current_soul: str | None, channel: str | None) -> float:
+    normalized_type = "post" if doc_type in {"post", "post_vision"} else doc_type
+    if normalized_type == "post":
+        return 1.0
+
+    channel_weights = DOC_WEIGHT_BY_CHANNEL.get(str(channel or ""))
+    if channel_weights is None:
+        return _type_weight(doc_type)
+
+    role = str(metadata.get("role") or "").strip()
+    if role not in {"user", "assistant"}:
+        return _type_weight(doc_type)
+
+    if normalized_type == "chat":
+        relation = "same"
+    else:
+        soul_name = str(metadata.get("soul_name") or "").strip()
+        if not current_soul or not soul_name:
+            return _type_weight(doc_type)
+        relation = "same" if soul_name == current_soul else "other"
+
+    return channel_weights.get((normalized_type, role, relation), _type_weight(doc_type))
+
+
+def _apply_doc_type_caps(hits: list[RetrievalDocHit], k: int, channel: str | None) -> list[RetrievalDocHit]:
+    caps = DOC_TYPE_CAPS_BY_CHANNEL.get(str(channel or ""))
+    if not caps:
+        return hits[:k]
+
+    selected: list[RetrievalDocHit] = []
+    counts = {doc_type: 0 for doc_type in caps}
+    for hit in hits:
+        if len(selected) >= k:
+            break
+        bucket = "post" if hit.type in {"post", "post_vision"} else hit.type
+        cap = caps.get(bucket, k)
+        if counts.get(bucket, 0) >= cap:
+            continue
+        counts[bucket] = counts.get(bucket, 0) + 1
+        selected.append(hit)
+    return selected
 
 
 def _type_weight(doc_type: str) -> float:

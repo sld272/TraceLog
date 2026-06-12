@@ -486,6 +486,140 @@ class VectorDistanceFilterTest(unittest.TestCase):
         events = [event for event in self.logged_events if event["event"] == "retrieval_self_excluded"]
         self.assertEqual(["chat-21"], events[-1]["excluded_doc_ids"])
 
+    def test_document_weight_prefers_post_user_role_and_same_soul(self) -> None:
+        post_weight = retrieval._doc_weight("post", {"type": "post", "post_id": "p-past"}, "默认", "comment")
+        user_same = retrieval._doc_weight("comment", {"role": "user", "soul_name": "默认"}, "默认", "comment")
+        user_other = retrieval._doc_weight("comment", {"role": "user", "soul_name": "毒舌好友"}, "默认", "comment")
+        assistant_same = retrieval._doc_weight(
+            "comment",
+            {"role": "assistant", "soul_name": "默认"},
+            "默认",
+            "comment",
+        )
+        assistant_other = retrieval._doc_weight(
+            "comment",
+            {"role": "assistant", "soul_name": "毒舌好友"},
+            "默认",
+            "comment",
+        )
+
+        self.assertEqual(1.0, post_weight)
+        self.assertGreater(post_weight, user_same)
+        self.assertGreater(user_same, user_other)
+        self.assertGreater(user_other, assistant_same)
+        self.assertGreater(assistant_same, assistant_other)
+
+    def test_chat_user_weight_is_higher_in_chat_channel(self) -> None:
+        chat_hit = vectorstore.VectorDocHit(
+            "chat-user",
+            "chat",
+            "10",
+            1,
+            0.2,
+            {"type": "chat", "role": "user", "thread_id": 7, "message_id": 10, "soul_name": "默认"},
+        )
+
+        comment_channel = retrieval._merge_document_hits(
+            "旧话题",
+            [],
+            [chat_hit],
+            k=1,
+            channel="comment",
+            current_soul="默认",
+        )
+        chat_channel = retrieval._merge_document_hits(
+            "旧话题",
+            [],
+            [chat_hit],
+            k=1,
+            channel="chat",
+            current_soul="默认",
+        )
+
+        self.assertEqual(0.8, comment_channel[0].score)
+        self.assertEqual(0.9, chat_channel[0].score)
+
+    def test_document_weight_does_not_affect_fts_only_post_hit(self) -> None:
+        hits = retrieval._merge_document_hits(
+            "关键词",
+            [retrieval.RetrievalHit("p-keyword", "fts", 1, -1.0)],
+            [],
+            k=1,
+            channel="comment",
+            current_soul="默认",
+        )
+
+        self.assertEqual(["post-p-keyword"], [hit.doc_id for hit in hits])
+        self.assertEqual(["fts"], hits[0].sources)
+        self.assertEqual(1.0, hits[0].score)
+
+    def test_comment_channel_type_caps_keep_total_within_k_and_do_not_overfill_posts(self) -> None:
+        vector_hits = [
+            vectorstore.VectorDocHit(
+                "chat-1",
+                "chat",
+                "1",
+                1,
+                0.2,
+                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 1, "soul_name": "默认"},
+            ),
+            vectorstore.VectorDocHit(
+                "chat-2",
+                "chat",
+                "2",
+                2,
+                0.2,
+                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 2, "soul_name": "默认"},
+            ),
+            *[
+                vectorstore.VectorDocHit(
+                    f"post-p-{index}",
+                    "post",
+                    f"p-{index}",
+                    index + 2,
+                    0.2,
+                    {"type": "post", "post_id": f"p-{index}"},
+                )
+                for index in range(1, 6)
+            ],
+        ]
+
+        hits = retrieval._merge_document_hits(
+            "旧私聊",
+            [],
+            vector_hits,
+            k=5,
+            channel="comment",
+            current_soul="默认",
+        )
+
+        self.assertLessEqual(len(hits), 5)
+        self.assertEqual(1, sum(1 for hit in hits if hit.type == "chat"))
+        self.assertEqual(3, sum(1 for hit in hits if hit.type == "post"))
+
+    def test_comment_channel_type_caps_do_not_backfill_posts_when_other_types_are_empty(self) -> None:
+        hits = retrieval._merge_document_hits(
+            "旧帖子",
+            [],
+            [
+                vectorstore.VectorDocHit(
+                    f"post-p-{index}",
+                    "post",
+                    f"p-{index}",
+                    index,
+                    0.2,
+                    {"type": "post", "post_id": f"p-{index}"},
+                )
+                for index in range(1, 6)
+            ],
+            k=5,
+            channel="comment",
+            current_soul="默认",
+        )
+
+        self.assertEqual(3, len(hits))
+        self.assertTrue(all(hit.type == "post" for hit in hits))
+
 
 class RetrievalDatabaseTest(unittest.TestCase):
     def setUp(self) -> None:
