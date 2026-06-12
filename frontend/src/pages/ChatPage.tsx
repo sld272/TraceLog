@@ -21,6 +21,8 @@ import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './WorkspacePages.module.css'
 
+const CHAT_HISTORY_PAGE_SIZE = 50
+
 interface ChatPageProps {
   soulName: string
   modelConfigured?: boolean | null
@@ -35,6 +37,8 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [busyMessageId, setBusyMessageId] = useState<number | null>(null)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [editingMessageId, setEditingMessageId] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [failedReplies, setFailedReplies] = useState<Record<number, string>>({})
@@ -48,7 +52,9 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   } | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
+  const historySentinelRef = useRef<HTMLDivElement>(null)
   const chatStreamUnsubscribeRef = useRef<(() => void) | null>(null)
+  const preserveScrollHeightRef = useRef<number | null>(null)
   const stickToBottomRef = useRef(true)
   const forceScrollRef = useRef(false)
   const submitShortcutTitle = getSubmitShortcutTitle()
@@ -63,13 +69,15 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       if (!latestThread) {
         setThread(null)
         setMessages([])
+        setHasMoreHistory(false)
         setError(null)
         return
       }
-      const detail = await getChatThread(latestThread.id)
+      const detail = await getChatThread(latestThread.id, CHAT_HISTORY_PAGE_SIZE)
       forceScrollRef.current = true
       setThread(detail.thread)
       setMessages(detail.messages)
+      setHasMoreHistory(detail.messages.length >= CHAT_HISTORY_PAGE_SIZE)
       setEditingMessageId(null)
       setEditDraft('')
       setFailedReplies(failedRepliesFromMessages(detail.messages))
@@ -81,6 +89,29 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       setLoading(false)
     }
   }, [soulName])
+
+  const loadEarlier = useCallback(async () => {
+    if (!thread?.id || loadingEarlier || !hasMoreHistory) return
+    const oldestMessageId = minRealMessageId(messages)
+    if (oldestMessageId === null) {
+      setHasMoreHistory(false)
+      return
+    }
+    const scroller = messagesRef.current
+    preserveScrollHeightRef.current = scroller?.scrollHeight ?? null
+    setLoadingEarlier(true)
+    try {
+      const detail = await getChatThread(thread.id, CHAT_HISTORY_PAGE_SIZE, oldestMessageId)
+      setThread(detail.thread)
+      setMessages((prev) => mergeMessages(prev, detail.messages))
+      setHasMoreHistory(detail.messages.length >= CHAT_HISTORY_PAGE_SIZE)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载更早消息失败')
+      preserveScrollHeightRef.current = null
+    } finally {
+      setLoadingEarlier(false)
+    }
+  }, [hasMoreHistory, loadingEarlier, messages, thread?.id])
 
   useEffect(() => {
     setDraft('')
@@ -114,6 +145,18 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   }, [thread?.id])
 
   useEffect(() => {
+    if (loading || !hasMoreHistory) return
+    const root = messagesRef.current
+    const sentinel = historySentinelRef.current
+    if (!root || !sentinel) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadEarlier()
+    }, { root, threshold: 0.01 })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMoreHistory, loadEarlier, loading, messages.length])
+
+  useEffect(() => {
     const el = chatInputRef.current
     if (el) {
       el.style.height = 'auto'
@@ -132,6 +175,12 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   useLayoutEffect(() => {
     const el = messagesRef.current
     if (!el) return
+    if (preserveScrollHeightRef.current !== null) {
+      const previousHeight = preserveScrollHeightRef.current
+      preserveScrollHeightRef.current = null
+      el.scrollTop += el.scrollHeight - previousHeight
+      return
+    }
     if (forceScrollRef.current || stickToBottomRef.current) {
       el.scrollTop = el.scrollHeight
       forceScrollRef.current = false
@@ -425,28 +474,41 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
           ) : messages.length === 0 ? (
             <div className={styles.empty}>还没有消息。和 {soulName} 说点什么吧，TA 会记得你们的对话。</div>
           ) : (
-            messages.map((message) => (
-              <MessageBubble
-                key={message.id}
-                soulName={soulName}
-                message={message}
-                busy={busyMessageId === message.id}
-                failure={failedReplies[message.id] ?? null}
-                retryError={retryErrors[message.id] ?? null}
-                editDraft={editingMessageId === message.id ? editDraft : null}
-                onStartEdit={startEditMessage}
-                onChangeEditDraft={setEditDraft}
-                onCancelEdit={cancelEditMessage}
-                onSaveEdit={saveEditMessage}
-                onRerun={(target) => {
-                  if (target.id < 0) {
-                    retryFailedReply(target)
-                    return
-                  }
-                  rerunMessage(target)
-                }}
-              />
-            ))
+            <>
+              <div className={styles.historySentinel} ref={historySentinelRef}>
+                {loadingEarlier ? (
+                  <span>加载更早的消息...</span>
+                ) : hasMoreHistory ? (
+                  <button type="button" onClick={loadEarlier}>
+                    加载更早的消息
+                  </button>
+                ) : (
+                  <span>已经是最早的消息</span>
+                )}
+              </div>
+              {messages.map((message) => (
+                <MessageBubble
+                  key={message.id}
+                  soulName={soulName}
+                  message={message}
+                  busy={busyMessageId === message.id}
+                  failure={failedReplies[message.id] ?? null}
+                  retryError={retryErrors[message.id] ?? null}
+                  editDraft={editingMessageId === message.id ? editDraft : null}
+                  onStartEdit={startEditMessage}
+                  onChangeEditDraft={setEditDraft}
+                  onCancelEdit={cancelEditMessage}
+                  onSaveEdit={saveEditMessage}
+                  onRerun={(target) => {
+                    if (target.id < 0) {
+                      retryFailedReply(target)
+                      return
+                    }
+                    rerunMessage(target)
+                  }}
+                />
+              ))}
+            </>
           )}
         </div>
 
@@ -644,6 +706,13 @@ function attachmentIds(message: ChatMessage): string[] {
 
 function maxRealMessageId(messages: ChatMessage[]): number {
   return messages.reduce((maxId, message) => message.id > 0 ? Math.max(maxId, message.id) : maxId, 0)
+}
+
+function minRealMessageId(messages: ChatMessage[]): number | null {
+  const ids = messages
+    .map((message) => message.id)
+    .filter((id) => id > 0)
+  return ids.length > 0 ? Math.min(...ids) : null
 }
 
 function MessageBubble({

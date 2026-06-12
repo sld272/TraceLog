@@ -707,9 +707,10 @@ export function listChatThreads(soulName: string) {
   return request<ChatThread[]>(`/chat/${soulName}/threads`)
 }
 
-export function getChatThread(threadId: number, limit = DEFAULT_MESSAGE_LIMIT) {
+export function getChatThread(threadId: number, limit = DEFAULT_MESSAGE_LIMIT, beforeMessageId?: number) {
+  const beforeQuery = beforeMessageId !== undefined ? `&before_message_id=${beforeMessageId}` : ''
   return request<{ thread: ChatThread; messages: ChatMessage[] }>(
-    `/chat/threads/${threadId}?limit=${limit}`,
+    `/chat/threads/${threadId}?limit=${limit}${beforeQuery}`,
   )
 }
 

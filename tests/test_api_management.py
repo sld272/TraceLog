@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from PIL import Image
 
-from core import db, logging_service, profile_service, retrieval, soul_memory_service, soul_service
+from core import chat_service, db, logging_service, profile_service, retrieval, soul_memory_service, soul_service
 from core.app_services import job_service
 
 
@@ -529,6 +529,24 @@ class ApiManagementTest(unittest.TestCase):
         self.assertTrue(data["result"]["ok"])
         self.assertEqual(["user", "assistant"], [message["role"] for message in data["messages"]])
         self.assertEqual("我在。", data["result"]["reply"])
+
+    def test_chat_thread_route_supports_before_message_cursor(self) -> None:
+        thread = chat_service.get_or_create_thread("默认")
+        message_ids = [
+            chat_service.append_user_message(thread.id, f"第 {index} 条").id
+            for index in range(1, 6)
+        ]
+
+        with self._client() as client:
+            response = client.get(
+                f"/chat/threads/{thread.id}?limit=2&before_message_id={message_ids[3]}"
+            )
+
+        self.assertEqual(200, response.status_code, response.text)
+        data = response.json()
+        self.assertEqual(thread.id, data["thread"]["id"])
+        self.assertEqual(message_ids[1:3], [message["id"] for message in data["messages"]])
+        self.assertEqual(["第 2 条", "第 3 条"], [message["content"] for message in data["messages"]])
 
     def test_chat_edit_route_regenerates_assistant_reply(self) -> None:
         soul_name = quote("默认")

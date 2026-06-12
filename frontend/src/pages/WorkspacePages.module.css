@@ -765,6 +765,26 @@
   overflow-y: auto;
 }
 
+.historySentinel {
+  display: flex;
+  justify-content: center;
+  min-height: 30px;
+  padding: var(--space-1) 0 var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.historySentinel button {
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+.historySentinel button:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
 @media (max-width: 767px) {
   .chatShell {
     /* .main switches to 16px vertical padding on mobile */

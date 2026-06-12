@@ -28,10 +28,19 @@ class UpdateChatMessageRequest(BaseModel):
 
 
 @router.get("/threads/{thread_id}")
-async def get_chat_thread(thread_id: int, limit: int = Query(default=30, ge=1, le=100)):
+async def get_chat_thread(
+    thread_id: int,
+    limit: int = Query(default=30, ge=1, le=100),
+    before_message_id: int | None = Query(default=None, ge=1),
+):
     try:
         thread = await run_sync(chat_service.get_thread, thread_id)
-        messages = await run_sync(chat_service.list_thread_messages, thread_id, limit)
+        messages = await run_sync(
+            chat_service.list_thread_messages,
+            thread_id,
+            limit,
+            before_message_id=before_message_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"thread": asdict(thread), "messages": [asdict(message) for message in messages]}
