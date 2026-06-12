@@ -67,7 +67,7 @@ async def init_runtime() -> ApiRuntime:
         )
         return _runtime
 
-    _runtime = _start_configured_runtime(config)
+    _runtime = _start_runtime(_build_configured_runtime(config))
     return _runtime
 
 
@@ -78,24 +78,30 @@ async def reload_runtime() -> ApiRuntime:
     config = _load_api_config(strict=False)
     logging_service.init_logging(config.get("logging"))
     workspace_service.init_workspace()
-    if not _is_model_configured(config):
-        next_runtime = ApiRuntime(
-            config=config,
-            client=None,
-            model=None,
-            worker=None,
-            vectorstore_initialized=False,
-            configured=False,
-        )
-    else:
-        next_runtime = _start_configured_runtime(config)
-    _runtime = next_runtime
+    next_runtime = (
+        _unconfigured_runtime(config)
+        if not _is_model_configured(config)
+        else _build_configured_runtime(config)
+    )
     if previous_runtime is not None and previous_runtime.worker is not None:
         await previous_runtime.worker.stop()
+    _runtime = next_runtime
+    _start_runtime(_runtime)
     return _runtime
 
 
-def _start_configured_runtime(config: dict) -> ApiRuntime:
+def _unconfigured_runtime(config: dict) -> ApiRuntime:
+    return ApiRuntime(
+        config=config,
+        client=None,
+        model=None,
+        worker=None,
+        vectorstore_initialized=False,
+        configured=False,
+    )
+
+
+def _build_configured_runtime(config: dict) -> ApiRuntime:
     vectorstore_initialized = False
     try:
         init_result = vectorstore.init_vectorstore(
@@ -127,9 +133,24 @@ def _start_configured_runtime(config: dict) -> ApiRuntime:
         vectorstore_initialized=vectorstore_initialized,
         configured=True,
     )
-    _enqueue_startup_retries()
-    worker.start()
     return runtime
+
+
+def _start_runtime(runtime: ApiRuntime) -> ApiRuntime:
+    if runtime.worker is not None:
+        _enqueue_startup_retries()
+        runtime.worker.start()
+    return runtime
+
+
+def _start_configured_runtime(config: dict) -> ApiRuntime:
+    """Build and start a configured runtime.
+
+    Kept as a small compatibility wrapper for tests and ad-hoc callers; reload
+    uses the build/start split so the old worker can stop before the new one
+    resets interrupted jobs.
+    """
+    return _start_runtime(_build_configured_runtime(config))
 
 
 async def shutdown_runtime() -> None:

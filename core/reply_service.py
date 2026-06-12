@@ -33,8 +33,12 @@ def fanout(
     souls = sorted(built_context.enabled_souls, key=lambda soul: (soul.sort_order, soul.name))
     if not souls:
         return []
+    completed_souls = _completed_root_reply_soul_names(post_id)
+    pending_souls = [soul for soul in souls if soul.name not in completed_souls]
+    if not pending_souls:
+        return []
 
-    max_workers = max(1, len(souls))
+    max_workers = max(1, len(pending_souls))
     results: list[SoulReplyResult] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_soul = {
@@ -47,7 +51,7 @@ def fanout(
                 model,
                 built_context.shared_context,
             ): soul
-            for soul in souls
+            for soul in pending_souls
         }
         for future in as_completed(future_to_soul):
             soul = future_to_soul[future]
@@ -59,6 +63,21 @@ def fanout(
             results.append(result)
 
     return sorted(results, key=lambda result: (result.sort_order, result.soul_name))
+
+
+def _completed_root_reply_soul_names(post_id: str) -> set[str]:
+    rows = db.query_all(
+        """
+        SELECT soul_name
+        FROM comments
+        WHERE post_id = ?
+          AND role = 'assistant'
+          AND seq = 0
+          AND TRIM(COALESCE(content, '')) != ''
+        """,
+        (post_id,),
+    )
+    return {str(row["soul_name"]) for row in rows if row["soul_name"]}
 
 
 def _call_one_soul(
@@ -110,6 +129,7 @@ def _call_one_soul(
         error=None,
     )
 
+
 def _failed_result(soul: SoulContext, error: str) -> SoulReplyResult:
     return SoulReplyResult(
         soul_name=soul.name,
@@ -132,7 +152,7 @@ def _save_comment(post_id: str, result: SoulReplyResult, model: str, built_conte
     with db.immediate_transaction() as conn:
         existing = conn.execute(
             """
-            SELECT id
+            SELECT id, content
             FROM comments
             WHERE post_id = ? AND soul_name = ? AND seq = 0
             """,
@@ -152,13 +172,15 @@ def _save_comment(post_id: str, result: SoulReplyResult, model: str, built_conte
         else:
             if not result.ok:
                 return
+            if str(existing["content"] or "").strip():
+                return
             comment_id = int(existing["id"])
             conn.execute(
                 """
                 UPDATE comments
-                SET role = 'assistant', content = ?, metadata = ?, created_at = ?
+                SET role = 'assistant', content = ?, metadata = ?
                 WHERE id = ?
                 """,
-                (result.reply, json.dumps(metadata, ensure_ascii=False), now, comment_id),
+                (result.reply, json.dumps(metadata, ensure_ascii=False), comment_id),
             )
     record_service.index_comment_embedding(comment_id, post_id, result.soul_name, "assistant", 0, result.reply)

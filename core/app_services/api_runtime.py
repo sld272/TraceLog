@@ -49,6 +49,7 @@ class JobWorker:
 
     def start(self) -> None:
         if not self._tasks or all(task.done() for task in self._tasks):
+            job_service.reset_running_to_pending()
             self._stop.clear()
             self._tasks = [asyncio.create_task(self._run()) for _ in range(self.concurrency)]
         if self._cleanup_task is None or self._cleanup_task.done():
@@ -82,7 +83,6 @@ class JobWorker:
         return removed
 
     async def _run(self) -> None:
-        job_service.reset_running_to_pending()
         while not self._stop.is_set():
             job = job_service.claim_next_pending()
             if job is None:

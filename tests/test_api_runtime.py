@@ -59,6 +59,48 @@ class JobWorkerCleanupTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(1, calls)
 
+    async def test_start_resets_running_jobs_once_for_all_worker_tasks(self) -> None:
+        class FakeTask:
+            def done(self) -> bool:
+                return False
+
+        created_tasks = []
+
+        def fake_create_task(coro):
+            coro.close()
+            created_tasks.append(coro)
+            return FakeTask()
+
+        worker = JobWorker(client=object(), model="test", concurrency=3)
+
+        with (
+            patch("core.app_services.api_runtime.job_service.reset_running_to_pending", return_value=0) as reset,
+            patch("core.app_services.api_runtime.asyncio.create_task", side_effect=fake_create_task),
+        ):
+            worker.start()
+
+        self.assertEqual(4, len(created_tasks))
+        reset.assert_called_once_with()
+
+    async def test_run_does_not_reset_running_jobs_per_task(self) -> None:
+        worker = JobWorker(client=object(), model="test")
+
+        def claim_none_and_stop():
+            worker._stop.set()
+            return None
+
+        async def sleep_noop(delay: float) -> None:
+            del delay
+
+        with (
+            patch("core.app_services.api_runtime.job_service.reset_running_to_pending") as reset,
+            patch("core.app_services.api_runtime.job_service.claim_next_pending", side_effect=claim_none_and_stop),
+            patch("core.app_services.api_runtime.asyncio.sleep", side_effect=sleep_noop),
+        ):
+            await worker._run()
+
+        reset.assert_not_called()
+
 
 class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
@@ -88,7 +130,7 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
             patch("api.deps.logging_service.init_logging"),
             patch("api.deps.workspace_service.init_workspace"),
             patch("api.deps._is_model_configured", return_value=True),
-            patch("api.deps._start_configured_runtime", side_effect=RuntimeError("reload boom")),
+            patch("api.deps._build_configured_runtime", side_effect=RuntimeError("reload boom")),
         ):
             with self.assertRaisesRegex(RuntimeError, "reload boom"):
                 await deps.reload_runtime()
@@ -96,15 +138,27 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(existing_runtime, deps._runtime)  # type: ignore[attr-defined]
         self.assertFalse(worker.stopped)
 
-    async def test_reload_swaps_runtime_after_new_runtime_is_ready(self) -> None:
+    async def test_reload_stops_previous_worker_before_starting_new_worker(self) -> None:
+        events: list[str] = []
+
         class ExistingWorker:
             def __init__(self) -> None:
                 self.stopped = False
 
             async def stop(self) -> None:
+                events.append("old.stop")
                 self.stopped = True
 
+        class NewWorker:
+            def __init__(self) -> None:
+                self.started = False
+
+            def start(self) -> None:
+                events.append("new.start")
+                self.started = True
+
         worker = ExistingWorker()
+        new_worker = NewWorker()
         existing_runtime = deps.ApiRuntime(
             config={"model": "old-model"},
             client=object(),
@@ -117,7 +171,7 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
             config={"model": "new-model"},
             client=object(),
             model="new-model",
-            worker=None,
+            worker=new_worker,  # type: ignore[arg-type]
             vectorstore_initialized=True,
             configured=True,
         )
@@ -128,13 +182,16 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
             patch("api.deps.logging_service.init_logging"),
             patch("api.deps.workspace_service.init_workspace"),
             patch("api.deps._is_model_configured", return_value=True),
-            patch("api.deps._start_configured_runtime", return_value=new_runtime),
+            patch("api.deps._build_configured_runtime", return_value=new_runtime),
+            patch("api.deps._enqueue_startup_retries"),
         ):
             reloaded = await deps.reload_runtime()
 
         self.assertIs(new_runtime, reloaded)
         self.assertIs(new_runtime, deps._runtime)  # type: ignore[attr-defined]
         self.assertTrue(worker.stopped)
+        self.assertTrue(new_worker.started)
+        self.assertEqual(["old.stop", "new.start"], events)
 
 
 if __name__ == "__main__":
