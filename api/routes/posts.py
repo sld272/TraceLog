@@ -52,8 +52,12 @@ async def create_post(request: CreatePostRequest):
 async def list_posts(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    before_ts: str | None = Query(default=None),
+    before_id: str | None = Query(default=None),
 ):
-    return await run_sync(_list_posts, limit, offset)
+    if (before_ts is None) != (before_id is None):
+        raise HTTPException(status_code=422, detail="before_ts 和 before_id 必须同时提供")
+    return await run_sync(_list_posts, limit, offset, before_ts, before_id)
 
 
 @router.get("/posts/search")
@@ -111,18 +115,34 @@ def _post_exists(post_id: str) -> bool:
     return db.query_one("SELECT 1 FROM posts WHERE id = ?", (post_id,)) is not None
 
 
-def _list_posts(limit: int, offset: int) -> list[dict[str, Any]]:
+def _list_posts(
+    limit: int,
+    offset: int,
+    before_ts: str | None = None,
+    before_id: str | None = None,
+) -> list[dict[str, Any]]:
+    where = ""
+    params: list[Any] = []
+    suffix = "LIMIT ? OFFSET ?"
+    if before_ts is not None and before_id is not None:
+        where = "WHERE (julianday(posts.ts), posts.id) < (julianday(?), ?)"
+        params.extend([before_ts, before_id])
+        suffix = "LIMIT ?"
+    params.append(limit)
+    if before_ts is None or before_id is None:
+        params.append(offset)
     rows = db.query_all(
-        """
+        f"""
         SELECT posts.id, posts.ts, posts.content, posts.importance,
                COUNT(comments.id) AS comment_count
         FROM posts
         LEFT JOIN comments ON comments.post_id = posts.id AND comments.seq = 0
+        {where}
         GROUP BY posts.id
         ORDER BY julianday(posts.ts) DESC, posts.id DESC
-        LIMIT ? OFFSET ?
+        {suffix}
         """,
-        (limit, offset),
+        tuple(params),
     )
     return [_post_summary(row) for row in rows]
 

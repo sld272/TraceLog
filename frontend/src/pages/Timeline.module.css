@@ -85,6 +85,27 @@
   gap: var(--space-3);
 }
 
+.loadMoreRow {
+  display: flex;
+  justify-content: center;
+  min-height: 36px;
+  padding: var(--space-2) 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.loadMoreRow button {
+  color: var(--color-accent);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+
+.loadMoreRow button:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
 .searchResults {
   display: flex;
   flex-direction: column;

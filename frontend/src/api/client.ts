@@ -420,8 +420,17 @@ export interface VectorIndexActionResult {
 /* Posts */
 const DEFAULT_LIST_LIMIT = 20
 
-export function listPosts(limit = DEFAULT_LIST_LIMIT, offset = 0) {
-  return request<Post[]>(`/posts?limit=${limit}&offset=${offset}`)
+export function listPosts(
+  limit = DEFAULT_LIST_LIMIT,
+  offset = 0,
+  cursor?: { beforeTs: string; beforeId: string },
+) {
+  const search = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (cursor) {
+    search.set('before_ts', cursor.beforeTs)
+    search.set('before_id', cursor.beforeId)
+  }
+  return request<Post[]>(`/posts?${search.toString()}`)
 }
 
 export function searchPosts(q: string, limit = DEFAULT_LIST_LIMIT, mode: SearchMode = 'keyword') {

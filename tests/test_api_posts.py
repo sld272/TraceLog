@@ -198,6 +198,47 @@ class ApiPostsTest(unittest.TestCase):
 
         self.assertEqual(422, response.status_code)
 
+    def test_list_posts_cursor_uses_timestamp_and_id_tiebreaker(self) -> None:
+        from core import db
+
+        with self._temp_db():
+            for post_id, ts, created_at in [
+                ("p-old", "2026-06-01T09:00:00+08:00", 1.0),
+                ("p-a", "2026-06-01T10:00:00+08:00", 2.0),
+                ("p-b", "2026-06-01T10:00:00+08:00", 3.0),
+            ]:
+                db.execute(
+                    """
+                    INSERT INTO posts(id, ts, content, importance, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (post_id, ts, post_id, 0.5, created_at, created_at),
+                )
+
+            with self._client() as client:
+                first_page = client.get("/posts?limit=1")
+                cursor_item = first_page.json()[0]
+                second_page = client.get(
+                    "/posts",
+                    params={
+                        "limit": 2,
+                        "before_ts": cursor_item["ts"],
+                        "before_id": cursor_item["post_id"],
+                    },
+                )
+
+        self.assertEqual(200, first_page.status_code)
+        self.assertEqual(["p-b"], [item["post_id"] for item in first_page.json()])
+        self.assertEqual(200, second_page.status_code)
+        self.assertEqual(["p-a", "p-old"], [item["post_id"] for item in second_page.json()])
+
+    def test_list_posts_cursor_requires_complete_pair(self) -> None:
+        with self._temp_db():
+            with self._client() as client:
+                response = client.get("/posts?before_ts=2026-06-01T10:00:00%2B08:00")
+
+        self.assertEqual(422, response.status_code)
+
     def test_sse_event_format_includes_id_event_and_payload(self) -> None:
         from api.routes.posts import _format_sse
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   type Attachment,
   type Comment,
@@ -68,6 +68,8 @@ export function Timeline({
   const [semanticAvailable, setSemanticAvailable] = useState<boolean | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [hasMorePosts, setHasMorePosts] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean
     title: string
@@ -75,6 +77,7 @@ export function Timeline({
     onConfirm: () => void
   } | null>(null)
   const postStreamUnsubscribersRef = useRef<Map<string, () => void>>(new Map())
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null)
   const retryPollTokenRef = useRef(0)
   const searchTokenRef = useRef(0)
   const searchTimerRef = useRef<number | null>(null)
@@ -87,6 +90,7 @@ export function Timeline({
     try {
       const data = await listPosts(API_LIMITS.POSTS_DEFAULT, 0)
       setPosts(data)
+      setHasMorePosts(data.length >= API_LIMITS.POSTS_DEFAULT)
       setError(null)
       data.forEach((post) => {
         if (isActivePipeline(post)) void restorePostStream(post.post_id)
@@ -308,6 +312,41 @@ export function Timeline({
     )
     postStreamUnsubscribersRef.current.set(postId, unsubscribe)
   }
+
+  const loadMorePosts = useCallback(async () => {
+    if (loadingMore || !hasMorePosts || searching || posts.length === 0) return
+    const cursorPost = posts[posts.length - 1]
+    if (!cursorPost) return
+    setLoadingMore(true)
+    try {
+      const data = await listPosts(
+        API_LIMITS.POSTS_DEFAULT,
+        0,
+        { beforeTs: cursorPost.ts, beforeId: cursorPost.post_id },
+      )
+      setPosts((prev) => appendUniquePosts(prev, data))
+      setHasMorePosts(data.length >= API_LIMITS.POSTS_DEFAULT)
+      setError(null)
+      data.forEach((post) => {
+        if (isActivePipeline(post)) void restorePostStream(post.post_id)
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载更早记录失败')
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [hasMorePosts, loadingMore, posts, searching])
+
+  useEffect(() => {
+    if (searching || !hasMorePosts || loadingMore) return
+    const sentinel = loadMoreSentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) void loadMorePosts()
+    }, { threshold: 0.01 })
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMorePosts, loadMorePosts, loadingMore, searching, posts.length])
 
   const refreshPostDetail = async (postId: string, eventType?: string) => {
     try {
@@ -650,32 +689,36 @@ export function Timeline({
           ) : (
             <div className={styles.feed}>
               {posts.map((post) => (
-                <ErrorBoundary
+                <TimelinePostCard
                   key={post.post_id}
-                  variant="inline"
-                  title="此条内容无法显示"
-                  message="其他记录不受影响，可以刷新页面后再试。"
-                >
-                  <PostCard
-                    post={post}
-                    comments={postComments[post.post_id]}
-                    commentConversations={postCommentConversations[post.post_id]}
-                    busyCommentId={busyCommentId}
-                    deletingPost={deletingPostId === post.post_id}
-                    retryingJobId={retryingJobId}
-                    detailHref={formatRoute({ kind: 'post', postId: post.post_id })}
-                    modelConfigured={modelConfigured}
-                    expandLoading={expandingPostIds[post.post_id] ?? false}
-                    expandError={expandErrors[post.post_id] ?? null}
-                    onExpand={() => handleExpand(post.post_id)}
-                    onReply={(soulName, content, attachments) => handleCommentReply(post.post_id, soulName, content, attachments)}
-                    onDeletePost={() => handleDeletePost(post.post_id)}
-                    onDeleteComment={(commentId) => handleDeleteComment(post.post_id, commentId)}
-                    onRerunComment={(commentId) => handleRerunComment(post.post_id, commentId)}
-                    onRetryFailedJobs={(jobIds) => handleRetryPostJobs(post.post_id, jobIds)}
-                  />
-                </ErrorBoundary>
+                  post={post}
+                  comments={postComments[post.post_id]}
+                  commentConversations={postCommentConversations[post.post_id]}
+                  busyCommentId={busyCommentId}
+                  deletingPost={deletingPostId === post.post_id}
+                  retryingJobId={retryingJobId}
+                  modelConfigured={modelConfigured}
+                  expandLoading={expandingPostIds[post.post_id] ?? false}
+                  expandError={expandErrors[post.post_id] ?? null}
+                  onExpandPost={handleExpand}
+                  onReplyPost={handleCommentReply}
+                  onDeletePostById={handleDeletePost}
+                  onDeleteCommentById={handleDeleteComment}
+                  onRerunCommentById={handleRerunComment}
+                  onRetryPostJobs={handleRetryPostJobs}
+                />
               ))}
+              <div className={styles.loadMoreRow} ref={loadMoreSentinelRef}>
+                {loadingMore ? (
+                  <span>加载更早的记录...</span>
+                ) : hasMorePosts ? (
+                  <button type="button" onClick={loadMorePosts}>
+                    加载更早的记录
+                  </button>
+                ) : (
+                  <span>已经是最早的记录</span>
+                )}
+              </div>
             </div>
           )}
         </>
@@ -785,6 +828,88 @@ function SearchResults({
   )
 }
 
+const TimelinePostCard = memo(function TimelinePostCard({
+  post,
+  comments,
+  commentConversations,
+  busyCommentId,
+  deletingPost,
+  retryingJobId,
+  modelConfigured,
+  expandLoading,
+  expandError,
+  onExpandPost,
+  onReplyPost,
+  onDeletePostById,
+  onDeleteCommentById,
+  onRerunCommentById,
+  onRetryPostJobs,
+}: {
+  post: Post
+  comments?: Comment[]
+  commentConversations?: Record<string, CommentConversationState>
+  busyCommentId: number | null
+  deletingPost: boolean
+  retryingJobId: number | null
+  modelConfigured?: boolean | null
+  expandLoading: boolean
+  expandError: string | null
+  onExpandPost: (postId: string) => Promise<void>
+  onReplyPost: (postId: string, soulName: string, content: string, attachments: Attachment[]) => Promise<void>
+  onDeletePostById: (postId: string) => Promise<void>
+  onDeleteCommentById: (postId: string, commentId: number) => Promise<void>
+  onRerunCommentById: (postId: string, commentId: number) => Promise<void>
+  onRetryPostJobs: (postId: string, jobIds: number[]) => Promise<void>
+}) {
+  const detailHref = formatRoute({ kind: 'post', postId: post.post_id })
+  const handleExpand = useCallback(() => onExpandPost(post.post_id), [onExpandPost, post.post_id])
+  const handleReply = useCallback(
+    (soulName: string, content: string, attachments: Attachment[]) =>
+      onReplyPost(post.post_id, soulName, content, attachments),
+    [onReplyPost, post.post_id],
+  )
+  const handleDeletePost = useCallback(() => onDeletePostById(post.post_id), [onDeletePostById, post.post_id])
+  const handleDeleteComment = useCallback(
+    (commentId: number) => onDeleteCommentById(post.post_id, commentId),
+    [onDeleteCommentById, post.post_id],
+  )
+  const handleRerunComment = useCallback(
+    (commentId: number) => onRerunCommentById(post.post_id, commentId),
+    [onRerunCommentById, post.post_id],
+  )
+  const handleRetryJobs = useCallback(
+    (jobIds: number[]) => onRetryPostJobs(post.post_id, jobIds),
+    [onRetryPostJobs, post.post_id],
+  )
+
+  return (
+    <ErrorBoundary
+      variant="inline"
+      title="此条内容无法显示"
+      message="其他记录不受影响，可以刷新页面后再试。"
+    >
+      <PostCard
+        post={post}
+        comments={comments}
+        commentConversations={commentConversations}
+        busyCommentId={busyCommentId}
+        deletingPost={deletingPost}
+        retryingJobId={retryingJobId}
+        detailHref={detailHref}
+        modelConfigured={modelConfigured}
+        expandLoading={expandLoading}
+        expandError={expandError}
+        onExpand={handleExpand}
+        onReply={handleReply}
+        onDeletePost={handleDeletePost}
+        onDeleteComment={handleDeleteComment}
+        onRerunComment={handleRerunComment}
+        onRetryFailedJobs={handleRetryJobs}
+      />
+    </ErrorBoundary>
+  )
+})
+
 function searchSummaryText(
   count: number,
   mode: SearchMode,
@@ -825,6 +950,18 @@ function sleep(ms: number): Promise<void> {
 function isActivePipeline(post: Pick<Post, 'pipeline_status'>): boolean {
   const state = post.pipeline_status?.state
   return state === 'running' || state === 'retrying'
+}
+
+function appendUniquePosts(current: Post[], incoming: Post[]): Post[] {
+  if (incoming.length === 0) return current
+  const seen = new Set(current.map((post) => post.post_id))
+  const next = [...current]
+  for (const post of incoming) {
+    if (seen.has(post.post_id)) continue
+    seen.add(post.post_id)
+    next.push(post)
+  }
+  return next
 }
 
 function EmptyIcon() {

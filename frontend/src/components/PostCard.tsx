@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   type Attachment,
   type Comment,
@@ -47,7 +47,7 @@ interface PostCardProps {
   onRetryFailedJobs?: (jobIds: number[]) => Promise<void>
 }
 
-export function PostCard({
+export const PostCard = memo(function PostCard({
   post,
   comments = [],
   commentConversations = {},
@@ -143,7 +143,7 @@ export function PostCard({
       />
     </article>
   )
-}
+})
 
 function PipelineNotice({
   post,
