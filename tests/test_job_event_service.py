@@ -77,13 +77,13 @@ class JobEventServiceTest(unittest.TestCase):
 
     def test_post_events_list_after_id(self) -> None:
         first = event_service.append_post_event("p-1", "post_created", {"ok": True})
-        second = event_service.append_post_event("p-1", "reply_started", {"soul_name": "默认"})
+        second = event_service.append_post_event("p-1", "reply_started", {"soul_name": "拾迹者"})
 
         events = event_service.list_post_events("p-1", after_id=first)
 
         self.assertEqual([second], [event["id"] for event in events])
         self.assertEqual("reply_started", events[0]["event_type"])
-        self.assertEqual({"soul_name": "默认"}, events[0]["payload"])
+        self.assertEqual({"soul_name": "拾迹者"}, events[0]["payload"])
         self.assertEqual("reply_started", event_service.latest_event_type("p-1"))
 
     def _insert_post(self, post_id: str) -> None:

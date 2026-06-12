@@ -71,10 +71,10 @@ class EvidenceServiceTest(unittest.TestCase):
 
     def test_format_retrieval_hits_dedupes_comment_conversations(self) -> None:
         self._insert_post("post-1", "今天想认真练歌。")
-        default_id = self._insert_comment("post-1", "默认", "assistant", "我陪你继续拆。", seq=0)
+        default_id = self._insert_comment("post-1", "拾迹者", "assistant", "我陪你继续拆。", seq=0)
         other_id = self._insert_comment("post-1", "毒舌好友", "assistant", "别装了，继续讲重点。", seq=0)
         hits = [
-            SimpleNamespace(type="comment", source_id=str(default_id), metadata={"post_id": "post-1", "soul_name": "默认"}),
+            SimpleNamespace(type="comment", source_id=str(default_id), metadata={"post_id": "post-1", "soul_name": "拾迹者"}),
             SimpleNamespace(type="comment", source_id=str(other_id), metadata={"post_id": "post-1", "soul_name": "毒舌好友"}),
             SimpleNamespace(type="comment", source_id=str(other_id), metadata={"post_id": "post-1", "soul_name": "毒舌好友"}),
         ]
@@ -110,7 +110,7 @@ class EvidenceServiceTest(unittest.TestCase):
             )
         ]
 
-        evidence = evidence_service.format_retrieval_hits(hits, current_soul="默认")
+        evidence = evidence_service.format_retrieval_hits(hits, current_soul="拾迹者")
 
         self.assertIn("## 公开评论片段 · post post-1 · 毒舌好友", evidence)
         self.assertIn("[关于 post] 今天想认真练歌。", evidence)
@@ -124,36 +124,36 @@ class EvidenceServiceTest(unittest.TestCase):
 
     def test_same_soul_comment_hit_keeps_full_thread(self) -> None:
         self._insert_post("post-1", "今天想认真练歌。")
-        first_id = self._insert_comment("post-1", "默认", "assistant", "首评内容", seq=0)
-        self._insert_comment("post-1", "默认", "user", "后续追问", seq=1)
-        self._insert_comment("post-1", "默认", "assistant", "后续回复", seq=2)
+        first_id = self._insert_comment("post-1", "拾迹者", "assistant", "首评内容", seq=0)
+        self._insert_comment("post-1", "拾迹者", "user", "后续追问", seq=1)
+        self._insert_comment("post-1", "拾迹者", "assistant", "后续回复", seq=2)
         hits = [
-            SimpleNamespace(type="comment", source_id=str(first_id), metadata={"post_id": "post-1", "soul_name": "默认"})
+            SimpleNamespace(type="comment", source_id=str(first_id), metadata={"post_id": "post-1", "soul_name": "拾迹者"})
         ]
 
-        evidence = evidence_service.format_retrieval_hits(hits, current_soul="默认")
+        evidence = evidence_service.format_retrieval_hits(hits, current_soul="拾迹者")
 
-        self.assertIn("## 公开评论对话 · post post-1 · 默认", evidence)
+        self.assertIn("## 公开评论对话 · post post-1 · 拾迹者", evidence)
         self.assertIn("首评内容", evidence)
         self.assertIn("后续追问", evidence)
         self.assertIn("后续回复", evidence)
 
     def test_comment_expansion_dedupes_post_already_rendered(self) -> None:
         self._insert_post("post-1", "今天想认真练歌。")
-        comment_id = self._insert_comment("post-1", "默认", "assistant", "我陪你继续拆。", seq=0)
+        comment_id = self._insert_comment("post-1", "拾迹者", "assistant", "我陪你继续拆。", seq=0)
         hits = [
             SimpleNamespace(type="post", source_id="post-1", metadata={"post_id": "post-1"}),
-            SimpleNamespace(type="comment", source_id=str(comment_id), metadata={"post_id": "post-1", "soul_name": "默认"}),
+            SimpleNamespace(type="comment", source_id=str(comment_id), metadata={"post_id": "post-1", "soul_name": "拾迹者"}),
         ]
 
-        evidence = evidence_service.format_retrieval_hits(hits, current_soul="默认")
+        evidence = evidence_service.format_retrieval_hits(hits, current_soul="拾迹者")
 
         self.assertEqual(1, evidence.count("今天想认真练歌。"))
         self.assertNotIn("[关于 post]", evidence)
         self.assertIn("我陪你继续拆。", evidence)
 
     def test_format_retrieval_hits_renders_chat_window_around_anchor(self) -> None:
-        thread_id = self._insert_chat_thread("默认")
+        thread_id = self._insert_chat_thread("拾迹者")
         old_message_id = self._insert_chat_message(thread_id, "user", "很早之前的消息", 1.0)
         anchor_message_id = self._insert_chat_message(thread_id, "user", "今天有点焦虑", 10.0)
         self._insert_chat_message(thread_id, "assistant", "我在，慢慢说。", 12.0)
@@ -177,7 +177,7 @@ class EvidenceServiceTest(unittest.TestCase):
         self.assertEqual(1, evidence.count("## 私聊片段"))
         self.assertIn("[用户 · 私聊] 很早之前的消息", evidence)
         self.assertIn("[用户 · 私聊] 今天有点焦虑", evidence)
-        self.assertIn("[默认 · 私聊] 我在，慢慢说。", evidence)
+        self.assertIn("[拾迹者 · 私聊] 我在，慢慢说。", evidence)
         self.assertIn("[用户 · 私聊] 后面又补充一句", evidence)
 
     def test_expand_post_falls_back_to_image_notice_when_no_vision_context(self) -> None:
@@ -193,7 +193,7 @@ class EvidenceServiceTest(unittest.TestCase):
 
     def test_build_evidence_summary_uses_snippets_and_tolerates_deleted_sources(self) -> None:
         self._insert_post("post-1", "这是一条会进入证据面板的公开记录。" * 8)
-        comment_id = self._insert_comment("post-1", "默认", "assistant", "评论证据内容", seq=0)
+        comment_id = self._insert_comment("post-1", "拾迹者", "assistant", "评论证据内容", seq=0)
         hits = [
             SimpleNamespace(
                 doc_id="post-post-1",
@@ -211,7 +211,7 @@ class EvidenceServiceTest(unittest.TestCase):
                 source_id=str(comment_id),
                 score=0.72,
                 distance=None,
-                metadata={"type": "comment", "comment_id": comment_id, "post_id": "post-1", "soul_name": "默认"},
+                metadata={"type": "comment", "comment_id": comment_id, "post_id": "post-1", "soul_name": "拾迹者"},
                 sources=["fts"],
                 reasons=["fts:rank=1"],
             ),

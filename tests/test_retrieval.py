@@ -408,7 +408,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
                 "1",
                 2,
                 0.2,
-                {"type": "comment", "post_id": "p-current", "soul_name": "默认"},
+                {"type": "comment", "post_id": "p-current", "soul_name": "拾迹者"},
             ),
             vectorstore.VectorDocHit(
                 "comment-2",
@@ -424,7 +424,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
                 "3",
                 4,
                 0.4,
-                {"type": "comment", "post_id": "p-other", "soul_name": "默认"},
+                {"type": "comment", "post_id": "p-other", "soul_name": "拾迹者"},
             ),
         ]
 
@@ -455,7 +455,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
                 "1",
                 1,
                 0.1,
-                {"type": "chat", "thread_id": 7, "message_id": 1, "soul_name": "默认"},
+                {"type": "chat", "thread_id": 7, "message_id": 1, "soul_name": "拾迹者"},
             ),
             vectorstore.VectorDocHit(
                 "chat-21",
@@ -463,7 +463,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
                 "21",
                 2,
                 0.2,
-                {"type": "chat", "thread_id": 7, "message_id": 21, "soul_name": "默认"},
+                {"type": "chat", "thread_id": 7, "message_id": 21, "soul_name": "拾迹者"},
             ),
             vectorstore.VectorDocHit(
                 "post-p-history",
@@ -487,19 +487,19 @@ class VectorDistanceFilterTest(unittest.TestCase):
         self.assertEqual(["chat-21"], events[-1]["excluded_doc_ids"])
 
     def test_document_weight_prefers_post_user_role_and_same_soul(self) -> None:
-        post_weight = retrieval._doc_weight("post", {"type": "post", "post_id": "p-past"}, "默认", "comment")
-        user_same = retrieval._doc_weight("comment", {"role": "user", "soul_name": "默认"}, "默认", "comment")
-        user_other = retrieval._doc_weight("comment", {"role": "user", "soul_name": "毒舌好友"}, "默认", "comment")
+        post_weight = retrieval._doc_weight("post", {"type": "post", "post_id": "p-past"}, "拾迹者", "comment")
+        user_same = retrieval._doc_weight("comment", {"role": "user", "soul_name": "拾迹者"}, "拾迹者", "comment")
+        user_other = retrieval._doc_weight("comment", {"role": "user", "soul_name": "毒舌好友"}, "拾迹者", "comment")
         assistant_same = retrieval._doc_weight(
             "comment",
-            {"role": "assistant", "soul_name": "默认"},
-            "默认",
+            {"role": "assistant", "soul_name": "拾迹者"},
+            "拾迹者",
             "comment",
         )
         assistant_other = retrieval._doc_weight(
             "comment",
             {"role": "assistant", "soul_name": "毒舌好友"},
-            "默认",
+            "拾迹者",
             "comment",
         )
 
@@ -516,7 +516,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
             "10",
             1,
             0.2,
-            {"type": "chat", "role": "user", "thread_id": 7, "message_id": 10, "soul_name": "默认"},
+            {"type": "chat", "role": "user", "thread_id": 7, "message_id": 10, "soul_name": "拾迹者"},
         )
 
         comment_channel = retrieval._merge_document_hits(
@@ -525,7 +525,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
             [chat_hit],
             k=1,
             channel="comment",
-            current_soul="默认",
+            current_soul="拾迹者",
         )
         chat_channel = retrieval._merge_document_hits(
             "旧话题",
@@ -533,7 +533,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
             [chat_hit],
             k=1,
             channel="chat",
-            current_soul="默认",
+            current_soul="拾迹者",
         )
 
         self.assertEqual(0.8, comment_channel[0].score)
@@ -546,7 +546,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
             [],
             k=1,
             channel="comment",
-            current_soul="默认",
+            current_soul="拾迹者",
         )
 
         self.assertEqual(["post-p-keyword"], [hit.doc_id for hit in hits])
@@ -561,7 +561,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
                 "1",
                 1,
                 0.2,
-                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 1, "soul_name": "默认"},
+                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 1, "soul_name": "拾迹者"},
             ),
             vectorstore.VectorDocHit(
                 "chat-2",
@@ -569,7 +569,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
                 "2",
                 2,
                 0.2,
-                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 2, "soul_name": "默认"},
+                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 2, "soul_name": "拾迹者"},
             ),
             *[
                 vectorstore.VectorDocHit(
@@ -590,7 +590,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
             vector_hits,
             k=5,
             channel="comment",
-            current_soul="默认",
+            current_soul="拾迹者",
         )
 
         self.assertLessEqual(len(hits), 5)
@@ -614,7 +614,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
             ],
             k=5,
             channel="comment",
-            current_soul="默认",
+            current_soul="拾迹者",
         )
 
         self.assertEqual(3, len(hits))
@@ -639,7 +639,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
                 "9",
                 5,
                 0.3,
-                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 9, "soul_name": "默认"},
+                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 9, "soul_name": "拾迹者"},
             ),
         ]
 
@@ -649,7 +649,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
             vector_hits,
             k=chat_service.RELATED_POST_LIMIT,
             channel="chat",
-            current_soul="默认",
+            current_soul="拾迹者",
         )
 
         doc_ids = [hit.doc_id for hit in hits]

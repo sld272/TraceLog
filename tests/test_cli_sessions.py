@@ -124,7 +124,7 @@ def _fake_client() -> LLMClient:
 def _chat_thread() -> chat_service.ChatThread:
     return chat_service.ChatThread(
         id=1,
-        soul_name="默认",
+        soul_name="拾迹者",
         title=None,
         created_at=1.0,
         updated_at=1.0,
@@ -135,7 +135,7 @@ def _chat_thread() -> chat_service.ChatThread:
 def _comment_thread() -> comment_service.CommentConversation:
     return comment_service.CommentConversation(
         post_id="20260525-001",
-        soul_name="默认",
+        soul_name="拾迹者",
         root_comment_id=1,
         created_at=1.0,
         updated_at=1.0,

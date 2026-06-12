@@ -234,7 +234,7 @@ class ApiManagementTest(unittest.TestCase):
 
     def test_generate_soul_route_returns_markdown(self) -> None:
         generated = {
-            "soul": "---\nname: 测试好友\nversion: 1\ndescription: 测试\n---\n\n# 测试好友\n\n## 人格定位\n测试",
+            "soul": "---\nname: 测试好友\nversion: 1\ndescription: 测试\n---\n\n你是 TraceLog 中名为「测试好友」的 AI 好友。\n\n## 语气特征\n测试\n\n## 怎么回应\n测试\n\n## 边界\n测试",
         }
 
         with patch("core.llm.soul_router.generate_soul", return_value=generated):
@@ -245,7 +245,7 @@ class ApiManagementTest(unittest.TestCase):
                 )
 
         self.assertEqual(200, response.status_code)
-        self.assertIn("## 人格定位", response.json()["soul"])
+        self.assertIn("## 怎么回应", response.json()["soul"])
 
     def test_settings_routes_read_save_config_and_workspace_status(self) -> None:
         with self._client() as client:
@@ -415,7 +415,7 @@ class ApiManagementTest(unittest.TestCase):
             INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
             VALUES (?, ?, 'assistant', ?, 0, ?)
             """,
-            (post_id, "默认", "要一起删除的评论", 2.0),
+            (post_id, "拾迹者", "要一起删除的评论", 2.0),
         )
         job_id = job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id})
 
@@ -518,7 +518,7 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("vector_index", reconcile_response.json())
 
     def test_chat_route_sends_message_and_persists_reply(self) -> None:
-        soul_name = quote("默认")
+        soul_name = quote("拾迹者")
 
         with patch("core.chat_service.reply_router.call_soul_chat_reply", return_value={"reply": "我在。"}):
             with self._client() as client:
@@ -531,7 +531,7 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("我在。", data["result"]["reply"])
 
     def test_chat_thread_route_supports_before_message_cursor(self) -> None:
-        thread = chat_service.get_or_create_thread("默认")
+        thread = chat_service.get_or_create_thread("拾迹者")
         message_ids = [
             chat_service.append_user_message(thread.id, f"第 {index} 条").id
             for index in range(1, 6)
@@ -549,7 +549,7 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(["第 2 条", "第 3 条"], [message["content"] for message in data["messages"]])
 
     def test_chat_edit_route_regenerates_assistant_reply(self) -> None:
-        soul_name = quote("默认")
+        soul_name = quote("拾迹者")
 
         with patch(
             "core.chat_service.reply_router.call_soul_chat_reply",
@@ -624,13 +624,13 @@ class ApiManagementTest(unittest.TestCase):
             INSERT INTO comments(post_id, soul_name, content, created_at)
             VALUES (?, ?, ?, ?)
             """,
-            (post_id, "默认", "我陪你练。", now),
+            (post_id, "拾迹者", "我陪你练。", now),
         )
 
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value={"reply": "继续说。"}):
             with self._client() as client:
                 response = client.post(
-                    f"/comments/posts/{post_id}/souls/{quote('默认')}/messages",
+                    f"/comments/posts/{post_id}/souls/{quote('拾迹者')}/messages",
                     json={"content": "卡在副歌了"},
                 )
 
@@ -648,7 +648,7 @@ class ApiManagementTest(unittest.TestCase):
             {
                 "id": 1,
                 "post_id": "p-1",
-                "soul_name": "默认",
+                "soul_name": "拾迹者",
                 "role": "assistant",
                 "content": "继续说。",
                 "seq": 2,

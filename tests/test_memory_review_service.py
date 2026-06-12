@@ -46,9 +46,9 @@ class MemoryReviewServiceTest(unittest.TestCase):
         db.init_db()
         self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "user.md").write_text(USER_MEMORY, encoding="utf-8")
-        self._insert_soul("默认")
+        self._insert_soul("拾迹者")
         self._insert_soul("毒舌好友")
-        soul_memory_service.write_soul_memory("默认", soul_memory("默认"), source="init")
+        soul_memory_service.write_soul_memory("拾迹者", soul_memory("拾迹者"), source="init")
         soul_memory_service.write_soul_memory("毒舌好友", soul_memory("毒舌好友"), source="init")
 
     def tearDown(self) -> None:
@@ -77,15 +77,15 @@ class MemoryReviewServiceTest(unittest.TestCase):
         self.assertEqual(1, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions"))["count"])
 
     def test_save_soul_memory_writes_file_and_user_revision(self) -> None:
-        updated = soul_memory("默认", "- 用户手动修正 SOUL 记忆")
+        updated = soul_memory("拾迹者", "- 用户手动修正 SOUL 记忆")
 
-        memory_review_service.save_soul_memory("默认", updated)
+        memory_review_service.save_soul_memory("拾迹者", updated)
         row = require_not_none(
             db.query_one("SELECT soul_name, source, patch FROM soul_memory_revisions ORDER BY id DESC LIMIT 1")
         )
 
-        self.assertEqual(updated, memory_review_service.read_soul_memory("默认"))
-        self.assertEqual("默认", row["soul_name"])
+        self.assertEqual(updated, memory_review_service.read_soul_memory("拾迹者"))
+        self.assertEqual("拾迹者", row["soul_name"])
         self.assertEqual("user", row["source"])
         self.assertIn("overwrite_soul_memory", row["patch"])
 
@@ -103,14 +103,14 @@ class MemoryReviewServiceTest(unittest.TestCase):
 
     def test_invalid_soul_memory_does_not_write_revision(self) -> None:
         before = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM soul_memory_revisions"))["count"]
-        original = soul_memory_service.read_soul_memory("默认")
+        original = soul_memory_service.read_soul_memory("拾迹者")
 
         with self.assertRaises(ValueError):
-            memory_review_service.save_soul_memory("默认", "# 默认的错误记忆\n")
+            memory_review_service.save_soul_memory("拾迹者", "# 拾迹者的错误记忆\n")
 
         after = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM soul_memory_revisions"))["count"]
         self.assertEqual(before, after)
-        self.assertEqual(original, soul_memory_service.read_soul_memory("默认"))
+        self.assertEqual(original, soul_memory_service.read_soul_memory("拾迹者"))
 
     def test_list_user_revisions_is_summary_only_and_ordered(self) -> None:
         profile_service.write_profile(USER_MEMORY + "\nreflector\n", source="reflector")
@@ -136,27 +136,27 @@ class MemoryReviewServiceTest(unittest.TestCase):
         self.assertIsNone(memory_review_service.get_user_revision(9999))
 
     def test_list_soul_revisions_filters_by_soul_and_source(self) -> None:
-        soul_memory_service.write_soul_memory("默认", soul_memory("默认", "- AI 修改"), source="soul_deep_reflector")
-        memory_review_service.save_soul_memory("默认", soul_memory("默认", "- 用户修改"))
+        soul_memory_service.write_soul_memory("拾迹者", soul_memory("拾迹者", "- AI 修改"), source="soul_deep_reflector")
+        memory_review_service.save_soul_memory("拾迹者", soul_memory("拾迹者", "- 用户修改"))
         memory_review_service.save_soul_memory("毒舌好友", soul_memory("毒舌好友", "- 另一个 SOUL 修改"))
 
-        default_revisions = memory_review_service.list_soul_revisions(soul_name="默认")
+        default_revisions = memory_review_service.list_soul_revisions(soul_name="拾迹者")
         user_revisions = memory_review_service.list_soul_revisions(source="user")
 
-        self.assertTrue(all(item["target_name"] == "默认" for item in default_revisions))
+        self.assertTrue(all(item["target_name"] == "拾迹者" for item in default_revisions))
         self.assertEqual(["user", "soul_deep_reflector"], [item["source"] for item in default_revisions[:2]])
-        self.assertEqual(["毒舌好友", "默认"], [item["target_name"] for item in user_revisions])
+        self.assertEqual(["毒舌好友", "拾迹者"], [item["target_name"] for item in user_revisions])
         self.assertNotIn("snapshot", default_revisions[0])
 
     def test_get_soul_revision_returns_snapshot_and_patch(self) -> None:
-        updated = soul_memory("默认", "- 用户详情")
-        memory_review_service.save_soul_memory("默认", updated)
-        revision_id = memory_review_service.list_soul_revisions(soul_name="默认", source="user")[0]["id"]
+        updated = soul_memory("拾迹者", "- 用户详情")
+        memory_review_service.save_soul_memory("拾迹者", updated)
+        revision_id = memory_review_service.list_soul_revisions(soul_name="拾迹者", source="user")[0]["id"]
 
         revision = require_not_none(memory_review_service.get_soul_revision(revision_id))
 
         self.assertEqual("soul", revision["target_type"])
-        self.assertEqual("默认", revision["target_name"])
+        self.assertEqual("拾迹者", revision["target_name"])
         self.assertEqual(updated, revision["snapshot"])
         self.assertEqual({"op": "overwrite_soul_memory"}, revision["patch"])
         self.assertIsNone(memory_review_service.get_soul_revision(9999))

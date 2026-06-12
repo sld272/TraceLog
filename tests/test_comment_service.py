@@ -64,7 +64,7 @@ class CommentServiceTest(unittest.TestCase):
         self.workspace.mkdir(parents=True, exist_ok=True)
         (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与角色\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
-        self._insert_post_and_comment("20260525-001", "默认", "我陪你继续拆。")
+        self._insert_post_and_comment("20260525-001", "拾迹者", "我陪你继续拆。")
         self._insert_post_and_comment("20260525-001", "毒舌好友", "别装了，继续讲重点。")
 
     def tearDown(self) -> None:
@@ -80,14 +80,14 @@ class CommentServiceTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_conversation_is_keyed_by_post_and_soul(self) -> None:
-        first = comment_service.get_conversation("20260525-001", "默认")
-        second = comment_service.get_conversation("20260525-001", "默认")
+        first = comment_service.get_conversation("20260525-001", "拾迹者")
+        second = comment_service.get_conversation("20260525-001", "拾迹者")
         other = comment_service.get_conversation("20260525-001", "毒舌好友")
 
         self.assertEqual(first.post_id, second.post_id)
         self.assertEqual(first.soul_name, second.soul_name)
         self.assertNotEqual(first.root_comment_id, other.root_comment_id)
-        self.assertEqual("默认", first.soul_name)
+        self.assertEqual("拾迹者", first.soul_name)
 
     def test_list_post_conversations_uses_post_soul_order_snapshot(self) -> None:
         db.execute(
@@ -97,7 +97,7 @@ class CommentServiceTest(unittest.TestCase):
             """,
             ("p-order", "2026-06-01T10:00:00+08:00", "排序测试", 1.0, 1.0),
         )
-        for soul_name, sort_order in [("默认", 0), ("毒舌好友", 1)]:
+        for soul_name, sort_order in [("拾迹者", 0), ("毒舌好友", 1)]:
             db.execute(
                 """
                 INSERT INTO post_soul_orders(post_id, soul_name, sort_order, created_at)
@@ -105,7 +105,7 @@ class CommentServiceTest(unittest.TestCase):
                 """,
                 ("p-order", soul_name, sort_order, 1.0),
             )
-        db.execute("UPDATE souls SET sort_order = ? WHERE name = ?", (9, "默认"))
+        db.execute("UPDATE souls SET sort_order = ? WHERE name = ?", (9, "拾迹者"))
         db.execute("UPDATE souls SET sort_order = ? WHERE name = ?", (0, "毒舌好友"))
         db.execute(
             """
@@ -119,28 +119,28 @@ class CommentServiceTest(unittest.TestCase):
             INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
             VALUES (?, ?, 'assistant', ?, 0, ?)
             """,
-            ("p-order", "默认", "后完成", 3.0),
+            ("p-order", "拾迹者", "后完成", 3.0),
         )
 
         conversations = comment_service.list_post_conversations("p-order")
 
-        self.assertEqual(["默认", "毒舌好友"], [conversation.soul_name for conversation in conversations])
+        self.assertEqual(["拾迹者", "毒舌好友"], [conversation.soul_name for conversation in conversations])
 
     def test_comment_reply_only_writes_selected_soul_conversation(self) -> None:
         client = FakeClient({"reply": "好，我只在这里接住这句。", "todos_to_upsert": [], "todos_to_delete": []})
 
-        result = comment_service.call_comment_reply("20260525-001", "默认", "只回复默认", client, "fake-model")
-        default_messages = comment_service.list_conversation_messages("20260525-001", "默认", include_root=False)
+        result = comment_service.call_comment_reply("20260525-001", "拾迹者", "只回复拾迹者", client, "fake-model")
+        default_messages = comment_service.list_conversation_messages("20260525-001", "拾迹者", include_root=False)
         other_messages = comment_service.list_conversation_messages("20260525-001", "毒舌好友", include_root=False)
 
         self.assertTrue(result.ok)
-        self.assertEqual("默认", result.soul_name)
+        self.assertEqual("拾迹者", result.soul_name)
         self.assertEqual(["user", "assistant"], [message.role for message in default_messages])
         self.assertEqual([1, 2], [message.seq for message in default_messages])
         self.assertEqual([], other_messages)
 
     def test_build_comment_context_separates_evidence_and_messages(self) -> None:
-        comment_service.append_comment("20260525-001", "默认", "user", "继续聊练歌")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊练歌")
         db.execute(
             """
             INSERT INTO todos(id, task, status, created_at, updated_at)
@@ -149,7 +149,7 @@ class CommentServiceTest(unittest.TestCase):
             ("todo-1", "整理歌单", "未完成", 1.0, 1.0),
         )
 
-        context = comment_service.build_comment_context("20260525-001", "默认", "继续聊练歌")
+        context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊练歌")
 
         self.assertIn("测试用户", context.context)
         self.assertIn("今天想认真练歌", context.context)
@@ -159,11 +159,11 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(["继续聊练歌"], [message.content for message in context.messages])
 
     def test_build_comment_context_uses_post_and_recent_user_messages_as_retrieval_query(self) -> None:
-        comment_service.append_comment("20260525-001", "默认", "user", "第一条")
-        comment_service.append_comment("20260525-001", "默认", "assistant", "这句不该进检索")
-        comment_service.append_comment("20260525-001", "默认", "user", "第二条")
-        comment_service.append_comment("20260525-001", "默认", "user", "第三条")
-        comment_service.append_comment("20260525-001", "默认", "user", "第四条")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "第一条")
+        comment_service.append_comment("20260525-001", "拾迹者", "assistant", "这句不该进检索")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "第二条")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "第三条")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "第四条")
         captured: dict[str, str] = {}
 
         def fake_search(query: str, **kwargs: object) -> list:
@@ -173,7 +173,7 @@ class CommentServiceTest(unittest.TestCase):
 
         retrieval.hybrid_search_documents = fake_search
 
-        context = comment_service.build_comment_context("20260525-001", "默认", "第四条")
+        context = comment_service.build_comment_context("20260525-001", "拾迹者", "第四条")
 
         expected = "今天想认真练歌。\n第二条\n第三条\n第四条"
         self.assertEqual(expected, context.retrieval_query)
@@ -191,7 +191,7 @@ class CommentServiceTest(unittest.TestCase):
         comment_service.append_comment("20260525-001", "毒舌好友", "assistant", "其他回复六")
         comment_service.append_comment("20260525-001", "毒舌好友", "user", "其他追问七")
 
-        context = comment_service.build_comment_context("20260525-001", "默认", "继续聊")
+        context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊")
 
         self.assertIn("# 本帖其他评论区对话(其他 SOUL,公开评论背景)", context.context)
         self.assertIn("## 毒舌好友", context.context)
@@ -206,7 +206,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIn("其他追问七", context.context)
 
     def test_build_comment_context_excludes_current_post_and_post_comments_from_retrieval(self) -> None:
-        comment_service.append_comment("20260525-001", "默认", "user", "继续聊练歌")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊练歌")
         captured: dict[str, object] = {}
 
         def fake_search(query: str, **kwargs: object) -> list:
@@ -216,7 +216,7 @@ class CommentServiceTest(unittest.TestCase):
 
         retrieval.hybrid_search_documents = fake_search
 
-        comment_service.build_comment_context("20260525-001", "默认", "继续聊练歌")
+        comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊练歌")
 
         exclusion = captured["exclusion"]
         self.assertIsInstance(exclusion, retrieval.RetrievalExclusion)
@@ -224,16 +224,16 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(frozenset({"20260525-001"}), exclusion.comment_post_ids)
 
     def test_build_comment_context_loads_current_soul_memory_only(self) -> None:
-        soul_memory_service.write_soul_memory("默认", "# 默认的相处记忆\n\n## 对用户的理解\n默认评论记忆\n", source="user")
+        soul_memory_service.write_soul_memory("拾迹者", "# 拾迹者的相处记忆\n\n## 对用户的理解\n拾迹者评论记忆\n", source="user")
         soul_memory_service.write_soul_memory("毒舌好友", "# 毒舌好友的相处记忆\n\n## 对用户的理解\n其他 SOUL 评论记忆\n", source="user")
 
-        context = comment_service.build_comment_context("20260525-001", "默认", "评论context词")
+        context = comment_service.build_comment_context("20260525-001", "拾迹者", "评论context词")
 
-        self.assertIn("默认评论记忆", context.soul.soul_memory)
+        self.assertIn("拾迹者评论记忆", context.soul.soul_memory)
         self.assertNotIn("其他 SOUL 评论记忆", context.soul.soul_memory)
 
     def test_build_comment_context_uses_query_rewrite_for_related_memories(self) -> None:
-        comment_service.append_comment("20260525-001", "默认", "user", "继续聊图书馆学习效率")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊图书馆学习效率")
         captured: dict[str, object] = {}
 
         def fake_search(
@@ -257,7 +257,7 @@ class CommentServiceTest(unittest.TestCase):
         )
 
         with patch("core.reply_context.query_rewriter.rewrite_query", return_value=rewritten) as rewrite:
-            comment_service.build_comment_context("20260525-001", "默认", "图书馆学习", FakeClient(), "fake-model")
+            comment_service.build_comment_context("20260525-001", "拾迹者", "图书馆学习", FakeClient(), "fake-model")
 
         rewrite.assert_called_once()
         self.assertEqual("用户是否表达过图书馆学习效率更高", captured["semantic_query"])
@@ -267,7 +267,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertTrue(event["used_rewrite"])
 
     def test_build_comment_context_injects_web_search_results_when_gate_requests_search(self) -> None:
-        comment_service.append_comment("20260525-001", "默认", "user", "查一下 Python 3.13 稳定版")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "查一下 Python 3.13 稳定版")
         settings = web_search_service.WebSearchConfig(
             enabled=True,
             provider="duckduckgo",
@@ -314,7 +314,7 @@ class CommentServiceTest(unittest.TestCase):
         ):
             context = comment_service.build_comment_context(
                 "20260525-001",
-                "默认",
+                "拾迹者",
                 "查一下 Python 3.13 稳定版",
                 FakeClient(),
                 "fake-model",
@@ -329,7 +329,7 @@ class CommentServiceTest(unittest.TestCase):
     def test_comment_reply_sends_multi_turn_messages(self) -> None:
         client = FakeClient({"reply": "我在。"})
 
-        result = comment_service.call_comment_reply("20260525-001", "默认", "继续聊练歌", client, "fake-model")
+        result = comment_service.call_comment_reply("20260525-001", "拾迹者", "继续聊练歌", client, "fake-model")
         messages = client.calls[-1]["messages"]
 
         self.assertTrue(result.ok)
@@ -344,10 +344,10 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual([{"role": "user", "content": "继续聊练歌"}], messages[2:])
 
     def test_comment_reply_multi_turn_preserves_conversation_order(self) -> None:
-        comment_service.call_comment_reply("20260525-001", "默认", "你好", FakeClient({"reply": "你好呀"}), "fake-model")
+        comment_service.call_comment_reply("20260525-001", "拾迹者", "你好", FakeClient({"reply": "你好呀"}), "fake-model")
         client = FakeClient({"reply": "继续。"})
 
-        comment_service.call_comment_reply("20260525-001", "默认", "再说说", client, "fake-model")
+        comment_service.call_comment_reply("20260525-001", "拾迹者", "再说说", client, "fake-model")
         thread_messages = client.calls[-1]["messages"][2:]
 
         self.assertEqual(["user", "assistant", "user"], [message["role"] for message in thread_messages])
@@ -358,9 +358,9 @@ class CommentServiceTest(unittest.TestCase):
 
     def test_comment_reply_failure_preserves_user_message_and_failed_assistant(self) -> None:
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
-            result = comment_service.call_comment_reply("20260525-001", "默认", "这句先记下", FakeClient(), "fake-model")
+            result = comment_service.call_comment_reply("20260525-001", "拾迹者", "这句先记下", FakeClient(), "fake-model")
 
-        messages = comment_service.list_conversation_messages("20260525-001", "默认", include_root=False)
+        messages = comment_service.list_conversation_messages("20260525-001", "拾迹者", include_root=False)
         self.assertFalse(result.ok)
         self.assertIsNotNone(result.assistant_message_id)
         self.assertEqual(["user", "assistant"], [message.role for message in messages])
@@ -369,7 +369,7 @@ class CommentServiceTest(unittest.TestCase):
 
     def test_rerun_failed_assistant_comment_updates_same_message(self) -> None:
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
-            result = comment_service.call_comment_reply("20260525-001", "默认", "这句先记下", FakeClient(), "fake-model")
+            result = comment_service.call_comment_reply("20260525-001", "拾迹者", "这句先记下", FakeClient(), "fake-model")
         self.assertIsNotNone(result.assistant_message_id)
 
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value={"reply": "重试后的回复"}):
@@ -401,7 +401,7 @@ class CommentServiceTest(unittest.TestCase):
             )
         ]
 
-        result = comment_service.call_comment_reply("20260525-001", "默认", "继续聊", FakeClient({"reply": "继续拆。"}), "fake-model")
+        result = comment_service.call_comment_reply("20260525-001", "拾迹者", "继续聊", FakeClient({"reply": "继续拆。"}), "fake-model")
         message = comment_service.get_message(require_not_none(result.assistant_message_id))
         metadata = json.loads(message.metadata or "{}")
 
@@ -415,7 +415,7 @@ class CommentServiceTest(unittest.TestCase):
 
     def test_rerun_failed_assistant_comment_keeps_failure_on_same_message(self) -> None:
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
-            result = comment_service.call_comment_reply("20260525-001", "默认", "这句先记下", FakeClient(), "fake-model")
+            result = comment_service.call_comment_reply("20260525-001", "拾迹者", "这句先记下", FakeClient(), "fake-model")
         self.assertIsNotNone(result.assistant_message_id)
 
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
@@ -430,24 +430,24 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIsNotNone(message.rerun_at)
 
     def test_delete_assistant_comment_is_rejected(self) -> None:
-        comment_service.append_comment("20260525-001", "默认", "user", "继续聊")
-        comment_service.append_comment("20260525-001", "默认", "assistant", "继续聊的回复")
-        root = comment_service.get_conversation("20260525-001", "默认").root_comment_id
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊")
+        comment_service.append_comment("20260525-001", "拾迹者", "assistant", "继续聊的回复")
+        root = comment_service.get_conversation("20260525-001", "拾迹者").root_comment_id
         self.assertIsNotNone(root)
 
         with self.assertRaises(ValueError):
             comment_service.delete_message(root)
 
-        messages = comment_service.list_conversation_messages("20260525-001", "默认")
+        messages = comment_service.list_conversation_messages("20260525-001", "拾迹者")
         self.assertEqual(["assistant", "user", "assistant"], [message.role for message in messages])
 
     def test_delete_comment_message_deletes_that_message_and_later_messages(self) -> None:
-        first_user = comment_service.append_comment("20260525-001", "默认", "user", "第一条")
-        comment_service.append_comment("20260525-001", "默认", "assistant", "第一条回复")
-        comment_service.append_comment("20260525-001", "默认", "user", "第二条")
+        first_user = comment_service.append_comment("20260525-001", "拾迹者", "user", "第一条")
+        comment_service.append_comment("20260525-001", "拾迹者", "assistant", "第一条回复")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "第二条")
 
         result = comment_service.delete_message(first_user.id)
-        messages = comment_service.list_conversation_messages("20260525-001", "默认")
+        messages = comment_service.list_conversation_messages("20260525-001", "拾迹者")
 
         self.assertEqual([first_user.id, first_user.id + 1, first_user.id + 2], result["deleted_message_ids"])
         self.assertEqual(["assistant"], [message.role for message in messages])
@@ -456,7 +456,7 @@ class CommentServiceTest(unittest.TestCase):
     def test_rerun_latest_assistant_comment_updates_same_message_and_marks_rerun(self) -> None:
         result = comment_service.call_comment_reply(
             "20260525-001",
-            "默认",
+            "拾迹者",
             "继续聊练歌",
             FakeClient({"reply": "原回复"}),
             "fake-model",
@@ -475,7 +475,7 @@ class CommentServiceTest(unittest.TestCase):
         attachment = self._insert_attachment("att-comment-image")
         result = comment_service.call_comment_reply(
             "20260525-001",
-            "默认",
+            "拾迹者",
             "这张图是什么发布信息",
             FakeClient({"reply": "原回复"}),
             "fake-model",
@@ -503,7 +503,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIn("Python 3.13 已发布", captured["messages"][-1].content)
 
     def test_rerun_root_assistant_comment_uses_public_post_reply_path(self) -> None:
-        root_id = comment_service.get_conversation("20260525-001", "默认").root_comment_id
+        root_id = comment_service.get_conversation("20260525-001", "拾迹者").root_comment_id
         self.assertIsNotNone(root_id)
         db.execute(
             """
@@ -557,7 +557,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("public_post", captured["search_trace"]["channel"])
         self.assertIn("今天想认真练歌", captured["user_input"])
         self.assertIn("历史相关帖子", captured["shared_context"])
-        self.assertEqual("默认", captured["soul_name"])
+        self.assertEqual("拾迹者", captured["soul_name"])
         self.assertEqual(["20260520-001"], captured["post_reply_trace"]["relevant_post_ids"])
         metadata = json.loads(rerun["message"].metadata or "{}")
         self.assertTrue(metadata["rerun"])
@@ -568,12 +568,12 @@ class CommentServiceTest(unittest.TestCase):
     def test_rerun_comment_requires_latest_assistant_message(self) -> None:
         first = comment_service.call_comment_reply(
             "20260525-001",
-            "默认",
+            "拾迹者",
             "第一轮",
             FakeClient({"reply": "第一轮回复"}),
             "fake-model",
         )
-        comment_service.append_comment("20260525-001", "默认", "user", "第二轮用户消息")
+        comment_service.append_comment("20260525-001", "拾迹者", "user", "第二轮用户消息")
         self.assertIsNotNone(first.assistant_message_id)
 
         with self.assertRaises(ValueError):
@@ -597,7 +597,7 @@ class CommentServiceTest(unittest.TestCase):
             }
         )
 
-        result = comment_service.call_comment_reply("20260525-001", "默认", "提醒我今晚整理歌单", client, "fake-model")
+        result = comment_service.call_comment_reply("20260525-001", "拾迹者", "提醒我今晚整理歌单", client, "fake-model")
         row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM todos"))
 
         self.assertTrue(result.ok)
@@ -614,13 +614,13 @@ class CommentServiceTest(unittest.TestCase):
             ("todo-1", "整理歌单", "未完成", 1.0, 1.0),
         )
 
-        context = comment_service.build_comment_context("20260525-001", "默认", "继续聊")
+        context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊")
 
         self.assertNotIn("整理歌单", context.context)
         self.assertNotIn("# 待办事项", context.context)
 
     def test_comment_reply_does_not_write_light_reflection_tables_or_revisions(self) -> None:
-        comment_service.call_comment_reply("20260525-001", "默认", "这是一条评论回复", FakeClient(), "fake-model")
+        comment_service.call_comment_reply("20260525-001", "拾迹者", "这是一条评论回复", FakeClient(), "fake-model")
 
         self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM entities"))["count"])
         self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM emotions"))["count"])

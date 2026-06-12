@@ -170,11 +170,11 @@ class PublicPostPipelineTest(unittest.TestCase):
             INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
             VALUES (?, ?, 1, 0, ?, ?)
             """,
-            ("默认", "souls/默认.md", 1.0, 1.0),
+            ("拾迹者", "souls/拾迹者.md", 1.0, 1.0),
         )
         soul_dir = self.workspace / "souls"
         soul_dir.mkdir(parents=True, exist_ok=True)
-        (soul_dir / "默认.md").write_text("默认人格", encoding="utf-8")
+        (soul_dir / "拾迹者.md").write_text("拾迹者人格", encoding="utf-8")
         created = public_post_pipeline.create_post("今天想练歌")
         first = require_not_none(job_service.claim_next_pending())
         job_service.mark_succeeded(first["id"])
@@ -195,7 +195,7 @@ class PublicPostPipelineTest(unittest.TestCase):
         self.assertIsNone(
             db.query_one(
                 "SELECT content FROM comments WHERE post_id = ? AND soul_name = ?",
-                (created.post_id, "默认"),
+                (created.post_id, "拾迹者"),
             )
         )
 

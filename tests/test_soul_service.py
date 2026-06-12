@@ -40,11 +40,11 @@ class SoulServiceTest(unittest.TestCase):
         soul_service.sync_souls()
 
         records = soul_service.list_souls()
-        self.assertEqual(["默认", "毒舌好友"], [record.name for record in records])
+        self.assertEqual(["拾迹者", "温柔树洞", "毒舌好友"], [record.name for record in records])
         self.assertTrue(all(record.enabled for record in records))
-        self.assertTrue((self.workspace / "souls" / "默认.md").exists())
-        self.assertTrue((self.workspace / "soul_memories" / "默认.md").exists())
-        self.assertNotIn("（暂无）", soul_memory_service.read_soul_memory("默认"))
+        self.assertTrue((self.workspace / "souls" / "拾迹者.md").exists())
+        self.assertTrue((self.workspace / "soul_memories" / "拾迹者.md").exists())
+        self.assertNotIn("（暂无）", soul_memory_service.read_soul_memory("拾迹者"))
 
         rows = db.query_all(
             """
@@ -54,7 +54,7 @@ class SoulServiceTest(unittest.TestCase):
             """
         )
         self.assertEqual(
-            [("毒舌好友", "system"), ("默认", "system")],
+            [("拾迹者", "system"), ("毒舌好友", "system"), ("温柔树洞", "system")],
             [(row["soul_name"], row["source"]) for row in rows],
         )
 
@@ -89,22 +89,22 @@ class SoulServiceTest(unittest.TestCase):
     def test_enable_disable_and_list_enabled_souls(self) -> None:
         soul_service.sync_souls()
 
-        soul_service.disable_soul("默认")
+        soul_service.disable_soul("拾迹者")
         enabled = soul_service.list_enabled_souls()
-        self.assertEqual(["毒舌好友"], [soul.name for soul in enabled])
+        self.assertEqual(["温柔树洞", "毒舌好友"], [soul.name for soul in enabled])
 
-        soul_service.enable_soul("默认")
+        soul_service.enable_soul("拾迹者")
         enabled = soul_service.list_enabled_souls()
-        self.assertEqual(["默认", "毒舌好友"], [soul.name for soul in enabled])
+        self.assertEqual(["拾迹者", "温柔树洞", "毒舌好友"], [soul.name for soul in enabled])
 
     def test_reorder_souls_moves_named_records_to_front(self) -> None:
         soul_service.sync_souls()
         soul_service.create_soul("测试好友", description="测试描述")
 
-        records = soul_service.reorder_souls(["测试好友", "默认"])
+        records = soul_service.reorder_souls(["测试好友", "拾迹者"])
 
-        self.assertEqual(["测试好友", "默认", "毒舌好友"], [record.name for record in records])
-        self.assertEqual([0, 1, 2], [record.sort_order for record in records])
+        self.assertEqual(["测试好友", "拾迹者", "温柔树洞", "毒舌好友"], [record.name for record in records])
+        self.assertEqual([0, 1, 2, 3], [record.sort_order for record in records])
 
     def test_create_soul_rejects_invalid_and_duplicate_names(self) -> None:
         soul_service.sync_souls()
@@ -112,14 +112,14 @@ class SoulServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             soul_service.create_soul("../坏名字")
         with self.assertRaises(ValueError):
-            soul_service.create_soul("默认")
+            soul_service.create_soul("拾迹者")
 
     def test_write_soul_memory_writes_file_and_revision(self) -> None:
         soul_service.sync_souls()
 
-        soul_memory_service.write_soul_memory("默认", "# 新记忆\n", source="user")
+        soul_memory_service.write_soul_memory("拾迹者", "# 新记忆\n", source="user")
 
-        self.assertEqual("# 新记忆\n", soul_memory_service.read_soul_memory("默认"))
+        self.assertEqual("# 新记忆\n", soul_memory_service.read_soul_memory("拾迹者"))
         row = db.query_one(
             """
             SELECT snapshot, source
@@ -128,7 +128,7 @@ class SoulServiceTest(unittest.TestCase):
             ORDER BY id DESC
             LIMIT 1
             """,
-            ("默认",),
+            ("拾迹者",),
         )
         self.assertIsNotNone(row)
         assert row is not None
@@ -155,11 +155,11 @@ class SoulServiceTest(unittest.TestCase):
             INSERT INTO comments(post_id, soul_name, content, created_at)
             VALUES (?, ?, ?, ?)
             """,
-            ("20260525-001", "默认", "我看见你在认真练歌。", 2.0),
+            ("20260525-001", "拾迹者", "我看见你在认真练歌。", 2.0),
         )
 
         add_result = soul_memory_service.apply_patch(
-            "默认",
+            "拾迹者",
             {
                 "section": "对用户的理解",
                 "ops": [{"op": "add", "value": "用户最近在认真练歌"}],
@@ -167,10 +167,10 @@ class SoulServiceTest(unittest.TestCase):
                 "confidence": 0.8,
             },
         )
-        content = soul_memory_service.read_soul_memory("默认")
+        content = soul_memory_service.read_soul_memory("拾迹者")
         anchor = content.split("<!-- id: ", 1)[1].split(" -->", 1)[0]
         update_result = soul_memory_service.apply_patch(
-            "默认",
+            "拾迹者",
             {
                 "section": "对用户的理解",
                 "ops": [{"op": "update", "anchor": anchor, "value": "用户最近在稳定练歌"}],
@@ -179,7 +179,7 @@ class SoulServiceTest(unittest.TestCase):
             },
         )
         skip_result = soul_memory_service.apply_patch(
-            "默认",
+            "拾迹者",
             {
                 "section": "对用户的理解",
                 "ops": [{"op": "add", "value": "暂无"}],
@@ -188,7 +188,7 @@ class SoulServiceTest(unittest.TestCase):
             },
         )
         remove_result = soul_memory_service.apply_patch(
-            "默认",
+            "拾迹者",
             {
                 "section": "对用户的理解",
                 "ops": [{"op": "remove", "anchor": anchor}],
@@ -196,7 +196,7 @@ class SoulServiceTest(unittest.TestCase):
                 "confidence": 0.8,
             },
         )
-        final_content = soul_memory_service.read_soul_memory("默认")
+        final_content = soul_memory_service.read_soul_memory("拾迹者")
 
         self.assertEqual("applied", add_result["status"])
         self.assertEqual("applied", update_result["status"])
@@ -218,11 +218,11 @@ class SoulServiceTest(unittest.TestCase):
             INSERT INTO comments(post_id, soul_name, content, created_at)
             VALUES (?, ?, ?, ?)
             """,
-            ("20260525-001", "毒舌好友", "这条证据不属于默认。", 2.0),
+            ("20260525-001", "毒舌好友", "这条证据不属于拾迹者。", 2.0),
         )
 
         result = soul_memory_service.apply_patch(
-            "默认",
+            "拾迹者",
             {
                 "section": "对用户的理解",
                 "ops": [{"op": "add", "value": "用户只把这件事告诉毒舌好友"}],

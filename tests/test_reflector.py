@@ -326,17 +326,17 @@ class ReflectorTest(unittest.TestCase):
 
     def test_soul_deep_reflection_reads_raw_thread_messages_and_patches_memory(self) -> None:
         soul_service.sync_souls()
-        chat_thread = chat_service.get_or_create_thread("默认")
-        chat_user = chat_service.append_user_message(chat_thread.id, "我在默认面前会直接说累")
+        chat_thread = chat_service.get_or_create_thread("拾迹者")
+        chat_user = chat_service.append_user_message(chat_thread.id, "我在拾迹者面前会直接说累")
         self._append_chat_assistant(chat_thread.id, "我听见了。")
         self._insert_comment_seed()
-        comment_user = comment_service.append_comment("20260525-001", "默认", "user", "这条评论也只给默认看")
+        comment_user = comment_service.append_comment("20260525-001", "拾迹者", "user", "这条评论也只给拾迹者看")
         payload = {
             "reflection_md": "## SOUL 深反思\n\n用户在这个 SOUL 面前表达了更私人的疲惫与限定可见的评论。",
             "patches": [
                 {
                     "section": "对用户的理解",
-                    "ops": [{"op": "add", "value": "用户在默认面前更愿意直接表达疲惫和限定可见的想法"}],
+                    "ops": [{"op": "add", "value": "用户在拾迹者面前更愿意直接表达疲惫和限定可见的想法"}],
                     "evidence": [f"chat_message:{chat_user.id}", f"comment_message:{comment_user.id}"],
                     "confidence": 0.86,
                 }
@@ -345,22 +345,22 @@ class ReflectorTest(unittest.TestCase):
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
 
         results = reflector.trigger_soul_deep_reflections(client, "fake-model", trigger="cli_exit")
-        memory_content = soul_memory_service.read_soul_memory("默认")
+        memory_content = soul_memory_service.read_soul_memory("拾迹者")
         reflection = require_not_none(db.query_one("SELECT type, metadata, related_posts FROM reflections WHERE type = 'soul_deep'"))
         user_revisions = db.query_all("SELECT id FROM user_md_revisions")
 
         self.assertEqual(1, len(results))
-        self.assertEqual("默认", results[0].soul_name)
+        self.assertEqual("拾迹者", results[0].soul_name)
         self.assertEqual({"applied": 1, "skipped": 0, "skipped_details": []}, results[0].patch_summary)
-        self.assertIn("用户在默认面前更愿意直接表达疲惫", memory_content)
+        self.assertIn("用户在拾迹者面前更愿意直接表达疲惫", memory_content)
         self.assertEqual([], user_revisions)
         metadata = json.loads(reflection["metadata"])
-        self.assertEqual("默认", metadata["soul_name"])
+        self.assertEqual("拾迹者", metadata["soul_name"])
         self.assertIn(f"chat_message:{chat_user.id}", reflection["related_posts"])
         self.assertIn(f"comment_message:{comment_user.id}", reflection["related_posts"])
         prompt = client.requests[0]["messages"][1]["content"]
         self.assertIn("raw thread messages", prompt)
-        self.assertIn("我在默认面前会直接说累", prompt)
+        self.assertIn("我在拾迹者面前会直接说累", prompt)
         self.assertIn("我听见了。", prompt)
 
     def test_soul_deep_reflection_skips_souls_without_new_interactions(self) -> None:
@@ -374,7 +374,7 @@ class ReflectorTest(unittest.TestCase):
 
     def test_soul_deep_reflection_excludes_other_soul_thread_messages(self) -> None:
         soul_service.sync_souls()
-        default_thread = chat_service.get_or_create_thread("默认")
+        default_thread = chat_service.get_or_create_thread("拾迹者")
         chat_service.append_user_message(default_thread.id, "default_private_marker")
         other_thread = chat_service.get_or_create_thread("毒舌好友")
         chat_service.append_user_message(other_thread.id, "other_private_marker")
@@ -389,7 +389,7 @@ class ReflectorTest(unittest.TestCase):
 
     def test_soul_deep_reflection_cursor_prevents_rerun(self) -> None:
         soul_service.sync_souls()
-        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_thread = chat_service.get_or_create_thread("拾迹者")
         chat_user = chat_service.append_user_message(chat_thread.id, "这条只处理一次")
         payload = {
             "reflection_md": "## SOUL 深反思\n\n用户说了一条只需要处理一次的私聊。",
@@ -410,19 +410,19 @@ class ReflectorTest(unittest.TestCase):
         self.assertEqual(1, len(first))
         self.assertEqual([], second)
         self.assertEqual(1, client.calls)
-        cursor = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_thread_deep_cursor:默认",)))
+        cursor = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_thread_deep_cursor:拾迹者",)))
         self.assertEqual({"chat_message_id": chat_user.id, "comment_message_id": 0}, json.loads(cursor["value"]))
 
     def test_soul_deep_reflection_invalid_result_does_not_advance_cursor(self) -> None:
         soul_service.sync_souls()
-        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_thread = chat_service.get_or_create_thread("拾迹者")
         chat_user = chat_service.append_user_message(chat_thread.id, "这条需要稍后补跑")
         bad_client = FakeClient(content=json.dumps({"reflection_md": "太短", "patches": []}, ensure_ascii=False))
 
         first = reflector.trigger_soul_deep_reflections(bad_client, "fake-model", trigger="cli_exit")
 
         self.assertEqual([], first)
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_thread_deep_cursor:默认",)))
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_thread_deep_cursor:拾迹者",)))
 
         payload = {
             "reflection_md": "## SOUL 深反思\n\n用户留下了一条需要在下次退出时补跑的私聊。",
@@ -440,28 +440,28 @@ class ReflectorTest(unittest.TestCase):
 
         self.assertEqual(1, len(second))
         self.assertEqual(1, second[0].interaction_count)
-        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_thread_deep_cursor:默认",)))
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_thread_deep_cursor:拾迹者",)))
 
     def test_soul_deep_reflection_uses_message_limit(self) -> None:
         soul_service.sync_souls()
-        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_thread = chat_service.get_or_create_thread("拾迹者")
         chat_1 = chat_service.append_user_message(chat_thread.id, "chat message 1")
         chat_2 = chat_service.append_user_message(chat_thread.id, "chat message 2")
         self._set_chat_message_time(chat_1.id, 1.0)
         self._set_chat_message_time(chat_2.id, 2.0)
         self._insert_comment_seed("20260525-root-001")
-        comment_1 = comment_service.append_comment("20260525-root-001", "默认", "user", "comment message 1")
-        comment_2 = comment_service.append_comment("20260525-root-001", "默认", "user", "comment message 2")
+        comment_1 = comment_service.append_comment("20260525-root-001", "拾迹者", "user", "comment message 1")
+        comment_2 = comment_service.append_comment("20260525-root-001", "拾迹者", "user", "comment message 2")
         self._set_comment_message_time(comment_1.id, 3.0)
         self._set_comment_message_time(comment_2.id, 4.0)
 
-        rows = reflector._load_soul_thread_messages_since_cursor("默认", 3)
+        rows = reflector._load_soul_thread_messages_since_cursor("拾迹者", 3)
 
         self.assertEqual(["chat message 1", "chat message 2", "comment message 1"], [row["content"] for row in rows])
-        self.assertEqual([], reflector._load_soul_thread_messages_since_cursor("默认", 0))
+        self.assertEqual([], reflector._load_soul_thread_messages_since_cursor("拾迹者", 0))
 
         payload = {
-            "reflection_md": "## SOUL 深反思\n\n用户与默认产生了多条原始互动，系统只应读取最早的三条。",
+            "reflection_md": "## SOUL 深反思\n\n用户与拾迹者产生了多条原始互动，系统只应读取最早的三条。",
             "patches": [],
         }
         client = FakeClient(content=json.dumps(payload, ensure_ascii=False))
@@ -477,13 +477,13 @@ class ReflectorTest(unittest.TestCase):
 
     def test_preview_soul_deep_reflection_scopes_match_pending_interactions(self) -> None:
         soul_service.sync_souls()
-        chat_thread = chat_service.get_or_create_thread("默认")
+        chat_thread = chat_service.get_or_create_thread("拾迹者")
         chat_service.append_user_message(chat_thread.id, "这条会进入 preview")
 
         scopes = reflector.preview_soul_deep_reflection_scopes()
 
         self.assertEqual(1, len(scopes))
-        self.assertEqual("默认", scopes[0].soul_name)
+        self.assertEqual("拾迹者", scopes[0].soul_name)
         self.assertEqual(1, scopes[0].interaction_count)
 
         reflector.trigger_soul_deep_reflections(FakeClient(), "fake-model", trigger="cli_exit")
@@ -514,7 +514,7 @@ class ReflectorTest(unittest.TestCase):
             INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
             VALUES (?, ?, 'assistant', ?, 0, ?)
             """,
-            (post_id, "默认", "我陪你继续练。", 2.0),
+            (post_id, "拾迹者", "我陪你继续练。", 2.0),
         )
 
     def _set_chat_message_time(self, message_id: int, created_at: float) -> None:

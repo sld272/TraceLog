@@ -109,14 +109,14 @@ class ApiPostsTest(unittest.TestCase):
                 INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                ("默认", "/tmp/default.md", 1, 1, 1.0, 1.0),
+                ("拾迹者", "/tmp/default.md", 1, 1, 1.0, 1.0),
             )
             db.execute(
                 """
                 INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                ("p-2", "默认", "assistant", "回应", 0, 3.0),
+                ("p-2", "拾迹者", "assistant", "回应", 0, 3.0),
             )
             with patch(
                 "api.routes.posts.retrieval.user_search_posts",
@@ -251,7 +251,7 @@ class ApiPostsTest(unittest.TestCase):
                 """,
                 ("p-order", "2026-06-01T10:00:00+08:00", "排序测试", 1.0, 1.0),
             )
-            for name, current_sort_order, snapshot_sort_order in [("默认", 9, 0), ("毒舌好友", 0, 1)]:
+            for name, current_sort_order, snapshot_sort_order in [("拾迹者", 9, 0), ("毒舌好友", 0, 1)]:
                 db.execute(
                     """
                     INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
@@ -278,14 +278,14 @@ class ApiPostsTest(unittest.TestCase):
                 INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
                 VALUES (?, ?, 'assistant', ?, 0, ?)
                 """,
-                ("p-order", "默认", "后完成", 3.0),
+                ("p-order", "拾迹者", "后完成", 3.0),
             )
 
             with self._client() as client:
                 response = client.get("/posts/p-order")
 
         self.assertEqual(200, response.status_code)
-        self.assertEqual(["默认", "毒舌好友"], [item["soul_name"] for item in response.json()["comments"]])
+        self.assertEqual(["拾迹者", "毒舌好友"], [item["soul_name"] for item in response.json()["comments"]])
 
     def test_sse_event_format_includes_id_event_and_payload(self) -> None:
         from api.routes.posts import _format_sse
@@ -296,14 +296,14 @@ class ApiPostsTest(unittest.TestCase):
                 "post_id": "p-1",
                 "job_id": 3,
                 "event_type": "reply_succeeded",
-                "payload": {"soul_name": "默认"},
+                "payload": {"soul_name": "拾迹者"},
                 "created_at": 1.0,
             }
         )
 
         self.assertIn("id: 7\n", payload)
         self.assertIn("event: reply_succeeded\n", payload)
-        self.assertIn('"soul_name": "默认"', payload)
+        self.assertIn('"soul_name": "拾迹者"', payload)
         self.assertTrue(payload.endswith("\n\n"))
 
     def test_sse_query_after_id_skips_previous_events(self) -> None:

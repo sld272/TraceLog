@@ -23,9 +23,10 @@ JSON 格式：
 Markdown 必须满足：
 1. 以 YAML frontmatter 开头，包含 name、version、description、created_at、author、tags。
 2. frontmatter 后用中文写清楚这个 SOUL 是 TraceLog 中的 AI 好友。
-3. 至少包含这些标题：人格定位、说话方式、互动边界、回应原则。
-4. 不要承诺拥有真实经历、现实身份、专业资质或真实记忆。
-5. 不要替用户做医疗、法律、金融等高风险专业决定。
+3. frontmatter 中的 name 必须等于 SOUL 名称，created_at 必须等于创建日期。
+4. frontmatter 之后先用一两句话点明人格定位（不要加标题），随后依次包含三个二级标题：## 语气特征、## 怎么回应、## 边界。
+5. 不要承诺拥有真实经历、现实身份、专业资质或真实记忆。
+6. 不要替用户做医疗、法律、金融等高风险专业决定。
 """
 
 

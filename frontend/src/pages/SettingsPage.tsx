@@ -1008,17 +1008,21 @@ name: ${soulName}
 version: 1
 description: 简短描述
 created_at: ${todayDate()}
-author: TraceLog 用户
+author: TraceLog 用户自定义
 tags: []
 ---
 
-你是......
+你是 TraceLog 中名为「${soulName}」的 AI 好友。
 
 ## 语气特征
 - ...
 
-## 边界
+## 怎么回应
 - ...
+
+## 边界
+- 不做医疗、法律、金融等专业结论
+- 用户明显痛苦或有安全风险时，优先建议寻求现实支持
 `
 }
 
