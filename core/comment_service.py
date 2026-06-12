@@ -93,10 +93,18 @@ def list_post_conversations(post_id: str) -> list[CommentConversation]:
     _assert_post_exists(post_id)
     rows = db.query_all(
         """
-        SELECT *
+        SELECT comments.*
         FROM comments
-        WHERE post_id = ? AND seq = 0
-        ORDER BY created_at ASC, id ASC
+        LEFT JOIN post_soul_orders
+          ON post_soul_orders.post_id = comments.post_id
+         AND post_soul_orders.soul_name = comments.soul_name
+        WHERE comments.post_id = ? AND comments.seq = 0
+        ORDER BY
+            CASE WHEN post_soul_orders.sort_order IS NULL THEN 1 ELSE 0 END ASC,
+            post_soul_orders.sort_order ASC,
+            CASE WHEN post_soul_orders.sort_order IS NOT NULL THEN comments.soul_name END ASC,
+            comments.created_at ASC,
+            comments.id ASC
         """,
         (post_id,),
     )

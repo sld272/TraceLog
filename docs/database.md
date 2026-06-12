@@ -18,6 +18,7 @@
 ### 2.1 公开记录
 
 - `posts`：公开 post 原文，字段包括 `id`、`ts`、`content`、`importance`、`created_at`、`updated_at`。
+- `post_soul_orders`：每条公开 post 创建时的启用 SOUL 排序快照，用于固定该 post 下首评和评论线程的展示顺序。
 - `posts_fts`：unicode61 tokenizer，用于英文、数字和一般文本关键词检索。
 - `posts_fts_trigram`：trigram tokenizer，用于中文模糊检索。
 - `comments`：post 下某个 SOUL 的扁平评论会话流。`seq=0` 是首评，`seq>0` 是用户追问和 SOUL 回复。

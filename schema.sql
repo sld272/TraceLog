@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS idx_posts_ts ON posts(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_importance ON posts(importance DESC);
 
+CREATE TABLE IF NOT EXISTS post_soul_orders (
+    post_id    TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    soul_name  TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL,
+    PRIMARY KEY (post_id, soul_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_post_soul_orders_post_order
+    ON post_soul_orders(post_id, sort_order, soul_name);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS posts_fts USING fts5(
     content,
     content='posts',

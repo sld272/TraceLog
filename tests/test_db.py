@@ -70,6 +70,7 @@ class DbTest(unittest.TestCase):
         self.assertIn("vector_index_collections", tables)
         self.assertIn("vector_index_items", tables)
         self.assertIn("vector_outbox", tables)
+        self.assertIn("post_soul_orders", tables)
 
     def test_message_mutation_marker_columns_exist(self) -> None:
         comment_columns = {row["name"] for row in db.query_all("PRAGMA table_info(comments)")}
@@ -80,6 +81,44 @@ class DbTest(unittest.TestCase):
         self.assertIn("edited_at", chat_columns)
         self.assertIn("rerun_at", chat_columns)
         self.assertIn("metadata", chat_columns)
+
+    def test_post_soul_order_backfill_preserves_existing_display_order(self) -> None:
+        self._insert_post("p-order")
+        for name in ["A", "B"]:
+            db.execute(
+                """
+                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, 1, 0, ?, ?)
+                """,
+                (name, f"souls/{name}.md", 1.0, 1.0),
+            )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+            VALUES (?, ?, 'assistant', ?, 0, ?)
+            """,
+            ("p-order", "B", "B reply", 2.0),
+        )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+            VALUES (?, ?, 'assistant', ?, 0, ?)
+            """,
+            ("p-order", "A", "A reply", 3.0),
+        )
+
+        db.init_db()
+
+        rows = db.query_all(
+            """
+            SELECT soul_name, sort_order
+            FROM post_soul_orders
+            WHERE post_id = ?
+            ORDER BY sort_order ASC
+            """,
+            ("p-order",),
+        )
+        self.assertEqual([("B", 0), ("A", 1)], [(row["soul_name"], row["sort_order"]) for row in rows])
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(

@@ -89,6 +89,43 @@ class CommentServiceTest(unittest.TestCase):
         self.assertNotEqual(first.root_comment_id, other.root_comment_id)
         self.assertEqual("默认", first.soul_name)
 
+    def test_list_post_conversations_uses_post_soul_order_snapshot(self) -> None:
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("p-order", "2026-06-01T10:00:00+08:00", "排序测试", 1.0, 1.0),
+        )
+        for soul_name, sort_order in [("默认", 0), ("毒舌好友", 1)]:
+            db.execute(
+                """
+                INSERT INTO post_soul_orders(post_id, soul_name, sort_order, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("p-order", soul_name, sort_order, 1.0),
+            )
+        db.execute("UPDATE souls SET sort_order = ? WHERE name = ?", (9, "默认"))
+        db.execute("UPDATE souls SET sort_order = ? WHERE name = ?", (0, "毒舌好友"))
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+            VALUES (?, ?, 'assistant', ?, 0, ?)
+            """,
+            ("p-order", "毒舌好友", "先完成", 2.0),
+        )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+            VALUES (?, ?, 'assistant', ?, 0, ?)
+            """,
+            ("p-order", "默认", "后完成", 3.0),
+        )
+
+        conversations = comment_service.list_post_conversations("p-order")
+
+        self.assertEqual(["默认", "毒舌好友"], [conversation.soul_name for conversation in conversations])
+
     def test_comment_reply_only_writes_selected_soul_conversation(self) -> None:
         client = FakeClient({"reply": "好，我只在这里接住这句。", "todos_to_upsert": [], "todos_to_delete": []})
 

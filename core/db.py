@@ -62,6 +62,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "chat_messages", "edited_at", "REAL")
     _ensure_column(conn, "chat_messages", "rerun_at", "REAL")
     _ensure_column(conn, "chat_messages", "metadata", "TEXT")
+    _ensure_post_soul_orders(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS evidence_feedback (
@@ -74,6 +75,72 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(channel, message_id, doc_id)
         )
         """
+    )
+
+
+def _ensure_post_soul_orders(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS post_soul_orders (
+            post_id    TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+            soul_name  TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (post_id, soul_name)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_post_soul_orders_post_order
+            ON post_soul_orders(post_id, sort_order, soul_name)
+        """
+    )
+    _backfill_post_soul_orders(conn)
+
+
+def _backfill_post_soul_orders(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT comments.post_id, comments.soul_name, comments.created_at, comments.id
+        FROM comments
+        LEFT JOIN post_soul_orders
+          ON post_soul_orders.post_id = comments.post_id
+         AND post_soul_orders.soul_name = comments.soul_name
+        WHERE comments.seq = 0
+          AND post_soul_orders.post_id IS NULL
+        ORDER BY comments.post_id ASC, comments.created_at ASC, comments.id ASC
+        """
+    ).fetchall()
+    if not rows:
+        return
+
+    max_orders = {
+        row["post_id"]: int(row["max_sort_order"])
+        for row in conn.execute(
+            """
+            SELECT post_id, MAX(sort_order) AS max_sort_order
+            FROM post_soul_orders
+            GROUP BY post_id
+            """
+        ).fetchall()
+        if row["max_sort_order"] is not None
+    }
+    offsets: dict[str, int] = {}
+    inserts = []
+    for row in rows:
+        post_id = str(row["post_id"])
+        next_offset = offsets.get(post_id, 0)
+        offsets[post_id] = next_offset + 1
+        sort_order = max_orders.get(post_id, -1) + 1 + next_offset
+        inserts.append((post_id, row["soul_name"], sort_order, row["created_at"]))
+
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO post_soul_orders(post_id, soul_name, sort_order, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        inserts,
     )
 
 

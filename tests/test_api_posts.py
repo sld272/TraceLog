@@ -240,6 +240,53 @@ class ApiPostsTest(unittest.TestCase):
 
         self.assertEqual(422, response.status_code)
 
+    def test_get_post_detail_orders_comments_by_post_soul_order_snapshot(self) -> None:
+        from core import db
+
+        with self._temp_db():
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("p-order", "2026-06-01T10:00:00+08:00", "排序测试", 1.0, 1.0),
+            )
+            for name, current_sort_order, snapshot_sort_order in [("默认", 9, 0), ("毒舌好友", 0, 1)]:
+                db.execute(
+                    """
+                    INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                    VALUES (?, ?, 1, ?, ?, ?)
+                    """,
+                    (name, f"souls/{name}.md", current_sort_order, 1.0, 1.0),
+                )
+                db.execute(
+                    """
+                    INSERT INTO post_soul_orders(post_id, soul_name, sort_order, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    ("p-order", name, snapshot_sort_order, 1.0),
+                )
+            db.execute(
+                """
+                INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+                VALUES (?, ?, 'assistant', ?, 0, ?)
+                """,
+                ("p-order", "毒舌好友", "先完成", 2.0),
+            )
+            db.execute(
+                """
+                INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+                VALUES (?, ?, 'assistant', ?, 0, ?)
+                """,
+                ("p-order", "默认", "后完成", 3.0),
+            )
+
+            with self._client() as client:
+                response = client.get("/posts/p-order")
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(["默认", "毒舌好友"], [item["soul_name"] for item in response.json()["comments"]])
+
     def test_sse_event_format_includes_id_event_and_payload(self) -> None:
         from api.routes.posts import _format_sse
 

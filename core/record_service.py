@@ -22,6 +22,7 @@ def save_post(content: str, *, index_immediately: bool = True, track_embedding: 
             """,
             (post_id, now.isoformat(), body, now.timestamp(), now.timestamp()),
         )
+        _snapshot_post_soul_order(conn, post_id, now.timestamp())
         if track_embedding:
             doc = vector_index_service.build_post_doc(post_id, body)
             if doc is not None:
@@ -36,6 +37,26 @@ def save_post(content: str, *, index_immediately: bool = True, track_embedding: 
             pass
 
     return post_id
+
+
+def _snapshot_post_soul_order(conn, post_id: str, created_at: float) -> None:
+    rows = conn.execute(
+        """
+        SELECT name, sort_order
+        FROM souls
+        WHERE enabled = 1
+        ORDER BY sort_order ASC, name ASC
+        """
+    ).fetchall()
+    if not rows:
+        return
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO post_soul_orders(post_id, soul_name, sort_order, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        [(post_id, row["name"], int(row["sort_order"]), created_at) for row in rows],
+    )
 
 
 def index_post_embedding(post_id: str) -> None:

@@ -119,6 +119,33 @@ class RecordServiceTest(unittest.TestCase):
         self.assertEqual("pending", outbox["status"])
         self.assertFalse(vector_index_service.collection_state("tracelog_test").query_ready)
 
+    def test_save_post_snapshots_enabled_soul_order(self) -> None:
+        for name, enabled, sort_order in [
+            ("后来的", 1, 2),
+            ("禁用的", 0, 1),
+            ("前面的", 1, 0),
+        ]:
+            db.execute(
+                """
+                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (name, f"souls/{name}.md", enabled, sort_order, 1.0, 1.0),
+            )
+
+        post_id = record_service.save_post("今天想练歌", index_immediately=False)
+
+        rows = db.query_all(
+            """
+            SELECT soul_name, sort_order
+            FROM post_soul_orders
+            WHERE post_id = ?
+            ORDER BY sort_order ASC, soul_name ASC
+            """,
+            (post_id,),
+        )
+        self.assertEqual([("前面的", 0), ("后来的", 2)], [(row["soul_name"], row["sort_order"]) for row in rows])
+
     def test_save_post_preserves_vector_doc_and_reraises_keyboard_interrupt(self) -> None:
         self.fake_vectorstore.error = KeyboardInterrupt()
 
