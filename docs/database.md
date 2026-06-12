@@ -10,15 +10,16 @@
 - 执行 `schema.sql`。
 - 校验 FTS5 trigram tokenizer 可用。
 - 在 `meta.schema_version` 写入当前版本 `1`。
+- 执行开发期轻量向前迁移，例如补齐 `post_soul_orders`，并为旧数据按已有 root comments 的 `created_at/id` 回填排序快照。
 
-项目尚未发布，不保留旧 schema 兼容。开发期旧数据如果不符合当前 schema，直接删除 `workspace/state.db` 和 `workspace/chroma_db/` 后重新初始化。
+项目仍处开发期，保留必要的轻量迁移和数据回填；破坏性 schema 变化仍可能要求删除 `workspace/state.db` 和 `workspace/chroma_db/` 后重新初始化。
 
 ## 2. 核心表分组
 
 ### 2.1 公开记录
 
 - `posts`：公开 post 原文，字段包括 `id`、`ts`、`content`、`importance`、`created_at`、`updated_at`。
-- `post_soul_orders`：每条公开 post 创建时的启用 SOUL 排序快照，用于固定该 post 下首评和评论线程的展示顺序。
+- `post_soul_orders`：每条公开 post 创建时的启用 SOUL 排序快照，用于固定该 post 下首评和评论线程的展示顺序。新 post 由 `record_service.save_post()` 写入；旧 post 在 `init_db()` 中按已有 root comments 的 `created_at/id` 回填。它只服务 UI 排序，不进入 prompt、FTS5、ChromaDB 或反思输入。
 - `posts_fts`：unicode61 tokenizer，用于英文、数字和一般文本关键词检索。
 - `posts_fts_trigram`：trigram tokenizer，用于中文模糊检索。
 - `comments`：post 下某个 SOUL 的扁平评论会话流。`seq=0` 是首评，`seq>0` 是用户追问和 SOUL 回复。
@@ -28,6 +29,8 @@
 
 公开 post 是全局检索、轻反思、TodoTool 和全局深反思的主要证据来源。
 
+同一 post 下的 SOUL root comment / conversation 入口优先按 `post_soul_orders.sort_order, soul_name` 展示；没有快照的旧数据回退到 `comments.created_at, comments.id`。单个 SOUL 会话内部仍按 `comments.seq` 排序。
+
 ### 2.2 评论会话与私聊
 
 - `comments(post_id, soul_name, seq)`：绑定到某条 post 与某个 SOUL 的后续评论会话，不再有独立 thread 容器。
@@ -35,7 +38,7 @@
 
 评论会话和私聊消息不进入 FTS5，但会进入 ChromaDB 统一检索池。私聊消息只允许当前 SOUL 检索；公开评论对话可以作为所有 SOUL 的公开背景，但 prompt 中必须标注说话人。
 
-图片原始文件不进入 FTS5 或 ChromaDB。识图启用且成功时，图片摘要写入 `vision_cache`；公开 post 的图片摘要会作为 `post_vision` 文档进入 ChromaDB，并在回复、证据展开和反思输入中随所属 post 注入。未启用或配置不可用时，只在 LLM 上下文中保留“有图片但不能查看内容”的边界提示。
+图片原始文件不进入 FTS5 或 ChromaDB。识图启用且成功时，图片摘要写入 `vision_cache`；公开 post 的图片摘要会作为 `post_vision` 文档进入 ChromaDB，并在回复、引用记忆面板和反思输入中随所属 post 注入。未启用或配置不可用时，只在 LLM 上下文中保留“有图片但不能查看内容”的边界提示。
 
 ### 2.3 派生结构化信号
 
@@ -153,8 +156,8 @@ patch evidence 必须是本次输入中的 `chat_message:<id>` 或 `comment_mess
 
 Schema 使用外键和 trigger 保持主要数据一致性：
 
-- 删除 SOUL 会级联删除该 SOUL 的 comments、chat threads 和 SOUL memory revisions。
-- 删除 post 会级联删除 comments、post attachment links、todo source 关联和 FTS 索引；应用层同时删除对应 post/comment/post_vision 向量文档。附件文件本身仍由孤儿附件清理逻辑处理。
+- 删除 SOUL 会级联删除该 SOUL 的 comments、chat threads、SOUL memory revisions 和该 SOUL 在各 post 上的排序快照。
+- 删除 post 会级联删除 comments、`post_soul_orders`、post attachment links、todo source 关联和 FTS 索引；应用层同时删除对应 post/comment/post_vision 向量文档。附件文件本身仍由孤儿附件清理逻辑处理。
 - FTS trigger 负责公开 post 正文索引同步。
 
 私聊和评论追问消息本身不会被自动提升为全局画像；只有 SOUL 深反思成功并通过 patch gate 后，才会写入对应 SOUL 的长期 Markdown 记忆。
