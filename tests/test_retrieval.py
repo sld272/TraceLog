@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db, fts_query, logging_service, retrieval, vectorstore
+from core import chat_service, comment_service, db, fts_query, logging_service, retrieval, vectorstore
 
 
 class FtsQueryTest(unittest.TestCase):
@@ -619,6 +619,53 @@ class VectorDistanceFilterTest(unittest.TestCase):
 
         self.assertEqual(3, len(hits))
         self.assertTrue(all(hit.type == "post" for hit in hits))
+
+    def test_chat_channel_quota_admits_qualified_chat_hit_despite_higher_scoring_posts(self) -> None:
+        vector_hits = [
+            *[
+                vectorstore.VectorDocHit(
+                    f"post-p-{index}",
+                    "post",
+                    f"p-{index}",
+                    index,
+                    0.05 * index + 0.05,
+                    {"type": "post", "post_id": f"p-{index}"},
+                )
+                for index in range(1, 5)
+            ],
+            vectorstore.VectorDocHit(
+                "chat-9",
+                "chat",
+                "9",
+                5,
+                0.3,
+                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 9, "soul_name": "默认"},
+            ),
+        ]
+
+        hits = retrieval._merge_document_hits(
+            "旧私聊",
+            [],
+            vector_hits,
+            k=chat_service.RELATED_POST_LIMIT,
+            channel="chat",
+            current_soul="默认",
+        )
+
+        doc_ids = [hit.doc_id for hit in hits]
+        self.assertIn("chat-9", doc_ids)
+        self.assertEqual(3, sum(1 for hit in hits if hit.type == "post"))
+        self.assertNotIn("post-p-4", doc_ids)
+
+    def test_reply_channel_retrieval_limits_cover_quota_sums(self) -> None:
+        self.assertGreaterEqual(
+            chat_service.RELATED_POST_LIMIT,
+            sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["chat"].values()),
+        )
+        self.assertGreaterEqual(
+            comment_service.COMMENT_RELATED_MEMORY_LIMIT,
+            sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["comment"].values()),
+        )
 
 
 class RetrievalDatabaseTest(unittest.TestCase):

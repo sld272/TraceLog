@@ -11,7 +11,8 @@ from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 CHAT_HISTORY_LIMIT = 20
-RELATED_POST_LIMIT = 3
+# 检索 k 必须覆盖配额总和,否则高分 post 会占满名额,chat/comment 配额永远填不上
+RELATED_POST_LIMIT = sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["chat"].values())
 RETRIEVAL_USER_MESSAGE_LIMIT = 3
 
 

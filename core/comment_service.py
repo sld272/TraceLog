@@ -27,7 +27,8 @@ from core.soul_service import SoulContext
 from core.app_services import public_post_pipeline
 
 COMMENT_HISTORY_LIMIT = 30
-COMMENT_RELATED_MEMORY_LIMIT = 5
+# 检索 k 必须覆盖配额总和,否则高分 post 会占满名额,comment/chat 配额永远填不上
+COMMENT_RELATED_MEMORY_LIMIT = sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["comment"].values())
 RETRIEVAL_USER_MESSAGE_LIMIT = 3
 OTHER_SOUL_THREAD_CONTEXT_LIMIT = 6
 
