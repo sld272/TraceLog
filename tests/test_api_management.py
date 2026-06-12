@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import io
 import json
@@ -559,6 +560,36 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("id: 1\n", payload)
         self.assertIn("event: chat_message\n", payload)
         self.assertIn('"content": "我在。"', payload)
+
+    def test_chat_message_sse_query_after_id_overrides_last_event_id(self) -> None:
+        from api.routes import chat as chat_routes
+
+        captured: dict[str, int] = {}
+
+        async def fake_run_sync(func, *args, **kwargs):
+            del func, args, kwargs
+            return object()
+
+        def fake_message_stream(thread_id: int, after_id: int):
+            captured["thread_id"] = thread_id
+            captured["after_id"] = after_id
+
+            async def empty_stream():
+                if False:
+                    yield ""
+
+            return empty_stream()
+
+        with (
+            patch("api.routes.chat.run_sync", fake_run_sync),
+            patch("api.routes.chat._message_stream", fake_message_stream),
+        ):
+            response = asyncio.run(
+                chat_routes.stream_chat_thread_events(7, last_event_id="3", after_id=42)
+            )
+
+        self.assertEqual("text/event-stream", response.media_type)
+        self.assertEqual({"thread_id": 7, "after_id": 42}, captured)
 
     def test_comment_route_sends_message_to_selected_soul_conversation(self) -> None:
         post_id = "20260531-001"

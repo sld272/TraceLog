@@ -559,7 +559,8 @@ export function streamPostEvents(
 
   POST_EVENT_TYPES.forEach((type) => {
     es.addEventListener(type, (e) => {
-      const data = JSON.parse(e.data) as PostEvent
+      const data = parseSseJson<PostEvent>(e.data, 'post event')
+      if (!data) return
       onEvent(data)
       if (data.event_type === 'pipeline_done') {
         onDone?.()
@@ -569,6 +570,32 @@ export function streamPostEvents(
   })
 
   return () => es.close()
+}
+
+export function streamChatMessages(
+  threadId: number,
+  onMessage: (message: ChatMessage) => void,
+  options: { afterId?: number } = {},
+): () => void {
+  const query = options.afterId !== undefined ? `?after_id=${options.afterId}` : ''
+  const es = new EventSource(`${BASE}/chat/threads/${threadId}/events${query}`)
+
+  es.addEventListener('chat_message', (e) => {
+    const data = parseSseJson<ChatMessage>(e.data, 'chat message')
+    if (!data) return
+    onMessage(data)
+  })
+
+  return () => es.close()
+}
+
+function parseSseJson<T>(data: string, label: string): T | null {
+  try {
+    return JSON.parse(data) as T
+  } catch (err) {
+    console.warn(`Invalid ${label} SSE payload`, err)
+    return null
+  }
 }
 
 /* Souls */

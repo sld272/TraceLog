@@ -7,6 +7,7 @@ import {
   listChatThreads,
   rerunChatMessage,
   sendChatMessage,
+  streamChatMessages,
   updateChatMessage,
 } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -47,6 +48,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   } | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
+  const chatStreamUnsubscribeRef = useRef<(() => void) | null>(null)
   const stickToBottomRef = useRef(true)
   const forceScrollRef = useRef(false)
   const submitShortcutTitle = getSubmitShortcutTitle()
@@ -87,6 +89,29 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     setEditDraft('')
     fetchThread()
   }, [fetchThread])
+
+  useEffect(() => {
+    setFailedReplies(failedRepliesFromMessages(messages))
+  }, [messages])
+
+  useEffect(() => {
+    if (!thread?.id) return
+    const afterId = maxRealMessageId(messages)
+    const unsubscribe = streamChatMessages(
+      thread.id,
+      (message) => {
+        setMessages((prev) => mergeMessages(prev, [message]))
+      },
+      { afterId },
+    )
+    chatStreamUnsubscribeRef.current = unsubscribe
+    return () => {
+      unsubscribe()
+      if (chatStreamUnsubscribeRef.current === unsubscribe) {
+        chatStreamUnsubscribeRef.current = null
+      }
+    }
+  }, [thread?.id])
 
   useEffect(() => {
     const el = chatInputRef.current
@@ -148,8 +173,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       const response = await sendChatMessage(soulName, body, attachments.map((attachment) => attachment.id))
       setThread(response.thread)
       if (response.result.ok) {
-        setMessages(response.messages)
-        setFailedReplies(failedRepliesFromMessages(response.messages))
+        setMessages((prev) => mergeMessageWindow(prev, response.messages))
         setRetryErrors({})
       } else {
         const failedMessages = response.messages.length > 0
@@ -162,22 +186,25 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
                 response.result.error ?? '回复生成失败',
               ),
             ]
-        setMessages(failedMessages)
-        setFailedReplies(failedRepliesFromMessages(failedMessages))
+        setMessages((prev) => mergeMessageWindow(prev, failedMessages))
         setRetryErrors({})
       }
       setError(null)
     } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : '发送失败'
       setMessages((prev) =>
         prev.map((message) =>
           message.id === optimisticAssistantId
-            ? { ...message, content: '' }
+            ? {
+                ...message,
+                content: '',
+                metadata: JSON.stringify({ status: 'failed', error: errorMessage }),
+              }
             : message,
         ),
       )
       setDraft((current) => current ? current : submittedDraft)
       setAttachments((current) => current.length > 0 ? current : submittedAttachments)
-      setFailedReplies({ [optimisticAssistantId]: err instanceof Error ? err.message : '发送失败' })
       setRetryErrors({})
       setError(null)
     } finally {
@@ -236,8 +263,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       )
       setThread(response.thread)
       if (response.result.ok) {
-        setMessages(response.messages)
-        setFailedReplies(failedRepliesFromMessages(response.messages))
+        setMessages((prev) => mergeMessageWindow(prev, response.messages))
         setRetryErrors({})
       } else {
         const failedMessages = response.messages.length > 0
@@ -250,8 +276,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
                 response.result.error ?? '回复生成失败',
               ),
             ]
-        setMessages(failedMessages)
-        setFailedReplies(failedRepliesFromMessages(failedMessages))
+        setMessages((prev) => mergeMessageWindow(prev, failedMessages))
         setRetryErrors({})
       }
       setError(null)
@@ -293,10 +318,9 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     try {
       const response = await rerunChatMessage(message.id)
       setThread(response.thread)
-      setMessages(response.messages)
+      setMessages((prev) => mergeMessageWindow(prev, response.messages))
       setEditingMessageId(null)
       setEditDraft('')
-      setFailedReplies({})
       setRetryErrors({})
       setError(null)
     } catch (err) {
@@ -339,8 +363,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
         : await sendChatMessage(soulName, userMessage.content, attachmentIds)
       setThread(response.thread)
       if (response.result.ok) {
-        setMessages(response.messages)
-        setFailedReplies(failedRepliesFromMessages(response.messages))
+        setMessages((prev) => mergeMessageWindow(prev, response.messages))
         setRetryErrors({})
       } else {
         const failedMessages = response.messages.length > 0
@@ -353,8 +376,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
                 response.result.error ?? '回复生成失败',
               ),
             ]
-        setMessages(failedMessages)
-        setFailedReplies(failedRepliesFromMessages(failedMessages))
+        setMessages((prev) => mergeMessageWindow(prev, failedMessages))
         setRetryErrors({})
       }
       setError(null)
@@ -572,6 +594,56 @@ function failedReplyError(message: ChatMessage): string | null {
   } catch {
     return null
   }
+}
+
+function mergeMessageWindow(current: ChatMessage[], windowMessages: ChatMessage[]): ChatMessage[] {
+  if (windowMessages.length === 0) return current
+  const realIds = windowMessages
+    .map((message) => message.id)
+    .filter((id) => id > 0)
+  if (realIds.length === 0) return mergeMessages(current, windowMessages)
+  const oldestWindowId = Math.min(...realIds)
+  return mergeMessages(
+    current.filter((message) => message.id > 0 && message.id < oldestWindowId),
+    windowMessages,
+  )
+}
+
+function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  if (incoming.length === 0) return current
+  const incomingRealMessages = incoming.filter((message) => message.id > 0)
+  const shouldDropOptimisticAssistant = incomingRealMessages.some((message) => message.role === 'assistant')
+
+  const keptCurrent = current.filter((message) => {
+    if (message.id > 0) return !incomingRealMessages.some((incomingMessage) => incomingMessage.id === message.id)
+    if (shouldDropOptimisticAssistant && message.role === 'assistant') return false
+    return !incomingRealMessages.some((incomingMessage) => isOptimisticMatch(message, incomingMessage))
+  })
+
+  return [...keptCurrent, ...incoming]
+    .sort((a, b) => {
+      if (a.id > 0 && b.id > 0 && a.id !== b.id) return a.id - b.id
+      if (a.created_at !== b.created_at) return a.created_at - b.created_at
+      if (a.id !== b.id) return a.id - b.id
+      return a.created_at - b.created_at
+    })
+}
+
+function isOptimisticMatch(optimistic: ChatMessage, persisted: ChatMessage): boolean {
+  if (optimistic.id > 0 || persisted.id <= 0) return false
+  if (optimistic.role !== persisted.role) return false
+  if (optimistic.content.trim() !== persisted.content.trim()) return false
+  return attachmentIds(optimistic).join('\0') === attachmentIds(persisted).join('\0')
+}
+
+function attachmentIds(message: ChatMessage): string[] {
+  return (message.attachments ?? [])
+    .map((attachment) => attachment.id)
+    .sort()
+}
+
+function maxRealMessageId(messages: ChatMessage[]): number {
+  return messages.reduce((maxId, message) => message.id > 0 ? Math.max(maxId, message.id) : maxId, 0)
 }
 
 function MessageBubble({

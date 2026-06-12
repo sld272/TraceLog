@@ -41,15 +41,17 @@ async def get_chat_thread(thread_id: int, limit: int = Query(default=30, ge=1, l
 async def stream_chat_thread_events(
     thread_id: int,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    after_id: int | None = Query(default=None, ge=0),
 ):
     try:
         await run_sync(chat_service.get_thread, thread_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    try:
-        after_id = int(last_event_id or "0")
-    except ValueError:
-        after_id = 0
+    if after_id is None:
+        try:
+            after_id = int(last_event_id or "0")
+        except ValueError:
+            after_id = 0
     return StreamingResponse(
         _message_stream(thread_id, after_id),
         media_type="text/event-stream",
