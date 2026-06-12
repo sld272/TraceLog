@@ -11,6 +11,7 @@ import {
   listProfileRevisions,
   listSoulMemoryRevisions,
   listSouls,
+  listJobs,
   previewGlobalReflection,
   previewSoulReflections,
   retryJob,
@@ -25,16 +26,23 @@ import {
   formatSmartTime,
 } from '@/utils/date'
 import { Notice } from '@/components/Notice'
-import { PollTimeoutError, pollUntil } from '@/utils/polling'
+import { pollUntil } from '@/utils/polling'
 import styles from './WorkspacePages.module.css'
 
 const RECENT_REVISION_LIMIT = 8
 const RECENT_PROFILE_REVISION_FETCH_LIMIT = 24
 const RECENT_SOUL_REVISION_FETCH_LIMIT = 12
 const REFLECTION_POLL_INTERVAL_MS = 3000
-const REFLECTION_POLL_TIMEOUT_MS = 30000
+const REFLECTION_JOB_FETCH_LIMIT = 50
 const REVISION_GROUP_WINDOW_SECONDS = 60
 const TERMINAL_JOB_STATUSES = new Set<Job['status']>(['succeeded', 'failed', 'cancelled'])
+const ACTIVE_JOB_STATUSES = new Set<Job['status']>(['pending', 'running'])
+const REFLECTION_JOB_TYPES = {
+  global: 'trigger_global_deep_reflection',
+  souls: 'trigger_soul_deep_reflections',
+} as const
+
+type ReflectionRunKind = keyof typeof REFLECTION_JOB_TYPES
 
 interface RevisionGroup {
   key: string
@@ -73,7 +81,7 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
   const [soulScopes, setSoulScopes] = useState<SoulReflectionScope[]>([])
   const [recentRevisions, setRecentRevisions] = useState<MemoryRevisionSummary[]>([])
   const [loading, setLoading] = useState(true)
-  const [running, setRunning] = useState<'global' | 'souls' | null>(null)
+  const [running, setRunning] = useState<ReflectionRunKind | null>(null)
   const [activeJob, setActiveJob] = useState<Job | null>(null)
   const [lastFailedJob, setLastFailedJob] = useState<Job | null>(null)
   const [jobActionBusy, setJobActionBusy] = useState(false)
@@ -134,6 +142,93 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
     refreshPage()
   }, [refreshPage])
 
+  const waitForReflectionJob = useCallback(async (jobId: number, signal: AbortSignal) => {
+    const job = await pollUntil({
+      intervalMs: REFLECTION_POLL_INTERVAL_MS,
+      timeoutMs: null,
+      signal,
+      tick: async () => {
+        const [job] = await Promise.all([
+          getJob(jobId),
+          fetchPreview(),
+        ])
+        setActiveJob(job)
+        return job
+      },
+      isDone: (job) => TERMINAL_JOB_STATUSES.has(job.status),
+    })
+
+    await Promise.all([
+      fetchPreview(),
+      fetchRecentRevisions(),
+    ])
+    onReflectionSettled?.()
+
+    if (job.status === 'succeeded') {
+      setActiveJob(null)
+      setLastFailedJob(null)
+      setNotice('整理已完成，更新内容显示在下方')
+    } else if (job.status === 'cancelled') {
+      setActiveJob(null)
+      setNotice('整理已取消')
+    } else {
+      setActiveJob(null)
+      setLastFailedJob(job)
+      setError(null)
+    }
+  }, [fetchPreview, fetchRecentRevisions, onReflectionSettled])
+
+  const handleReflectionRunError = (err: unknown, fallbackLabel: string) => {
+    if (err instanceof DOMException && err.name === 'AbortError') return
+    setActiveJob(null)
+    setError(err instanceof Error ? err.message : `${fallbackLabel}失败`)
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    const restoreReflectionJob = async () => {
+      try {
+        const jobs = await listReflectionJobs()
+        if (controller.signal.aborted) return
+        if (pollAbortRef.current && pollAbortRef.current !== controller) return
+
+        const active = latestActiveReflectionJob(jobs)
+        if (active) {
+          const kind = reflectionRunKindForJob(active)
+          if (!kind) return
+          pollAbortRef.current = controller
+          setRunning(kind)
+          setActiveJob(active)
+          setLastFailedJob(null)
+          setNotice('检测到整理仍在后台运行，已继续跟踪')
+          try {
+            await waitForReflectionJob(active.id, controller.signal)
+          } finally {
+            if (pollAbortRef.current === controller) pollAbortRef.current = null
+            setRunning(null)
+          }
+          return
+        }
+
+        const failed = latestUnretriedFailedReflectionJob(jobs)
+        if (failed) {
+          setActiveJob(null)
+          setLastFailedJob(failed)
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+        setError(err instanceof Error ? err.message : '整理任务状态恢复失败')
+      }
+    }
+
+    void restoreReflectionJob()
+    return () => {
+      controller.abort()
+      if (pollAbortRef.current === controller) pollAbortRef.current = null
+    }
+  }, [waitForReflectionJob])
+
   useEffect(() => {
     return () => {
       pollAbortRef.current?.abort()
@@ -176,61 +271,6 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
       if (pollAbortRef.current === controller) pollAbortRef.current = null
       setRunning(null)
     }
-  }
-
-  const waitForReflectionJob = async (jobId: number, signal: AbortSignal) => {
-    try {
-      const job = await pollUntil({
-        intervalMs: REFLECTION_POLL_INTERVAL_MS,
-        timeoutMs: REFLECTION_POLL_TIMEOUT_MS,
-        signal,
-        tick: async () => {
-          const [job] = await Promise.all([
-            getJob(jobId),
-            fetchPreview(),
-          ])
-          setActiveJob(job)
-          return job
-        },
-        isDone: (job) => TERMINAL_JOB_STATUSES.has(job.status),
-      })
-
-      await Promise.all([
-        fetchPreview(),
-        fetchRecentRevisions(),
-      ])
-      onReflectionSettled?.()
-
-      if (job.status === 'succeeded') {
-        setActiveJob(null)
-        setLastFailedJob(null)
-        setNotice('整理已完成，更新内容显示在下方')
-      } else if (job.status === 'cancelled') {
-        setActiveJob(null)
-        setNotice('整理已取消')
-      } else {
-        setActiveJob(null)
-        setLastFailedJob(job)
-        setError(null)
-      }
-    } catch (err) {
-      if (err instanceof PollTimeoutError) {
-        await Promise.all([
-          fetchPreview(),
-          fetchRecentRevisions(),
-        ])
-        onReflectionSettled?.()
-        setNotice('整理仍在后台运行，可稍后刷新查看结果')
-        return
-      }
-      throw err
-    }
-  }
-
-  const handleReflectionRunError = (err: unknown, fallbackLabel: string) => {
-    if (err instanceof DOMException && err.name === 'AbortError') return
-    setActiveJob(null)
-    setError(err instanceof Error ? err.message : `${fallbackLabel}失败`)
   }
 
   const retryReflectionJob = async (job: Job) => {
@@ -343,6 +383,54 @@ export function ReflectionsPage({ onReflectionSettled }: ReflectionsPageProps) {
       )}
     </div>
   )
+}
+
+async function listReflectionJobs(): Promise<Job[]> {
+  const jobGroups = await Promise.all(
+    Object.values(REFLECTION_JOB_TYPES).map((jobType) => (
+      listJobs({ job_type: jobType, limit: REFLECTION_JOB_FETCH_LIMIT })
+    )),
+  )
+  return jobGroups.flat()
+}
+
+function latestActiveReflectionJob(jobs: Job[]): Job | null {
+  return newestJob(jobs.filter((job) => ACTIVE_JOB_STATUSES.has(job.status)))
+}
+
+function latestUnretriedFailedReflectionJob(jobs: Job[]): Job | null {
+  const retriedJobIds = new Set(
+    jobs
+      .map(retryOfJobId)
+      .filter((jobId): jobId is number => jobId !== null),
+  )
+  return newestJob(jobs.filter((job) => job.status === 'failed' && !retriedJobIds.has(job.id)))
+}
+
+function newestJob(jobs: Job[]): Job | null {
+  return [...jobs].sort(compareJobsDesc)[0] ?? null
+}
+
+function compareJobsDesc(a: Job, b: Job): number {
+  const createdDelta = b.created_at - a.created_at
+  return createdDelta === 0 ? b.id - a.id : createdDelta
+}
+
+function retryOfJobId(job: Job): number | null {
+  if (!isRecord(job.payload)) return null
+  const value = job.payload.retry_of_job_id
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function reflectionRunKindForJob(job: Job): ReflectionRunKind | null {
+  if (job.type === REFLECTION_JOB_TYPES.global) return 'global'
+  if (job.type === REFLECTION_JOB_TYPES.souls) return 'souls'
+  return null
 }
 
 function RecentRevisionsCard({

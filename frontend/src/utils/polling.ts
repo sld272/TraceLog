@@ -1,6 +1,6 @@
 interface PollUntilOptions<T> {
   intervalMs: number
-  timeoutMs: number
+  timeoutMs?: number | null
   tick: () => Promise<T>
   isDone: (value: T) => boolean
   signal?: AbortSignal
@@ -26,10 +26,11 @@ export async function pollUntil<T>({
     throwIfAborted(signal)
     const value = await tick()
     if (isDone(value)) return value
-    if (Date.now() - startedAt >= timeoutMs) {
+    const elapsedMs = Date.now() - startedAt
+    if (timeoutMs != null && elapsedMs >= timeoutMs) {
       throw new PollTimeoutError()
     }
-    await wait(Math.min(intervalMs, timeoutMs - (Date.now() - startedAt)), signal)
+    await wait(timeoutMs == null ? intervalMs : Math.min(intervalMs, timeoutMs - elapsedMs), signal)
   }
 }
 
