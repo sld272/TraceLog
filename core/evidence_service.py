@@ -15,7 +15,6 @@ def format_retrieval_hits(
     current_soul: str | None = None,
 ) -> str:
     """Expand mixed retrieval hits into prompt-ready evidence blocks."""
-    del current_soul
     parts: list[str] = []
     seen_posts: set[str] = set()
     seen_comments: set[tuple[str, str]] = set()
@@ -36,8 +35,20 @@ def format_retrieval_hits(
             key = (post_id, soul_name)
             if post_id and soul_name and key not in seen_comments:
                 seen_comments.add(key)
-                expanded = expand_comment_conversation(post_id, soul_name)
+                include_post = post_id not in seen_posts
+                if current_soul is None or soul_name == current_soul:
+                    expanded = expand_comment_conversation(post_id, soul_name, include_post=include_post)
+                else:
+                    comment_id = _int_or_none(metadata.get("comment_id") or getattr(hit, "source_id", None))
+                    expanded = expand_comment_window(
+                        post_id,
+                        soul_name,
+                        comment_id,
+                        include_post=include_post,
+                    )
                 if expanded:
+                    if include_post:
+                        seen_posts.add(post_id)
                     parts.append(expanded)
         elif hit_type == "chat":
             try:
@@ -108,7 +119,7 @@ def post_id_evidence_metadata(post_ids: list[str]) -> dict:
     return {"version": 1, "items": hits[:MAX_EVIDENCE_ITEMS]}
 
 
-def expand_comment_conversation(post_id: str, soul_name: str, limit: int = 30) -> str:
+def expand_comment_conversation(post_id: str, soul_name: str, limit: int = 30, *, include_post: bool = True) -> str:
     post = db.query_one("SELECT id, content FROM posts WHERE id = ?", (post_id,))
     rows = db.query_all(
         """
@@ -123,11 +134,56 @@ def expand_comment_conversation(post_id: str, soul_name: str, limit: int = 30) -
     if not rows:
         return ""
     title = f"## 公开评论对话 · post {post_id} · {soul_name}"
-    if post is not None:
+    if include_post and post is not None:
         title += f"\n[关于 post] {_post_content_for_evidence(post)}"
     lines = [title]
     for row in rows:
         label = _comment_label(row["role"], int(row["seq"]), soul_name)
+        lines.append(f"[{label}] {row['content']}")
+    return "\n".join(lines)
+
+
+def expand_comment_window(
+    post_id: str,
+    soul_name: str,
+    around_comment_id: int | None,
+    *,
+    radius: int = 2,
+    include_post: bool = True,
+) -> str:
+    post = db.query_one("SELECT id, content FROM posts WHERE id = ?", (post_id,))
+    anchor = None
+    if around_comment_id is not None:
+        anchor = db.query_one(
+            """
+            SELECT seq
+            FROM comments
+            WHERE id = ? AND post_id = ? AND soul_name = ?
+            """,
+            (around_comment_id, post_id, soul_name),
+        )
+    if anchor is None:
+        return expand_comment_conversation(post_id, soul_name, limit=(radius * 2) + 1, include_post=include_post)
+
+    seq = int(anchor["seq"])
+    rows = db.query_all(
+        """
+        SELECT role, content, seq
+        FROM comments
+        WHERE post_id = ? AND soul_name = ? AND seq BETWEEN ? AND ?
+        ORDER BY seq ASC
+        LIMIT ?
+        """,
+        (post_id, soul_name, seq - radius, seq + radius, (radius * 2) + 1),
+    )
+    if not rows:
+        return ""
+    title = f"## 公开评论片段 · post {post_id} · {soul_name}"
+    if include_post and post is not None:
+        title += f"\n[关于 post] {_post_content_for_evidence(post)}"
+    lines = [title]
+    for row in rows:
+        label = _comment_window_label(row["role"], soul_name)
         lines.append(f"[{label}] {row['content']}")
     return "\n".join(lines)
 
@@ -249,12 +305,25 @@ def _dedupe_strings(values: list[str]) -> list[str]:
     return deduped
 
 
+def _int_or_none(value) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _comment_label(role: str, seq: int, soul_name: str) -> str:
     if role == "user":
         return "用户 · 追问"
     if seq == 0:
         return f"{soul_name} · 首评"
     return f"{soul_name} · 回复"
+
+
+def _comment_window_label(role: str, soul_name: str) -> str:
+    if role == "user":
+        return "用户 · 追问"
+    return f"{soul_name} · 公开评论"
 
 
 def _post_content_for_evidence(row) -> str:

@@ -37,6 +37,14 @@ class ReplyRouterPromptTest(unittest.TestCase):
         self.assertIn("准备过程", prompt)
         self.assertIn("历史行为", prompt)
 
+    def test_comment_reply_prompt_forbids_exposing_private_chat_in_public_comments(self) -> None:
+        prompt = reply_router.COMMENT_REPLY_TASK_PROMPT
+
+        self.assertIn("私聊边界", prompt)
+        self.assertIn("标注为「私聊片段」", prompt)
+        self.assertIn("不要点破、复述或直接引用私聊内容", prompt)
+        self.assertIn("表达上必须像是只基于公开信息", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

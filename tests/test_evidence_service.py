@@ -71,12 +71,12 @@ class EvidenceServiceTest(unittest.TestCase):
 
     def test_format_retrieval_hits_dedupes_comment_conversations(self) -> None:
         self._insert_post("post-1", "今天想认真练歌。")
-        self._insert_comment("post-1", "默认", "assistant", "我陪你继续拆。", seq=0)
-        self._insert_comment("post-1", "毒舌好友", "assistant", "别装了，继续讲重点。", seq=0)
+        default_id = self._insert_comment("post-1", "默认", "assistant", "我陪你继续拆。", seq=0)
+        other_id = self._insert_comment("post-1", "毒舌好友", "assistant", "别装了，继续讲重点。", seq=0)
         hits = [
-            SimpleNamespace(type="comment", source_id="1", metadata={"post_id": "post-1", "soul_name": "默认"}),
-            SimpleNamespace(type="comment", source_id="2", metadata={"post_id": "post-1", "soul_name": "毒舌好友"}),
-            SimpleNamespace(type="comment", source_id="2", metadata={"post_id": "post-1", "soul_name": "毒舌好友"}),
+            SimpleNamespace(type="comment", source_id=str(default_id), metadata={"post_id": "post-1", "soul_name": "默认"}),
+            SimpleNamespace(type="comment", source_id=str(other_id), metadata={"post_id": "post-1", "soul_name": "毒舌好友"}),
+            SimpleNamespace(type="comment", source_id=str(other_id), metadata={"post_id": "post-1", "soul_name": "毒舌好友"}),
         ]
 
         evidence = evidence_service.format_retrieval_hits(hits)
@@ -86,6 +86,71 @@ class EvidenceServiceTest(unittest.TestCase):
         self.assertIn("毒舌好友 · 首评", evidence)
         self.assertIn("别装了，继续讲重点。", evidence)
         self.assertIn("[关于 post] 今天想认真练歌。", evidence)
+
+    def test_other_soul_comment_hit_uses_small_window_around_anchor(self) -> None:
+        self._insert_post("post-1", "今天想认真练歌。")
+        inserted_ids = []
+        for seq, (role, content) in enumerate(
+            [
+                ("assistant", "首评内容"),
+                ("user", "追问一"),
+                ("assistant", "回复二"),
+                ("user", "命中的追问三"),
+                ("assistant", "回复四"),
+                ("user", "追问五"),
+                ("assistant", "回复六"),
+            ]
+        ):
+            inserted_ids.append(self._insert_comment("post-1", "毒舌好友", role, content, seq=seq))
+        hits = [
+            SimpleNamespace(
+                type="comment",
+                source_id=str(inserted_ids[3]),
+                metadata={"post_id": "post-1", "soul_name": "毒舌好友", "comment_id": inserted_ids[3]},
+            )
+        ]
+
+        evidence = evidence_service.format_retrieval_hits(hits, current_soul="默认")
+
+        self.assertIn("## 公开评论片段 · post post-1 · 毒舌好友", evidence)
+        self.assertIn("[关于 post] 今天想认真练歌。", evidence)
+        self.assertNotIn("首评内容", evidence)
+        self.assertIn("追问一", evidence)
+        self.assertIn("回复二", evidence)
+        self.assertIn("命中的追问三", evidence)
+        self.assertIn("回复四", evidence)
+        self.assertIn("追问五", evidence)
+        self.assertNotIn("回复六", evidence)
+
+    def test_same_soul_comment_hit_keeps_full_thread(self) -> None:
+        self._insert_post("post-1", "今天想认真练歌。")
+        first_id = self._insert_comment("post-1", "默认", "assistant", "首评内容", seq=0)
+        self._insert_comment("post-1", "默认", "user", "后续追问", seq=1)
+        self._insert_comment("post-1", "默认", "assistant", "后续回复", seq=2)
+        hits = [
+            SimpleNamespace(type="comment", source_id=str(first_id), metadata={"post_id": "post-1", "soul_name": "默认"})
+        ]
+
+        evidence = evidence_service.format_retrieval_hits(hits, current_soul="默认")
+
+        self.assertIn("## 公开评论对话 · post post-1 · 默认", evidence)
+        self.assertIn("首评内容", evidence)
+        self.assertIn("后续追问", evidence)
+        self.assertIn("后续回复", evidence)
+
+    def test_comment_expansion_dedupes_post_already_rendered(self) -> None:
+        self._insert_post("post-1", "今天想认真练歌。")
+        comment_id = self._insert_comment("post-1", "默认", "assistant", "我陪你继续拆。", seq=0)
+        hits = [
+            SimpleNamespace(type="post", source_id="post-1", metadata={"post_id": "post-1"}),
+            SimpleNamespace(type="comment", source_id=str(comment_id), metadata={"post_id": "post-1", "soul_name": "默认"}),
+        ]
+
+        evidence = evidence_service.format_retrieval_hits(hits, current_soul="默认")
+
+        self.assertEqual(1, evidence.count("今天想认真练歌。"))
+        self.assertNotIn("[关于 post]", evidence)
+        self.assertIn("我陪你继续拆。", evidence)
 
     def test_format_retrieval_hits_renders_chat_window_around_anchor(self) -> None:
         thread_id = self._insert_chat_thread("默认")
