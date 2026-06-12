@@ -579,7 +579,7 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("event: chat_message\n", payload)
         self.assertIn('"content": "我在。"', payload)
 
-    def test_chat_message_sse_query_after_id_overrides_last_event_id(self) -> None:
+    def test_chat_message_sse_last_event_id_overrides_query_after_id(self) -> None:
         from api.routes import chat as chat_routes
 
         captured: dict[str, int] = {}
@@ -607,7 +607,7 @@ class ApiManagementTest(unittest.TestCase):
             )
 
         self.assertEqual("text/event-stream", response.media_type)
-        self.assertEqual({"thread_id": 7, "after_id": 42}, captured)
+        self.assertEqual({"thread_id": 7, "after_id": 3}, captured)
 
     def test_comment_route_sends_message_to_selected_soul_conversation(self) -> None:
         post_id = "20260531-001"

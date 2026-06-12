@@ -666,11 +666,13 @@ function mergeMessageWindow(current: ChatMessage[], windowMessages: ChatMessage[
 
 function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
   if (incoming.length === 0) return current
+  const incomingIds = new Set(incoming.map((message) => message.id))
   const incomingRealMessages = incoming.filter((message) => message.id > 0)
   const shouldDropOptimisticAssistant = incomingRealMessages.some((message) => message.role === 'assistant')
 
   const keptCurrent = current.filter((message) => {
-    if (message.id > 0) return !incomingRealMessages.some((incomingMessage) => incomingMessage.id === message.id)
+    if (incomingIds.has(message.id)) return false
+    if (message.id > 0) return true
     if (shouldDropOptimisticAssistant && message.role === 'assistant') return false
     return !incomingRealMessages.some((incomingMessage) => isOptimisticMatch(message, incomingMessage))
   })

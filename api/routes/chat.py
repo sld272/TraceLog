@@ -56,11 +56,13 @@ async def stream_chat_thread_events(
         await run_sync(chat_service.get_thread, thread_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    if after_id is None:
+    if last_event_id is not None:
         try:
-            after_id = int(last_event_id or "0")
+            after_id = int(last_event_id)
         except ValueError:
             after_id = 0
+    elif after_id is None:
+        after_id = 0
     return StreamingResponse(
         _message_stream(thread_id, after_id),
         media_type="text/event-stream",

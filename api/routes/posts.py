@@ -94,11 +94,13 @@ async def stream_post_events(
     exists = await run_sync(_post_exists, post_id)
     if not exists:
         raise HTTPException(status_code=404, detail="post not found")
-    if after_id is None:
+    if last_event_id is not None:
         try:
-            after_id = int(last_event_id or "0")
+            after_id = int(last_event_id)
         except ValueError:
             after_id = 0
+    elif after_id is None:
+        after_id = 0
     return StreamingResponse(
         _event_stream(post_id, after_id),
         media_type="text/event-stream",

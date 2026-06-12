@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import tempfile
 import unittest
@@ -294,6 +295,37 @@ class ApiPostsTest(unittest.TestCase):
         self.assertIn('"error": "boom"', body)
         self.assertIn('"new": true', body)
         self.assertNotIn('"old": true', body)
+
+    def test_sse_last_event_id_overrides_query_after_id(self) -> None:
+        from api.routes import posts as post_routes
+
+        captured: dict[str, object] = {}
+
+        async def fake_run_sync(func, *args, **kwargs):
+            if func is post_routes._post_exists:
+                return True
+            return func(*args, **kwargs)
+
+        def fake_event_stream(post_id: str, after_id: int):
+            captured["post_id"] = post_id
+            captured["after_id"] = after_id
+
+            async def empty_stream():
+                if False:
+                    yield ""
+
+            return empty_stream()
+
+        with (
+            patch("api.routes.posts.run_sync", fake_run_sync),
+            patch("api.routes.posts._event_stream", fake_event_stream),
+        ):
+            response = asyncio.run(
+                post_routes.stream_post_events("p-sse", last_event_id="9", after_id=2)
+            )
+
+        self.assertEqual("text/event-stream", response.media_type)
+        self.assertEqual({"post_id": "p-sse", "after_id": 9}, captured)
 
     def test_api_config_missing_file_fails_clearly(self) -> None:
         from api import deps
