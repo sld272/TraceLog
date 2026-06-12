@@ -1,6 +1,6 @@
 # TraceLog 项目概述
 
-本文档介绍 TraceLog 的项目背景、产品定位、当前实现状态、架构总览、关键设计决策与风险。具体技术架构设计见 [architecture.md](./architecture.md)，数据库 Schema 见 [database.md](./database.md)。
+本文档介绍 TraceLog 的项目背景、产品定位、当前实现状态、架构总览、关键设计决策与风险。具体技术架构设计见 [architecture.md](./architecture.md)，数据库 Schema 见 [database.md](./database.md)，API 说明见 [api.md](./api.md)。
 
 ## 1. 项目背景与定位
 
