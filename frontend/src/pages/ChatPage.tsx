@@ -386,13 +386,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     const userMessage = previousUserMessage(messages, message)
     if (!userMessage) return
     const previousMessages = messages
-    const previousFailedReplies = failedReplies
     setBusyMessageId(message.id)
-    setFailedReplies((prev) => {
-      const next = { ...prev }
-      delete next[message.id]
-      return next
-    })
     setRetryErrors((prev) => {
       const next = { ...prev }
       delete next[message.id]
@@ -401,7 +395,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     setMessages((prev) =>
       prev.map((item) =>
         item.id === message.id
-          ? { ...item, content: '' }
+          ? { ...item, content: '', metadata: null }
           : item,
       ),
     )
@@ -432,7 +426,6 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     } catch (err) {
       const retryError = err instanceof Error ? err.message : '重试失败'
       setMessages(previousMessages)
-      setFailedReplies(previousFailedReplies)
       setRetryErrors((prev) => ({ ...prev, [message.id]: retryError }))
       setError(retryError)
     } finally {
