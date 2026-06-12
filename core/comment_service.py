@@ -24,6 +24,7 @@ from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
+from core.app_services import public_post_pipeline
 
 COMMENT_HISTORY_LIMIT = 30
 COMMENT_RELATED_MEMORY_LIMIT = 5
@@ -466,6 +467,9 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
     if post is None:
         raise ValueError(f"post 不存在：{message.post_id}")
 
+    if message.seq == 0:
+        return _rerun_root_assistant_message(message, post, client, model)
+
     prior_messages = list_conversation_messages(
         message.post_id,
         message.soul_name,
@@ -507,6 +511,74 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
         "model": model,
         "rerun": True,
         "evidence": evidence_service.evidence_metadata(context.retrieval_hits),
+    }
+    with db.transaction() as conn:
+        conn.execute(
+            """
+            UPDATE comments
+            SET content = ?, metadata = ?, rerun_at = ?
+            WHERE id = ?
+            """,
+            (reply.strip(), json.dumps(metadata, ensure_ascii=False), now, message.id),
+        )
+
+    updated = get_message(message.id)
+    record_service.index_comment_embedding(
+        updated.id,
+        updated.post_id,
+        updated.soul_name,
+        updated.role,
+        updated.seq,
+        updated.content,
+    )
+    return {
+        "message": updated,
+        "conversation": get_conversation(updated.post_id, updated.soul_name),
+        "messages": list_conversation_messages(updated.post_id, updated.soul_name),
+    }
+
+
+def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClient, model: str) -> dict:
+    _assert_soul_writable(message.soul_name)
+    llm_content = _post_content_for_llm(post)
+    public_context = public_post_pipeline.build_public_post_reply_context(
+        message.post_id,
+        llm_content,
+        client,
+        model,
+        trace_context={
+            "channel": "public_post",
+            "post_id": message.post_id,
+            "soul_name": message.soul_name,
+            "rerun_comment_id": message.id,
+        },
+    )
+    soul = _load_soul_context(message.soul_name)
+    data = reply_router.call_soul_post_reply(
+        llm_content,
+        client,
+        model,
+        public_context.built_context.shared_context,
+        soul,
+        trace_context={
+            "post_id": message.post_id,
+            "soul_name": message.soul_name,
+            "rerun_comment_id": message.id,
+            "relevant_post_ids": public_context.relevant_post_ids,
+        },
+    )
+    if data is None:
+        return _mark_existing_assistant_failed(message, "root comment rerun failed")
+    reply = data.get("reply")
+    if not isinstance(reply, str) or not reply.strip():
+        return _mark_existing_assistant_failed(message, "root comment rerun returned empty reply")
+
+    now = db.now_ts()
+    metadata = {
+        "status": "ok",
+        "model": model,
+        "rerun": True,
+        "evidence": evidence_service.post_id_evidence_metadata(public_context.relevant_post_ids),
     }
     with db.transaction() as conn:
         conn.execute(

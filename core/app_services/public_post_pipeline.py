@@ -18,6 +18,13 @@ class CreatedPost:
     job_ids: list[int]
 
 
+@dataclass(frozen=True)
+class PublicPostReplyContext:
+    llm_content: str
+    relevant_post_ids: list[str]
+    built_context: context_builder.BuiltContext
+
+
 def create_post(content: str, attachment_ids: list[str] | None = None) -> CreatedPost:
     """Persist one public post and enqueue its API background pipeline."""
     body = content.strip()
@@ -94,38 +101,22 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
             vision_context,
             [attachment.id for attachment in attachments],
         )
-    rewritten_query = query_rewriter.rewrite_query(
+    public_context = build_public_post_reply_context(
+        post_id,
+        llm_content,
         client,
         model,
-        llm_content,
-        "public_post",
-        trace_context={"channel": "public_post", "post_id": post_id},
-    )
-    relevant_ids = retrieval.hybrid_search(
-        llm_content,
-        k=3,
-        semantic_query=rewritten_query.semantic_query,
-        fts_keywords=rewritten_query.keywords,
-        trace_context={"channel": "public_post", "post_id": post_id},
-        exclusion=retrieval.RetrievalExclusion(post_ids=frozenset({post_id})),
-    )
-    built_context = context_builder.build_context(
-        relevant_post_ids=relevant_ids,
-        query=llm_content,
-        fts_keywords=rewritten_query.keywords,
-        client=client,
-        model=model,
         trace_context={"channel": "public_post", "post_id": post_id},
     )
 
-    if not built_context.enabled_souls:
+    if not public_context.built_context.enabled_souls:
         event_service.append_post_event(post_id, "reply_started", {"soul_count": 0}, job_id=job_id)
         event_service.append_post_event(post_id, "reply_succeeded", {"soul_count": 0}, job_id=job_id)
         return
 
-    for soul in built_context.enabled_souls:
+    for soul in public_context.built_context.enabled_souls:
         event_service.append_post_event(post_id, "reply_started", {"soul_name": soul.name}, job_id=job_id)
-    results = reply_service.fanout(post_id, llm_content, client, model, built_context)
+    results = reply_service.fanout(post_id, llm_content, client, model, public_context.built_context)
     for result in results:
         event_type = "reply_succeeded" if result.ok else "reply_failed"
         event_service.append_post_event(
@@ -143,6 +134,46 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
         names = "、".join(result.soul_name for result in failed_results)
         first_error = failed_results[0].error or "unknown error"
         raise RuntimeError(f"reply generation failed for {names}: {first_error}")
+
+
+def build_public_post_reply_context(
+    post_id: str,
+    llm_content: str,
+    client: LLMClient,
+    model: str,
+    *,
+    trace_context: dict[str, Any] | None = None,
+) -> PublicPostReplyContext:
+    """Build the retrieval and shared context used by public post first replies."""
+    effective_trace_context = trace_context or {"channel": "public_post", "post_id": post_id}
+    rewritten_query = query_rewriter.rewrite_query(
+        client,
+        model,
+        llm_content,
+        "public_post",
+        trace_context=effective_trace_context,
+    )
+    relevant_ids = retrieval.hybrid_search(
+        llm_content,
+        k=3,
+        semantic_query=rewritten_query.semantic_query,
+        fts_keywords=rewritten_query.keywords,
+        trace_context=effective_trace_context,
+        exclusion=retrieval.RetrievalExclusion(post_ids=frozenset({post_id})),
+    )
+    built_context = context_builder.build_context(
+        relevant_post_ids=relevant_ids,
+        query=llm_content,
+        fts_keywords=rewritten_query.keywords,
+        client=client,
+        model=model,
+        trace_context=effective_trace_context,
+    )
+    return PublicPostReplyContext(
+        llm_content=llm_content,
+        relevant_post_ids=built_context.relevant_post_ids,
+        built_context=built_context,
+    )
 
 
 def _run_todo_tool(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:

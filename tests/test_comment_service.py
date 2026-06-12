@@ -440,32 +440,67 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("图片评论重跑回复", rerun["message"].content)
         self.assertIn("Python 3.13 已发布", captured["messages"][-1].content)
 
-    def test_rerun_root_assistant_comment_uses_post_as_synthetic_user_message(self) -> None:
+    def test_rerun_root_assistant_comment_uses_public_post_reply_path(self) -> None:
         root_id = comment_service.get_conversation("20260525-001", "默认").root_comment_id
         self.assertIsNotNone(root_id)
+        db.execute(
+            """
+            INSERT INTO posts(id, ts, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("20260520-001", "2026-05-20T10:00:00+08:00", "历史相关帖子。", 0.5, 0.5),
+        )
         captured = {}
 
+        def fake_rewrite(client, model, raw_query, channel, trace_context=None):
+            del client, model, trace_context
+            captured["rewrite_channel"] = channel
+            captured["rewrite_query"] = raw_query
+            return query_rewriter.RewrittenQuery(
+                raw_query=raw_query,
+                semantic_query="认真练歌",
+                keywords=["练歌"],
+                used_rewrite=True,
+            )
+
         def fake_search(*args, **kwargs):
+            captured["search_args"] = args
             captured["exclusion"] = kwargs.get("exclusion")
-            return []
+            captured["search_trace"] = kwargs.get("trace_context")
+            return ["20260520-001"]
 
-        retrieval.hybrid_search_documents = fake_search
-
-        def fake_reply(client, model, context, soul, *, trace_context=None):
-            del client, model, soul, trace_context
-            captured["messages"] = context.messages
-            captured["context"] = context.context
+        def fake_post_reply(user_input, client, model, shared_context, soul, *, trace_context=None):
+            del client, model
+            captured["user_input"] = user_input
+            captured["shared_context"] = shared_context
+            captured["soul_name"] = soul.name
+            captured["post_reply_trace"] = trace_context
             return {"reply": "根评论重跑回复"}
 
-        with patch("core.comment_service.reply_router.call_soul_comment_reply", side_effect=fake_reply):
+        with (
+            patch("core.app_services.public_post_pipeline.query_rewriter.rewrite_query", side_effect=fake_rewrite),
+            patch("core.app_services.public_post_pipeline.retrieval.hybrid_search", side_effect=fake_search),
+            patch("core.comment_service.reply_router.call_soul_post_reply", side_effect=fake_post_reply),
+            patch(
+                "core.comment_service.reply_router.call_soul_comment_reply",
+                side_effect=AssertionError("root rerun should not use comment reply"),
+            ),
+        ):
             rerun = comment_service.rerun_latest_assistant_message(root_id, FakeClient(), "fake-model")
 
         self.assertEqual("根评论重跑回复", rerun["message"].content)
-        self.assertEqual(["user"], [message.role for message in captured["messages"]])
-        self.assertIn("今天想认真练歌", captured["messages"][0].content)
-        self.assertEqual(frozenset({"20260525-001"}), captured["exclusion"].comment_post_ids)
-        self.assertNotIn("公开评论对话 · post 20260525-001 · 默认", captured["context"])
-        self.assertNotIn("我陪你继续拆", captured["context"])
+        self.assertEqual("public_post", captured["rewrite_channel"])
+        self.assertIn("今天想认真练歌", captured["rewrite_query"])
+        self.assertEqual(frozenset({"20260525-001"}), captured["exclusion"].post_ids)
+        self.assertEqual("public_post", captured["search_trace"]["channel"])
+        self.assertIn("今天想认真练歌", captured["user_input"])
+        self.assertIn("历史相关帖子", captured["shared_context"])
+        self.assertEqual("默认", captured["soul_name"])
+        self.assertEqual(["20260520-001"], captured["post_reply_trace"]["relevant_post_ids"])
+        metadata = json.loads(rerun["message"].metadata or "{}")
+        self.assertTrue(metadata["rerun"])
+        self.assertEqual("post", metadata["evidence"]["items"][0]["type"])
+        self.assertEqual("20260520-001", metadata["evidence"]["items"][0]["post_id"])
         self.assertIsNotNone(rerun["message"].rerun_at)
 
     def test_rerun_comment_requires_latest_assistant_message(self) -> None:
