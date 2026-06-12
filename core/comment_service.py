@@ -29,6 +29,7 @@ from core.app_services import public_post_pipeline
 COMMENT_HISTORY_LIMIT = 30
 COMMENT_RELATED_MEMORY_LIMIT = 5
 RETRIEVAL_USER_MESSAGE_LIMIT = 3
+OTHER_SOUL_THREAD_CONTEXT_LIMIT = 6
 
 
 @dataclass(frozen=True)
@@ -249,6 +250,10 @@ def build_comment_context(
     if post is not None:
         post_content = _post_content_for_llm(post)
         sections.append(f"# 原始 post\n\n[{post['id']}] {post_content}")
+
+    other_soul_context = _other_soul_comment_context(post_id, soul_name)
+    if other_soul_context:
+        sections.append(other_soul_context)
 
     retrieval_query = _build_comment_retrieval_query(post, llm_messages, user_message)
     rewritten_query = reply_context.rewrite_for_retrieval(
@@ -604,6 +609,55 @@ def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClie
         "conversation": get_conversation(updated.post_id, updated.soul_name),
         "messages": list_conversation_messages(updated.post_id, updated.soul_name),
     }
+
+
+def _other_soul_comment_context(post_id: str, current_soul: str) -> str:
+    threads = db.query_all(
+        """
+        SELECT soul_name, MAX(created_at) AS last_message_at
+        FROM comments
+        WHERE post_id = ? AND soul_name <> ?
+        GROUP BY soul_name
+        HAVING SUM(CASE WHEN role = 'user' AND seq > 0 THEN 1 ELSE 0 END) > 0
+        ORDER BY last_message_at DESC, soul_name ASC
+        """,
+        (post_id, current_soul),
+    )
+    if not threads:
+        return ""
+
+    sections = ["# 本帖其他评论区对话(其他 SOUL,公开评论背景)"]
+    for thread in threads:
+        soul_name = str(thread["soul_name"])
+        rows = db.query_all(
+            """
+            SELECT role, content, seq
+            FROM comments
+            WHERE post_id = ? AND soul_name = ?
+            ORDER BY seq DESC, id DESC
+            LIMIT ?
+            """,
+            (post_id, soul_name, OTHER_SOUL_THREAD_CONTEXT_LIMIT),
+        )
+        rows = list(reversed(rows))
+        if not rows:
+            continue
+        lines = [f"## {soul_name}"]
+        for row in rows:
+            label = _comment_context_label(str(row["role"]), int(row["seq"]), soul_name)
+            lines.append(f"[{label}] {row['content']}")
+        sections.append("\n".join(lines))
+    if len(sections) == 1:
+        return ""
+    return "\n\n".join(sections)
+
+
+def _comment_context_label(role: str, seq: int, soul_name: str) -> str:
+    if role == "user":
+        return "用户 · 追问"
+    if seq == 0:
+        return f"{soul_name} · 首评"
+    return f"{soul_name} · 回复"
 
 
 def _mark_existing_assistant_failed(message: CommentMessage, error: str) -> dict:

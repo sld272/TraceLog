@@ -45,6 +45,17 @@ class ReplyRouterPromptTest(unittest.TestCase):
         self.assertIn("不要点破、复述或直接引用私聊内容", prompt)
         self.assertIn("表达上必须像是只基于公开信息", prompt)
 
+    def test_comment_reply_prompt_allows_public_other_soul_context_with_boundaries(self) -> None:
+        prompt = reply_router.COMMENT_REPLY_TASK_PROMPT
+
+        self.assertIn("公开评论区边界", prompt)
+        self.assertIn("你可以看见同一公开 post 下用户和其他 SOUL 的评论对话", prompt)
+        self.assertIn("我看到你和 X 聊到", prompt)
+        self.assertIn("不要直接与其他 SOUL 对话", prompt)
+        self.assertIn("不要替其他 SOUL 发言", prompt)
+        self.assertIn("不要大量评价其他 SOUL 的观点", prompt)
+        self.assertIn("不要让其他线程抢走当前追问的重心", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

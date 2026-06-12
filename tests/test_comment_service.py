@@ -143,6 +143,31 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(expected, captured["query"])
         self.assertNotIn("这句不该进检索", context.retrieval_query)
 
+    def test_build_comment_context_includes_other_soul_threads_with_user_followups(self) -> None:
+        soul_service.create_soul("安静好友", "安静人格")
+        self._insert_post_and_comment("20260525-001", "安静好友", "只首评，不应进入")
+        comment_service.append_comment("20260525-001", "毒舌好友", "user", "其他追问一")
+        comment_service.append_comment("20260525-001", "毒舌好友", "assistant", "其他回复二")
+        comment_service.append_comment("20260525-001", "毒舌好友", "user", "其他追问三")
+        comment_service.append_comment("20260525-001", "毒舌好友", "assistant", "其他回复四")
+        comment_service.append_comment("20260525-001", "毒舌好友", "user", "其他追问五")
+        comment_service.append_comment("20260525-001", "毒舌好友", "assistant", "其他回复六")
+        comment_service.append_comment("20260525-001", "毒舌好友", "user", "其他追问七")
+
+        context = comment_service.build_comment_context("20260525-001", "默认", "继续聊")
+
+        self.assertIn("# 本帖其他评论区对话(其他 SOUL,公开评论背景)", context.context)
+        self.assertIn("## 毒舌好友", context.context)
+        self.assertNotIn("只首评，不应进入", context.context)
+        self.assertNotIn("别装了，继续讲重点。", context.context)
+        self.assertNotIn("其他追问一", context.context)
+        self.assertIn("其他回复二", context.context)
+        self.assertIn("其他追问三", context.context)
+        self.assertIn("其他回复四", context.context)
+        self.assertIn("其他追问五", context.context)
+        self.assertIn("其他回复六", context.context)
+        self.assertIn("其他追问七", context.context)
+
     def test_build_comment_context_excludes_current_post_and_post_comments_from_retrieval(self) -> None:
         comment_service.append_comment("20260525-001", "默认", "user", "继续聊练歌")
         captured: dict[str, object] = {}
