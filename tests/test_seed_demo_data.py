@@ -50,6 +50,125 @@ class SeedDemoContentTest(unittest.TestCase):
         self.assertEqual(times, sorted(times))
         self.assertEqual("2026-03-01T09:00:00+08:00", plan[0].created_at.isoformat())
 
+    def test_build_timeline_orders_events_and_keeps_comment_after_parent(self) -> None:
+        content = seed_demo_data.load_content(EXAMPLE_PATH)
+        plan = seed_demo_data.build_demo_plan(content.posts, year=2026)
+
+        timeline = seed_demo_data.build_timeline(plan, content, year=2026)
+
+        # 严格按 sort_at 升序
+        sort_ats = [event.sort_at for event in timeline]
+        self.assertEqual(sort_ats, sorted(sort_ats))
+        # 每条互动都排在它依赖/参照的更早事件之后——追问不早于父帖
+        post_at = {event.post_plan.key: event.sort_at for event in timeline if event.kind == "post"}
+        for event in timeline:
+            if event.kind == "comment":
+                self.assertGreaterEqual(event.sort_at, post_at[event.comment_spec.post_key])
+        kinds = [event.kind for event in timeline]
+        self.assertEqual({"post", "comment", "chat"}, set(kinds))
+
+    def test_build_timeline_auto_comment_anchors_after_parent(self) -> None:
+        path = _write_toml(
+            """
+            [[posts]]
+            key = "p1"
+            month = 3
+            day = 1
+            hour = 9
+            minute = 0
+            act = "x"
+            content = "一条 post"
+
+            [[comment_threads]]
+            post_key = "p1"
+            soul_name = "拾迹者"
+            followup = "没写时间的追问"
+            """
+        )
+        self.addCleanup(path.unlink)
+        content = seed_demo_data.load_content(path)
+        plan = seed_demo_data.build_demo_plan(content.posts, year=2026)
+
+        timeline = seed_demo_data.build_timeline(plan, content, year=2026)
+
+        comment = next(event for event in timeline if event.kind == "comment")
+        parent = next(event for event in timeline if event.kind == "post")
+        # 自动追问没有 applied_at（交给 end-of-run 回填），但排序锚定在父帖之后
+        self.assertIsNone(comment.applied_at)
+        self.assertFalse(comment.explicit)
+        self.assertGreater(comment.sort_at, parent.sort_at)
+
+    def test_build_timeline_auto_chat_goes_to_tail(self) -> None:
+        path = _write_toml(
+            """
+            [[posts]]
+            key = "p1"
+            month = 3
+            day = 1
+            hour = 9
+            minute = 0
+            act = "x"
+            content = "一条 post"
+
+            [[chats]]
+            soul_name = "温柔树洞"
+            message = "没写时间的私聊"
+            """
+        )
+        self.addCleanup(path.unlink)
+        content = seed_demo_data.load_content(path)
+        plan = seed_demo_data.build_demo_plan(content.posts, year=2026)
+        fixed_now = datetime(2026, 12, 31, 23, 0).astimezone()
+
+        timeline = seed_demo_data.build_timeline(plan, content, year=2026, now=fixed_now)
+
+        chat = next(event for event in timeline if event.kind == "chat")
+        self.assertIsNone(chat.applied_at)
+        self.assertEqual(fixed_now, chat.sort_at)
+        # 落在 now，自然排到时间线末尾
+        self.assertIs(timeline[-1], chat)
+
+    def test_build_timeline_rejects_comment_time_before_parent(self) -> None:
+        path = _write_toml(
+            """
+            [[posts]]
+            key = "p1"
+            month = 3
+            day = 5
+            hour = 9
+            minute = 0
+            act = "x"
+            content = "一条 post"
+
+            [[comment_threads]]
+            post_key = "p1"
+            soul_name = "拾迹者"
+            followup = "追问时间比父帖还早"
+            month = 3
+            day = 1
+            hour = 9
+            minute = 0
+            """
+        )
+        self.addCleanup(path.unlink)
+        content = seed_demo_data.load_content(path)
+        plan = seed_demo_data.build_demo_plan(content.posts, year=2026)
+
+        with self.assertRaisesRegex(ValueError, "早于父帖"):
+            seed_demo_data.build_timeline(plan, content, year=2026)
+
+    def test_build_timeline_skips_comment_for_truncated_parent(self) -> None:
+        content = seed_demo_data.load_content(EXAMPLE_PATH)
+        # 只取第一条帖子，comment 绑定的是 sample-start（在场），所以这里改用 limit 截掉它
+        plan = seed_demo_data.build_demo_plan(content.posts, year=2026, limit=1)
+        # sample-start 仍在 plan 中，追问能绑定；构造一个父帖被截断的场景
+        plan_without_parent = [item for item in plan if item.key != "sample-start"]
+
+        timeline = seed_demo_data.build_timeline(plan_without_parent, content, year=2026)
+
+        # 父帖不在场时，对应追问被跳过（不进时间线）
+        self.assertFalse(any(event.kind == "comment" for event in timeline))
+
     def test_resolve_content_path_returns_existing_file(self) -> None:
         path = seed_demo_data.resolve_content_path(None)
 
