@@ -52,6 +52,7 @@ const SOUL_MEMORY_SECTIONS: SectionSpec[] = [
 const MEMORY_ANCHOR_RE = /<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->/
 const MEMORY_ANCHOR_GLOBAL_RE = /\s*<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->/g
 const MEMORY_ANCHOR_SPACING_RE = /[ \t]+(<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->)/g
+const TRAILING_LINE_WHITESPACE_RE = /[ \t]+$/g
 
 export function MemorySettingsPanel({
   souls,
@@ -68,6 +69,9 @@ export function MemorySettingsPanel({
   const [editorMode, setEditorMode] = useState<EditorMode>('structured')
   const [savedContent, setSavedContent] = useState('')
   const [draftContent, setDraftContent] = useState('')
+  const [structuredBaseContent, setStructuredBaseContent] = useState('')
+  const [sectionDrafts, setSectionDrafts] = useState<Record<string, string>>({})
+  const [savedSectionDrafts, setSavedSectionDrafts] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -75,13 +79,20 @@ export function MemorySettingsPanel({
 
   const selectedObject = memoryObjects.find((item) => item.id === selectedObjectId)
     ?? buildProfileMemoryObject(workspaceStatus)
-  const isDirty = editorMode === 'structured'
-    ? normalizeStructuredMemoryContent(draftContent) !== normalizeStructuredMemoryContent(savedContent)
-    : draftContent !== savedContent
   const displaySections = useMemo(
-    () => getDisplaySections(selectedObject.kind, draftContent),
-    [selectedObject.kind, draftContent],
+    () => getDisplaySections(selectedObject.kind, sectionDrafts),
+    [selectedObject.kind, sectionDrafts],
   )
+  const structuredDraftContent = useMemo(
+    () => buildStructuredMemoryContent(selectedObject.kind, structuredBaseContent, sectionDrafts),
+    [selectedObject.kind, structuredBaseContent, sectionDrafts],
+  )
+  const currentDraftContent = editorMode === 'structured' ? structuredDraftContent : draftContent
+  const currentSaveContent = sanitizeMemoryContent(currentDraftContent)
+  const savedSaveContent = sanitizeMemoryContent(savedContent)
+  const isDirty = editorMode === 'structured'
+    ? !areSectionDraftsEqual(sectionDrafts, savedSectionDrafts) || sanitizeMemoryContent(structuredBaseContent) !== savedSaveContent
+    : currentSaveContent !== savedSaveContent
 
   useEffect(() => {
     if (!memoryObjects.some((item) => item.id === selectedObjectId)) {
@@ -109,7 +120,18 @@ export function MemorySettingsPanel({
   }
 
   const handleSectionChange = (title: string, body: string) => {
-    setDraftContent((content) => updateSectionBody(content, title, body))
+    setSectionDrafts((drafts) => ({ ...drafts, [title]: body }))
+  }
+
+  const handleEditorModeChange = (mode: EditorMode) => {
+    if (mode === editorMode) return
+    if (mode === 'markdown') {
+      setDraftContent(structuredDraftContent)
+    } else {
+      setStructuredBaseContent(draftContent)
+      setSectionDrafts(buildSectionDrafts(selectedObject.kind, draftContent))
+    }
+    setEditorMode(mode)
   }
 
   const handleSave = async (event: FormEvent) => {
@@ -118,12 +140,16 @@ export function MemorySettingsPanel({
     setNotice(null)
     setError(null)
     try {
-      const content = draftContent.trimEnd() + '\n'
+      const content = currentSaveContent
       const saved = selectedObject.kind === 'profile'
         ? (await updateProfile(content)).content
         : (await updateSoulMemory(selectedObject.label, content)).content
       setSavedContent(saved)
       setDraftContent(saved)
+      setStructuredBaseContent(saved)
+      const savedDrafts = buildSectionDrafts(selectedObject.kind, saved)
+      setSectionDrafts(savedDrafts)
+      setSavedSectionDrafts(savedDrafts)
       setNotice('记忆已保存。')
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存记忆失败')
@@ -140,10 +166,17 @@ export function MemorySettingsPanel({
       const content = await fetchContent(object)
       setSavedContent(content)
       setDraftContent(content)
+      setStructuredBaseContent(content)
+      const drafts = buildSectionDrafts(object.kind, content)
+      setSectionDrafts(drafts)
+      setSavedSectionDrafts(drafts)
       setEditorMode('structured')
     } catch (err) {
       setSavedContent('')
       setDraftContent('')
+      setStructuredBaseContent('')
+      setSectionDrafts({})
+      setSavedSectionDrafts({})
       setError(err instanceof Error ? err.message : '读取记忆失败')
     } finally {
       setLoading(false)
@@ -207,7 +240,7 @@ export function MemorySettingsPanel({
                   type="button"
                   role="tab"
                   aria-selected={editorMode === 'structured'}
-                  onClick={() => setEditorMode('structured')}
+                  onClick={() => handleEditorModeChange('structured')}
                 >
                   结构化
                 </button>
@@ -216,7 +249,7 @@ export function MemorySettingsPanel({
                   type="button"
                   role="tab"
                   aria-selected={editorMode === 'markdown'}
-                  onClick={() => setEditorMode('markdown')}
+                  onClick={() => handleEditorModeChange('markdown')}
                 >
                   Markdown
                 </button>
@@ -268,7 +301,11 @@ export function MemorySettingsPanel({
               <button
                 className={workspaceStyles.ghostButton}
                 type="button"
-                onClick={() => setDraftContent(savedContent)}
+                onClick={() => {
+                  setDraftContent(savedContent)
+                  setStructuredBaseContent(savedContent)
+                  setSectionDrafts(savedSectionDrafts)
+                }}
                 disabled={!isDirty || saving}
               >
                 放弃草稿
@@ -276,7 +313,7 @@ export function MemorySettingsPanel({
               <button
                 className={workspaceStyles.button}
                 type="submit"
-                disabled={!isDirty || saving || !draftContent.trim()}
+                disabled={!isDirty || saving || !currentSaveContent.trim()}
               >
                 {saving ? '保存中...' : '保存记忆'}
               </button>
@@ -328,14 +365,50 @@ function buildProfileMemoryObject(status: WorkspaceStatus | null): MemoryObject 
   }
 }
 
-function getDisplaySections(kind: MemoryKind, content: string) {
-  const specs = kind === 'profile' ? PROFILE_SECTIONS : SOUL_MEMORY_SECTIONS
+function getSectionSpecs(kind: MemoryKind): SectionSpec[] {
+  return kind === 'profile' ? PROFILE_SECTIONS : SOUL_MEMORY_SECTIONS
+}
+
+function buildSectionDrafts(kind: MemoryKind, content: string): Record<string, string> {
   const parsed = parseMarkdownSections(content)
-  const sectionMap = new Map(parsed.sections.map((section) => [section.title, section.body]))
+  const sectionMap = new Map(parsed.sections.map((section) => [section.title, stripMemoryAnchors(section.body)]))
+  return Object.fromEntries(getSectionSpecs(kind).map((spec) => [spec.title, sectionMap.get(spec.title) ?? '']))
+}
+
+function areSectionDraftsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  for (const key of keys) {
+    if ((left[key] ?? '') !== (right[key] ?? '')) return false
+  }
+  return true
+}
+
+function getDisplaySections(kind: MemoryKind, drafts: Record<string, string>) {
+  const specs = getSectionSpecs(kind)
   return specs.map((spec) => ({
     ...spec,
-    body: stripMemoryAnchors(sectionMap.get(spec.title) ?? ''),
+    body: drafts[spec.title] ?? '',
   }))
+}
+
+function buildStructuredMemoryContent(kind: MemoryKind, baseContent: string, drafts: Record<string, string>): string {
+  const specs = getSectionSpecs(kind)
+  const editableTitles = new Set(specs.map((spec) => spec.title))
+  const parsed = parseMarkdownSections(baseContent)
+  const seenTitles = new Set<string>()
+  const sections = parsed.sections.map((section) => {
+    if (!editableTitles.has(section.title)) return section
+    seenTitles.add(section.title)
+    return { ...section, body: mergeMemoryAnchors(section.body, drafts[section.title] ?? '') }
+  })
+
+  specs.forEach((spec) => {
+    if (!seenTitles.has(spec.title)) {
+      sections.push({ title: spec.title, body: drafts[spec.title] ?? '' })
+    }
+  })
+
+  return buildMarkdown(parsed.prefix, sections)
 }
 
 function parseMarkdownSections(content: string): { prefix: string; sections: ParsedSection[] } {
@@ -358,14 +431,14 @@ function parseMarkdownSections(content: string): { prefix: string; sections: Par
       firstSectionIndex = index
     }
     if (currentTitle !== null) {
-      sections.push({ title: currentTitle, body: currentBody.join('\n').trimEnd() })
+      sections.push({ title: currentTitle, body: bodyFromSectionLines(currentBody) })
     }
     currentTitle = title
     currentBody = []
   })
 
   if (currentTitle !== null) {
-    sections.push({ title: currentTitle, body: currentBody.join('\n').trimEnd() })
+    sections.push({ title: currentTitle, body: bodyFromSectionLines(currentBody) })
   }
 
   return {
@@ -374,18 +447,14 @@ function parseMarkdownSections(content: string): { prefix: string; sections: Par
   }
 }
 
-function updateSectionBody(content: string, title: string, body: string): string {
-  const parsed = parseMarkdownSections(content)
-  let found = false
-  const sections = parsed.sections.map((section) => {
-    if (section.title !== title) return section
-    found = true
-    return { ...section, body: mergeMemoryAnchors(section.body, body) }
-  })
-  if (!found) {
-    sections.push({ title, body })
+function bodyFromSectionLines(lines: string[]): string {
+  const bodyLines = [...lines]
+  while (bodyLines.length > 0) {
+    const lastLine = bodyLines[bodyLines.length - 1]
+    if (lastLine === undefined || lastLine.trim()) break
+    bodyLines.pop()
   }
-  return buildMarkdown(parsed.prefix, sections)
+  return bodyLines.join('\n')
 }
 
 function buildMarkdown(prefix: string, sections: ParsedSection[]): string {
@@ -395,17 +464,19 @@ function buildMarkdown(prefix: string, sections: ParsedSection[]): string {
     parts.push(trimmedPrefix)
   }
   sections.forEach((section) => {
-    parts.push(`## ${section.title}\n${section.body.trimEnd()}`)
+    const body = section.body
+    parts.push(body ? `## ${section.title}\n${body}` : `## ${section.title}`)
   })
-  return `${parts.join('\n\n').trimEnd()}\n`
+  return `${parts.join('\n\n')}\n`
 }
 
-function normalizeStructuredMemoryContent(content: string): string {
-  return content
+function sanitizeMemoryContent(content: string): string {
+  const sanitized = content
     .split(/\r?\n/)
-    .map((line) => line.replace(MEMORY_ANCHOR_SPACING_RE, ' $1').trimEnd())
+    .map((line) => line.replace(TRAILING_LINE_WHITESPACE_RE, '').replace(MEMORY_ANCHOR_SPACING_RE, ' $1'))
     .join('\n')
     .trimEnd()
+  return sanitized ? `${sanitized}\n` : ''
 }
 
 function stripMemoryAnchors(body: string): string {
@@ -413,11 +484,10 @@ function stripMemoryAnchors(body: string): string {
     .split(/\r?\n/)
     .map((line) => stripMemoryAnchorFromLine(line))
     .join('\n')
-    .trimEnd()
 }
 
 function stripMemoryAnchorFromLine(line: string): string {
-  return line.replace(MEMORY_ANCHOR_GLOBAL_RE, '').trimEnd()
+  return line.replace(MEMORY_ANCHOR_GLOBAL_RE, '')
 }
 
 function mergeMemoryAnchors(previousBody: string, nextBody: string): string {
@@ -464,7 +534,6 @@ function mergeMemoryAnchors(previousBody: string, nextBody: string): string {
       return `${visibleLine} ${anchor}`
     })
     .join('\n')
-    .trimEnd()
 }
 
 function extractMemoryAnchor(line: string): string | null {
