@@ -65,13 +65,6 @@
 - `todos`：公开 post 抽取出的待办。
 - `meta`：schema version、pending vector docs、pending light reflection、deep reflection cursor 等系统状态。
 
-### 2.6 API 后台任务与事件
-
-- `jobs`：API 公开发帖 pipeline 的后台任务状态，字段包括 `type`、`status`、`payload_json`、`attempts`、`error` 与执行时间戳。
-- `post_events`：面向前端和 SSE 的公开 post 事件流，记录 post 创建、embedding、SOUL 回复、TodoTool、轻反思和深反思触发状态。
-
-`jobs.status` 当前使用 `pending` / `running` / `succeeded` / `failed` / `cancelled`。API worker 使用单队列串行领取 pending job，SOUL fanout 内部仍可并发调用多个 SOUL。手动全局/SOUL 深反思也复用 `jobs`，但不一定产生 `post_events`，因为它们不绑定单条公开 post。
-
 当前 SOUL 深反思 cursor 使用 `meta.soul_thread_deep_cursor:<soul_name>`，value 是 JSON：
 
 ```json
@@ -82,6 +75,22 @@
 ```
 
 这使同一个 SOUL 的私聊消息与评论追问消息可以用各自自增 id 独立推进，失败时不会丢失待处理消息。`comment_message_id` 指向 `comments.id` 中 `seq>0` 的记录。
+
+### 2.6 API 后台任务与事件
+
+- `jobs`：API 公开发帖 pipeline 的后台任务状态，字段包括 `type`、`status`、`payload_json`、`attempts`、`max_attempts`、`error` 与执行时间戳。
+- `post_events`：面向前端和 SSE 的公开 post 事件流，记录 post 创建、embedding、SOUL 回复、TodoTool、轻反思和深反思触发状态。
+
+`jobs.status` 当前使用 `pending` / `running` / `succeeded` / `failed` / `cancelled`。API worker 默认用单 worker 从同一队列领取 pending job，SOUL fanout 内部仍可并发调用多个 SOUL。手动全局/SOUL 深反思也复用 `jobs`，但不一定产生 `post_events`，因为它们不绑定单条公开 post。
+
+### 2.7 向量账本、索引状态与证据反馈
+
+- `vector_docs`：SQLite 中的向量文档账本，保存 doc id、类型、来源表、来源 id、内容 hash、metadata 和 source revision。
+- `vector_doc_tombstones`：记录已删除向量文档的删除 revision，用于让 ChromaDB 删除操作可对账。
+- `vector_index_collections`：按 embedding 模型与 base URL 指纹隔离的 Chroma collection 同步状态，包含 synced revision、ready 和审计状态。
+- `vector_index_items`：记录某个 collection 中已索引的 doc id、content hash 和 source revision。
+- `vector_outbox`：待同步到 ChromaDB 的 upsert/delete 队列，保存 pending/succeeded/failed、attempts 和 error。
+- `evidence_feedback`：记录前端引用记忆面板提交的 evidence 反馈，目前只支持把某条 evidence 标记为 `irrelevant`。
 
 ## 3. FTS5 external content
 

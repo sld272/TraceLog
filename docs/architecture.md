@@ -61,12 +61,16 @@ raw evidence
 - `post_soul_orders`
 - `chat_threads` / `chat_messages`
 - `attachments` 及 `post_attachments` / `comment_attachments` / `chat_message_attachments`
+- `vision_cache`
 - `entities` / `post_entities`
 - `emotions`
 - `events`
 - `relations` / `relations_log`
 - `todos`
 - `reflections`
+- `vector_docs` / `vector_doc_tombstones` / `vector_outbox`
+- `vector_index_collections` / `vector_index_items`
+- `evidence_feedback`
 - `meta`
 
 职责：
@@ -90,10 +94,12 @@ workspace/
 ├── attachments/
 │   └── images/
 ├── souls/
-│   ├── 默认.md
+│   ├── 拾迹者.md
+│   ├── 温柔树洞.md
 │   └── 毒舌好友.md
 └── soul_memories/
-    ├── 默认.md
+    ├── 拾迹者.md
+    ├── 温柔树洞.md
     └── 毒舌好友.md
 ```
 
@@ -108,10 +114,12 @@ workspace/
 | 私聊消息 | `chat_messages` | 当前线程消息序列 | ChatService |
 | 图片附件 | `attachments` + attachment link tables | UI 展示；可选识图后注入摘要 | AttachmentService / VisionService |
 | 图片摘要 | `vision_cache` + `post_vision` 向量文档 | 作为客观视觉摘要注入回复与反思上下文 | VisionService / RecordService |
+| 向量账本与同步状态 | `vector_docs` / `vector_doc_tombstones` / `vector_outbox` / `vector_index_collections` / `vector_index_items` | 不直接注入；同步到 ChromaDB 后参与检索 | VectorIndexService / RecordService |
 | 轻反思信号 | entities / emotions / events / relations | 不直接注入 | Reflector |
 | 深反思记录 | `reflections` | 不默认注入 | Reflector |
 | 待办 | `todos` | TodoTool 开启时注入活跃项 | TodoService |
 | revision 审计 | `user_md_revisions` / `soul_memory_revisions` | 不注入 | Profile/SoulMemory service |
+| evidence feedback | `evidence_feedback` | 不注入；用于记录回复引用证据的用户反馈 | EvidenceFeedbackService |
 
 ## 4. 回复上下文
 
@@ -127,14 +135,14 @@ user input
   -> context_builder.build_context
 ```
 
-ChromaDB collection 使用 cosine distance；向量命中必须先通过绝对距离闸门（当前 `distance <= 0.65`）才会进入 hybrid merge。FTS5 命中不受该闸门影响，向量分数的 min-max 归一化只在幸存命中内进行。
+ChromaDB collection 使用 cosine distance；向量命中必须先通过绝对距离闸门（当前 `distance <= 0.73`）才会进入 hybrid merge。FTS5 命中不受该闸门影响，向量分数的 min-max 归一化只在幸存命中内进行。
 
 当前 post 的 post/post_vision 文档会在 FTS 与向量候选进入 hybrid merge 前排除，避免首评把原帖重复注入为历史相关帖。
 
 `build_context()` 当前只组装：
 
 - `# 用户档案`
-- `# 相关帖子`
+- `# 当前用户的历史相关帖子`
 - `# 待办事项`
 - `# 网页搜索结果`（仅在网页搜索开启且 gate 判断需要时）
 
@@ -171,6 +179,7 @@ SOUL 自己的人格和 `soul_memories/<name>.md` 仍由 reply router 在该 SOU
 - 当前 SOUL 人格与相处记忆。
 - `user.md`。
 - 原始 post。
+- 同一 post 下其他 SOUL 已发生追问的公开评论片段（只包含有用户追问的其他评论区，最近最多 6 条消息）。
 - unified retrieval 命中的相关记忆：通过绝对距离闸门的公开 posts、公开评论对话、当前 SOUL 的私聊片段。
 - 当前 SOUL 的首条回复。
 - 当前评论会话的最近追问/回复消息序列。
@@ -212,7 +221,7 @@ SOUL 是虚拟好友，不是事实复读机。回复时允许使用比喻、场
 
 ### 5.2 全局深反思
 
-触发：CLI 退出、API 手动触发或 Web 反思入口。
+触发：CLI 退出、API/Web 手动触发，或 Web/API 公开 post pipeline 累计到阈值后的自动触发。
 
 输入：
 

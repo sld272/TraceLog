@@ -299,7 +299,7 @@ curl -F "file=@photo.jpg" http://127.0.0.1:8000/attachments/upload
 ```json
 {
   "post_id": "20260612-001",
-  "soul_name": "默认",
+  "soul_name": "拾迹者",
   "root_comment_id": 1,
   "created_at": 1710000000.0,
   "updated_at": 1710000000.0,
@@ -311,7 +311,7 @@ curl -F "file=@photo.jpg" http://127.0.0.1:8000/attachments/upload
 {
   "id": 3,
   "post_id": "20260612-001",
-  "soul_name": "默认",
+  "soul_name": "拾迹者",
   "role": "user",
   "content": "你觉得下一步应该怎么拆？",
   "seq": 1,
@@ -338,10 +338,10 @@ curl -F "file=@photo.jpg" http://127.0.0.1:8000/attachments/upload
 
 ```json
 {
-  "conversation": { "post_id": "20260612-001", "soul_name": "默认", "root_comment_id": 1 },
+  "conversation": { "post_id": "20260612-001", "soul_name": "拾迹者", "root_comment_id": 1 },
   "result": {
     "post_id": "20260612-001",
-    "soul_name": "默认",
+    "soul_name": "拾迹者",
     "ok": true,
     "reply": "可以先把下一步切成三块...",
     "user_message_id": 3,
@@ -357,7 +357,7 @@ curl -F "file=@photo.jpg" http://127.0.0.1:8000/attachments/upload
 ```text
 id: 4
 event: comment_message
-data: {"id":4,"post_id":"20260612-001","soul_name":"默认","role":"assistant","content":"..."}
+data: {"id":4,"post_id":"20260612-001","soul_name":"拾迹者","role":"assistant","content":"..."}
 ```
 
 ## 7. SOUL 私聊
@@ -379,7 +379,7 @@ data: {"id":4,"post_id":"20260612-001","soul_name":"默认","role":"assistant","
 {
   "thread": {
     "id": 1,
-    "soul_name": "默认",
+    "soul_name": "拾迹者",
     "title": null,
     "created_at": 1710000000.0,
     "updated_at": 1710000000.0,
@@ -387,7 +387,7 @@ data: {"id":4,"post_id":"20260612-001","soul_name":"默认","role":"assistant","
   },
   "result": {
     "thread_id": 1,
-    "soul_name": "默认",
+    "soul_name": "拾迹者",
     "ok": true,
     "reply": "我在。",
     "user_message_id": 10,
@@ -416,17 +416,17 @@ data: {"id":11,"thread_id":1,"role":"assistant","content":"我在。"}
 | `POST` | `/souls` | `{ "name": "...", "soul": "...", "description": "...", "enabled": true }` | 创建 SOUL |
 | `POST` | `/souls/generate-soul` | `{ "name": "...", "inspiration": "..." }` | 用 LLM 生成 SOUL Markdown |
 | `PATCH` | `/souls/{name}` | `{ "soul": "...", "description": "...", "enabled": true }` | 更新 SOUL 文本、描述或启用状态 |
-| `PATCH` | `/souls/{name}` | `{ "order": ["默认", "毒舌好友"] }` | 重排 SOUL；路径名只用于匹配 route，实际以 `order` 为准 |
+| `PATCH` | `/souls/{name}` | `{ "order": ["拾迹者", "温柔树洞", "毒舌好友"] }` | 重排 SOUL；路径名只用于匹配 route，实际以 `order` 为准 |
 
 SOUL 对象：
 
 ```json
 {
-  "name": "默认",
-  "file_path": "workspace/souls/默认.md",
+  "name": "拾迹者",
+  "file_path": "workspace/souls/拾迹者.md",
   "enabled": true,
   "sort_order": 0,
-  "description": "温和稳定的陪伴者",
+  "description": "TraceLog 的默认好友，温暖、记得你的来路，帮你看见自己的成长",
   "created_at": 1710000000.0,
   "updated_at": 1710000000.0
 }
@@ -436,7 +436,7 @@ SOUL 对象：
 
 ```json
 {
-  "soul": "# 默认\n..."
+  "soul": "# 拾迹者\n..."
 }
 ```
 
@@ -474,7 +474,7 @@ Todo 由公开 post 中的 TodoTool 自动抽取，也可以通过 API 手动管
 | 方法 | 路径 | 请求 | 说明 |
 | --- | --- | --- | --- |
 | `GET` | `/todos` | 无 | 列出 todos |
-| `POST` | `/todos` | `{ "task": "...", "date": "2026-06-12", "start_time": null, "end_time": null, "status": "open" }` | 创建 todo |
+| `POST` | `/todos` | `{ "task": "...", "date": "2026-06-12", "start_time": null, "end_time": null, "status": "未完成" }` | 创建 todo |
 | `PATCH` | `/todos/{todo_id}` | 任意可更新字段 | 更新 todo |
 | `DELETE` | `/todos/{todo_id}` | 无 | 删除 todo |
 
@@ -487,13 +487,15 @@ Todo 对象：
   "date": "2026-06-12",
   "start_time": null,
   "end_time": null,
-  "status": "open",
+  "status": "未完成",
   "source_post": "20260612-001",
   "created_at": 1710000000.0,
   "updated_at": 1710000000.0,
   "completed_at": null
 }
 ```
+
+`status` 取值：`未完成` / `已完成`。创建时省略 `status` 会默认为 `未完成`。
 
 ## 11. 反思
 
@@ -521,7 +523,7 @@ SOUL 预览响应：
 ```json
 [
   {
-    "soul_name": "默认",
+    "soul_name": "拾迹者",
     "interaction_count": 12,
     "scope_start": 1710000000.0,
     "scope_end": 1710000100.0
