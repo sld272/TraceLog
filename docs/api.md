@@ -137,7 +137,7 @@ Revision detail 会额外包含完整快照：
 
 ```json
 {
-  "content": "今天终于把论文大纲写完了",
+  "content": "今天天气真不错",
   "attachment_ids": ["att_..."]
 }
 ```
@@ -174,7 +174,7 @@ Revision detail 会额外包含完整快照：
 {
   "post_id": "20260612-001",
   "ts": "2026-06-12 10:00:00",
-  "content": "今天终于把论文大纲写完了",
+  "content": "今天天气真不错",
   "importance": 3,
   "comment_count": 2,
   "latest_event_type": "pipeline_done",
@@ -197,7 +197,7 @@ Revision detail 会额外包含完整快照：
     {
       "post_id": "20260612-001",
       "ts": "2026-06-12 10:00:00",
-      "content": "今天终于把论文大纲写完了",
+      "content": "今天天气真不错",
       "importance": 3,
       "comment_count": 2,
       "latest_event_type": null,
@@ -220,7 +220,7 @@ Revision detail 会额外包含完整快照：
   "post": {
     "post_id": "20260612-001",
     "ts": "2026-06-12 10:00:00",
-    "content": "今天终于把论文大纲写完了",
+    "content": "今天天气真不错",
     "importance": 3,
     "created_at": 1710000000.0,
     "updated_at": 1710000000.0,
@@ -313,7 +313,7 @@ curl -F "file=@photo.jpg" http://127.0.0.1:8000/attachments/upload
   "post_id": "20260612-001",
   "soul_name": "拾迹者",
   "role": "user",
-  "content": "你觉得下一步应该怎么拆？",
+  "content": "你觉得下一步应该怎么做？",
   "seq": 1,
   "metadata": null,
   "created_at": 1710000000.0,
@@ -483,7 +483,7 @@ Todo 对象：
 ```json
 {
   "id": "todo_...",
-  "task": "改论文大纲",
+  "task": "改论文",
   "date": "2026-06-12",
   "start_time": null,
   "end_time": null,
