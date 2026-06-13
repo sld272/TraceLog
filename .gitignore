@@ -215,6 +215,8 @@ __marimo__/
 # TraceLog
 config.json
 workspace/
+# 本地演示内容（个人填充，不上传；模板见 scripts/demo_content.example.toml）
+scripts/demo_content.toml
 *.db
 *.db-shm
 *.db-wal

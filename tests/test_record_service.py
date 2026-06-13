@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -118,6 +119,17 @@ class RecordServiceTest(unittest.TestCase):
         self.assertEqual("今天想练歌", vector_doc["content"])
         self.assertEqual("pending", outbox["status"])
         self.assertFalse(vector_index_service.collection_state("tracelog_test").query_ready)
+
+    def test_save_post_accepts_historical_created_at(self) -> None:
+        created_at = datetime(2026, 4, 3, 22, 15, tzinfo=timezone(timedelta(hours=8)))
+
+        post_id = record_service.save_post("今天在仙林图书馆复习", index_immediately=False, created_at=created_at)
+
+        post = require_not_none(db.query_one("SELECT id, ts, created_at, updated_at FROM posts WHERE id = ?", (post_id,)))
+        self.assertEqual("20260403-001", post["id"])
+        self.assertEqual("2026-04-03T22:15:00+08:00", post["ts"])
+        self.assertEqual(created_at.timestamp(), post["created_at"])
+        self.assertEqual(created_at.timestamp(), post["updated_at"])
 
     def test_save_post_snapshots_enabled_soul_order(self) -> None:
         for name, enabled, sort_order in [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from core import attachment_service, context_builder, db, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service, vision_service
@@ -25,7 +26,12 @@ class PublicPostReplyContext:
     built_context: context_builder.BuiltContext
 
 
-def create_post(content: str, attachment_ids: list[str] | None = None) -> CreatedPost:
+def create_post(
+    content: str,
+    attachment_ids: list[str] | None = None,
+    *,
+    created_at: datetime | None = None,
+) -> CreatedPost:
     """Persist one public post and enqueue its API background pipeline."""
     body = content.strip()
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
@@ -34,7 +40,12 @@ def create_post(content: str, attachment_ids: list[str] | None = None) -> Create
     if len(body) > 20_000:
         raise ValueError("content 不能超过 20000 字符")
 
-    post_id = record_service.save_post(body, index_immediately=False, track_embedding=bool(body))
+    post_id = record_service.save_post(
+        body,
+        index_immediately=False,
+        track_embedding=bool(body),
+        created_at=created_at,
+    )
     attachment_service.attach_to_post(post_id, attachment_ids)
     event_service.append_post_event(post_id, "post_created", {"post_id": post_id})
 
@@ -351,11 +362,14 @@ def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClie
 def _run_trigger_soul_deep_reflections(payload: dict[str, Any], client: LLMClient, model: str) -> None:
     limit_per_soul = _payload_int(payload, "limit_per_soul", 100)
     trigger = str(payload.get("trigger") or "api_manual")
+    raw_names = payload.get("soul_names")
+    soul_names = [str(name) for name in raw_names] if isinstance(raw_names, list) and raw_names else None
     reflector.trigger_soul_deep_reflections(
         client,
         model,
         trigger=trigger,
         limit_per_soul=limit_per_soul,
+        soul_names=soul_names,
     )
 
 

@@ -387,6 +387,26 @@ class ReflectorTest(unittest.TestCase):
         self.assertIn("default_private_marker", default_prompt)
         self.assertNotIn("other_private_marker", default_prompt)
 
+    def test_soul_deep_reflection_filters_by_soul_names(self) -> None:
+        soul_service.sync_souls()
+        default_thread = chat_service.get_or_create_thread("拾迹者")
+        chat_service.append_user_message(default_thread.id, "只反思拾迹者这条")
+        other_thread = chat_service.get_or_create_thread("毒舌好友")
+        chat_service.append_user_message(other_thread.id, "毒舌好友这条先不反思")
+        client = FakeClient()
+
+        results = reflector.trigger_soul_deep_reflections(
+            client, "fake-model", trigger="cli_exit", soul_names=["拾迹者"]
+        )
+
+        self.assertEqual(["拾迹者"], [result.soul_name for result in results])
+
+        # 毒舌好友 未被反思、游标未推进；之后不带过滤仍能反思到它，拾迹者则已消费。
+        remaining = reflector.trigger_soul_deep_reflections(client, "fake-model", trigger="cli_exit")
+        remaining_names = [result.soul_name for result in remaining]
+        self.assertIn("毒舌好友", remaining_names)
+        self.assertNotIn("拾迹者", remaining_names)
+
     def test_soul_deep_reflection_cursor_prevents_rerun(self) -> None:
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("拾迹者")

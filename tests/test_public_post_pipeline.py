@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import io
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -79,6 +80,26 @@ class PublicPostPipelineTest(unittest.TestCase):
         )
         self.assertEqual([job["id"] for job in db.query_all("SELECT id FROM jobs ORDER BY id ASC")], created.job_ids)
         self.assertEqual(["post_created"], [event["event_type"] for event in events])
+
+    def test_create_post_can_use_historical_created_at_and_still_enqueue_jobs(self) -> None:
+        created_at = datetime(2026, 4, 3, 22, 15, tzinfo=timezone(timedelta(hours=8)))
+
+        created = public_post_pipeline.create_post("今天在仙林图书馆复习", created_at=created_at)
+        post = require_not_none(db.query_one("SELECT id, ts FROM posts WHERE id = ?", (created.post_id,)))
+        jobs = job_service.list_jobs_for_post(created.post_id)
+
+        self.assertEqual("20260403-001", post["id"])
+        self.assertEqual("2026-04-03T22:15:00+08:00", post["ts"])
+        self.assertEqual(
+            [
+                "index_post_embedding",
+                "generate_post_replies",
+                "run_todo_tool",
+                "run_light_reflection",
+                "maybe_trigger_global_deep_reflection",
+            ],
+            [job["type"] for job in jobs],
+        )
 
     def test_create_post_omits_todo_job_when_tool_disabled(self) -> None:
         tool_config_service.set_tool_enabled("todo", False)

@@ -232,10 +232,18 @@ def trigger_soul_deep_reflections(
     *,
     trigger: str = "manual",
     limit_per_soul: int = 100,
+    soul_names: list[str] | None = None,
 ) -> list[SoulDeepReflectionResult]:
-    """Generate SOUL-specific deep reflections from raw thread messages."""
+    """Generate SOUL-specific deep reflections from raw thread messages.
+
+    When ``soul_names`` is provided, only those (still enabled) SOULs are
+    reflected; otherwise every enabled SOUL is considered.
+    """
     results: list[SoulDeepReflectionResult] = []
+    allowed = set(soul_names) if soul_names else None
     for soul in soul_service.list_enabled_souls():
+        if allowed is not None and soul.name not in allowed:
+            continue
         messages = _load_soul_thread_messages_since_cursor(soul.name, limit_per_soul)
         if not messages:
             continue

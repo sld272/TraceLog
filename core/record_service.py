@@ -8,9 +8,15 @@ from datetime import datetime
 from core import db, logging_service, vector_index_service
 
 
-def save_post(content: str, *, index_immediately: bool = True, track_embedding: bool = True) -> str:
+def save_post(
+    content: str,
+    *,
+    index_immediately: bool = True,
+    track_embedding: bool = True,
+    created_at: datetime | None = None,
+) -> str:
     """Save a post to SQLite, then try to index it in ChromaDB."""
-    now = datetime.now().astimezone()
+    now = _normalize_post_time(created_at)
     post_id = _next_post_id(now.strftime("%Y%m%d"))
     body = content.strip()
 
@@ -37,6 +43,12 @@ def save_post(content: str, *, index_immediately: bool = True, track_embedding: 
             pass
 
     return post_id
+
+
+def _normalize_post_time(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.now().astimezone()
+    return value.astimezone()
 
 
 def _snapshot_post_soul_order(conn, post_id: str, created_at: float) -> None:

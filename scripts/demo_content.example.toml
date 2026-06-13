@@ -1,0 +1,420 @@
+# ============================================================================
+# TraceLog 演示数据内容 —— 自由发挥区
+# ============================================================================
+# 用法：把本文件复制成同目录下的 demo_content.toml，再随意编辑。
+#   cp scripts/demo_content.example.toml scripts/demo_content.toml
+# demo_content.toml 已被 .gitignore，不会上传；seeder 优先读它，没有就回退到本示例。
+#
+# 三种条目：
+#   [[posts]]           公开记录。key 必须唯一；comment_threads 用 post_key 绑定到它，
+#                       所以你随便增删、重排帖子，追问都不会错位。
+#                       时间用 month/day/hour/minute，脚本会自动按时间排序。
+#                       act 只是分幕标签，dry-run 里用来看分布，随便写。
+#   [[comment_threads]] 在某帖的某个 SOUL 首评下，用户再追问一句（生成一轮真实对话）。
+#                       post_key 必须对得上某条 posts 的 key。
+#   [[chats]]           与某个 SOUL 的私聊（保持近期时间，展示“当前在用”）。
+#
+# 注意：
+#   - soul_name 只能是已启用的人格（默认库：拾迹者 / 温柔树洞 / 毒舌好友）。写错会被跳过、不会崩。
+#   - 改完先 `python scripts/seed_demo_data.py --dry-run` 预览时间线和绑定。
+#   - 成长弧线（怀疑→笃定）是 user.md 那个 revise 镜头的素材；个别帖子内嵌了带绝对日期的
+#     自然待办给 TodoTool 抽——大改时心里有数。
+#   - 文件保持 UTF-8。
+# ============================================================================
+
+
+# ───────────────────────── 第一幕·自我怀疑（3/16–3/31）─────────────────────────
+
+[[posts]]
+key = "ginkgo-doubt"
+month = 3
+day = 16
+hour = 21
+minute = 40
+act = "第一幕·自我怀疑"
+content = "晚自习回来，又一个人在仙林的银杏道上走。法语晨读刚结束，脑子里却全是跨考计算机的事。说出去同学都觉得我疯了，文科生跨考工科。我自己其实也没底，就是不甘心。"
+
+[[posts]]
+key = "first-python"
+month = 3
+day = 18
+hour = 12
+minute = 30
+act = "第一幕·自我怀疑"
+content = "法语精读课走神，在草稿纸上写了人生第一行 Python。结果回宿舍连环境都没装明白，pip 报错搜了半天。原来想入门和真的入门，中间差了一整个下午。"
+
+[[posts]]
+key = "calculator-bug"
+month = 3
+day = 21
+hour = 23
+minute = 10
+act = "第一幕·自我怀疑"
+content = "跟着 B 站教程写了个命令行计算器，红字报了一屏，找了俩小时才发现是缩进错了。气死，但改对的那一下又有点上头。这种感觉法语课从来没给过我。"
+
+[[posts]]
+key = "roommate-puzzled"
+month = 3
+day = 23
+hour = 22
+minute = 50
+act = "第一幕·自我怀疑"
+content = "室友看我天天对着黑乎乎的终端，问我在干嘛。我说想转码，她愣了好几秒，说『你不是法语的吗』。我笑笑没接话。这条路好像暂时没人能一起走。"
+
+[[posts]]
+key = "calculus-panic"
+month = 3
+day = 26
+hour = 21
+minute = 20
+act = "第一幕·自我怀疑"
+content = "高数下学期难度肉眼可见地上来了，多元函数听得我怀疑自己理科底子是不是早还给高中老师了。坐在最后一排，第一次有点慌。"
+
+[[posts]]
+key = "doubt-too-late"
+month = 3
+day = 29
+hour = 12
+minute = 45
+act = "第一幕·自我怀疑"
+content = "看隔壁计科的同学随手写了个脚本把全班成绩排了序，几分钟的事。我连 for 循环还要查语法。差距感一下子很重——我是不是起步太晚了。"
+
+[[posts]]
+key = "signup-contest"
+month = 3
+day = 31
+hour = 23
+minute = 35
+act = "第一幕·自我怀疑"
+content = "一冲动把学校程序设计大赛的报名表填了。填到『项目简介』那一栏卡住，盯着光标闪了十分钟。又怕丢人，又不甘心就这么算了。先报上吧。"
+
+
+# ───────────────────────── 第二幕·投入与低谷（4/2–4/30）─────────────────────────
+
+[[posts]]
+key = "project-idea"
+month = 4
+day = 2
+hour = 21
+minute = 50
+act = "第二幕·投入与低谷"
+content = "想做个东西：能像发朋友圈一样随手记录自己，然后在我回头看的时候，帮我把这些碎片连起来。名字还没想好。先把这个念头记在这里，别让它溜走。"
+
+[[posts]]
+key = "midterm-week"
+month = 4
+day = 5
+hour = 12
+minute = 40
+act = "第二幕·投入与低谷"
+content = "期中周要来了，高数、线代、程序设计、四级全挤在一块。列了张清单，列完反而更焦虑。先把这周的高数错题刷完，4 月 8 号之前，别再拖。"
+
+[[posts]]
+key = "first-db-design"
+month = 4
+day = 8
+hour = 23
+minute = 20
+act = "第二幕·投入与低谷"
+content = "第一次自己设计数据库表，改了五版还是觉得别扭。原来『想清楚一件事该怎么存』比『把它写出来』难多了。今天没写几行代码，全在画图和推翻。"
+
+[[posts]]
+key = "midterm-fail"
+month = 4
+day = 11
+hour = 22
+minute = 30
+act = "第二幕·投入与低谷"
+content = "期中高数考砸了。出考场那一刻，眼眶有点热。跨考这个决定，今晚特别动摇——是不是我高估了自己。"
+
+[[posts]]
+key = "roommate-coldwar"
+month = 4
+day = 13
+hour = 12
+minute = 50
+act = "第二幕·投入与低谷"
+content = "室友说我最近像人间蒸发，天天泡在机房。我们有点冷战。我也不知道怎么解释，我只是怕一停下来就追不上了。"
+
+[[posts]]
+key = "first-bug-fixed"
+month = 4
+day = 15
+hour = 1
+minute = 10
+act = "第二幕·投入与低谷"
+content = "卡了三天的搜索功能 bug，今天凌晨终于通了。宿舍都睡了，就我一个人对着屏幕傻笑。这种半夜独自通关的快乐，没法跟人说，但是真的快乐。"
+
+[[posts]]
+key = "cet-listening"
+month = 4
+day = 18
+hour = 12
+minute = 30
+act = "第二幕·投入与低谷"
+content = "四级越来越近，听力还是一团浆糊。这周六（4 月 25 号）之前必须做完两套真题，而且要把错的精听一遍，不能再假装练过了。"
+
+[[posts]]
+key = "mentor-basics-weak"
+month = 4
+day = 20
+hour = 21
+minute = 40
+act = "第二幕·投入与低谷"
+content = "找了个带过竞赛的学长聊。他说我基础确实薄，但思路不算差，让我别急。一半被打击，一半被点醒。至少不是全盘否定。"
+
+[[posts]]
+key = "burnout-low"
+month = 4
+day = 23
+hour = 23
+minute = 50
+act = "第二幕·投入与低谷"
+content = "累到怀疑人生。法语作业、项目的 bug、四级、跟室友的别扭，全堆在今晚。就想躺在床上谁也不理。是不是我同时想要的太多了。"
+
+[[posts]]
+key = "cet-mock-done"
+month = 4
+day = 25
+hour = 12
+minute = 20
+act = "第二幕·投入与低谷"
+content = "情绪归情绪，那两套四级真题还是做完了，分不高，但做完了。没有因为心情烂就彻底摆烂，这点今天勉强给自己及格。"
+
+[[posts]]
+key = "first-ui"
+month = 4
+day = 27
+hour = 21
+minute = 30
+act = "第二幕·投入与低谷"
+content = "给项目拼了第一个能用的界面，丑得很，但按钮按下去真的有反应的那一刻，心情忽然亮了一下。原来我也能让一个东西『活』起来。"
+
+[[posts]]
+key = "roommate-makeup"
+month = 4
+day = 29
+hour = 22
+minute = 40
+act = "第二幕·投入与低谷"
+content = "主动找室友道歉了，聊开了。她说不是怪我忙，是怕我把自己绷得太紧、哪天突然断掉。听完有点想哭。还好没把这段关系也弄丢。"
+
+[[posts]]
+key = "month-review-1"
+month = 4
+day = 30
+hour = 12
+minute = 30
+act = "第二幕·投入与低谷"
+content = "月底回看这个月：高数、四级、项目、和室友，没有一件是满分，但也没有一件彻底断掉。下个月想少开新坑，把手上的事往前推一推。"
+
+
+# ───────────────────────── 第三幕·转折（5/3–5/24）─────────────────────────
+
+[[posts]]
+key = "project-recall"
+month = 5
+day = 3
+hour = 21
+minute = 50
+act = "第三幕·转折"
+content = "项目今天能把我两周前随手记的想法搜出来了。看到过去那个还在纠结的自己，忽然有种很实在的感觉——我真的在往前走，不只是原地打转。"
+
+[[posts]]
+key = "problem-solving-joy"
+month = 5
+day = 6
+hour = 12
+minute = 45
+act = "第三幕·转折"
+content = "程序设计的小作业，这次我没看题解，自己一点点想出来了。提交通过的那一刻，我发现『解决问题』这件事本身就很爽，跟分数没关系。这感觉有点新。"
+
+[[posts]]
+key = "friend-feedback"
+month = 5
+day = 9
+hour = 23
+minute = 10
+act = "第三幕·转折"
+content = "把项目发给一个同学试用，他第一反应是：『这不就是给自己发朋友圈吗。』被说中了，但是好的那种。原来我模模糊糊想做的东西，别人一句话就讲清楚了。"
+
+[[posts]]
+key = "refactor-clean"
+month = 5
+day = 12
+hour = 21
+minute = 20
+act = "第三幕·转折"
+content = "今晚重构了一坨重复代码，删掉之后清爽多了。没人会看见这部分，但我自己知道这块地板被擦干净了。这种安静的成就感，居然有点上瘾。"
+
+[[posts]]
+key = "basketball-clear"
+month = 5
+day = 15
+hour = 22
+minute = 30
+act = "第三幕·转折"
+content = "晚上去打了两小时球。投篮还是铁，但跑动比上次积极多了。跑完一身汗，脑子反而特别清楚——身体动起来，比躺着刷手机更像休息。"
+
+[[posts]]
+key = "anime-courage"
+month = 5
+day = 17
+hour = 12
+minute = 40
+act = "第三幕·转折"
+content = "补了一直想看的那部番。主角明明怕得要死，还是硬着头皮往前冲。突然觉得我做项目、备考也该这样，别老等什么『状态好了再开始』。"
+
+[[posts]]
+key = "cet-done"
+month = 5
+day = 20
+hour = 21
+minute = 10
+act = "第三幕·转折"
+content = "四级考完了。听力居然大致跟得上，没有像三月那样整段放空。走出考场那一刻，有点久违的轻松。"
+
+[[posts]]
+key = "defense-draft"
+month = 5
+day = 22
+hour = 23
+minute = 30
+act = "第三幕·转折"
+content = "大赛要交初审了，开始写答辩稿。第一版讲得太满，恨不得把所有功能都塞进去。得砍，把重点压进五分钟，不然评委还没听懂我们就讲完了。"
+
+[[posts]]
+key = "path-works"
+month = 5
+day = 24
+hour = 12
+minute = 30
+act = "第三幕·转折"
+content = "这半学期第一次，我真切地觉得：跨考这条路，好像真的走得通。不是三月那种头脑发热的冲动，是一点点试出来的笃定。"
+
+
+# ───────────────────────── 第四幕·冲刺复盘（5/27–6/13）─────────────────────────
+
+[[posts]]
+key = "empty-state-copy"
+month = 5
+day = 27
+hour = 21
+minute = 40
+act = "第四幕·冲刺复盘"
+content = "给项目补了空状态的文案。一个空页面不该只是空白，它应该像轻轻对用户说一句：你可以从这里开始。做这种小细节的时候，我特别投入。"
+
+[[posts]]
+key = "defense-v3"
+month = 5
+day = 30
+hour = 23
+minute = 20
+act = "第四幕·冲刺复盘"
+content = "答辩稿改到第三版，把所有漂亮的废话都删了，换成具体的问题、具体的人、一个最小可用的 demo。才发现，把一件事讲清楚，比把它做出来还难。"
+
+[[posts]]
+key = "mentor-praise"
+month = 6
+day = 2
+hour = 12
+minute = 50
+act = "第四幕·冲刺复盘"
+content = "导师看了我的进度，说我跟开学那会儿判若两人。那一刻有点想哭，是开心的那种。原来这几个月不是错觉，是真的留下了什么。"
+
+[[posts]]
+key = "demo-video-open"
+month = 6
+day = 5
+hour = 23
+minute = 10
+act = "第四幕·冲刺复盘"
+content = "在录演示视频，卡在开场怎么讲。想了半天，决定不堆功能，就从『我自己为什么需要它』讲起——一个总是记了又忘、想看见自己成长的人。"
+
+[[posts]]
+key = "late-nights"
+month = 6
+day = 8
+hour = 22
+minute = 30
+act = "第四幕·冲刺复盘"
+content = "这两天天天熬到一两点。是累，但是是那种『在做自己真正想做的事』的累，跟以前为了应付而熬夜，完全是两回事。"
+
+[[posts]]
+key = "review-half-year"
+month = 6
+day = 11
+hour = 23
+minute = 40
+act = "第四幕·冲刺复盘"
+content = "今晚把这半年记的东西从头翻了一遍。三月那个连 for 循环都要查语法、怀疑自己是不是太晚的我，大概怎么也想不到现在的样子。有点感慨。"
+
+[[posts]]
+key = "contest-tomorrow"
+month = 6
+day = 13
+hour = 12
+minute = 30
+act = "第四幕·冲刺复盘"
+content = "大赛初审明天就要交了。还是紧张，但这一次，我是真的相信自己能把一件事，完完整整地做完。"
+
+
+# ───────────────────────── 针对性追问（post_key 绑定到上面的帖子）─────────────────────────
+
+[[comment_threads]]
+post_key = "doubt-too-late"
+soul_name = "毒舌好友"
+followup = "你直说，我这个进度，是不是真的太晚了、赶不上了？"
+
+[[comment_threads]]
+post_key = "midterm-fail"
+soul_name = "温柔树洞"
+followup = "我知道一次考试说明不了什么，可今晚就是特别想放弃跨考。"
+
+[[comment_threads]]
+post_key = "mentor-basics-weak"
+soul_name = "拾迹者"
+followup = "他说我基础薄。如果只能先补一样，你觉得我该从哪开始？"
+
+[[comment_threads]]
+post_key = "burnout-low"
+soul_name = "温柔树洞"
+followup = "什么都堆在一起，我今晚真的一点都不想动了。"
+
+[[comment_threads]]
+post_key = "problem-solving-joy"
+soul_name = "拾迹者"
+followup = "我好像第一次觉得写代码本身是快乐的，不只是为了考研。这正常吗？"
+
+[[comment_threads]]
+post_key = "path-works"
+soul_name = "毒舌好友"
+followup = "三月时我还觉得自己是头脑发热。你说我现在这状态，算想明白了吗？"
+
+[[comment_threads]]
+post_key = "review-half-year"
+soul_name = "拾迹者"
+followup = "你陪我从三月到现在，你觉得我最大的变化是什么？"
+
+
+# ───────────────────────── 私聊（保持近期时间）─────────────────────────
+
+[[chats]]
+soul_name = "温柔树洞"
+message = "最近什么都挤在一起，我有点喘不过气，又不太想跟室友说。"
+
+[[chats]]
+soul_name = "拾迹者"
+message = "帮我理一下，从开学到现在我到底做成了几件事？我自己有点看不清。"
+
+[[chats]]
+soul_name = "毒舌好友"
+message = "我怕大赛初审做不完，又怕自己只是三分钟热度。"
+
+[[chats]]
+soul_name = "拾迹者"
+message = "如果用一句话总结这半年的我，你会怎么说？"
+
+[[chats]]
+soul_name = "温柔树洞"
+message = "明天就要交初审了，我又紧张，又有点舍不得这段时间。"
