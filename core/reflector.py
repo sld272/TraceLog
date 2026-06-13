@@ -505,10 +505,15 @@ def _max_soul_thread_cursor(rows: list) -> dict[str, int]:
 
 
 def _set_soul_thread_deep_cursor(soul_name: str, cursor: dict[str, int]) -> None:
+    current = _get_soul_thread_deep_cursor(soul_name)
+    merged = {
+        "chat_message_id": max(current.get("chat_message_id", 0), _safe_int(cursor.get("chat_message_id"))),
+        "comment_message_id": max(current.get("comment_message_id", 0), _safe_int(cursor.get("comment_message_id"))),
+    }
     with db.immediate_transaction() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            (f"{SOUL_THREAD_DEEP_CURSOR_PREFIX}{soul_name}", json.dumps(cursor, ensure_ascii=False)),
+            (f"{SOUL_THREAD_DEEP_CURSOR_PREFIX}{soul_name}", json.dumps(merged, ensure_ascii=False)),
         )
 
 
