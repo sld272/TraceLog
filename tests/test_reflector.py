@@ -413,6 +413,45 @@ class ReflectorTest(unittest.TestCase):
         cursor = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_thread_deep_cursor:拾迹者",)))
         self.assertEqual({"chat_message_id": chat_user.id, "comment_message_id": 0}, json.loads(cursor["value"]))
 
+    def test_soul_deep_reflection_cursor_merges_channels_without_reopening_comments(self) -> None:
+        soul_service.sync_souls()
+        self._insert_comment_seed()
+        comment_user = comment_service.append_comment("20260525-001", "拾迹者", "user", "先整理评论消息")
+        self._set_comment_message_time(comment_user.id, 1.0)
+
+        first_payload = {
+            "reflection_md": "## SOUL 深反思\n\n用户先留下了一条评论消息，整理后不应再次出现在待整理范围。",
+            "patches": [],
+        }
+        first = reflector.trigger_soul_deep_reflections(
+            FakeClient(content=json.dumps(first_payload, ensure_ascii=False)),
+            "fake-model",
+            trigger="cli_exit",
+        )
+        self.assertEqual(1, len(first))
+
+        chat_thread = chat_service.get_or_create_thread("拾迹者")
+        chat_user = chat_service.append_user_message(chat_thread.id, "再整理一条私聊消息")
+        self._set_chat_message_time(chat_user.id, 2.0)
+        second_payload = {
+            "reflection_md": "## SOUL 深反思\n\n用户随后又留下了一条私聊消息，整理时不能清空评论游标。",
+            "patches": [],
+        }
+
+        second = reflector.trigger_soul_deep_reflections(
+            FakeClient(content=json.dumps(second_payload, ensure_ascii=False)),
+            "fake-model",
+            trigger="cli_exit",
+        )
+
+        self.assertEqual(1, len(second))
+        cursor = require_not_none(db.query_one("SELECT value FROM meta WHERE key = ?", ("soul_thread_deep_cursor:拾迹者",)))
+        self.assertEqual(
+            {"chat_message_id": chat_user.id, "comment_message_id": comment_user.id},
+            json.loads(cursor["value"]),
+        )
+        self.assertEqual([], reflector.preview_soul_deep_reflection_scopes())
+
     def test_soul_deep_reflection_invalid_result_does_not_advance_cursor(self) -> None:
         soul_service.sync_souls()
         chat_thread = chat_service.get_or_create_thread("拾迹者")
