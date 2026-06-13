@@ -49,6 +49,10 @@ const SOUL_MEMORY_SECTIONS: SectionSpec[] = [
   { title: '私聊沉淀' },
 ]
 
+const MEMORY_ANCHOR_RE = /<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->/
+const MEMORY_ANCHOR_GLOBAL_RE = /\s*<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->/g
+const MEMORY_ANCHOR_SPACING_RE = /[ \t]+(<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->)/g
+
 export function MemorySettingsPanel({
   souls,
   workspaceStatus,
@@ -71,7 +75,9 @@ export function MemorySettingsPanel({
 
   const selectedObject = memoryObjects.find((item) => item.id === selectedObjectId)
     ?? buildProfileMemoryObject(workspaceStatus)
-  const isDirty = draftContent !== savedContent
+  const isDirty = editorMode === 'structured'
+    ? normalizeStructuredMemoryContent(draftContent) !== normalizeStructuredMemoryContent(savedContent)
+    : draftContent !== savedContent
   const displaySections = useMemo(
     () => getDisplaySections(selectedObject.kind, draftContent),
     [selectedObject.kind, draftContent],
@@ -328,7 +334,7 @@ function getDisplaySections(kind: MemoryKind, content: string) {
   const sectionMap = new Map(parsed.sections.map((section) => [section.title, section.body]))
   return specs.map((spec) => ({
     ...spec,
-    body: sectionMap.get(spec.title) ?? '',
+    body: stripMemoryAnchors(sectionMap.get(spec.title) ?? ''),
   }))
 }
 
@@ -374,7 +380,7 @@ function updateSectionBody(content: string, title: string, body: string): string
   const sections = parsed.sections.map((section) => {
     if (section.title !== title) return section
     found = true
-    return { ...section, body }
+    return { ...section, body: mergeMemoryAnchors(section.body, body) }
   })
   if (!found) {
     sections.push({ title, body })
@@ -392,4 +398,79 @@ function buildMarkdown(prefix: string, sections: ParsedSection[]): string {
     parts.push(`## ${section.title}\n${section.body.trimEnd()}`)
   })
   return `${parts.join('\n\n').trimEnd()}\n`
+}
+
+function normalizeStructuredMemoryContent(content: string): string {
+  return content
+    .split(/\r?\n/)
+    .map((line) => line.replace(MEMORY_ANCHOR_SPACING_RE, ' $1').trimEnd())
+    .join('\n')
+    .trimEnd()
+}
+
+function stripMemoryAnchors(body: string): string {
+  return body
+    .split(/\r?\n/)
+    .map((line) => stripMemoryAnchorFromLine(line))
+    .join('\n')
+    .trimEnd()
+}
+
+function stripMemoryAnchorFromLine(line: string): string {
+  return line.replace(MEMORY_ANCHOR_GLOBAL_RE, '').trimEnd()
+}
+
+function mergeMemoryAnchors(previousBody: string, nextBody: string): string {
+  const previousLines = previousBody.split(/\r?\n/)
+  const nextLines = nextBody.split(/\r?\n/)
+  const anchorsByVisibleLine = new Map<string, string[]>()
+  const usedAnchors = new Set<string>()
+
+  previousLines.forEach((line) => {
+    const anchor = extractMemoryAnchor(line)
+    if (!anchor) return
+    const visibleLine = normalizeMemoryLine(line)
+    if (!visibleLine) return
+    const anchors = anchorsByVisibleLine.get(visibleLine) ?? []
+    anchors.push(anchor)
+    anchorsByVisibleLine.set(visibleLine, anchors)
+  })
+
+  const mergedAnchors = nextLines.map((line) => {
+    if (extractMemoryAnchor(line)) return null
+    const visibleLine = normalizeMemoryLine(line)
+    const exactMatch = visibleLine ? anchorsByVisibleLine.get(visibleLine)?.find((anchor) => !usedAnchors.has(anchor)) : undefined
+    if (!exactMatch) return null
+    usedAnchors.add(exactMatch)
+    return exactMatch
+  })
+
+  nextLines.forEach((line, index) => {
+    if (mergedAnchors[index] !== null || extractMemoryAnchor(line)) return
+    if (!normalizeMemoryLine(line)) return
+    const previousAnchor = extractMemoryAnchor(previousLines[index] ?? '')
+    if (!previousAnchor || usedAnchors.has(previousAnchor)) return
+    mergedAnchors[index] = previousAnchor
+    usedAnchors.add(previousAnchor)
+  })
+
+  return nextLines
+    .map((line, index) => {
+      const existingAnchor = extractMemoryAnchor(line)
+      const anchor = existingAnchor ?? mergedAnchors[index]
+      if (!anchor) return stripMemoryAnchorFromLine(line)
+      const visibleLine = stripMemoryAnchorFromLine(line)
+      if (!visibleLine.trim()) return visibleLine
+      return `${visibleLine} ${anchor}`
+    })
+    .join('\n')
+    .trimEnd()
+}
+
+function extractMemoryAnchor(line: string): string | null {
+  return MEMORY_ANCHOR_RE.exec(line)?.[0] ?? null
+}
+
+function normalizeMemoryLine(line: string): string {
+  return stripMemoryAnchorFromLine(line).trim()
 }
