@@ -17,7 +17,6 @@ USER_MD_PATH = str(db.WORKSPACE_DIR / "user.md")
 
 DEFAULT_SECTION_SENSITIVITY = {
     "基本信息": "high",
-    "身份与角色": "high",
     "性格与倾向": "normal",
     "技能与专长": "normal",
     "兴趣与习惯": "normal",
@@ -30,7 +29,6 @@ DEFAULT_USER_MD = """---
 schema: tracelog/user.md@v1
 sensitivity:
   基本信息: high
-  身份与角色: high
   性格与倾向: normal
   技能与专长: normal
   兴趣与习惯: normal
@@ -42,8 +40,6 @@ sensitivity:
 # 用户档案
 
 ## 基本信息
-
-## 身份与角色
 
 ## 性格与倾向
 
@@ -64,7 +60,6 @@ VALID_SENSITIVITY_LEVELS = {"high", "normal", "low"}
 
 SECTION_PREFIXES = {
     "基本信息": "bf",
-    "身份与角色": "role",
     "性格与倾向": "trait",
     "技能与专长": "skill",
     "兴趣与习惯": "habit",
@@ -83,6 +78,10 @@ THRESHOLDS = {
     ("high", "add"): (1, 0.85),
     ("high", "update"): (1, 0.88),
     ("high", "remove"): (1, 0.95),
+}
+
+LEGACY_SECTION_MERGES = {
+    "身份与角色": "基本信息",
 }
 
 
@@ -357,9 +356,26 @@ def _write_text_atomic(path: str, content: str) -> None:
 def init_default_profile() -> None:
     """Create user.md when missing and record an init revision."""
     if os.path.exists(USER_MD_PATH):
+        migrate_legacy_profile_sections()
         return
     _write_text_atomic(USER_MD_PATH, DEFAULT_USER_MD)
     _record_user_md_revision(DEFAULT_USER_MD, {"op": "init"}, "user")
+
+
+def migrate_legacy_profile_sections() -> None:
+    """Merge removed profile sections into their current destinations."""
+    if not os.path.exists(USER_MD_PATH):
+        return
+    current = read_profile()
+    migrated = _merge_legacy_profile_sections(current)
+    if migrated == current:
+        return
+    _write_text_atomic(USER_MD_PATH, migrated)
+    _record_user_md_revision(
+        migrated,
+        {"op": "migrate_profile_sections", "merges": LEGACY_SECTION_MERGES},
+        "migration",
+    )
 
 
 def read_profile() -> str:
@@ -374,6 +390,84 @@ def write_profile(content: str, source: str = "reflector", patch: dict | None = 
     """Overwrite user.md and record a revision snapshot."""
     _write_text_atomic(USER_MD_PATH, content)
     _record_user_md_revision(content, patch or {"op": "overwrite_profile"}, source)
+
+
+def _merge_legacy_profile_sections(content: str) -> str:
+    lines = content.splitlines()
+    changed = False
+
+    cleaned = _remove_legacy_sensitivity_entries(lines)
+    if cleaned != lines:
+        changed = True
+        lines = cleaned
+
+    for legacy_section, target_section in LEGACY_SECTION_MERGES.items():
+        merged = _merge_section_lines(lines, legacy_section, target_section)
+        if merged != lines:
+            changed = True
+            lines = merged
+
+    if not changed:
+        return content
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _remove_legacy_sensitivity_entries(lines: list[str]) -> list[str]:
+    if not lines or lines[0].strip() != "---":
+        return lines
+    frontmatter_end = None
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            frontmatter_end = index
+            break
+    if frontmatter_end is None:
+        return lines
+
+    legacy_names = set(LEGACY_SECTION_MERGES)
+    cleaned: list[str] = []
+    changed = False
+    for index, line in enumerate(lines):
+        if 0 < index < frontmatter_end:
+            key = line.split(":", 1)[0].strip()
+            if key in legacy_names:
+                changed = True
+                continue
+        cleaned.append(line)
+    return cleaned if changed else lines
+
+
+def _merge_section_lines(lines: list[str], legacy_section: str, target_section: str) -> list[str]:
+    legacy_bounds = _find_section_bounds(lines, legacy_section)
+    if legacy_bounds is None:
+        return lines
+
+    target_bounds = _find_section_bounds(lines, target_section)
+    if target_bounds is None:
+        target_insert_at = legacy_bounds[0]
+        lines = list(lines)
+        lines[target_insert_at:target_insert_at] = [f"## {target_section}", ""]
+        target_bounds = _find_section_bounds(lines, target_section)
+        legacy_bounds = _find_section_bounds(lines, legacy_section)
+        if target_bounds is None or legacy_bounds is None:
+            return lines
+
+    legacy_start, legacy_end = legacy_bounds
+    target_start, target_end = target_bounds
+    legacy_body = [line for line in lines[legacy_start + 1 : legacy_end] if line.strip()]
+
+    merged = list(lines)
+    del merged[legacy_start:legacy_end]
+
+    if legacy_body:
+        if legacy_start < target_start:
+            target_start -= legacy_end - legacy_start
+            target_end -= legacy_end - legacy_start
+        insert_at = _section_insert_index(merged, target_start, target_end)
+        if insert_at > target_start + 1 and merged[insert_at - 1].strip():
+            legacy_body = ["", *legacy_body]
+        merged[insert_at:insert_at] = legacy_body
+
+    return merged
 
 
 def _record_user_md_revision(snapshot: str, patch: dict, source: str) -> None:

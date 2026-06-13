@@ -13,7 +13,6 @@ USER_MD = """---
 schema: tracelog/user.md@v1
 sensitivity:
   基本信息: high
-  身份与角色: high
   当前状态与关注: low
   技能与专长: normal
   性格与倾向: normal
@@ -23,8 +22,6 @@ sensitivity:
 
 ## 基本信息
 - （暂无） <!-- id: bf-empty -->
-
-## 身份与角色
 - 高一学生 <!-- id: role-student -->
 
 ## 当前状态与关注
@@ -101,12 +98,42 @@ class ProfileServiceTest(unittest.TestCase):
     def test_default_user_md_has_empty_sections_without_placeholders(self) -> None:
         self.assertNotIn("暂无", profile_service.DEFAULT_USER_MD)
         self.assertIn("schema: tracelog/user.md@v1", profile_service.DEFAULT_USER_MD)
-        self.assertIn("## 基本信息\n\n## 身份与角色", profile_service.DEFAULT_USER_MD)
+        self.assertIn("## 基本信息\n\n## 性格与倾向", profile_service.DEFAULT_USER_MD)
+        self.assertNotIn("身份与角色: high", profile_service.DEFAULT_USER_MD)
+        self.assertNotIn("## 身份与角色", profile_service.DEFAULT_USER_MD)
         self.assertIn("## 当前状态与关注", profile_service.DEFAULT_USER_MD)
         self.assertNotIn("## 关键身份", profile_service.DEFAULT_USER_MD)
         self.assertNotIn("## 身份与现状", profile_service.DEFAULT_USER_MD)
         self.assertNotIn("## 长期目标与当前痛点", profile_service.DEFAULT_USER_MD)
         self.assertNotIn("## 近期主题与走向", profile_service.DEFAULT_USER_MD)
+
+    def test_init_migrates_legacy_role_section_into_basic_info(self) -> None:
+        (self.workspace / "user.md").write_text(
+            "---\n"
+            "schema: tracelog/user.md@v1\n"
+            "sensitivity:\n"
+            "  基本信息: high\n"
+            "  身份与角色: high\n"
+            "  当前状态与关注: low\n"
+            "---\n\n"
+            "# 用户档案\n\n"
+            "## 基本信息\n"
+            "- 姓名：张三 <!-- id: bf-name -->\n\n"
+            "## 身份与角色\n"
+            "- 高一学生 <!-- id: role-student -->\n\n"
+            "## 当前状态与关注\n",
+            encoding="utf-8",
+        )
+
+        profile_service.init_default_profile()
+
+        content = profile_service.read_profile()
+        row = require_not_none(db.query_one("SELECT patch, source FROM user_md_revisions ORDER BY id DESC LIMIT 1"))
+        self.assertNotIn("身份与角色: high", content)
+        self.assertNotIn("## 身份与角色", content)
+        self.assertIn("- 姓名：张三 <!-- id: bf-name -->\n\n- 高一学生 <!-- id: role-student -->", content)
+        self.assertIn("migrate_profile_sections", row["patch"])
+        self.assertEqual("migration", row["source"])
 
     def test_user_md_frontmatter_is_parsed_as_yaml(self) -> None:
         cases = [
@@ -222,7 +249,7 @@ class ProfileServiceTest(unittest.TestCase):
     def test_high_update_and_remove_thresholds(self) -> None:
         low_update = profile_service.apply_patch(
             {
-                "section": "身份与角色",
+                "section": "基本信息",
                 "ops": [{"op": "update", "anchor": "role-student", "value": "高中一年级学生"}],
                 "evidence": ["20260525-001"],
                 "confidence": 0.87,
@@ -230,7 +257,7 @@ class ProfileServiceTest(unittest.TestCase):
         )
         update = profile_service.apply_patch(
             {
-                "section": "身份与角色",
+                "section": "基本信息",
                 "ops": [{"op": "update", "anchor": "role-student", "value": "高中一年级学生"}],
                 "evidence": ["20260525-001"],
                 "confidence": 0.88,
@@ -238,7 +265,7 @@ class ProfileServiceTest(unittest.TestCase):
         )
         low_remove = profile_service.apply_patch(
             {
-                "section": "身份与角色",
+                "section": "基本信息",
                 "ops": [{"op": "remove", "anchor": "role-student"}],
                 "evidence": ["20260525-001"],
                 "confidence": 0.94,
@@ -246,7 +273,7 @@ class ProfileServiceTest(unittest.TestCase):
         )
         remove = profile_service.apply_patch(
             {
-                "section": "身份与角色",
+                "section": "基本信息",
                 "ops": [{"op": "remove", "anchor": "role-student"}],
                 "evidence": ["20260525-001"],
                 "confidence": 0.95,
