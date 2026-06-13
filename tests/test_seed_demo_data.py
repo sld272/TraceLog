@@ -25,25 +25,25 @@ class SeedDemoContentTest(unittest.TestCase):
         content = seed_demo_data.load_content(EXAMPLE_PATH)
 
         keys = [post.key for post in content.posts]
-        self.assertGreaterEqual(len(keys), 1)
+        self.assertEqual(["sample-start", "sample-followup"], keys)
         self.assertEqual(len(keys), len(set(keys)))  # key 无重复
         key_set = set(keys)
         for thread in content.comment_threads:
             self.assertIn(thread.post_key, key_set)  # 追问都能绑定到帖子
 
         blob = "\n".join(post.content for post in content.posts)
-        for marker in ("仙林", "法语", "跨考计算机", "四级", "打了两小时球", "番"):
-            self.assertIn(marker, blob)
+        self.assertIn("示例公开记录", blob)
+        self.assertIn("替换成", blob)
 
     def test_build_demo_plan_orders_by_time_and_limits(self) -> None:
         content = seed_demo_data.load_content(EXAMPLE_PATH)
 
         plan = seed_demo_data.build_demo_plan(content.posts, year=2026, limit=4)
 
-        self.assertEqual(4, len(plan))
+        self.assertEqual(2, len(plan))
         times = [item.created_at for item in plan]
         self.assertEqual(times, sorted(times))
-        self.assertEqual("2026-03-16T21:40:00+08:00", plan[0].created_at.isoformat())
+        self.assertEqual("2026-03-01T09:00:00+08:00", plan[0].created_at.isoformat())
 
     def test_resolve_content_path_returns_existing_file(self) -> None:
         path = seed_demo_data.resolve_content_path(None)
