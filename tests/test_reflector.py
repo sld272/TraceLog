@@ -56,13 +56,11 @@ class ReflectorTest(unittest.TestCase):
             "schema: tracelog/user.md@v1\n"
             "sensitivity:\n"
             "  基本信息: high\n"
-            "  身份与角色: high\n"
             "  当前状态与关注: low\n"
             "---\n\n"
             "# 用户档案\n\n"
             "## 基本信息\n"
             "- （暂无） <!-- id: bf-empty -->\n\n"
-            "## 身份与角色\n"
             "- 测试用户 <!-- id: role-user -->\n\n"
             "## 当前状态与关注\n",
             encoding="utf-8",
@@ -127,6 +125,8 @@ class ReflectorTest(unittest.TestCase):
         self.assertIn("当前状态与关注", prompt)
         self.assertIn("快进快删", prompt)
         self.assertIn("不超过 10 条", prompt)
+        self.assertIn("身份与角色（如高一生/大学生/职业/主唱/某社团成员）都统一写入这里", prompt)
+        self.assertNotIn("写入身份与角色", prompt)
         self.assertNotIn("关键身份", prompt)
         self.assertNotIn("身份与现状", prompt)
         self.assertNotIn("长期目标与当前痛点", prompt)
@@ -223,7 +223,7 @@ class ReflectorTest(unittest.TestCase):
             "reflection_md": "## 深反思\n\n你在修正对自己当前身份的描述。",
             "patches": [
                 {
-                    "section": "身份与角色",
+                    "section": "基本信息",
                     "ops": [{"op": "update", "anchor": "role-user", "value": "比赛项目参与者"}],
                     "evidence": ["20260525-001"],
                     "confidence": 0.88,

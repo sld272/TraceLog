@@ -43,7 +43,7 @@ class ApiManagementTest(unittest.TestCase):
         db.init_db()
         logging_service.init_logging({"enabled": False})
         self.workspace.mkdir(parents=True, exist_ok=True)
-        (self.workspace / "user.md").write_text("# 用户档案\n\n## 身份与角色\n测试用户\n", encoding="utf-8")
+        (self.workspace / "user.md").write_text("# 用户档案\n\n## 基本信息\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
         self.config_path.write_text(
             json.dumps(
@@ -114,7 +114,7 @@ class ApiManagementTest(unittest.TestCase):
         return TestClient(create_app())
 
     def test_profile_routes_read_update_and_list_revisions(self) -> None:
-        new_profile = "# 用户档案\n\n## 身份与角色\nAPI 测试用户\n"
+        new_profile = "# 用户档案\n\n## 基本信息\nAPI 测试用户\n"
 
         with self._client() as client:
             get_response = client.get("/profile")

@@ -34,7 +34,6 @@ interface ParsedSection {
 
 const PROFILE_SECTIONS: SectionSpec[] = [
   { title: '基本信息' },
-  { title: '身份与角色' },
   { title: '性格与倾向' },
   { title: '技能与专长' },
   { title: '兴趣与习惯' },

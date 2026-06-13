@@ -10,7 +10,7 @@ from tests.helpers import require_not_none
 
 USER_MEMORY = """# 用户档案
 
-## 身份与角色
+## 基本信息
 - 测试用户
 """
 
@@ -59,7 +59,7 @@ class MemoryReviewServiceTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_save_user_memory_writes_file_and_user_revision(self) -> None:
-        updated = "# 用户档案\n\n## 身份与角色\n- 用户手动修正\n"
+        updated = "# 用户档案\n\n## 基本信息\n- 用户手动修正\n"
 
         memory_review_service.save_user_memory(updated)
         row = require_not_none(db.query_one("SELECT source, patch FROM user_md_revisions ORDER BY id DESC LIMIT 1"))
