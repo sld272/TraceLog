@@ -23,10 +23,12 @@
 #     post_key  Must match one [[posts]].key.
 #     soul_name Existing enabled SOUL name, for example: 拾迹者 / 温柔树洞 / 毒舌好友.
 #     followup User follow-up under that SOUL's first comment.
+#     month/day/hour/minute are optional. If present, they set the follow-up time.
 #
 #   [[chats]]
 #     soul_name Existing enabled SOUL name.
 #     message   Private chat user message.
+#     month/day/hour/minute are optional. If present, they set the user message time.
 #
 # Keep this file as documentation plus tiny placeholders only. Put real demo
 # data in scripts/demo_content.toml.
@@ -55,9 +57,17 @@ content = "示例公开记录：把这里替换成另一条 demo 内容，可以
 [[comment_threads]]
 post_key = "sample-start"
 soul_name = "拾迹者"
+month = 3
+day = 1
+hour = 11
+minute = 20
 followup = "示例追问：把这里替换成用户想继续聊的一句话。"
 
 
 [[chats]]
 soul_name = "温柔树洞"
+month = 3
+day = 3
+hour = 22
+minute = 10
 message = "示例私聊：把这里替换成用户和某个 SOUL 的一对一消息。"

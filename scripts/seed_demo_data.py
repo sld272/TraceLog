@@ -41,6 +41,15 @@ DEFAULT_SEED = 20260612
 DEFAULT_YEAR = 2026
 DEMO_DEEP_REFLECTION_INTERVAL = 3
 DEMO_SOUL_REFLECTION_ROUND_INTERVAL = 3
+TIME_FIELDS = ("month", "day", "hour", "minute")
+
+
+@dataclass(frozen=True)
+class TimeSpec:
+    month: int
+    day: int
+    hour: int
+    minute: int
 
 
 @dataclass(frozen=True)
@@ -59,12 +68,14 @@ class CommentThreadSpec:
     post_key: str
     soul_name: str
     followup: str
+    time: TimeSpec | None
 
 
 @dataclass(frozen=True)
 class ChatSpec:
     soul_name: str
     message: str
+    time: TimeSpec | None
 
 
 @dataclass(frozen=True)
@@ -90,6 +101,7 @@ class SeedStats:
     comment_threads_skipped: int
     chat_messages_created: int
     comments_backfilled: int
+    custom_interaction_times_applied: int
 
 
 # ---------------------------------------------------------------------------
@@ -128,12 +140,13 @@ def load_content(path: Path) -> DemoContent:
 
 def _parse_post(item: dict, index: int) -> PostSpec:
     try:
+        time = _parse_required_time(item, "posts", index)
         return PostSpec(
             key=str(item["key"]),
-            month=int(item["month"]),
-            day=int(item["day"]),
-            hour=int(item["hour"]),
-            minute=int(item["minute"]),
+            month=time.month,
+            day=time.day,
+            hour=time.hour,
+            minute=time.minute,
             act=str(item.get("act", "")),
             content=str(item["content"]),
         )
@@ -147,6 +160,7 @@ def _parse_thread(item: dict, index: int) -> CommentThreadSpec:
             post_key=str(item["post_key"]),
             soul_name=str(item["soul_name"]),
             followup=str(item["followup"]),
+            time=_parse_optional_time(item, "comment_threads", index),
         )
     except KeyError as exc:
         raise ValueError(f"comment_threads[{index}] 缺少必填字段 {exc}") from exc
@@ -154,9 +168,35 @@ def _parse_thread(item: dict, index: int) -> CommentThreadSpec:
 
 def _parse_chat(item: dict, index: int) -> ChatSpec:
     try:
-        return ChatSpec(soul_name=str(item["soul_name"]), message=str(item["message"]))
+        return ChatSpec(
+            soul_name=str(item["soul_name"]),
+            message=str(item["message"]),
+            time=_parse_optional_time(item, "chats", index),
+        )
     except KeyError as exc:
         raise ValueError(f"chats[{index}] 缺少必填字段 {exc}") from exc
+
+
+def _parse_required_time(item: dict, section: str, index: int) -> TimeSpec:
+    try:
+        return TimeSpec(
+            month=int(item["month"]),
+            day=int(item["day"]),
+            hour=int(item["hour"]),
+            minute=int(item["minute"]),
+        )
+    except KeyError as exc:
+        raise ValueError(f"{section}[{index}] 缺少必填字段 {exc}") from exc
+
+
+def _parse_optional_time(item: dict, section: str, index: int) -> TimeSpec | None:
+    present = {field for field in TIME_FIELDS if field in item}
+    if not present:
+        return None
+    missing = [field for field in TIME_FIELDS if field not in present]
+    if missing:
+        raise ValueError(f"{section}[{index}] 自定义时间字段不完整，缺少 {missing}")
+    return _parse_required_time(item, section, index)
 
 
 def _validate(posts: list[PostSpec], threads: list[CommentThreadSpec], path: Path) -> None:
@@ -175,12 +215,16 @@ def _validate(posts: list[PostSpec], threads: list[CommentThreadSpec], path: Pat
 def build_demo_plan(posts: list[PostSpec], *, year: int = DEFAULT_YEAR, limit: int = 0) -> list[DemoPostPlan]:
     plans: list[DemoPostPlan] = []
     for post in posts:
-        created_at = datetime(year, post.month, post.day, post.hour, post.minute, 0).astimezone()
+        created_at = _time_to_datetime(TimeSpec(post.month, post.day, post.hour, post.minute), year)
         plans.append(DemoPostPlan(key=post.key, created_at=created_at, act=post.act, content=post.content))
     plans.sort(key=lambda item: item.created_at)
     if limit and limit > 0:
         plans = plans[:limit]
     return plans
+
+
+def _time_to_datetime(time: TimeSpec, year: int) -> datetime:
+    return datetime(year, time.month, time.day, time.hour, time.minute, 0).astimezone()
 
 
 # ---------------------------------------------------------------------------
@@ -271,19 +315,28 @@ async def run_seed(plan: list[DemoPostPlan], content: DemoContent, args: argpars
 
     # 2) 针对性追问：在 SOUL 首评下继续一轮真实对话（按稳定 key 绑定帖子）。
     rounds_by_soul: dict[str, int] = {}
-    comment_created, comment_skipped = await create_comment_threads(
+    comment_created, comment_skipped, custom_comment_times_applied, custom_comment_ids = await create_comment_threads(
         post_id_by_key,
         _cap(content.comment_threads, args.comment_threads),
         client,
         model,
         rounds_by_soul,
+        rng,
+        year=args.year,
     )
 
-    # 3) 私聊：保持近期时间戳，展示"当前在用"。
-    chat_created = await create_chat_rounds(_cap(content.chats, args.chat_rounds), client, model, rounds_by_soul)
+    # 3) 私聊：可按 TOML 指定时间回填；未指定时保持当前时间，展示"当前在用"。
+    chat_created, custom_chat_times_applied = await create_chat_rounds(
+        _cap(content.chats, args.chat_rounds),
+        client,
+        model,
+        rounds_by_soul,
+        rng,
+        year=args.year,
+    )
 
-    # 4) 回填评论时间，避免历史帖下面挂着"今天"的评论而穿帮（私聊不回填）。
-    comments_backfilled = backfill_comment_times(rng)
+    # 4) 回填评论时间，避免历史帖下面挂着"今天"的评论而穿帮；显式指定时间的追问不覆盖。
+    comments_backfilled = backfill_comment_times(rng, skip_comment_ids=custom_comment_ids)
 
     # 5) 收尾：补 soul 深反思 + 全局深反思，确保最近的尾巴也被对账进长期记忆。
     enqueue_final_reflections()
@@ -296,6 +349,7 @@ async def run_seed(plan: list[DemoPostPlan], content: DemoContent, args: argpars
         comment_threads_skipped=comment_skipped,
         chat_messages_created=chat_created,
         comments_backfilled=comments_backfilled,
+        custom_interaction_times_applied=custom_comment_times_applied + custom_chat_times_applied,
     )
 
 
@@ -326,9 +380,14 @@ async def create_comment_threads(
     client,
     model: str,
     rounds_by_soul: dict[str, int],
-) -> tuple[int, int]:
+    rng: random.Random,
+    *,
+    year: int,
+) -> tuple[int, int, int, set[int]]:
     created = 0
     skipped = 0
+    custom_times_applied = 0
+    custom_comment_ids: set[int] = set()
     for spec in specs:
         post_id = post_id_by_key.get(spec.post_key)
         if post_id is None:
@@ -350,16 +409,29 @@ async def create_comment_threads(
             continue
         if result.ok:
             created += 1
+            if spec.time is not None:
+                applied_ids = apply_comment_round_time(result, _time_to_datetime(spec.time, year), rng)
+                custom_times_applied += len(applied_ids)
+                custom_comment_ids.update(applied_ids)
             note_soul_round_and_maybe_reflect(spec.soul_name, rounds_by_soul)
             print(f"[comment] {post_id}/{spec.soul_name} 已生成追问回复")
         else:
             skipped += 1
             print(f"[comment] {post_id}/{spec.soul_name} 生成失败: {result.error}")
-    return created, skipped
+    return created, skipped, custom_times_applied, custom_comment_ids
 
 
-async def create_chat_rounds(specs: list[ChatSpec], client, model: str, rounds_by_soul: dict[str, int]) -> int:
+async def create_chat_rounds(
+    specs: list[ChatSpec],
+    client,
+    model: str,
+    rounds_by_soul: dict[str, int],
+    rng: random.Random,
+    *,
+    year: int,
+) -> tuple[int, int]:
     created = 0
+    custom_times_applied = 0
     for spec in specs:
         try:
             thread = await asyncio.to_thread(chat_service.get_or_create_thread, spec.soul_name)
@@ -369,19 +441,96 @@ async def create_chat_rounds(specs: list[ChatSpec], client, model: str, rounds_b
             continue
         if result.ok:
             created += 1
+            if spec.time is not None:
+                custom_times_applied += apply_chat_round_time(
+                    result,
+                    _time_to_datetime(spec.time, year),
+                    rng,
+                )
             note_soul_round_and_maybe_reflect(spec.soul_name, rounds_by_soul)
             print(f"[chat] {spec.soul_name} 已生成一轮私聊")
         else:
             print(f"[chat] {spec.soul_name} 生成失败: {result.error}")
-    return created
+    return created, custom_times_applied
 
 
-def backfill_comment_times(rng: random.Random) -> int:
+def apply_comment_round_time(
+    result: comment_service.CommentReplyResult,
+    created_at: datetime,
+    rng: random.Random,
+) -> set[int]:
+    ids = _message_pair_ids(result.user_message_id, result.assistant_message_id)
+    updates = _message_pair_updates(ids, created_at, rng)
+    if not updates:
+        return set()
+    with db.transaction() as conn:
+        conn.executemany("UPDATE comments SET created_at = ? WHERE id = ?", updates)
+    return {message_id for _, message_id in updates}
+
+
+def apply_chat_round_time(
+    result: chat_service.ChatReplyResult,
+    created_at: datetime,
+    rng: random.Random,
+) -> int:
+    ids = _message_pair_ids(result.user_message_id, result.assistant_message_id)
+    updates = _message_pair_updates(ids, created_at, rng)
+    if not updates:
+        return 0
+    with db.transaction() as conn:
+        conn.executemany("UPDATE chat_messages SET created_at = ? WHERE id = ?", updates)
+        _refresh_chat_thread_time(conn, result.thread_id)
+    return len(updates)
+
+
+def _message_pair_ids(user_message_id: int, assistant_message_id: int | None) -> list[int]:
+    ids = [int(user_message_id)]
+    if assistant_message_id is not None:
+        ids.append(int(assistant_message_id))
+    return ids
+
+
+def _message_pair_updates(ids: list[int], created_at: datetime, rng: random.Random) -> list[tuple[float, int]]:
+    if not ids:
+        return []
+    user_ts = created_at.timestamp()
+    updates = [(user_ts, ids[0])]
+    for message_id in ids[1:]:
+        user_ts += rng.randint(2, 8) * 60
+        updates.append((user_ts, message_id))
+    return updates
+
+
+def _refresh_chat_thread_time(conn, thread_id: int) -> None:
+    row = conn.execute(
+        """
+        SELECT MIN(created_at) AS first_message_at, MAX(created_at) AS last_message_at
+        FROM chat_messages
+        WHERE thread_id = ?
+        """,
+        (thread_id,),
+    ).fetchone()
+    if row is None or row["last_message_at"] is None:
+        return
+    conn.execute(
+        """
+        UPDATE chat_threads
+        SET created_at = ?,
+            updated_at = ?,
+            last_message_at = ?
+        WHERE id = ?
+        """,
+        (row["first_message_at"], row["last_message_at"], row["last_message_at"], thread_id),
+    )
+
+
+def backfill_comment_times(rng: random.Random, *, skip_comment_ids: set[int] | None = None) -> int:
     """把每条评论的 created_at 回填到对应 post 时间附近，按 (post, soul, seq) 递增加 jitter。"""
+    skip_ids = {int(comment_id) for comment_id in (skip_comment_ids or set())}
     post_rows = db.query_all("SELECT id, created_at FROM posts")
     post_ts = {row["id"]: float(row["created_at"]) for row in post_rows}
     comment_rows = db.query_all(
-        "SELECT id, post_id, soul_name, seq FROM comments ORDER BY post_id, soul_name, seq"
+        "SELECT id, post_id, soul_name, seq, created_at FROM comments ORDER BY post_id, soul_name, seq"
     )
     updates: list[tuple[float, int]] = []
     cursor_ts: dict[tuple[str, str], float] = {}
@@ -390,6 +539,9 @@ def backfill_comment_times(rng: random.Random) -> int:
         if base is None:
             continue
         key = (row["post_id"], row["soul_name"])
+        if int(row["id"]) in skip_ids:
+            cursor_ts[key] = float(row["created_at"])
+            continue
         if int(row["seq"]) == 0:
             # 首评：发帖后 2–30 分钟。
             ts = base + rng.randint(2, 30) * 60
@@ -494,10 +646,29 @@ def print_plan(plan: list[DemoPostPlan], content: DemoContent) -> None:
     for act, count in Counter(item.act for item in plan).most_common():
         print(f"  {act or '(未标注)'}: {count}")
     print(f"追问线程：{len(content.comment_threads)}    私聊：{len(content.chats)}")
+    scheduled_comments = sum(1 for item in content.comment_threads if item.time is not None)
+    scheduled_chats = sum(1 for item in content.chats if item.time is not None)
+    print(f"自定义追问时间：{scheduled_comments}    自定义私聊时间：{scheduled_chats}")
     print("\n全部帖子预览：")
     for index, item in enumerate(plan):
         one_line = item.content.replace("\n", " ")[:48]
         print(f"  [{index:>2}] {item.created_at.isoformat(timespec='minutes')} ({item.key}) {one_line}…")
+    if content.comment_threads:
+        print("\n追问预览：")
+        for index, item in enumerate(content.comment_threads):
+            when = _format_optional_time(item.time)
+            print(f"  [{index:>2}] {when} ({item.post_key}/{item.soul_name}) {item.followup[:36]}…")
+    if content.chats:
+        print("\n私聊预览：")
+        for index, item in enumerate(content.chats):
+            when = _format_optional_time(item.time)
+            print(f"  [{index:>2}] {when} ({item.soul_name}) {item.message[:36]}…")
+
+
+def _format_optional_time(time: TimeSpec | None) -> str:
+    if time is None:
+        return "自动"
+    return f"{time.month:02d}-{time.day:02d} {time.hour:02d}:{time.minute:02d}"
 
 
 def confirm_write(plan: list[DemoPostPlan], content: DemoContent) -> bool:
@@ -523,6 +694,7 @@ def print_stats(stats: SeedStats) -> None:
     print(f"评论追问成功/跳过: {stats.comment_threads_created}/{stats.comment_threads_skipped}")
     print(f"私聊轮次成功: {stats.chat_messages_created}")
     print(f"回填评论时间: {stats.comments_backfilled} 条")
+    print(f"自定义互动时间: {stats.custom_interaction_times_applied} 条消息")
     print("当前数据库统计：")
     for name, count in counts.items():
         print(f"  {name}: {count}")
