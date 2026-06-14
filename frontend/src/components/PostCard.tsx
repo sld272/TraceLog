@@ -201,7 +201,7 @@ function PipelineNotice({
   return (
     <div className={styles.processing}>
       <LoadingDots />
-      <span>TA 正在思考...</span>
+      <span>TA 们正在思考...</span>
     </div>
   )
 }
