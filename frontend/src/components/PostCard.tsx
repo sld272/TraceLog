@@ -11,7 +11,7 @@ import { EvidencePanel } from './EvidencePanel'
 import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
 import { SoulAvatar } from './SoulAvatar'
-import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, StarIcon, TrashIcon } from '@/components/icons'
+import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
 import { getSubmitShortcutTitle } from '@/utils/shortcuts'
@@ -88,11 +88,6 @@ export const PostCard = memo(function PostCard({
             )}
           </div>
         </div>
-        {post.importance > 0.7 && (
-          <span className={styles.importanceBadge} title="这条记录被标记为重要">
-            <StarIcon />
-          </span>
-        )}
         {onDeletePost && (
           <button className={styles.postAction} onClick={onDeletePost} disabled={deletingPost} title="删除记录" aria-label="删除记录">
             <TrashIcon />
