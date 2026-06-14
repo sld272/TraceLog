@@ -18,6 +18,10 @@
 - 全局深反思每 3 帖触发一次、且只对账"上次反思之后"的帖子，所以 user.md 会先被写入"自我怀疑"，
   再在后续成功证据累积时被 reconcile 成"确认方向"——成长画像的 revise 是机制自然跑出来的；
 - 每个 SOUL 的深反思按"该人格每满 3 轮真实互动触发一次"的节奏排队。
+
+追问 / 私聊都支持**多轮连续对话**：一个 ``[[comment_threads]]`` 可写 ``followups = [...]``、一个 ``[[chats]]`` 可写
+``messages = [...]``（单数 ``followup`` / ``message`` 仍兼容）。同一块内的多轮按顺序灌进同一会话 / 线程，所以后一轮的
+AI 回复能看到前几轮——连续性由此而来。运行时每轮都会把 **AI 的真实回复全文打印出来**，方便确认对话是否连贯。
 """
 
 from __future__ import annotations
@@ -77,15 +81,15 @@ class PostSpec:
 class CommentThreadSpec:
     post_key: str
     soul_name: str
-    followup: str
-    time: TimeSpec | None
+    followups: tuple[str, ...]  # 按顺序逐轮追问；多轮共享同一 (post, soul) 会话，AI 看得到前几轮
+    time: TimeSpec | None  # 显式时间锚定该对话块的第 1 轮（第 0 个 followup）
 
 
 @dataclass(frozen=True)
 class ChatSpec:
     soul_name: str
-    message: str
-    time: TimeSpec | None
+    messages: tuple[str, ...]  # 按顺序逐轮私聊；多轮进同一线程，AI 看得到前几轮
+    time: TimeSpec | None  # 显式时间锚定该对话块的第 1 轮（第 0 条消息）
 
 
 @dataclass(frozen=True)
@@ -132,7 +136,9 @@ class SeedStats:
     post_timeouts: int
     comment_threads_created: int
     comment_threads_skipped: int
-    chat_messages_created: int
+    comment_rounds: int
+    chat_threads_created: int
+    chat_rounds: int
     comments_backfilled: int
     custom_interaction_times_applied: int
 
@@ -192,7 +198,7 @@ def _parse_thread(item: dict, index: int) -> CommentThreadSpec:
         return CommentThreadSpec(
             post_key=str(item["post_key"]),
             soul_name=str(item["soul_name"]),
-            followup=str(item["followup"]),
+            followups=_parse_message_list(item, "followup", "followups", "comment_threads", index),
             time=_parse_optional_time(item, "comment_threads", index),
         )
     except KeyError as exc:
@@ -203,11 +209,32 @@ def _parse_chat(item: dict, index: int) -> ChatSpec:
     try:
         return ChatSpec(
             soul_name=str(item["soul_name"]),
-            message=str(item["message"]),
+            messages=_parse_message_list(item, "message", "messages", "chats", index),
             time=_parse_optional_time(item, "chats", index),
         )
     except KeyError as exc:
         raise ValueError(f"chats[{index}] 缺少必填字段 {exc}") from exc
+
+
+def _parse_message_list(item: dict, singular: str, plural: str, section: str, index: int) -> tuple[str, ...]:
+    """解析多轮对话的消息序列：优先读数组字段 ``plural``，否则回退到单串字段 ``singular``。
+
+    返回按轮次排序的非空字符串元组。数组里允许跨行/留白，但去掉首尾空白后不能为空。
+    """
+    if plural in item:
+        raw = item[plural]
+        if not isinstance(raw, list) or not raw:
+            raise ValueError(f"{section}[{index}] 的 {plural} 必须是非空数组")
+        messages = [str(value).strip() for value in raw]
+        if any(not message for message in messages):
+            raise ValueError(f"{section}[{index}] 的 {plural} 含有空字符串")
+        return tuple(messages)
+    if singular in item:
+        message = str(item[singular]).strip()
+        if not message:
+            raise ValueError(f"{section}[{index}] 的 {singular} 不能为空")
+        return (message,)
+    raise ValueError(f"{section}[{index}] 缺少必填字段：{singular} 或 {plural}")
 
 
 def _parse_required_time(item: dict, section: str, index: int) -> TimeSpec:
@@ -356,8 +383,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--content", default=None, help="内容 TOML 文件路径；默认 demo_content.toml，回退到示例")
     parser.add_argument("--year", type=int, default=DEFAULT_YEAR, help="剧本所用年份（默认 2026）")
     parser.add_argument("--limit", type=int, default=0, help="只取前 N 条（按时间序），0 表示全部，用于快速试跑")
-    parser.add_argument("--comment-threads", type=int, default=-1, help="使用前 N 条追问，-1 表示全部")
-    parser.add_argument("--chat-rounds", type=int, default=-1, help="使用前 N 条私聊，-1 表示全部")
+    parser.add_argument("--comment-threads", type=int, default=-1, help="使用前 N 段追问对话块（每块可含多轮），-1 表示全部")
+    parser.add_argument("--chat-rounds", type=int, default=-1, help="使用前 N 段私聊对话块（每块可含多轮），-1 表示全部")
     parser.add_argument("--batch-size", type=int, default=1, help="（已废弃）合并时间线下严格逐条按时间序处理，此参数被忽略")
     parser.add_argument("--timeout-per-post", type=float, default=300.0)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -426,14 +453,19 @@ async def run_seed(timeline: list[TimelineEvent], args: argparse.Namespace) -> S
     post_timeouts = 0
     comment_created = 0
     comment_skipped = 0
+    comment_rounds = 0
     chat_created = 0
+    chat_rounds = 0
     custom_times_applied = 0
     custom_comment_ids: set[int] = set()
 
-    # 单一时间线：严格按 sort_at 顺序处理。每条互动（追问/私聊）生成前先 drain 掉所有 pending/running
-    # 的 job，保证它读到的记忆只对账到"此刻之前"的事件，绝不引用未来才得出的反思。
+    # 单一时间线：严格按 sort_at 顺序处理。每条事件生成前先 drain 掉所有 pending/running 的 job：
+    # 对互动来说保证它读到的记忆只对账到"此刻之前"的事件，绝不引用未来才得出的反思；对发帖来说，
+    # 还能避免主线程的 save_post 和后台 worker 写上一条互动的 embedding 撞在一起抢 SQLite 单写锁。
     for event in timeline:
         if event.kind == "post":
+            # 先等后台 worker 把前面互动 fire-and-forget 的 embedding 等 job 写完，再落库下一篇帖子。
+            await wait_until_no_pending_jobs(timeout=900.0)
             item = event.post_plan
             assert item is not None
             post_number = len(created_post_ids) + 1
@@ -457,7 +489,7 @@ async def run_seed(timeline: list[TimelineEvent], args: argparse.Namespace) -> S
         if event.kind == "comment":
             spec = event.comment_spec
             assert spec is not None
-            ok, custom_ids = await create_one_comment_thread(
+            ok, custom_ids, rounds_done = await create_one_comment_thread(
                 post_id_by_key,
                 spec,
                 event.applied_at,
@@ -468,6 +500,7 @@ async def run_seed(timeline: list[TimelineEvent], args: argparse.Namespace) -> S
             )
             if ok:
                 comment_created += 1
+                comment_rounds += rounds_done
                 custom_comment_ids.update(custom_ids)
                 custom_times_applied += len(custom_ids)
             else:
@@ -475,7 +508,7 @@ async def run_seed(timeline: list[TimelineEvent], args: argparse.Namespace) -> S
         elif event.kind == "chat":
             spec = event.chat_spec
             assert spec is not None
-            ok, applied = await create_one_chat_round(
+            ok, applied, rounds_done = await create_one_chat_thread(
                 spec,
                 event.applied_at,
                 client,
@@ -485,6 +518,7 @@ async def run_seed(timeline: list[TimelineEvent], args: argparse.Namespace) -> S
             )
             if ok:
                 chat_created += 1
+                chat_rounds += rounds_done
                 custom_times_applied += applied
 
     # 回填评论时间：把自动时间的追问 created_at 收拢到父帖附近，避免历史帖下挂着"今天"的评论而穿帮；
@@ -500,7 +534,9 @@ async def run_seed(timeline: list[TimelineEvent], args: argparse.Namespace) -> S
         post_timeouts=post_timeouts,
         comment_threads_created=comment_created,
         comment_threads_skipped=comment_skipped,
-        chat_messages_created=chat_created,
+        comment_rounds=comment_rounds,
+        chat_threads_created=chat_created,
+        chat_rounds=chat_rounds,
         comments_backfilled=comments_backfilled,
         custom_interaction_times_applied=custom_times_applied,
     )
@@ -535,63 +571,97 @@ async def create_one_comment_thread(
     model: str,
     rounds_by_soul: dict[str, int],
     rng: random.Random,
-) -> tuple[bool, set[int]]:
-    """生成一条追问回复。返回 (是否成功, 被显式改写时间的 comment id 集合)。
+) -> tuple[bool, set[int], int]:
+    """生成一段多轮追问对话。返回 (是否成功, 被显式改写时间的 comment id 集合, 实际完成轮数)。
 
-    ``applied_at`` 来自时间线：非 None 时把该轮消息的 created_at 改写到这个校历时间
-    （显式追问），并把这些 id 返回给调用方，让 end-of-run 回填跳过它们。
+    ``spec.followups`` 是按顺序的多轮用户追问；每轮都追加到同一 (post, soul) 会话，所以后一轮的
+    AI 回复能看到前几轮——连续性由此而来。每轮都把 **AI 的真实回复全文打印出来**，方便确认对话是否连贯。
+
+    ``applied_at`` 只锚定该对话块的第 1 轮（第 0 个 followup）；其余轮留给 end-of-run 的
+    ``backfill_comment_times`` 按 (post, soul, seq) 顺延，自然得到合理间隔。某轮失败则中止后续轮
+    （后续轮会去回应一条并不存在的回复）。
     """
     post_id = post_id_by_key.get(spec.post_key)
     if post_id is None:
         print(f"[comment] 跳过：找不到 post_key={spec.post_key}（本次未创建或被 --limit 截断）")
-        return False, set()
-    try:
-        result = await asyncio.to_thread(
-            comment_service.call_comment_reply,
-            post_id,
-            spec.soul_name,
-            spec.followup,
-            client,
-            model,
-        )
-    except ValueError as exc:
-        print(f"[comment] 跳过 {post_id}/{spec.soul_name}: {exc}")
-        return False, set()
-    if not result.ok:
-        print(f"[comment] {post_id}/{spec.soul_name} 生成失败: {result.error}")
-        return False, set()
+        return False, set(), 0
     custom_ids: set[int] = set()
-    if applied_at is not None:
-        custom_ids = apply_comment_round_time(result, applied_at, rng)
-    note_soul_round_and_maybe_reflect(spec.soul_name, rounds_by_soul)
-    print(f"[comment] {post_id}/{spec.soul_name} 已生成追问回复")
-    return True, custom_ids
+    rounds_done = 0
+    total = len(spec.followups)
+    for round_index, followup in enumerate(spec.followups):
+        try:
+            result = await asyncio.to_thread(
+                comment_service.call_comment_reply,
+                post_id,
+                spec.soul_name,
+                followup,
+                client,
+                model,
+            )
+        except ValueError as exc:
+            print(f"[comment] 跳过 {post_id}/{spec.soul_name}（第 {round_index + 1} 轮）: {exc}")
+            break
+        if not result.ok:
+            print(f"[comment] {post_id}/{spec.soul_name} 第 {round_index + 1} 轮生成失败: {result.error}")
+            break
+        if round_index == 0 and applied_at is not None:
+            custom_ids = apply_comment_round_time(result, applied_at, rng)
+        note_soul_round_and_maybe_reflect(spec.soul_name, rounds_by_soul)
+        rounds_done += 1
+        _print_round("comment", f"{post_id}/{spec.soul_name}", round_index, total, followup, result.reply)
+    if rounds_done == 0:
+        return False, set(), 0
+    return True, custom_ids, rounds_done
 
 
-async def create_one_chat_round(
+async def create_one_chat_thread(
     spec: ChatSpec,
     applied_at: datetime | None,
     client,
     model: str,
     rounds_by_soul: dict[str, int],
     rng: random.Random,
-) -> tuple[bool, int]:
-    """生成一轮私聊。返回 (是否成功, 被显式改写时间的消息条数)。"""
+) -> tuple[bool, int, int]:
+    """生成一段多轮私聊。返回 (是否成功, 被显式改写时间的消息条数, 实际完成轮数)。
+
+    ``spec.messages`` 是按顺序的多轮用户消息，全部进同一线程，AI 看得到前几轮——连续性由此而来；
+    每轮打印 AI 真实回复。私聊没有 end-of-run 回填：显式 ``applied_at`` 锚定第 1 轮，后续轮在前一轮
+    基础上递增；无显式时间则保持"现在"（各轮相差秒级，按 id 稳定排序），落到时间线末尾展示"当前在用"。
+    """
     try:
         thread = await asyncio.to_thread(chat_service.get_or_create_thread, spec.soul_name)
-        result = await asyncio.to_thread(chat_service.call_chat_reply, thread.id, spec.message, client, model)
     except ValueError as exc:
         print(f"[chat] 跳过 {spec.soul_name}: {exc}")
-        return False, 0
-    if not result.ok:
-        print(f"[chat] {spec.soul_name} 生成失败: {result.error}")
-        return False, 0
+        return False, 0, 0
     applied = 0
-    if applied_at is not None:
-        applied = apply_chat_round_time(result, applied_at, rng)
-    note_soul_round_and_maybe_reflect(spec.soul_name, rounds_by_soul)
-    print(f"[chat] {spec.soul_name} 已生成一轮私聊")
-    return True, applied
+    rounds_done = 0
+    total = len(spec.messages)
+    round_base = applied_at
+    for round_index, message in enumerate(spec.messages):
+        try:
+            result = await asyncio.to_thread(chat_service.call_chat_reply, thread.id, message, client, model)
+        except ValueError as exc:
+            print(f"[chat] 跳过 {spec.soul_name}（第 {round_index + 1} 轮）: {exc}")
+            break
+        if not result.ok:
+            print(f"[chat] {spec.soul_name} 第 {round_index + 1} 轮生成失败: {result.error}")
+            break
+        if round_base is not None:
+            applied += apply_chat_round_time(result, round_base, rng)
+            round_base = round_base + timedelta(minutes=rng.randint(15, 75))
+        note_soul_round_and_maybe_reflect(spec.soul_name, rounds_by_soul)
+        rounds_done += 1
+        _print_round("chat", spec.soul_name, round_index, total, message, result.reply)
+    if rounds_done == 0:
+        return False, 0, 0
+    return True, applied, rounds_done
+
+
+def _print_round(channel: str, target: str, round_index: int, total: int, user_message: str, reply: str) -> None:
+    """打印一轮对话：用户消息 + AI 真实回复全文，让运行日志能看出多轮连续性。"""
+    print(f"[{channel}] {target} 第 {round_index + 1}/{total} 轮")
+    print(f"    用户: {user_message.strip()}")
+    print(f"    {target.split('/')[-1]}: {reply.strip()}")
 
 
 def apply_comment_round_time(
@@ -785,7 +855,8 @@ def print_plan(plan: list[DemoPostPlan], content: DemoContent) -> None:
     print("分幕分布：")
     for act, count in Counter(item.act for item in plan).most_common():
         print(f"  {act or '(未标注)'}: {count}")
-    print(f"追问线程：{len(content.comment_threads)}    私聊：{len(content.chats)}")
+    print(f"追问线程：{len(content.comment_threads)}（{_total_rounds(t.followups for t in content.comment_threads)} 轮）"
+          f"    私聊：{len(content.chats)}（{_total_rounds(c.messages for c in content.chats)} 轮）")
     scheduled_comments = sum(1 for item in content.comment_threads if item.time is not None)
     scheduled_chats = sum(1 for item in content.chats if item.time is not None)
     print(f"自定义追问时间：{scheduled_comments}    自定义私聊时间：{scheduled_chats}")
@@ -797,12 +868,16 @@ def print_plan(plan: list[DemoPostPlan], content: DemoContent) -> None:
         print("\n追问预览：")
         for index, item in enumerate(content.comment_threads):
             when = _format_optional_time(item.time)
-            print(f"  [{index:>2}] {when} ({item.post_key}/{item.soul_name}) {item.followup[:36]}…")
+            print(f"  [{index:>2}] {when} ({item.post_key}/{item.soul_name}) ×{len(item.followups)}轮 {item.followups[0][:32]}…")
     if content.chats:
         print("\n私聊预览：")
         for index, item in enumerate(content.chats):
             when = _format_optional_time(item.time)
-            print(f"  [{index:>2}] {when} ({item.soul_name}) {item.message[:36]}…")
+            print(f"  [{index:>2}] {when} ({item.soul_name}) ×{len(item.messages)}轮 {item.messages[0][:32]}…")
+
+
+def _total_rounds(message_lists) -> int:
+    return sum(len(messages) for messages in message_lists)
 
 
 def print_timeline(timeline: list[TimelineEvent]) -> None:
@@ -817,10 +892,10 @@ def print_timeline(timeline: list[TimelineEvent]) -> None:
             tag = "—"
         elif event.kind == "comment" and event.comment_spec is not None:
             spec = event.comment_spec
-            desc = f"({spec.post_key}/{spec.soul_name}) {spec.followup[:32]}"
+            desc = f"({spec.post_key}/{spec.soul_name}) ×{len(spec.followups)}轮 {spec.followups[0][:28]}"
         elif event.kind == "chat" and event.chat_spec is not None:
             spec = event.chat_spec
-            desc = f"({spec.soul_name}) {spec.message[:32]}"
+            desc = f"({spec.soul_name}) ×{len(spec.messages)}轮 {spec.messages[0][:28]}"
         else:
             desc = ""
         print(f"  [{index:>2}] {when} {label[event.kind]:<2} {tag:<2} {desc}…")
@@ -852,8 +927,8 @@ def print_stats(stats: SeedStats) -> None:
     print("\n完成。")
     print(f"本次创建 posts: {stats.posts_created}")
     print(f"post pipeline 等待超时: {stats.post_timeouts}")
-    print(f"评论追问成功/跳过: {stats.comment_threads_created}/{stats.comment_threads_skipped}")
-    print(f"私聊轮次成功: {stats.chat_messages_created}")
+    print(f"评论追问成功/跳过: {stats.comment_threads_created}/{stats.comment_threads_skipped}（共 {stats.comment_rounds} 轮）")
+    print(f"私聊会话成功: {stats.chat_threads_created}（共 {stats.chat_rounds} 轮）")
     print(f"回填评论时间: {stats.comments_backfilled} 条")
     print(f"自定义互动时间: {stats.custom_interaction_times_applied} 条消息")
     print("当前数据库统计：")

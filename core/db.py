@@ -22,7 +22,9 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 5000")
+    # WAL 允许多读单写；并发短写（API worker + 请求 / seed 主循环）抢单写锁时，靠 busy_timeout
+    # 排队重试而不是立刻报 "database is locked"。所有写事务都很短（网络调用都在事务外），30s 足够等过去。
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -163,14 +165,25 @@ def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:
 
 @contextmanager
 def transaction() -> Iterator[sqlite3.Connection]:
-    """Run statements in a write transaction."""
-    with _transaction("BEGIN") as conn:
+    """Run statements in a write transaction.
+
+    Uses ``BEGIN IMMEDIATE`` so the write lock is taken at BEGIN rather than upgraded
+    mid-transaction. A deferred ``BEGIN`` that reads first (e.g. SELECT) and then writes
+    must upgrade the read lock to a write lock; if another writer holds it, SQLite returns
+    SQLITE_BUSY *immediately without consulting busy_timeout* (deadlock avoidance), so such
+    callers would crash with "database is locked" under concurrency regardless of the
+    timeout. Acquiring the write lock up front lets ``busy_timeout`` queue contenders.
+    """
+    with _transaction("BEGIN IMMEDIATE") as conn:
         yield conn
 
 
 @contextmanager
 def immediate_transaction() -> Iterator[sqlite3.Connection]:
-    """Run statements in a write transaction that acquires the write lock up front."""
+    """Run statements in a write transaction that acquires the write lock up front.
+
+    Synonym of :func:`transaction` (kept for call sites that state the intent explicitly).
+    """
     with _transaction("BEGIN IMMEDIATE") as conn:
         yield conn
 

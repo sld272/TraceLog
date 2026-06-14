@@ -22,13 +22,23 @@
 #   [[comment_threads]]
 #     post_key  Must match one [[posts]].key.
 #     soul_name Existing enabled SOUL name, for example: 拾迹者 / 温柔树洞 / 毒舌好友.
-#     followup User follow-up under that SOUL's first comment.
-#     month/day/hour/minute are optional. If present, they set the follow-up time.
+#     followup  Single user follow-up under that SOUL's first comment.
+#     followups Multi-round follow-ups (array of strings). Each round is appended to the
+#               SAME (post, soul) conversation in order, so a later round's AI reply can see
+#               the earlier rounds — that is where continuity comes from. Use either
+#               `followup` (one round) or `followups` (many rounds), not both.
+#     month/day/hour/minute are optional. If present, they anchor the FIRST round; later
+#               rounds are spaced automatically after it.
 #
 #   [[chats]]
 #     soul_name Existing enabled SOUL name.
-#     message   Private chat user message.
-#     month/day/hour/minute are optional. If present, they set the user message time.
+#     message   Single private chat user message.
+#     messages  Multi-round private chat (array of strings). Sent in order into the same
+#               thread, so the AI sees earlier rounds. Use either `message` or `messages`.
+#     month/day/hour/minute are optional. If present, they anchor the FIRST round.
+#
+# During a real run the script prints each round's user message AND the AI's real reply,
+# so you can see whether a multi-round conversation actually flows.
 #
 # Keep this file as documentation plus tiny placeholders only. Put real demo
 # data in scripts/demo_content.toml.
@@ -54,6 +64,7 @@ act = "示例分幕"
 content = "示例公开记录：把这里替换成另一条 demo 内容，可以包含一个明确待办。"
 
 
+# 单轮追问：用 followup（一句话）。
 [[comment_threads]]
 post_key = "sample-start"
 soul_name = "拾迹者"
@@ -63,7 +74,18 @@ hour = 11
 minute = 20
 followup = "示例追问：把这里替换成用户想继续聊的一句话。"
 
+# 多轮追问：用 followups（数组），每一句都会接着 AI 上一句继续，体现连续性。
+[[comment_threads]]
+post_key = "sample-followup"
+soul_name = "毒舌好友"
+followups = [
+  "示例第 1 轮：用户的第一句追问。",
+  "示例第 2 轮：用户读到 AI 回复后继续说的一句。",
+  "示例第 3 轮：再追一句。",
+]
 
+
+# 单轮私聊：用 message。
 [[chats]]
 soul_name = "温柔树洞"
 month = 3
@@ -71,3 +93,11 @@ day = 3
 hour = 22
 minute = 10
 message = "示例私聊：把这里替换成用户和某个 SOUL 的一对一消息。"
+
+# 多轮私聊：用 messages（数组）。
+[[chats]]
+soul_name = "温柔树洞"
+messages = [
+  "示例第 1 轮私聊。",
+  "示例第 2 轮：承接 AI 的回应继续聊。",
+]
