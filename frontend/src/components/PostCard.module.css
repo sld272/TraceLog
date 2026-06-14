@@ -79,17 +79,6 @@
   text-decoration: underline;
 }
 
-.importanceBadge {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: var(--color-warm-subtle);
-  color: var(--color-warm);
-}
-
 .postAction {
   display: inline-flex;
   align-items: center;
