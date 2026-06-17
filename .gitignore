@@ -220,6 +220,8 @@ workspace/
 *.db-wal
 .DS_Store
 pyrightconfig.json
+.local/
+scripts/demo_content.toml
 
 # Frontend (Node/Vite)
 frontend/node_modules/
