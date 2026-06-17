@@ -3,7 +3,6 @@ import { type Attachment } from '@/api/client'
 import { ImageUploader } from './ImageUploader'
 import { LoadingDots, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
-import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './Composer.module.css'
 
 interface ComposerProps {
@@ -18,7 +17,6 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const submitShortcutTitle = getSubmitShortcutTitle()
 
   /* Auto-resize textarea */
   useEffect(() => {
@@ -46,7 +44,8 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    /* Enter 发帖，Shift+Enter 换行；输入法组词时的 Enter 不触发发帖 */
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSubmit()
     }
@@ -94,7 +93,7 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
             onChange={setAttachments}
             showPreview={false}
           />
-          <span className={styles.submitWrap} title={submitShortcutTitle}>
+          <span className={`${styles.submitWrap} kbdTip`}>
             <button
               className={styles.submitBtn}
               onClick={handleSubmit}
@@ -107,6 +106,9 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
                 <SendIcon />
               )}
             </button>
+            <span className="kbdTipBubble" role="tooltip">
+              发送 <span className="kbdTipKey">Enter</span>
+            </span>
           </span>
         </div>
       </div>

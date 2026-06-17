@@ -18,7 +18,6 @@ import { Notice } from '@/components/Notice'
 import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
-import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import styles from './WorkspacePages.module.css'
 
 const CHAT_HISTORY_PAGE_SIZE = 50
@@ -57,7 +56,6 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   const preserveScrollHeightRef = useRef<number | null>(null)
   const stickToBottomRef = useRef(true)
   const forceScrollRef = useRef(false)
-  const submitShortcutTitle = getSubmitShortcutTitle()
   const modelUnavailable = modelConfigured === false
   const chatBusy = sending || busyMessageId !== null
 
@@ -513,7 +511,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault()
                   submitDraft()
                 }
@@ -543,7 +541,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
                 onChange={setAttachments}
                 showPreview={false}
               />
-              <span className={styles.buttonTooltipWrap} title={submitShortcutTitle}>
+              <span className={`${styles.buttonTooltipWrap} kbdTip`}>
                 <button
                   className={styles.chatSubmitButton}
                   disabled={(!draft.trim() && attachments.length === 0) || chatBusy || modelUnavailable}
@@ -551,6 +549,9 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
                 >
                   {chatBusy ? <LoadingDots /> : <SendIcon />}
                 </button>
+                <span className="kbdTipBubble" role="tooltip">
+                  发送 <span className="kbdTipKey">Enter</span>
+                </span>
               </span>
             </div>
           </div>

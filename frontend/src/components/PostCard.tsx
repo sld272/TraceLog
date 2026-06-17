@@ -14,7 +14,6 @@ import { SoulAvatar } from './SoulAvatar'
 import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
-import { getSubmitShortcutTitle } from '@/utils/shortcuts'
 import { soulColors } from '@/utils/soulColor'
 import styles from './PostCard.module.css'
 
@@ -243,7 +242,6 @@ function CommentPreview({
   const soulName = comment.soul_name
   const colors = soulColors(soulName)
   const trimmed = reply.trim()
-  const submitShortcutTitle = getSubmitShortcutTitle()
   const messages = conversation?.messages ?? []
   const threadMessages = messages.filter((message) => message.seq > 0)
   const visibleThreadMessages = visibleMessagesForVariant(threadMessages, variant)
@@ -279,7 +277,7 @@ function CommentPreview({
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
       handleSubmit()
     }
@@ -383,7 +381,7 @@ function CommentPreview({
               onChange={setAttachments}
               showPreview={false}
             />
-            <span className={styles.replyButtonWrap} title={submitShortcutTitle}>
+            <span className={`${styles.replyButtonWrap} kbdTip`}>
               <button
                 className={styles.replyButton}
                 onClick={handleSubmit}
@@ -392,6 +390,9 @@ function CommentPreview({
               >
                 {replyBusy ? <LoadingDots /> : <SendIcon width={14} height={14} />}
               </button>
+              <span className="kbdTipBubble" role="tooltip">
+                发送 <span className="kbdTipKey">Enter</span>
+              </span>
             </span>
           </div>
         </div>
