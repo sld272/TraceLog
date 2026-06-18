@@ -587,3 +587,68 @@ def _parse_memory_reconcile_content(content: str | None) -> dict | None:
 
     summary = data.get("summary")
     return {"ops": ops, "summary": summary.strip() if isinstance(summary, str) else ""}
+
+
+# 引擎：Memory View Synthesis（core units -> 身份画像 prose，memory v2）
+
+MEMORY_VIEW_SYNTH_PROMPT = """\
+你是 TraceLog 拾迹的画像综合引擎。你会收到一组**已筛选的核心记忆单元（core units）**，把它们综合成一段连贯、稳定、有界的身份画像 prose。这段画像会作为「这个用户/这段关系整体是谁」的恒在底色注入对话——它是 orientation（定向），不是事实精度来源。
+
+## 硬规则
+1. 只能使用提供的 units，不得新增任何信息、不得脑补。
+2. 不得把短期状态夸大成长期身份；不稳定内容用「近期/阶段性」措辞。
+3. 风格直接、不煽情；证据不足宁可省略。
+4. 必须压在字数预算内（见输入）。
+5. 输出连贯 prose（可少量分段），不要逐条罗列、不要 Markdown 标题。
+
+## 输出：只输出一个 JSON 对象，无解释
+{"profile_md": "综合后的画像 prose"}
+
+## 当前时间
+{current_datetime}
+"""
+
+
+def call_view_synthesis(
+    client: LLMClient,
+    model: str,
+    *,
+    units_text: str,
+    char_budget: int,
+    view_type: str,
+    trace_context: dict | None = None,
+) -> str | None:
+    """Synthesize identity-floor prose from core units. Returns prose or None."""
+    user_content = (
+        f"## 画像类型\n\n{view_type}\n\n"
+        f"## 字数预算\n\n不超过 {char_budget} 字\n\n"
+        "---\n\n"
+        f"## 核心记忆单元\n\n{units_text or '（无）'}"
+    )
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="memory_view_synthesis",
+        timeout=45,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": MEMORY_VIEW_SYNTH_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": user_content},
+        ],
+        parser=_parse_view_synthesis_content,
+        trace_context=trace_context,
+    )
+
+
+def _parse_view_synthesis_content(content: str | None) -> str | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    profile_md = data.get("profile_md")
+    if not isinstance(profile_md, str) or not profile_md.strip():
+        return None
+    return profile_md.strip()
