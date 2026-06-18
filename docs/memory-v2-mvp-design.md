@@ -4,7 +4,7 @@
 >
 > 已吸收前期 deep research 与后续架构审阅结论：字段去过载、view 作为受管对象、对账输入补 tombstones；并把六项基础正确性纳入 MVP——owner/visibility 拆分、append-only evidence events、`no_prompt` 硬门、Global/Soul/Thread/PrivateContext 分层、freshness 三重预算、raw/unit 独立向量 collection。md 渲染仍为 **LLM 综合为主、模板仅失败兜底**（§3.4）；写时机仍是批量深反思，不做每帖 proposer；每帖增量对账留后续第三步。凡仍有合理岔路的地方以 **分支** 列出，标注代价与推荐。
 >
-> 相关：[architecture.md](./architecture.md)、[database.md](./database.md)、[memory-v2-design.md](./memory-v2-design.md)。
+> 相关：[architecture.md](./architecture.md)、[database.md](./database.md)、[memory-v2-design.md](./memory-v2-design.md)、[memory-v2-state-goals-suggestions-design.md](./memory-v2-state-goals-suggestions-design.md)（当前状态块 · goaltool · 统一建议机制，承接本文的读路与写路分工）。
 
 ---
 
