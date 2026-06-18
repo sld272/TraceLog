@@ -2,33 +2,33 @@
 
 > 状态：实现前定稿（feat/memory-v2 分支）。本文是 [memory-v2-design.md](./memory-v2-design.md) 第 6 节"第一步核心赌注"的可落地展开，把愿景里被一句话带过的细节钉成 schema、op 模型、迁移路径、验收门。
 >
-> 已纳入 [memory-v2-deep-research-report.md](./memory-v2-deep-research-report.md) 的评估结论：采纳"字段去过载、view 作为受管对象（hash 驱动重综合）、对账输入补 tombstones"等修订与一批默认数值。md 渲染按后续讨论定为 **LLM 综合为主、模板仅失败兜底**（orientation 定位，见 §3.4）；写时机为**两段式**（每帖产候选 + 深反思对账，§2.5），轻反思禁用。其余完整 v2 设施（review 队列、隐私全分类、检索打分等）按 §11 记账延后。凡仍有合理岔路的地方以 **分支** 列出，标注代价与推荐。
+> 已纳入 [memory-v2-deep-research-report.md](./memory-v2-deep-research-report.md) 的评估结论：采纳"字段去过载、view 作为受管对象（hash 驱动重综合）、对账输入补 tombstones"等修订与一批默认数值。md 渲染按后续讨论定为 **LLM 综合为主、模板仅失败兜底**（orientation 定位，见 §3.4）。**写时机：批量深反思直接从 raw 抽取/对账（B），不做每帖 proposer**；**读路：本期受控改造**——md 全量注入之外加入 unit 检索 + 接缝 raw，带 feature-flag 可回退 md-only（§7）。轻反思禁用（无消费者）。**每帖增量对账（trickle reconcile）写入 [memory-v2-design.md](./memory-v2-design.md) 作为后续第三步**。其余完整 v2 设施（review 队列、隐私全分类、检索多信号打分等）按 §11 记账延后。凡仍有合理岔路的地方以 **分支** 列出，标注代价与推荐。
 >
 > 相关：[architecture.md](./architecture.md)、[database.md](./database.md)、[auto-reflection-design.md](./auto-reflection-design.md)。
 
 ---
 
-## 0. MVP 的边界：只换"写的表示"，不换"写的时机"，更不换"读"
+## 0. MVP 的边界：换"写的表示"（unit）+ 受控改读路（加 unit 检索），写时机仍批量深反思
 
 ### 0.1 三层真相分工（先把名词钉死）
 
 - **raw evidence —— 原始证据层。** post / chat_message / comment 原文，不可变，是一切记忆的最终出处。**它今天就是主记忆**：回复读路真正承重的是对 raw 池的 hybrid_search，不是 md。v2 之后 raw 仍是主记忆，units 只是给它补上抽象、出处与置信。
-- **memory unit —— 结构化真相层 + 审计层。** 一等公民：带 id / 置信 / 证据链 / 状态 / 时间。深反思（对账）的落点；工作台增删改查的对象；终态读路检索的目标。
+- **memory unit —— 结构化真相层 + 审计层。** 一等公民：带 id / 置信 / 证据链 / 状态 / 时间。深反思（对账）的落点；工作台增删改查的对象；**本期起回复读路检索的目标**（§7）。
 - **user.md / soul_memories —— 由 core memory units 低频**综合（synthesis）**出的核心画像块。** **不是** unit 的机械渲染/投影，而是对 core 子集的一次有损、整合、有界的综合。它**全量注入**回复 LLM，给模型一个稳定的身份地板，也给用户一面直观的镜子。
 
 一句话：**raw 给真相，unit 给精度与出处，md 给一个恒在的身份框。**
 
-### 0.2 MVP 只动其中两件事
+### 0.2 MVP 动哪几件事
 
-整份 v2 愿景有三条腿：①记忆单元化（写的表示）②读路 md→unit→raw 变焦 ③衰减/重组/滴流对账（写的时机）。**MVP 做第①条，并把第③条的「生产」侧前移到每帖（产候选），但对账与 md 综合仍批量、读路完全不动。** 这是本设计的克制重心，它一次性拆掉几个风险：
+整份 v2 愿景有三条腿：①记忆单元化（写的表示）②读路 md→unit→raw 变焦 ③衰减/重组/每帖增量对账（写的时机）。**MVP 做①和②，③延后**——写端用批量深反思直接从 raw 抽取（不做每帖 proposer），读端把 unit 检索拉进回复路。补上"光写不读 = 影子库"的浪费，让 units 真正有消费者。
 
-- **读路不动 → 演示稳定性不受影响。** 回复生成今天怎么读 `user.md` / `soul_memories`，MVP 之后还是怎么读——它读的仍是一篇全量注入的 Markdown，只不过这篇 md 从"深反思直接重写"变成"由 core unit 低频综合"。回复链路一行 prompt 都不用改。
-- **对账与 md 仍批量，只把生产前移。** 轻反思**禁用**，改由每帖一次独立 LLM 调用产出**候选 unit**（`status='proposed'`）顶替其管线槽位；**候选→active 的对账、以及 md 综合，仍留在批量深反思**，节奏与 cursor 不变。高频**全量**滴流对账（第 3 档）仍是 v2 第三步——MVP 只把**生产**滴流化，**消解**仍批量。
-- **范围单点 → 单点赌注名副其实。** 本轮吸收研究报告时，刻意只取"写端单点"那一刀，不被完整 v2 的设施诱导着翻倍工程量（见 §11）。
+- **写：深反思直接抽取（B）。** 轻反思**禁用**（无功能消费者）。批量深反思读"自 cursor 起的 raw + 现存 active units + tombstones"，产 `add/confirm/revise/retract` 落 `memory_units`（而非重写 md）。抽象发生在唯一有跨证据视野的地方——深反思；不先量产单帖候选再筛（那是 observation 2.0）。
+- **读：受控加 unit 检索（本期最大风险项）。** 回复路从"md 全量 + raw hybrid_search"扩成"md 全量(core) + 检索 unit(非 core) + 顺 evidence 摸 raw + 接缝 raw"（§7）。**因为它动了每条回复的热路径，必须带 feature-flag + md-only 回退**，并把"回复不回归"列为硬验收门（§8）。
+- **md：core unit 低频综合（orientation）。** `user.md`/`soul_memories` 从"深反思手写"变成"core unit 综合产出"，全量注入不变（§3）。
 
-一句话 MVP 验收：**每帖产候选 unit；深反思把候选消解成 active unit（产 unit ops 落 `memory_units`）而非重写 md；`user.md` / `soul_memories` 改由 core unit 低频综合产出（全量注入不变）；工作台改为以 unit 为对象。回复读路原样不动。**
+一句话 MVP 验收：**深反思直接产 unit ops（不重写 md）；`user.md`/`soul_memories` 由 core unit 综合；回复路在 flag 后加入 unit 检索 + 接缝 raw 且不回归；工作台以 unit 为对象。**
 
-明确**不在 MVP**：unit 进向量库 / 读时检索 unit / 接缝 raw 注入（第二步）；decay / 重组 / 高频**全量**滴流对账（第三步）；图谱化矛盾边失效、challenge 流程、隐私删除 UX（见 §11）。**轻反思本期禁用**（代码保留、不挂管线，详见 §2.1）。但第二步的接口缝必须在 MVP 就预留好（见 §7）。
+明确**不在 MVP**：decay / 重组 / **每帖增量对账（trickle，第三步，写进愿景文档）**；`retrieve_units` 的多信号打分（MVP 用最简语义召回，打分留 v2.1）；图谱化矛盾边失效、challenge 流程、隐私删除 UX（见 §11）。**轻反思禁用**（代码保留、不挂管线，详见 §2.1）。
 
 ---
 
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS memory_units (
     source           TEXT NOT NULL DEFAULT 'reflected'
                        CHECK(source IN ('reflected','user_authored','migrated')),
     status           TEXT NOT NULL DEFAULT 'active'
-                       CHECK(status IN ('active','proposed','pending','dormant',
+                       CHECK(status IN ('active','pending','dormant',
                                         'retracted_by_model','retracted_by_user',
                                         'superseded','challenged')),
     retraction_reason TEXT
@@ -83,7 +83,7 @@ CREATE INDEX IF NOT EXISTS idx_units_slice ON memory_units(scope, in_md_slice, s
 
 - 去过载的四条对应判断：**`tier`** 决定结构身份（core 画像 / 普通 contextual / 一次性 episodic），比手改 `in_md_slice` 合适；**`profile_policy`** 是用户"强制进/强制出画像"的意图；**`importance`** 是画像价值打分，与 `confidence`（信念强度）正交——低置信也可能高价值，反之亦然；**`sensitivity`** 收窄为**仅**表示 reconcile 改动门禁（沿用 `profile_service` 现有 high/normal/low 语义），不再兼任画像优先级。
 - **`in_md_slice` 降级为纯 selector 计算缓存**：它只是 §3.2 谓词算出来的结果物化，不承载用户意图、预算或隐私。
-- `status`：`proposed`（每帖 proposer 产出的候选，未经对账，不进 md/检索）；`retracted_by_model`（模型判定不再成立）与 `retracted_by_user`（用户撤销）**对称区分**，后者配 `retraction_reason` 区分 `false`/`outdated`（见 §4.1）；`pending`（迁移候选、低置信待定）；`superseded`（被取代）；`challenged` 占位给 v2.2 的挑战流程（MVP 不产生，但写进 CHECK 省得日后重建表）。
+- `status`：`retracted_by_model`（模型判定不再成立）与 `retracted_by_user`（用户撤销）**对称区分**，后者配 `retraction_reason` 区分 `false`/`outdated`（见 §4.1）；`pending`（迁移候选、低置信待定，仅 §5 迁移用）；`superseded`（被取代）；`dormant`（decay 转入，第三步用）；`challenged` 占位给 v2.2 的挑战流程（MVP 不产生，但写进 CHECK 省得日后重建表）。MVP 写端不产 `proposed`——没有每帖 proposer（§2.1）。
 - `source` 复用反思器 scope 语义（global ← 公开 post；`soul:<name>` ← 该 SOUL 私聊+评论）。`user_locked` 这层 MVP 由 `source='user_authored'` 推导，暂不单列。
 - `normalized_claim` / `superseded_by` / `retrieval_count` 占位，MVP 几乎不写，先建省得二次迁移。
 
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS memory_unit_evidence (
 CREATE INDEX IF NOT EXISTS idx_unit_evidence_eid ON memory_unit_evidence(evidence_id);
 ```
 
-`idx_unit_evidence_eid` 是关键：它让"这条 raw 已被哪些 unit 覆盖"成为一次 join——当年 observation 做不到、只能靠猜的去重，到第二步"由 unit 顺藤摸 raw"直接白嫖。
+`idx_unit_evidence_eid` 是关键：它让"这条 raw 已被哪些 unit 覆盖"成为一次 join——当年 observation 做不到、只能靠猜的去重，本期读路"由 unit 顺 evidence 摸 raw"（§7.1 第 3 步）直接白嫖。
 
 ### 1.3 `memory_unit_ops`（审计 + 工作台的"整理记录"骨架）
 
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS memory_view_units (
 
 ### 1.5 schema 落地方式
 
-新表全部进 `schema.sql`（`init_db` 每次启动 `executescript` 且都是 `IF NOT EXISTS`，老库自动补建）。**CHECK 约束里的预留枚举值（如 `challenged`、`pending`）现在就写全**——SQLite 改 CHECK 需重建表，提前写省去日后痛苦迁移。`memory_units` 不需要 FTS（MVP 不检索 unit；第二步进向量库走现成 `vector_docs` / `vector_outbox` 出账管线）。
+新表全部进 `schema.sql`（`init_db` 每次启动 `executescript` 且都是 `IF NOT EXISTS`，老库自动补建）。**CHECK 约束里的预留枚举值（如 `challenged`、`pending`）现在就写全**——SQLite 改 CHECK 需重建表，提前写省去日后痛苦迁移。`memory_units` 不需要 FTS（MVP 读路用向量召回，active unit 进现成 `vector_docs` / `vector_outbox` 出账管线，§7.1）。
 
 ---
 
@@ -174,61 +174,55 @@ CREATE TABLE IF NOT EXISTS memory_view_units (
 
 **关键复用**：现有 patch 已带 `evidence`/`confidence`/`sensitivity`/`ops`，gating（`_patch_evidence_allowed`）现成。unit op 模型几乎是它的同构升级。
 
-**两段式层次（务必守住，否则 unit 退化成 observation 2.0）**：**轻反思禁用**——代码保留、从 `public_post_pipeline` 摘除、gate 一个开关可复活，四张表（entities/emotions/events/relations）留 schema 空置，`posts.importance` 冻在默认值（前端仅显示、无功能依赖，故不补）。在线侧改由**每帖一次独立 LLM = 候选 proposer**：只看单帖+近邻，产 `status='proposed'` 候选（**provisional，非真相**，自带 evidence、低默认 confidence），不进 md/检索。**真正的跨证据抽象只发生在深反思**：把候选 promote/merge/confirm/**drop**/revise/retract 成 active unit。对应 Generative Agents 的 observation→reflection，但这里 observation 是**显式可丢弃的候选**，不是一等记忆——`drop` 就是防 observation 2.0 的阀门。**覆盖范围：候选 proposer 只跑公开 post（global scope）；soul（私聊+评论）仍走深反思直接读 raw 线程的单段式**（见 §2.4）。
+**层次定位（务必守住，否则 unit 退化成 observation 2.0）**：**轻反思禁用**——代码保留、从 `public_post_pipeline` 摘除、gate 一个开关可复活，四张表（entities/emotions/events/relations）留 schema 空置，`posts.importance` 冻在默认值（前端仅显示、无功能依赖，故不补）。**不引入每帖 proposer**：单帖一次 LLM 没有跨证据视野、只能转写，by construction 就是 observation 2.0；"先量产候选再 drop"是用 LLM 成本产废、再让深反思趟废堆。因此**抽象只发生在深反思**——它是唯一天然有跨证据视野（一窗 raw + 全部 active unit）的地方。unit **只承载跨证据抽象**；逐帖复述永远留在 raw 层。这与 Generative Agents 的 observation / reflection 分层同构（raw=observation，unit=reflection）。
 
-### 2.2 op 模型：LLM 输出什么
+> 为什么不要每帖 proposer（审阅结论）：proposer 若只看单帖 = observation 2.0；若给它"当前 post + 召回 raw + 相关 active unit"让它真·跨证据增量提案，那就是**每帖一次对账**（trickle reconcile）——把重调用搬上在线热路径、且把 unit 检索提前进写端。它是 v2 第三步的正解，但 MVP 不上，写进 [memory-v2-design.md](./memory-v2-design.md)。MVP 写端就是批量深反思直接抽取。
 
-分两段。**每帖（proposer）只有一种 op**：
+### 2.2 op 模型：深反思输出什么
 
-| op | 语义 | 落库动作 |
-| --- | --- | --- |
-| `propose` | 从单帖抽出的候选信念 | INSERT unit(status=`proposed`, source=`reflected`, 低默认 confidence≈0.3–0.5, 连 evidence)。**不**产 post 级 importance（轻反思已禁用、无功能依赖）。 |
-
-**深反思（reconciler）消解候选 + 现存 active**，op 集：
+把 `reflection_router` 的深反思 schema 从"文本 patch"换成"unit ops"。深反思读"自 cursor 起的 raw + 现存 active units + tombstones"，一次产出一批 op：
 
 | op | 语义 | 落库动作 | 是否可能触发 md 重综合 |
 | --- | --- | --- | --- |
-| `promote` | 候选经跨证据确认，升 active | proposed→`active`，confidence 按印证数估，连 evidence | 仅当升入 core 子集 |
-| `merge` | 多候选 / 候选+active 合并 | 并 evidence、升 confidence，多余候选标 `superseded` | 仅当结果在 core 子集 |
-| `confirm` | 候选印证已有 active | `last_confirmed=now`、`confidence↑`、吸收 evidence，**content 不动** | **否**（§3.3 排除纯 confirm） |
-| `drop` | 候选是单帖复述/垃圾，不予升格 | proposed→`superseded`（或弃），记 op | **否**（**防 observation 2.0 的阀门**） |
-| `revise` | 旧 active 措辞/细节更新 | 见 §2.3 分支 | 仅当该 unit 在 core 子集内 |
-| `retract` | 旧 active 不再成立（模型判定） | status=`retracted_by_model` | 仅当该 unit 原在 core 子集内 |
+| `add` | 跨证据抽出的新信念 | INSERT unit(status=`active`, source=`reflected`)，LLM 同时给 `type`/`tier`/`importance` + 连 evidence | 仅当新 unit 进 core 子集 |
+| `confirm` | 旧 unit 再获证据 | `last_confirmed=now`、`confidence↑`、补 evidence 行，**content 不动** | **否**（§3.3 排除纯 confirm） |
+| `revise` | 旧 unit 措辞/细节更新 | 见 §2.3 分支 | 仅当该 unit 在 core 子集内 |
+| `retract` | 旧 unit 不再成立（模型判定） | status=`retracted_by_model` | 仅当该 unit 原在 core 子集内 |
 
-深反思每条 op 必带 `target_id`（promote/drop 指候选，confirm/revise/retract 指 active）、`evidence`（受 gating 约束，证据须落在本轮 scope 内）、`confidence`、`type`、`tier`。沿用现有 `_patch_evidence_allowed` 门禁。**confidence 是「挣来的」**：单帖候选低置信，唯有跨帖印证（merge/confirm）或被 active 确认才升——这是两段式的认知红利。
+每条 `add`/`revise`/`retract` 必带 `target_id`（除 add）、`evidence`（受 gating 约束，证据须落在本轮 scope 内）、`confidence`、`type`、`tier`、`importance`。沿用现有 `_patch_evidence_allowed` 门禁。**`add` 的强约束（防 observation 2.0）**：必须是跨证据抽象，不得逐帖转写——prompt 明示"一条 raw 不足以支撑一个 unit，除非它确立了一个跨时段成立的信念"；§8.1 抽样验"跨证据抽象 ≥ 70%、逐帖复述 ≤ 15%"是这条的验收。
 
 ### 2.3 `revise` 的两种实现（分支 D）
 
 - **分支 D1（推荐 MVP）：就地 UPDATE content。** 旧 unit 直接改 content + `updated_at`，历史落 `memory_unit_ops.before_json`。简单。代价：丢失"同一信念历代措辞"的行级时间线（op 日志仍可回溯）。
 - **分支 D2：每次 revise = 新 unit + 旧 unit superseded。** 真 bi-temporal。代价：行数膨胀，综合/检索处处要 `WHERE status='active'`，MVP 收益低。
 
-> 推荐 D1。把 D2 留给"显式矛盾"：对账判定新旧**冲突**（非措辞更新）时，才 retract 旧 + 新建（promote 候选为 active）+ 写 `superseded_by`。即矛盾才进 bi-temporal，普通更新就地改。
+> 推荐 D1。把 D2 留给"显式矛盾"：对账判定新旧**冲突**（非措辞更新）时，才 retract 旧 + add 新 + 写 `superseded_by`。即矛盾才进 bi-temporal，普通更新就地改。
 
 ### 2.4 对账的输入（分支 A，已含报告的补充）
 
-要产出 confirm/revise/retract，LLM 必须看到相关现存 unit。MVP 没有 unit 向量检索（第二步）。
+要产出 confirm/revise/retract，LLM 必须看到相关现存 unit。
 
-- **分支 A1（推荐 MVP）：把该 scope 下全部 active unit 一次性喂进去。** 零额外检索设施；MVP 量级（演示库几百条）完全可控；且**现状深反思本就把整篇 `user.md` 喂进去**，喂全部 active unit 不比现在差。直接绕开"对账依赖检索、检索又在第二步"的鸡生蛋。
-- 分支 A2（entities/FTS 预筛）/ A3（提前上向量检索）：复杂度提前，MVP 不值。
+- **分支 A1（推荐 MVP）：把该 scope 下全部 active unit 一次性喂进去。** 对账要的是"这批新 raw 与**全部**已有信念逐一比对"，天然要全量、而非按 query 召回——所以即便读路已上 unit 向量检索（§7），对账输入仍走全量 A1，不复用读路的 top-k 召回（那会漏掉本轮 raw 未触及但需 retract 的旧 unit）。MVP 量级（演示库几百条）完全可控；且**现状深反思本就把整篇 `user.md` 喂进去**，喂全部 active unit 不比现在差。
+- 分支 A2（entities/FTS/向量预筛）：当 active unit 数破阈值（建议 N≈150–200）后再降级到"全 core + 本轮 raw 相关召回"；MVP 量级不必。
 
-**对账输入集，按 scope 分写**（不再喂 light signals——轻反思已禁用）：
+**对账输入集**（不再喂 light signals——轻反思已禁用；global/soul 同构，都是 raw 直入）：自 cursor 起的本轮 raw evidence ＋ 当前 scope 全部 active units ＋ **当前 scope 的 tombstones（每条带 `retraction_reason`，见 §4.1）** ＋（可选）近几轮 `memory_unit_ops` 摘要。
 
-- **global 深反思**：本轮全部 `proposed` 候选（各带 evidence，可按需 hydrate 源 raw）＋ 当前 scope 全部 active units ＋ **tombstones（每条带 `retraction_reason`，见 §4.1）** ＋（可选）近几轮 `memory_unit_ops` 摘要。
-- **soul 深反思**：raw 线程消息 since cursor（**单段式**，无候选预产）＋ 当前 soul 的 active units ＋ tombstones。沿用现 `soul_thread_deep_cursor`，输出由 patch 改为 unit ops。
+- **global 深反思**：raw = 自 `reflections.scope_end` 起的公开 post（现成 cursor）。
+- **soul 深反思**：raw = 自 `soul_thread_deep_cursor` 起的私聊+评论线程消息（现成 cursor）。
 
-候选**召回**成为 global 写路的质量承重点：某帖候选漏抽，深反思只能靠 hydrate 源 raw 补救；故 proposer 需与原轻反思同等的**重试安全**——`pending_reflect:` 复用为 `pending_propose:`（失败标记+重试），别让深反思读到空洞。
+两条 scope 唯一区别是 raw 来源与 cursor，op 模型、active/tombstone 注入、apply 步完全同构。输出由 patch 改为 unit ops，cursor 语义不动。
 
 ### 2.5 对账粒度：批量 vs 滴流（分支 B）
 
-- **分支 B-split（本次选定）：生产/消解切分。** unit **生产**移到每帖（proposer 产候选，global scope）；**对账+md 仍批量深反思**，节奏、cursor、双车道、在途闸门一律不碰。是 producer/consumer 切分，非 B1/B2。
-- 分支 B1（原 MVP 备选）：生产也留批量深反思，完全不动在线侧。更省，但放弃「候选随帖即时落库」与第二/三步的新鲜度地基。
-- 分支 B2（立即上高频**全量**滴流对账）：需 v1 隔离方案全部到位，LLM 频次飙升，演示前引入新不稳定源。
+- **分支 B1（本次选定）：完全保留现有批量深反思节奏与 cursor**，只换 apply 步（patch→unit ops）。触发时机、双车道、在途闸门、在线热路径一律不碰。抽象只在深反思这一处发生。
+- 分支 B-split（每帖 proposer 产候选 + 深反思消解）：审阅否决——单帖 proposer = observation 2.0（量产废候选）；要它真·跨证据就等于每帖对账，见下。
+- 分支 B2（每帖增量对账 / trickle reconcile）：把"当前 post + 召回 raw + 相关 active unit"喂 LLM 做增量提案，是新鲜度的正解、也是 sleep-time compute 的形态。但它需 unit 检索就位、LLM 频次上在线路、v1 隔离全到位。**留作 v2 第三步，写进 [memory-v2-design.md](./memory-v2-design.md)。**
 
-> 选 B-split。硬约束：候选**不得**作为 active 进 md/检索；每帖 proposer**不得**与深反思对账合进同一次调用（否则单帖视野污染 active → observation 2.0）。
+> 选 B1。新鲜度在 MVP 由**读路的接缝 raw**（§7：自 cursor 起的近期原文逐字注入）兜住，不靠写端高频。"想更新鲜"就缩小深反思批次 / idle 多跑几次（免费旋钮），不复活 proposer。
 
 ### 2.6 写不变量（守住）
 
-每帖 proposer 落候选、深反思 op 落库都走 `db.immediate_transaction()`（同原 `_apply_light_reflection` 模式）：先 LLM 重算、再短事务批量写。md 综合（§3）在事务**外**做（甚至异步，见 §3.3），产物再用 `os.replace` 原子落盘——延续"重算在前、写锁在后、毫秒级写窗口"。unit 化后写窗口更小（行更新 vs 整段重写）。
+深反思 op 落库走 `db.immediate_transaction()`（同原 `_apply_light_reflection` 模式）：先 LLM 重算、再短事务批量写。md 综合（§3）在事务**外**做（甚至异步，见 §3.3），产物再用 `os.replace` 原子落盘——延续"重算在前、写锁在后、毫秒级写窗口"。unit 化后写窗口更小（行更新 vs 整段重写）。
 
 ---
 
@@ -304,7 +298,7 @@ in_md_slice = 1 当且仅当：
 
 ### 3.5 与回复读路的衔接
 
-综合产物仍写到 `user.md` / `soul_memories/<name>.md` 的**老路径、老格式**（带 `## 章节`，sensitivity 分级保留），**全量注入**不变。于是 `memory_review_service.read_*` 与回复读路读到的"形状"不变——**回复链路零改动**。区别只在：这篇文件现在是机器综合产物。
+综合产物仍写到 `user.md` / `soul_memories/<name>.md` 的**老路径、老格式**（带 `## 章节`，sensitivity 分级保留），**全量注入**不变。于是 `memory_review_service.read_*` 读到的 md "形状"不变——**md 这一段**回复链路零改动。**但本期读路在 md 之外加了 unit 检索 + 接缝 raw（§7）**：md 仍是常驻 core 画像，额外多了"按 query 召回的非 core unit + 顺 evidence 摸到的 raw + 接缝 raw"。区别两点：md 现在是机器综合产物；md 不再是回复唯一的记忆来源。
 
 **生成文件头**（廉价卫生，声明它是产物、为未来冲突检测埋线）：综合时在文件头写
 
@@ -314,7 +308,7 @@ in_md_slice = 1 当且仅当：
      generated_at=... content_hash=sha256:... -->
 ```
 
-并建议给每段埋 `<!-- tracelog:units=u1,u2 -->` provenance 锚点（region 级，非逐行锁），为第二步"回复出处标到具体 unit"埋线，零成本。MVP 不实现"用户改本地文件后回灌"的冲突流程（md 不可编辑，见 §4 与 §11）。
+并建议给每段埋 `<!-- tracelog:units=u1,u2 -->` provenance 锚点（region 级，非逐行锁），支撑本期读路"回复用了哪些 unit"的归因（§7.1），逐 region 精确归因留 v2.1，零成本。MVP 不实现"用户改本地文件后回灌"的冲突流程（md 不可编辑，见 §4 与 §11）。
 
 ---
 
@@ -330,16 +324,16 @@ in_md_slice = 1 当且仅当：
 
 1. **错的 / 从来不对**（`retraction_reason='false'`）：`status='retracted_by_user'` + 写 tombstone。防诈尸**开**——支撑它的 raw 还在，下次对账会重派生，必须抑制。
 2. **曾经对、现在过时**（`retraction_reason='outdated'`）：`status='retracted_by_user'` + tombstone。防诈尸**软**——允许在**有新证据**时重新派生，但 confidence 重算；不是「永不再现」。（decay 驱动的 dormant 变体留第三步。）
-3. **属实、但别再提 / 别写进画像**：**这不是删除**。`status` 保持 `active`，置 `profile_policy='force_exclude'`，**不写 tombstone**，对账**应继续 confirm 它**。MVP 读路是 md-only，`force_exclude`（§3.2 门外）已能完整实现「不出现在回复」；连检索也屏蔽的 `visibility='no_prompt'` 等第二步上 unit 检索才有区别，按 §11 延后。
+3. **属实、但别再提 / 别写进画像**：**这不是删除**。`status` 保持 `active`，置 `profile_policy='force_exclude'`，**不写 tombstone**，对账**应继续 confirm 它**。注意 MVP 读路已含 unit 检索（§7）：`force_exclude` 只挡 md 画像，**不挡检索召回**——一条 active 的 force_exclude unit 仍可能被 query 召回进回复。要"连检索也屏蔽"需 `visibility='no_prompt'`（§11，v2.2）。MVP 若要严格"任何地方都别提"，临时手段是改判为 `retracted_by_user`（reason=`outdated`），代价是丢了"它仍为真"的语义——这正是 `no_prompt` 存在的理由，故 v2.2 必补。
 
 所有删除都保留 evidence 连接与 op 日志（`memory_unit_ops.after_json` 已快照 `retraction_reason`，无需另加列）。
 
 **防诈尸按 `retraction_reason` 分流**（修正分支 E 的一刀切）：
 
 - **分支 E1（推荐）：prompt 级抑制。** 对账输入带本 scope 的 tombstones（每条含 `retraction_reason`，§2.4）：对 `false` 严禁再生成同义条目；对 `outdated` 仅作软提示。代价：软约束。
-- **分支 E2：落库级去重守卫。** promote/merge 落库前与 `false` tombstone 做近似查重（`normalized_claim` / 实体重叠 / 第二步 embedding），命中则丢弃或转 `pending`。
+- **分支 E2：落库级去重守卫。** 深反思 `add` 落库前与 `false` tombstone 做近似查重（`normalized_claim` / 实体重叠 / 第二步 embedding），命中则丢弃该 add。
 
-> 推荐 E1 起步，叠一条**廉价硬规则**（仅对 `false`）：若某候选的 evidence 集合 ⊆ 某 `false`-tombstoned unit 的 evidence 集合，直接 `drop`。E2 的 embedding 查重等第二步 unit 进向量库后补上。
+> 推荐 E1 起步，叠一条**廉价硬规则**（仅对 `false`）：若某 `add` 的 evidence 集合 ⊆ 某 `false`-tombstoned unit 的 evidence 集合，直接抑制。E2 的 embedding 查重等第二步 unit 进向量库后补上。
 
 ### 4.2 用户手写/编辑 = ground truth，对账免疫（启用后必需，分支 F）
 
@@ -390,27 +384,42 @@ shadow 期以"天"计而非"周"，迁就答辩档期；比一刀切稳。
 
 ---
 
-## 7. 终态读路与本期必须预留的接口缝
+## 7. 读路改造（本期纳入，带 flag + md-only 回退）
 
-MVP 读路不动，但为第二步"md 全量 + 检索 unit + 顺藤 raw"留好缝，否则二次返工要动 schema 与读路。终态读路图：
+units 只写不读 = 影子库，且 demo 的"懂你 + 点出处"靠读路真的用上 unit。所以 MVP 把愿景 §4 的读路落进来——但因为它**动每条回复的热路径**，是本期最大风险项，全程带 `MEMORY_V2_READ` flag，关掉即退回今天的 md-only + raw hybrid_search。
+
+### 7.1 本期读路（flag 开时）
+
+现状 `build_public_post_reply_context` 直接 `hybrid_search` 打 raw 池取 top-k。改为有序展开：
 
 ```
-md 全量注入(core 画像)
-  + 检索 unit(非 core, 按 query 召回, 带 confidence/type/自何时)
-  + raw(① unit.evidence_ids 顺藤摸到  ② hybrid_search 直达孤儿话题)
-  + 接缝 raw(自 cursor 起、尚未对账成 unit 的近期原文)
+md 全量注入(core 画像, 常驻无 query)                       ← §3 综合产物
+  + 检索 unit(非 core, 按 query 召回, 带 confidence/type/自何时)  ← retrieve_units
+  + raw(① 命中 unit 顺 evidence_ids 摸到  ② hybrid_search 直达孤儿话题)
+  + 接缝 raw(自 cursor 起、尚未对账成 unit 的近期原文, 逐字)
+  + 读取规则(precedence: 事实信 raw, 框架用 unit, 冲突以新为准)
 ```
 
-下列缝**在 MVP 就落地**，终态才用起来：
+1. **md 常驻**：core 画像无 query 注入（不变）。
+2. **检索 unit**：`retrieve_units(query, scopes, k≈6–8, exclude_in_md=True)` — active unit 进向量库（复用 `vector_docs`/`vector_outbox`），ANN 召回非 core 的相关 unit，带 confidence/type/自何时。**MVP 用最简语义召回**（单一 embedding 相似度 + status=active + 排除 in_md_slice）；多信号打分（semantic+BM25+entity+time+importance）留 v2.1（§11）。
+3. **顺 evidence 摸 raw**：命中 unit 已挂 evidence_ids，按需 hydrate 源 raw；命中 unit 已覆盖的 raw 不重复塞，仅当 raw 能补 unit 抽象掉的细节时才带。
+4. **接缝 raw**：自 cursor（`soul_thread_deep_cursor` / 全局 `reflections.scope_end`）起的近期原文逐字带上，不论与当前话题是否相关——这是模型对"刚发生"的感知，也是 MVP 不靠写端高频的新鲜度来源（§2.5）。
+5. **precedence 写进回复 prompt**：事实信 raw（尤其接缝近期 raw）、框架用 unit（带 confidence 软着说）、近期 raw 与旧 unit 矛盾以 raw 为准。
 
-1. **`memory_unit_evidence` + `idx_unit_evidence_eid` + `relation` 列**（§1.2）：unit→raw 的 join、去重、支持/反驳区分。
-2. **`in_md_slice` / `tier`**（§1.1 / §3.2）：core（进 md）与非 core（靠检索）的分界；终态据它对检索结果去重。
-3. **`memory_views` / `memory_view_units` + provenance 锚点**（§1.4 / §3.5）：终态"回复出处标到具体 unit"。
-4. **`context_builder` 里放 `retrieve_units(query, scopes, k=8, exclude_in_md=True, hydrate_raw=False)` 空壳**（MVP 返回 `[]`）：第二步检索 unit 的唯一插入点。打分公式（多信号）见 §11，留作 v2.1。
-5. **unit 的 `confidence`/`type`/`status`/`scope`/`importance` 齐备**（§1.1）：终态排序、过滤、排除墓碑。
-6. **接缝 cursor 复用现成的**（`soul_thread_deep_cursor`、全局 `reflections.scope_end`）：MVP 不用，别动其语义。
+### 7.2 回退与验证（硬要求）
 
-冲突一致性（终态）由愿景文档第 4.4 节 precedence（事实信 raw、框架用 unit、冲突以新为准）处理；本设计单向 unit→md + raw 始终是 unit 上游证据，与之兼容。
+- **feature-flag**：整条新读路挂 `MEMORY_V2_READ`；关掉 = 回今天的 md-only + raw hybrid_search，零行为变化。出问题一键回滚。
+- **回归门**：§8.1"回复不回归"从"兜底回归"升为**硬验收**——flag 开/关同组 post 跑回复，质量不得下降。
+- **分阶段**：可先只加"检索 unit"不加接缝 raw、再叠接缝，逐段验证；任一段回归即单独关。
+
+### 7.3 仍然预留、本期不全用的缝
+
+1. **`memory_views` / `memory_view_units` + provenance 锚点**（§1.4 / §3.5）："回复出处标到具体 unit"——MVP 可先标到"用了哪些 unit"，逐 region 精确归因留 v2.1。
+2. **`memory_unit_evidence.relation`**（支持/反驳区分）：MVP 召回只用 supports，contradicts/revises 留图谱化。
+3. **`retrieve_units` 多信号打分**：MVP 单 embedding，打分公式 v2.1。
+4. **`retrieval_count` 回灌**（读时记 unit 被检索/采用 → decay 信号）：第三步，MVP 不写。
+
+冲突一致性由愿景文档 §4.4 precedence 处理（已落进 7.1 第 5 步）；本设计单向 unit→md + raw 始终是 unit 上游证据，与之兼容。
 
 ---
 
@@ -422,7 +431,8 @@ md 全量注入(core 画像)
 - **记忆质量**：抽样 50 条 reflected unit，**跨证据抽象 ≥ 70%**，"逐帖复述"≤ 15%；合成 md 在预算内；抽样人眼复核合成 md **大体忠于 core units、无明显臆造**（软标准——md 是 orientation 非事实源，不做机械校验，见 §3.4）。
 - **用户控制**（启用编辑后）：user_authored 不被对账自动改写；`force_exclude`（属实但别再提）保持 active、不进 md、不被 tombstone、对账仍可 confirm；`reason='false'` 删除后同 evidence 不诈尸；`reason='outdated'` 删除无新证据不复活、有新证据可重派生且 confidence 重置。
 - **重综合低频**：埋点——纯 confirm / core 外 op **零重综合**，重综合次数 ≪ 对账 op 次数。
-- **回复不回归**：翻转前后同组 post 跑回复，质量无明显下降（读路未变，兜底回归）。
+- **回复不回归（硬门，读路已变）**：`MEMORY_V2_READ` flag 开/关同组 post 跑回复，开 flag 质量**不得低于**关 flag（md-only 基线）；理想是"懂得更多"。这是本期读路改造（§7）的承重验收，非"兜底"。
+- **读路正确性**：检索 unit 排除 in_md_slice（不双注入）；顺 evidence 摸到的 raw 不与召回 unit 重复；接缝 raw 确实带上自 cursor 起的近期原文；flag 关时读路与今天逐字一致。
 
 ### 8.2 演示脚本（冲刺答辩用，5 幕）
 
@@ -430,7 +440,7 @@ md 全量注入(core 画像)
 2. **看到出处**：点开一条 unit，下钻其 raw evidence。
 3. **用户纠正系统**：把一条 reflected unit 改成 user_authored，触发新 md 综合，画像随之更新。
 4. **删除不诈尸**：删一条记忆 → 跑一次整理 → 证明它不复活。
-5. **回复效果**：用更新后的画像生成回复，体现"懂你"但不乱编。
+5. **回复效果（读路高光）**：发一条与 core 画像无关的帖 → 回复里既有 md 给的稳定身份底色、又召回了相关的非 core unit、还带最近动态（接缝 raw）；点开回复能看出"用了哪些 unit / 哪些 raw"。对比 flag 关（md-only）凸显"懂得更多但不乱编"。
 
 ---
 
@@ -439,13 +449,14 @@ md 全量注入(core 画像)
 1. 建表（§1：units / evidence / ops / views / view_units）进 schema.sql + 单测建表/约束。
 2. `memory_unit_service`：先 list/get/op 日志（只读 manage 面）跑通展示与 diff；增删改与 §4 墓碑/免疫作为紧随一步。
 3. 综合器（§3.4 LLM 综合为主 + 模板失败兜底）+ core 子集 selector/滞回（§3.2，core 强制 DWELL）+ `memory_views` hash 失效（§3.3），先对"手造 units"综合，验产物形状与老 md 一致、预算达标。
-4a. **禁用轻反思**：`public_post_pipeline` 把 `run_light_reflection` 槽换成 `run_propose_units`（每帖独立 LLM 产候选 `proposed`，含 evidence + 重试 `pending_propose:`，**不**产 importance）；轻反思代码 gate 到开关、保留可复活；更新 `test_public_post_pipeline`（断言 `run_light_reflection`→`run_propose_units`）。
-4b. 改 `reflection_router` 深反思 schema：文本 patch → unit ops；`reflector` apply 步改写为 §2 op 落库（global 吃候选做 promote/merge/confirm/**drop**/revise/retract；soul 单段式读 raw 线程，patch→ops；保留 gating；对账输入按 §2.4 scope 分写 + tombstones）。
-5. 预留缝（§7）随手落地：evidence relation、`tier`/`importance`、provenance 锚点与文件头、`retrieve_units` 空壳、cursor 不动。
-6. 迁移脚本（§5）+ shadow 跑（§6）+ 验收门（§8）。
-7. 翻转：删旧 patch→md 路径，md 改由综合产出。工作台 ReflectionsPage 接 op 日志 diff。
+4. **禁用轻反思**：`public_post_pipeline` 摘除 `run_light_reflection`（gate 到开关、保留可复活）；更新 `test_public_post_pipeline`。注意保留 `maybe_trigger_global_deep_reflection`。
+5. 改 `reflection_router` 深反思 schema：文本 patch → unit ops；`reflector` apply 步（global + soul）改写为 §2 op 落库（add/confirm/revise/retract，保留 gating；对账输入 = raw + active units + tombstones，§2.4）。
+6. **读路改造（本期最大风险项，带 flag）**：active unit 进向量库（复用 `vector_docs`/`vector_outbox`）；`retrieve_units` 空壳填上最简语义召回（§7）；`context_builder` 加"md 全量 + 检索 unit + 顺 evidence 摸 raw + 接缝 raw + precedence 规则"，整条挂 `MEMORY_V2_READ` flag，关掉即回 md-only。
+7. 预留缝（§7）随手落地：evidence relation、`tier`/`importance`、provenance 锚点与文件头、接缝 cursor 复用。
+8. 迁移脚本（§5）+ shadow 跑（§6）+ 验收门（§8，含"回复不回归"硬门）。
+9. 翻转：删旧 patch→md 路径，md 改由综合产出；读路 flag 开。工作台 ReflectionsPage 接 op 日志 diff。
 
-读路改造、decay/重组、unit 进向量库——第二/三步，不在此清单。
+decay/重组、**每帖增量对账（trickle）**、unit 检索多信号打分——第三步 / v2.1，不在此清单。
 
 ---
 
@@ -462,10 +473,11 @@ md 全量注入(core 画像)
 | 字段语义 | 去过载：`tier`/`profile_policy`/`importance`/`sensitivity`(仅门禁) 各司其职，`in_md_slice` 降为缓存 |
 | 渲染 | **LLM 综合为主（prompt 约束）+ 模板仅失败兜底**；md 是 orientation 非事实源，不设机械校验闸 |
 | 重综合触发 | `memory_views.source_unit_set_hash` 失效驱动，可异步 |
-| 对账输入 | global：候选 + 全部 active units(A1) + tombstones(带 reason)；soul：raw 线程单段式 |
-| 写时机 | 两段式（B-split）：每帖产候选 + 深反思对账/综合；读路不动 |
+| 对账输入 | raw(自 cursor) + 全部 active units(A1) + tombstones(带 reason)；global/soul 同构，仅 raw 源与 cursor 不同 |
+| 写时机 | **批量深反思直接抽取（B1）**，不做每帖 proposer（= observation 2.0）；新鲜度靠读路接缝 raw |
+| 读路 | **本期改造**：md 全量 + 检索 unit + 顺 evidence 摸 raw + 接缝 raw + precedence；带 flag 可回 md-only |
 | 轻反思 | **MVP 禁用**（代码留、不挂管线、四表空置、importance 不补） |
-| 候选范围 | proposer 只跑公开 post(global)；soul 单段式 |
+| 每帖增量对账 | trickle reconcile = v2 第三步，写进愿景文档；MVP 不上 |
 | 删除语义 | 按 `retraction_reason` 分流：false（防诈尸）/ outdated（可重派生）/「别再提」= force_exclude 非删除 |
 
 **待你拍板**：
@@ -488,12 +500,13 @@ md 全量注入(core 画像)
 记录研究报告里"形状正确、但服务的是 v2.1/v2.2 功能"的设计，**预留而不现在建**，免得日后被当成新发现重捡。
 
 - **`memory_reviews` 队列 + challenge / pending-review / import-diff 流程**：服务 F2 挑战、raw 删除 reconsider、外部 md 导入。MVP 走 F1 硬免疫、无这些入口，表基本空转。预留形状，不建流程。
-- **隐私全分类 `visibility`(no_prompt/private/restricted) + `privacy_level`(normal/private/sensitive)**：v2.2。但「错的 vs 属实但隐藏」的**删除意图分流**前移进 MVP（只需 `retraction_reason` 列 + `force_exclude` 路由，堵住「把真事实当假抹掉」的 bug，见 §4.1）；MVP 仍不拆 `visibility`/`privacy_level` 两列，`no_prompt`（连检索也屏蔽）与 raw scrub 留 v2.2。
+- **隐私全分类 `visibility`(no_prompt/private/restricted) + `privacy_level`(normal/private/sensitive)**：v2.2。「错的 vs 属实但隐藏」的**删除意图分流**前移进 MVP（`retraction_reason` 列 + `force_exclude` 路由，堵住「把真事实当假抹掉」的 bug，见 §4.1）。**但因 MVP 读路已含 unit 检索，`force_exclude` 只挡 md、挡不住检索召回**——"属实但任何地方都别提"需 `no_prompt`，这条因读路前移而从"可有可无"升级为 **v2.2 必补**（§4.1 意图 3 的缺口）。raw scrub 仍留 v2.2。
 - **raw 证据删除流程 + `memory_audit_logs` 审计表 + scrub 为 `[deleted_by_user]`**：高风险、影响审计与 unit 完整性，属隐私治理（v2.2）。
-- **`retrieve_units` 多信号打分**（semantic+BM25+entity+time+importance+source_bias）**与读时 precedence 具体权重**：v2.1 读路。MVP 只留空壳与方向。
+- **`retrieve_units` 多信号打分**（semantic+BM25+entity+time+importance+source_bias）：v2.1。MVP **已上**最简语义召回（单 embedding，§7.1），仅多信号打分公式延后。precedence 规则本身在 MVP 落地（§7.1 第 5 步），只是权重不调优。
 - **本地文件编辑的 hash 冲突三向 diff 回灌**：md 在 MVP 不可被用户编辑，仅写生成文件头（§3.5），不做冲突解决流。
 - **`user_locked` 独立列**：MVP 由 `source='user_authored'` 推导。
-- **`normalized_claim` 的实际填充与 embedding 级查重**：列占位，等 E2 / 第二步向量库再启用。
-- **轻反思**：MVP **禁用**（非延后——代码保留、gate 开关、不挂管线，四表空置）。其实体/关系图作为 v2 unit 骨架的数据源，届时需重启轻反思或由候选 proposer 补吐。
+- **`normalized_claim` 的实际填充与 embedding 级查重**：列占位，等 E2 再启用（MVP 读路虽已上向量库，但 add 去重仍用 E1 prompt 抑制 + 证据子集硬规则，不依赖 normalized_claim）。
+- **轻反思**：MVP **禁用**（非延后——代码保留、gate 开关、不挂管线，四表空置）。其实体/关系图作为 v2 unit 骨架的数据源，届时需重启轻反思或由每帖增量对账（trickle）补吐。
+- **每帖增量对账 / trickle reconcile（分支 B2）**：把"当前 post + 召回 raw + 相关 active unit"喂 LLM 做在线增量提案，是 sleep-time compute 的正解、新鲜度上限最高。需 unit 检索就位 + 在线 LLM 频次控制 + v1 隔离全到位。**v2 第三步，已写进 [memory-v2-design.md](./memory-v2-design.md)。** MVP 用批量深反思 + 读路接缝 raw 替代。
 
-> 取舍原则：报告把"完整 v2"画全了，MVP 只切"写端单点赌注"那一刀。**预留 schema 形状 ≠ 现在就建流程。**
+> 取舍原则：MVP 切"写端 unit 化 + 读端最简 unit 检索"，把每帖增量对账（trickle）、decay/重组、隐私治理、多信号打分等留给后续。**预留 schema 形状 ≠ 现在就建流程；上最简读路 ≠ 上完整检索栈。**

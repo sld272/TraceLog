@@ -59,7 +59,7 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 
 **复用已有投资**：轻反思已抽出 entities / emotions / events / relations 四张表，现"解耦、留作可视化基建"基本是死重。但 `entities.mention_count`、`relations.strength` 本就是跨帖累积的抽象，不是复述。把这套结构从死表提升为 **unit 的骨架**（实体图 + 情节事件做支架，语义信念 unit 挂其上），既清死重，又天然满足"genuine abstraction"。
 
-> **MVP 现状（见 memory-v2-mvp-design.md）**：轻反思**禁用**，在线侧改由每帖一次独立 LLM 产候选 unit（`proposed`），深反思跨证据消解为 active。本节「实体图升为 unit 骨架」是 v2 增强，届时需重启轻反思或由候选 proposer 补吐实体/关系。
+> **MVP 现状（见 memory-v2-mvp-design.md）**：轻反思**禁用**；写端用批量深反思直接从 raw 抽 unit（不做每帖 proposer——单帖无跨证据视野 = observation 2.0，见 §3.1）。本节「实体图升为 unit 骨架」是 v2 增强，届时需重启轻反思或由每帖增量对账（§3.1）补吐实体/关系。
 
 ### 2.3 unit 模型解锁了什么
 
@@ -75,13 +75,40 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 
 当前是 fast（轻反思）+ slow（深反思）两档。v2 补上第三档"重组/压缩/遗忘"（睡眠隐喻里干的事）：
 
-1. **捕获（在线，毫秒）**：raw 落库 + 轻反思抽结构化信号。基本不变。
-2. **对账（后台滴流）**：新 evidence → unit ops。替代现批量深反思。高频。
+1. **捕获（在线，毫秒）**：raw 落库。（轻反思在 MVP 已禁用——其结构化信号无消费者；v2 若复活，应作为 unit 骨架的实体/关系数据源而非独立 signal 层。）
+2. **对账（后台滴流）**：新 evidence → unit ops。替代现批量深反思。高频。**这一档的落地形态见 §3.1。**
 3. **重组（低频，深夜 / 长 idle）**：细碎 unit 升一层抽象（层次化摘要，RAPTOR 式树）、合并重复、执行遗忘、重建检索索引、把常用 unit 浮上 md 核心画像。这是真正该周期跑的"大整理"，与"高频做第 2 档"不冲突。
 
 这也对齐 Generative Agents（Stanford）的做法：memory stream + 周期 reflection 生成更高层 insight 节点并链回证据，本质就是第 3 档。
 
 写路不变量（v1 已满足，需守住）：长期记忆原子写（`os.replace`）、WAL、"重算在前、写锁在后、毫秒级写窗口"。unit 化后写窗口更小（单元更新 vs 整段重写）。
+
+### 3.1 第二档的落地形态：每帖增量对账（trickle reconcile）
+
+> 这是 MVP（[memory-v2-mvp-design.md](./memory-v2-mvp-design.md)）**刻意延后**的设计，在此存档为 v2 第三步的目标形态。MVP 写端用批量深反思直接从 raw 抽取（每帖不产任何 unit），新鲜度由读路的接缝 raw 兜住。
+
+**为什么不能"每帖单独抽 unit"**（核心陷阱，必须钉死）：per-post 一次 LLM 若只看这一条 post，**by construction 没有跨证据视野，只能转写**——这就是被砍掉的 observation 2.0。给它套一层"候选/可丢弃（proposed）+ 深反思再 promote/drop"也救不了：壳只降低了垃圾**进 active 的风险**，没降低**产垃圾的成本**；drop 率高，LLM 花在产废、深反思还要趟废堆。
+
+**正解是把"每帖"做成"每帖一次小对账"，而非"每帖一次抽取"**——调用时带一个检索窗口：
+
+```
+触发：新 post 落库（在线，后台车道）
+输入：当前 post + 召回的最近相关 raw(向量 top-k) + 召回的相关 active unit(向量 top-k)
+任务：针对已有记忆做增量提案——
+      · confirm 旧 unit（本帖再次印证）
+      · add 新 unit（仅当跨这条 + 召回证据构成真抽象）
+      · flag 矛盾（本帖与某 active unit 冲突 → 标记待 supersede）
+落库：直接产 active unit ops（带 evidence），无 proposed 中间态
+```
+
+关键差别：它一上来就有跨证据视野（召回的 raw + active unit），产出的是**真·跨证据信号**而非单帖转写——drop 率与"先量产后筛"的浪费都没了。这正是业界 *sleep-time compute*（空闲算力预先整理记忆）的形态，也是 v1"双车道 + 在途闸门"隔离设计的天然用武之地。
+
+**它依赖什么（也是 MVP 不上的原因）**：
+- **unit 向量检索必须就位**——"召回相关 active unit"是它的前提。MVP 虽已为**读路**上了 unit 检索，但把它接进**写路的每帖触发**会显著抬高在线 LLM 频次。
+- **在线 LLM 频次控制**：min_interval / 单飞 / 背景串行 / 开关（沿用 v1 隔离方案，§7）。
+- **冷启动**：库空时召回为空，退化成"看单帖凭空抽"——需用阈值（active unit 数 < N 时不触发每帖对账，仍靠批量深反思）兜过早期。
+
+**与批量深反思的关系**：两者不互斥。每帖对账做高频增量；批量深反思（或第 3 档重组）做周期性的全局一致化（跨更大窗口的合并、矛盾消解、遗忘）。MVP 只有后者；v2 第三步加前者。
 
 ---
 
@@ -153,9 +180,9 @@ md / unit 都派生自 raw，故：
 
 现有 reconcile 能跑，且有比赛 deadline，故不推倒重来。下**一个最高杠杆的赌注**，其余按需叠加：
 
-1. **第一步（核心赌注）**：引入 memory unit 表；深反思**改为输出 unit ops 而非文本 patch**；`user.md` / `soul_memories` 改由 core unit 低频综合（synthesis）。一步同时解决：触发难题消解、遗忘/审计/工作台近乎免费、scaling cliff 解除。ROI 最高的单点。（**MVP 细化**：unit 生产前移到每帖候选、轻反思禁用，对账+md 仍批量；详见 memory-v2-mvp-design.md。）
-2. **第二步**：unit 进检索池；读路改为 md 核心画像 + 检索 unit + 接缝 raw（第 4 节）。
-3. **第三步**：decay + 第 3 档重组。
+1. **第一步（MVP，核心赌注）**：引入 memory unit 表；深反思**改为输出 unit ops 而非文本 patch**（批量直接从 raw 抽取）；`user.md` / `soul_memories` 改由 core unit 低频综合（synthesis）；**并把 unit 检索拉进回复读路**（md 全量 + 检索 unit + 接缝 raw，带 flag 可回退）。写①读②一并落地——否则 unit 只写不读 = 影子库。触发难题消解、遗忘/审计/工作台近乎免费、scaling cliff 解除。详见 memory-v2-mvp-design.md。
+2. **第二步**：unit 检索多信号打分、precedence 权重调优、provenance 精确归因（MVP 只上最简语义召回）。
+3. **第三步**：decay + 第 3 档重组 + **每帖增量对账（§3.1）**。
 4. **可选增强**：图谱化（实体支架、矛盾边失效），不阻塞主线。
 
 **兼容性**：Markdown 视图、用户手编、revision 全保留。用户编辑从"全文覆盖"细化为"在工作台直接编辑 unit、md 退为只读产物"，比现在更精细。CLI 退出整理保留（天然停顿点）。
