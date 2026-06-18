@@ -8,7 +8,7 @@
 
 ## 0. 一句话主张
 
-把记忆从"一篇被深反思反复重写的 Markdown 文档"，改造为"一堆一等公民的 **memory unit**；Markdown 降级为 unit 渲染出的视图；raw evidence 仍是不可变真相"。读写两条路都随之改变：写路从批量重写变成持续滴流的 unit 对账，读路从两极（整篇注入 md + 检索 raw）变成 **md → unit → raw 的连续变焦**。
+把记忆从"一篇被深反思反复重写的 Markdown 文档"，改造为"一堆一等公民的 **memory unit**；Markdown 降级为 core unit 低频综合出的核心画像视图；raw evidence 仍是不可变真相"。读写两条路都随之改变：写路从批量重写变成持续滴流的 unit 对账，读路从两极（整篇注入 md + 检索 raw）变成 **md → unit → raw 的连续变焦**。
 
 **核心洞察**：我们之前几轮纠结的"什么时候触发整理"是症状，不是病根。批量、攒阈值、挑空档跑——这些都是"文档重写模型"的伴生病。换掉记忆单元这个底层，触发问题不治而愈。
 
@@ -30,7 +30,7 @@
 
 ### 2.1 主客易位
 
-> 记忆的真相 = 一组一等公民的 memory unit。`user.md` / `soul_memories/<name>.md` 不再是真相，而是这些 unit 渲染出来的一个视图。
+> 记忆的真相 = 一组一等公民的 memory unit。`user.md` / `soul_memories/<name>.md` 不再是真相，而是这些 unit 低频综合出来的核心画像视图（synthesis，非机械渲染）。
 
 unit 的字段草案：
 
@@ -62,7 +62,7 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 ### 2.3 unit 模型解锁了什么
 
 - **触发问题消失。** reconcile 从"批量重写"变成"流式对账"：每条新 evidence → 几个候选 op（confirm / revise / retract / add）。增量、便宜、可流式。不再攒 5 帖、不再挑空档。它就是后台车道里持续滴流的小操作——社媒大量 idle 时间正好喂这种轻整理（业界称 *sleep-time compute*：用空闲算力预先整理记忆，让在线回复更便宜）。v1 的"双车道 + 在途闸门"隔离设计，正是它的天然底座。
-- **遗忘 = 一个字段 + 一个后台扫描。** `decay = f(last_confirmed, importance, retrieval_count)`，低于阈值转 dormant，渲染视图里自然消失，但可审计可恢复。
+- **遗忘 = 一个字段 + 一个后台扫描。** `decay = f(last_confirmed, importance, retrieval_count)`，低于阈值转 dormant，综合出的画像里自然消失，但可审计可恢复。
 - **矛盾与时间有效期成一等公民。** 新证据与旧 unit 冲突时，不是覆盖文本，而是把旧 unit 标 `superseded` 并记 `superseded_by`——即知识图谱里的 bi-temporal / 边失效路线（Zep / Graphiti）。"当时真、现在假"终于可表达。
 - **工作台几乎免费。** "查看整理记录 + 每次改了什么" = `SELECT ... ORDER BY changed_at`，diff = unit 状态机转移，不必从两份 Markdown 快照反推。
 - **检索覆盖记忆本身。** unit 进向量库，回复时检索相关 unit 而非整篇注入，scaling cliff 解除。
@@ -75,7 +75,7 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 
 1. **捕获（在线，毫秒）**：raw 落库 + 轻反思抽结构化信号。基本不变。
 2. **对账（后台滴流）**：新 evidence → unit ops。替代现批量深反思。高频。
-3. **重组（低频，深夜 / 长 idle）**：细碎 unit 升一层抽象（层次化摘要，RAPTOR 式树）、合并重复、执行遗忘、重建检索索引、把常用 unit 浮上 md slice。这是真正该周期跑的"大整理"，与"高频做第 2 档"不冲突。
+3. **重组（低频，深夜 / 长 idle）**：细碎 unit 升一层抽象（层次化摘要，RAPTOR 式树）、合并重复、执行遗忘、重建检索索引、把常用 unit 浮上 md 核心画像。这是真正该周期跑的"大整理"，与"高频做第 2 档"不冲突。
 
 这也对齐 Generative Agents（Stanford）的做法：memory stream + 周期 reflection 生成更高层 insight 节点并链回证据，本质就是第 3 档。
 
@@ -89,7 +89,7 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 
 ### 4.1 三层各自的读时角色
 
-- **md slice —— 常驻基线，无需 query。** active unit 渲染出的**有界顶层切片**（存储的 md 全量、可读、可编辑；注入 prompt 的只是高置信、高重要、身份级的一小撮）。回答"我在跟谁说话 / 这个 SOUL 与 TA 的关系"——与当前话题无关也该在场的自我。prose 形态，因为身份要靠连贯叙述被吸收。对应 MemGPT core memory，但是渲染出来的而非手写死。
+- **md 核心画像 —— 常驻基线，无需 query，全量注入。** core memory unit 低频**综合（synthesis，非机械渲染）**出的**有界身份画像块**；它整篇注入 prompt——有界性由 core 子集准入控制，故全量可负担；非 core 单元不进 md，留在 unit 层靠下文检索。回答"我在跟谁说话 / 这个 SOUL 与 TA 的关系"——与当前话题无关也该在场的自我。prose 形态，因为身份要靠连贯叙述被吸收。对应 MemGPT/Letta 的 core memory 块、Generative Agents 周期综合的 self-summary，是检索照不到的身份地板；用户编辑落在 unit 层，不直接改这篇产物。
 - **unit —— 话题召回，按 query 检索。** 当前 post 讲 X，就检索与 X 相关的 unit（哪怕重要度不够、进不了 md 基线）。精确召回此刻相关的具体信念/事实/目标，每个带 confidence、"自何时"、evidence_ids。结构化卡片形态，要的是精度与出处。这正是当年 observation 想当没当成的"可检索中间层"。
 - **raw evidence —— 落地验证，按需下钻。** 三个角色缺一不可：(a) unit 太粗时下钻取"用户原话/细节"；(b) 引用接地，回复有据可查不编（现 evidence 面板即此）；(c) **最新、尚未对账成 unit 的 raw**。逐字原文形态，可引用。
 
@@ -99,7 +99,7 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 
 当前 `build_public_post_reply_context` 直接 `hybrid_search` 打 raw 池取 top-k。v2 改为有序展开：
 
-1. **常驻**：渲染 md slice，无 query 注入。
+1. **常驻**：综合 md 核心画像，无 query 注入。
 2. **检索 unit**：用改写后 query 在 unit 向量上召回 top 相关 unit（带元数据）。
 3. **顺藤摸瓜**：命中 unit 已挂 evidence_ids，按需 hydrate 源 raw。**关键**：unit↔raw 去重从此是一次 join，不再是当年 observation 的"猜哪条重复"。命中 unit 已覆盖的 raw 不重复塞，仅当 raw 能补 unit 抽象掉的细节时才带。
 4. **并行打 raw 池兜底**：对"尚无任何 unit 覆盖"的话题，仍走 hybrid_search 召回 raw。
@@ -129,7 +129,7 @@ md / unit 都派生自 raw，故：
 
 ```
 [SOUL 人格]                      ← 不变
-[基线认知]  ← md slice, prose    ← 常驻，无 query
+[基线认知]  ← md 核心画像(综合), prose ← 常驻全量注入，无 query
 [相关记忆]  ← 检索到的 unit 卡片  ← 带 confidence / 自何时 / evidence 链
    · 每张可选附 1 条源 raw 作支撑
 [最近动态]  ← 接缝 raw，逐字      ← 自 cursor 起的近期原文，可引用
@@ -143,7 +143,7 @@ md / unit 都派生自 raw，故：
 
 ## 5. 读写闭环
 
-读时记录"哪些 unit 被检索 / 被采用"，回灌为 unit 的 `retrieval_count` 与 decay 信号：常被用到的 unit 浮上 md slice，无人理的沉为 dormant。第 3 档重组据此重排 md 顶层切片。于是记忆不是静态文档，而是随使用自我浮沉的活体。
+读时记录"哪些 unit 被检索 / 被采用"，回灌为 unit 的 `retrieval_count` 与 decay 信号：常被用到的 unit 浮上 md 核心画像，无人理的沉为 dormant。第 3 档重组据此重排 md 核心画像。于是记忆不是静态文档，而是随使用自我浮沉的活体。
 
 ---
 
@@ -151,18 +151,18 @@ md / unit 都派生自 raw，故：
 
 现有 reconcile 能跑，且有比赛 deadline，故不推倒重来。下**一个最高杠杆的赌注**，其余按需叠加：
 
-1. **第一步（核心赌注）**：引入 memory unit 表；深反思**改为输出 unit ops 而非文本 patch**；`user.md` / `soul_memories` 改由 active unit 渲染。一步同时解决：触发难题消解、遗忘/审计/工作台近乎免费、scaling cliff 解除。ROI 最高的单点。
-2. **第二步**：unit 进检索池；读路改为 md slice + 检索 unit + 接缝 raw（第 4 节）。
+1. **第一步（核心赌注）**：引入 memory unit 表；深反思**改为输出 unit ops 而非文本 patch**；`user.md` / `soul_memories` 改由 core unit 低频综合（synthesis）。一步同时解决：触发难题消解、遗忘/审计/工作台近乎免费、scaling cliff 解除。ROI 最高的单点。
+2. **第二步**：unit 进检索池；读路改为 md 核心画像 + 检索 unit + 接缝 raw（第 4 节）。
 3. **第三步**：decay + 第 3 档重组。
 4. **可选增强**：图谱化（实体支架、矛盾边失效），不阻塞主线。
 
-**兼容性**：Markdown 视图、用户手编、revision 全保留。用户编辑从"全文覆盖"细化为"对渲染视图的编辑回写为 unit override"，比现在更精细。CLI 退出整理保留（天然停顿点）。
+**兼容性**：Markdown 视图、用户手编、revision 全保留。用户编辑从"全文覆盖"细化为"在工作台直接编辑 unit、md 退为只读产物"，比现在更精细。CLI 退出整理保留（天然停顿点）。
 
 ---
 
 ## 7. 已知张力与待定决策
 
-- **md slice 的选取准则**：重要度 × 置信 × 衰减 × 检索频次的具体打分；切片预算多大。
+- **md 核心画像的选取准则**：重要度 × 置信 × 衰减 × 检索频次的具体打分；画像预算多大。
 - **unit 与 raw 的统一检索排序**：同池打分如何归一、去重边界。
 - **对账粒度**：每条 evidence 即对账，还是小批 micro-batch（成本/质量权衡）。
 - **unit 拆分/合并**：何时把一个 unit 裂成两个、何时合并重复，交给第 3 档还是对账即时做。
