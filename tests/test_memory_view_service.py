@@ -53,15 +53,14 @@ class MemoryViewServiceTest(unittest.TestCase):
         self.assertIn(unit_id, core)
         self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
 
-    def test_dwell_blocks_freshly_added_core_unit(self) -> None:
+    def test_freshly_added_confident_core_unit_enters_immediately(self) -> None:
+        # a clearly-stated, high-confidence, important identity must enter the
+        # portrait on its first reconcile (no op-count dwell blocking it).
         unit_id = mus.add_unit(
             owner_scope="global", visibility_scope="public", source_channel="post",
-            type="identity", content="刚出现的核心信念", confidence=0.9, tier="core",
-            importance=0.8, evidence_event_ids=[self._event()],
+            type="identity", content="南大大一法语生，自学计算机", confidence=0.9, tier="core",
+            importance=0.9, evidence_event_ids=[self._event()],
         )
-        # only the 'add' op exists -> dwell unmet
-        self.assertNotIn(unit_id, mvs.recompute_slice("global", "public"))
-        mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=0.9)
         self.assertIn(unit_id, mvs.recompute_slice("global", "public"))
 
     def test_low_confidence_and_low_importance_excluded(self) -> None:

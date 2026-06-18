@@ -85,7 +85,7 @@ v2 **不能**把短期状态塞进 `user.md`：`user.md` 是 core unit 的低频
 | --- | --- | --- |
 | `< 0.30` | 瞬时琐事 | 拒绝,永不成为 unit |
 | `0.30 ~ 0.70` | 有意义但非核心(近期状态等) | unit + 可检索 + 当前状态块;**不进** user.md |
-| `>= 0.70` | 核心身份/长期目标/核心偏好/重要关系 | 够格进常驻画像(还需 tier=core + confidence≥0.82 + DWELL) |
+| `>= 0.70` | 核心身份/长期目标/核心偏好/重要关系 | 够格进常驻画像(还需 tier=core + confidence≥0.82) |
 
 对应常量：`MIN_ADD_IMPORTANCE = 0.30`（`core/memory_reconciler.py`）、`MIN_IMPORTANCE = 0.70`（`core/memory_view_service.py`，由 0.60 上调）。confidence 轴另有 `ENTER 0.82 / EXIT 0.62`,与 importance 不混。
 

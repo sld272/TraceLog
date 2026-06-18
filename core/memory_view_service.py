@@ -6,7 +6,7 @@ binding is a one-way DAG: evidence -> units -> view. The view never holds
 independent truth, so it cannot drift.
 
 This module owns:
-  * the core-subset selector (entry predicate + hysteresis + a pragmatic dwell),
+  * the core-subset selector (entry predicate + confidence hysteresis),
   * the source_unit_set_hash that drives stale/re-synthesis,
   * a deterministic template renderer (the failure fallback / default), and
   * synthesize_view, which accepts an injectable LLM synthesizer (Phase 4b)
@@ -34,7 +34,6 @@ from core import db, memory_unit_service as mus
 ENTER = 0.82
 EXIT = 0.62
 MIN_IMPORTANCE = 0.70
-DWELL_MIN_OPS = 2  # add + >=1 confirm before a core unit may enter md
 
 RENDERER_VERSION = "baseline-v1"
 USER_MD_CHAR_BUDGET = 1200
@@ -60,16 +59,16 @@ def _new_view_id() -> str:
     return f"mv_{int(time.time() * 1000):012x}{os.urandom(4).hex()}"
 
 
-def _confirm_op_count(unit_id: str) -> int:
-    row = db.query_one(
-        "SELECT COUNT(*) AS n FROM memory_unit_ops WHERE unit_id = ? AND op IN ('add','confirm')",
-        (unit_id,),
-    )
-    return int(row["n"]) if row else 0
-
-
 def _passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bool:
-    """Design §3.2 predicate with hysteresis + pragmatic dwell."""
+    """Design §3.2 core-subset predicate with confidence hysteresis.
+
+    The stability guard for the always-on portrait is the triple bar
+    tier=core AND confidence>=ENTER AND importance>=MIN_IMPORTANCE (plus
+    user/policy overrides) — strict enough that a single misjudgement rarely
+    clears all three. The earlier op-count "dwell" was removed: it permanently
+    blocked a clearly-stated, one-time identity from ever entering the portrait
+    (it never accrued a second confirm). A faithful "survived N reconcile passes"
+    buffer belongs in the later decay/consolidation phase, not here."""
     if unit["status"] != "active":
         return False
     if unit["prompt_policy"] != "allow":
@@ -90,11 +89,6 @@ def _passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bo
         return False
     if float(unit["importance"]) < MIN_IMPORTANCE:
         return False
-    # dwell: a reflected core unit must have been confirmed at least once before
-    # it can join the always-on identity floor (single-pass misjudgement guard).
-    if source != "user_authored" and not currently_in_slice:
-        if _confirm_op_count(unit["id"]) < DWELL_MIN_OPS:
-            return False
     return True
 
 
