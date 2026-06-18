@@ -146,6 +146,33 @@ class MemoryReconcilerTest(unittest.TestCase):
         self.assertEqual(summary.skipped, 1)
         self.assertEqual(summary.applied, 0)
 
+    def test_low_importance_add_is_rejected_as_trivia(self) -> None:
+        ids = self._emit_public_events(1)
+        producer = self._producer([
+            {"op": "add", "type": "state", "content": "用户当时正在上课",
+             "confidence": 0.9, "tier": "episodic", "importance": 0.2, "evidence_event_ids": ids},
+        ])
+        summary = recon.reconcile_bucket(
+            "global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL
+        )
+        self.assertEqual(summary.applied, 0)
+        self.assertEqual(summary.skipped, 1)
+        self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 0)
+        # cursor still advances
+        self.assertEqual(mes.get_cursor("global", "public"), ids[-1])
+
+    def test_meaningful_state_above_floor_is_kept(self) -> None:
+        ids = self._emit_public_events(1)
+        producer = self._producer([
+            {"op": "add", "type": "state", "content": "这阵子在准备考研，压力大",
+             "confidence": 0.8, "tier": "contextual", "importance": 0.5, "evidence_event_ids": ids},
+        ])
+        summary = recon.reconcile_bucket(
+            "global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL
+        )
+        self.assertEqual(summary.applied, 1)
+        self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 1)
+
     def test_partial_batch_applies_good_skips_bad(self) -> None:
         ids = self._emit_public_events(2)
         producer = self._producer([

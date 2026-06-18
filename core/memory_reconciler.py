@@ -24,6 +24,13 @@ from datetime import datetime
 
 from core import db, logging_service, memory_events_service as mes, memory_unit_service as mus
 
+# A new unit must clear a minimum importance to be worth remembering at all.
+# The LLM already scores momentary trivia low (e.g. "用户正在上课" -> ~0.2); this
+# deterministic floor enforces it regardless of the LLM's stochastic decision to
+# emit. It is well below the core-portrait entry bar (memory_view_service
+# MIN_IMPORTANCE 0.60): 0.30 just to exist as a unit, 0.60 to enter user.md.
+MIN_ADD_IMPORTANCE = 0.30
+
 # reflection.type values per bucket kind (kept distinct for the workbench).
 RECONCILE_GLOBAL = "global_deep_reflection"
 RECONCILE_THREAD = "thread_deep_reflection"
@@ -146,6 +153,11 @@ def apply_ops(
             if op == "add":
                 if not event_ids:
                     raise ValueError("add 必须引用至少一条本批 evidence event")
+                importance = float(op_obj.get("importance", 0.5))
+                if importance < MIN_ADD_IMPORTANCE:
+                    raise ValueError(
+                        f"importance {importance:.2f} 低于阈值 {MIN_ADD_IMPORTANCE}（瞬时琐碎信息，不值得记忆）"
+                    )
                 mus.add_unit(
                     owner_scope=owner_scope,
                     visibility_scope=visibility_scope,
@@ -155,7 +167,7 @@ def apply_ops(
                     confidence=float(op_obj.get("confidence", 0.6)),
                     evidence_event_ids=event_ids,
                     tier=str(op_obj.get("tier") or "contextual"),
-                    importance=float(op_obj.get("importance", 0.5)),
+                    importance=importance,
                     actor="reconciler",
                     reflection_id=reflection_id,
                     conn=conn,
