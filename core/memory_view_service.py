@@ -26,10 +26,14 @@ from dataclasses import dataclass
 
 from core import db, memory_unit_service as mus
 
-# selector thresholds (design §3.2)
+# selector thresholds (design §3.2). Importance is a three-band structure:
+#   < MIN_ADD_IMPORTANCE (0.30, in memory_reconciler) -> trivia, never a unit
+#   0.30 .. MIN_IMPORTANCE                            -> unit + retrieval + current-state block, NOT user.md
+#   >= MIN_IMPORTANCE (0.70)                          -> eligible for the always-on identity portrait
+# Confidence (ENTER/EXIT) is the orthogonal "is it true" axis with hysteresis.
 ENTER = 0.82
 EXIT = 0.62
-MIN_IMPORTANCE = 0.60
+MIN_IMPORTANCE = 0.70
 DWELL_MIN_OPS = 2  # add + >=1 confirm before a core unit may enter md
 
 RENDERER_VERSION = "baseline-v1"

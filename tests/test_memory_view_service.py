@@ -76,6 +76,20 @@ class MemoryViewServiceTest(unittest.TestCase):
         self.assertNotIn(low_conf, core)
         self.assertNotIn(low_imp, core)
 
+    def test_importance_below_portrait_floor_excluded(self) -> None:
+        # importance 0.65 is above the unit floor (0.30) but below the portrait floor (0.70)
+        unit_id = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="identity", content="中等重要度的核心候选", confidence=0.9, tier="core",
+            importance=0.65, evidence_event_ids=[self._event()],
+        )
+        mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=0.9)
+        self.assertNotIn(unit_id, mvs.recompute_slice("global", "public"))
+        # bump to 0.70 -> now admitted
+        with db.transaction() as conn:
+            conn.execute("UPDATE memory_units SET importance=0.70 WHERE id=?", (unit_id,))
+        self.assertIn(unit_id, mvs.recompute_slice("global", "public"))
+
     def test_contextual_tier_excluded(self) -> None:
         unit_id = mus.add_unit(
             owner_scope="global", visibility_scope="public", source_channel="post",

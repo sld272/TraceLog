@@ -28,7 +28,7 @@ from core import db, logging_service, memory_events_service as mes, memory_unit_
 # The LLM already scores momentary trivia low (e.g. "用户正在上课" -> ~0.2); this
 # deterministic floor enforces it regardless of the LLM's stochastic decision to
 # emit. It is well below the core-portrait entry bar (memory_view_service
-# MIN_IMPORTANCE 0.60): 0.30 just to exist as a unit, 0.60 to enter user.md.
+# MIN_IMPORTANCE 0.70): 0.30 just to exist as a unit, 0.70 to enter user.md.
 MIN_ADD_IMPORTANCE = 0.30
 
 # reflection.type values per bucket kind (kept distinct for the workbench).
