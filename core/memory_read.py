@@ -18,10 +18,11 @@ reach a prompt — never left to the model to self-censor.
 
 from __future__ import annotations
 
+import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from core import db, memory_scope_policy as policy
+from core import db, memory_scope_policy as policy, memory_view_service as mvs
 
 # current-state block
 STATE_BLOCK_LIMIT = 5
@@ -177,3 +178,88 @@ def _keyword_overlap(content: str, terms: list[str]) -> int:
     if not terms:
         return 0
     return sum(1 for t in terms if t in content)
+
+
+# --- prompt section assembly (Phase 5b) ------------------------------------
+
+_DISCRETION_TAG = "「私密·谨慎」"
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+@dataclass
+class MemoryPrompt:
+    text: str
+    used_unit_ids: list[str] = field(default_factory=list)
+    has_discretion_items: bool = False
+
+
+def _portrait_text(owner_scope: str, visibility_scope: str, view_type: str) -> str:
+    view = mvs.get_view(owner_scope, visibility_scope, view_type)
+    if view is None:
+        return ""
+    body = _HTML_COMMENT.sub("", str(view["content_md"] or "")).strip()
+    return body
+
+
+def build_memory_section(channel: str, reply_soul: str | None, query: str) -> MemoryPrompt:
+    """Assemble the always-on + retrieved memory block for a reply prompt.
+
+    Layers (design §4.5): baseline portrait -> current state -> relevant units,
+    plus a precedence/discretion rule line. Private-but-admitted items are
+    tagged so the model self-censors before public disclosure; forbidden memory
+    never reaches here (filtered upstream by scope policy)."""
+    sections: list[str] = []
+    used: list[str] = []
+    has_discretion = False
+
+    # 1. baseline identity portrait (always-on, query-independent)
+    portrait = _portrait_text("global", "public", mvs.VIEW_USER_MD)
+    if portrait:
+        sections.append(f"[基线认知]\n{portrait}")
+    if reply_soul is not None and channel in policy.PRIVATE_CHANNELS:
+        soul_portrait = _portrait_text(
+            f"soul:{reply_soul}", f"private:soul:{reply_soul}", mvs.VIEW_SOUL_PRIVATE
+        )
+        if soul_portrait:
+            sections.append(f"[{reply_soul}·私聊画像]\n{soul_portrait}")
+
+    # 2. current-state block (always-on)
+    state_items = recent_state_block(channel, reply_soul)
+    if state_items:
+        lines = []
+        for item in state_items:
+            tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
+            has_discretion = has_discretion or item.needs_discretion
+            lines.append(f"- 近期：{item.content}{tag}")
+            used.append(item.unit_id)
+        sections.append("[当前状态]\n" + "\n".join(lines))
+
+    # 3. query-relevant beliefs
+    hits = retrieve_units(query, channel, reply_soul)
+    if hits:
+        lines = []
+        for item in hits:
+            tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
+            has_discretion = has_discretion or item.needs_discretion
+            lines.append(f"- [{item.type}|置信{item.confidence:.1f}] {item.content}{tag}")
+            used.append(item.unit_id)
+        sections.append("[相关记忆]\n" + "\n".join(lines))
+
+    if not sections:
+        return MemoryPrompt(text="", used_unit_ids=[], has_discretion_items=False)
+
+    rules = [
+        "[记忆使用规则]",
+        "讲事实/细节以最新动态为准；讲框架、倾向、关系用上述记忆，低置信的软着说。",
+    ]
+    if has_discretion:
+        rules.append(
+            f"标记 {_DISCRETION_TAG} 的是只在私聊得知的内容：可参考，但公开场合需自行判断是否合适说出，默认不要主动透露。"
+        )
+    sections.append("\n".join(rules))
+
+    return MemoryPrompt(
+        text="\n\n".join(sections),
+        used_unit_ids=used,
+        has_discretion_items=has_discretion,
+    )

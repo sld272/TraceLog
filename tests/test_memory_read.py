@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db, memory_events_service as mes, memory_read, memory_unit_service as mus
+from core import (
+    db,
+    memory_events_service as mes,
+    memory_read,
+    memory_unit_service as mus,
+    memory_view_service as mvs,
+)
 
 
 class MemoryReadTest(unittest.TestCase):
@@ -130,6 +136,47 @@ class MemoryReadTest(unittest.TestCase):
         match = [h for h in hits if h.unit_id == uid]
         self.assertEqual(len(match), 1)
         self.assertTrue(match[0].needs_discretion)
+
+
+    # --- build_memory_section ---------------------------------------------
+
+    def test_build_section_assembles_layers(self) -> None:
+        now = db.now_ts()
+        # portrait
+        core = self._unit("global", "public", type="identity", content="南大法语生，自学计算机", importance=0.8)
+        mus.confirm_unit(core, evidence_event_ids=[self._ev("global", "public")], confidence=0.9)
+        with db.transaction() as conn:
+            conn.execute("UPDATE memory_units SET tier='core', confidence=0.9 WHERE id=?", (core,))
+        mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        # state + relevant
+        self._unit("global", "public", type="state", content="这周备考很累", importance=0.5, last_confirmed=now)
+        self._unit("global", "public", type="preference", content="喜欢安静咖啡馆", importance=0.5)
+
+        prompt = memory_read.build_memory_section("public_post", "gotoh", "咖啡馆")
+        self.assertIn("[基线认知]", prompt.text)
+        self.assertIn("[当前状态]", prompt.text)
+        self.assertIn("这周备考很累", prompt.text)
+        self.assertIn("[相关记忆]", prompt.text)
+        self.assertIn("咖啡馆", prompt.text)
+        self.assertIn("[记忆使用规则]", prompt.text)
+        self.assertFalse(prompt.has_discretion_items)
+
+    def test_build_section_marks_discretion_and_adds_rule(self) -> None:
+        now = db.now_ts()
+        ev = self._ev("soul:gotoh", "private:soul:gotoh", "chat")
+        mus.add_unit(
+            owner_scope="soul:gotoh", visibility_scope="private:soul:gotoh", source_channel="chat",
+            type="insight", content="用户私下说的烦心事", importance=0.6, evidence_event_ids=[ev],
+        )
+        prompt = memory_read.build_memory_section("public_post", "gotoh", "烦心事")
+        self.assertIn(memory_read._DISCRETION_TAG, prompt.text)
+        self.assertTrue(prompt.has_discretion_items)
+        self.assertIn("默认不要主动透露", prompt.text)
+
+    def test_build_section_empty_when_no_memory(self) -> None:
+        prompt = memory_read.build_memory_section("public_post", "gotoh", "随便")
+        self.assertEqual(prompt.text, "")
+        self.assertEqual(prompt.used_unit_ids, [])
 
 
 if __name__ == "__main__":
