@@ -439,3 +439,151 @@ def _parse_global_deep_reflection_content(content: str | None) -> dict | None:
         "reflection_md": reflection_md.strip(),
         "patches": normalized_patches,
     }
+
+
+# 引擎：Memory Reconcile（事件驱动的 unit 对账，memory v2）
+
+MEMORY_RECONCILE_PROMPT = """\
+你是 TraceLog 拾迹的记忆对账引擎。你在一个**固定的记忆边界**（owner + visibility）内工作：读取该边界内自上次对账以来的新证据事件（evidence events），与该边界已有的记忆单元（active memory units）逐一比对，输出一批**增量操作（ops）**，让结构化信念与新证据保持一致。
+
+## 输入
+- 边界：本批所有操作只能作用于此边界，禁止跨边界。
+- 新证据事件：每条带唯一 `event_id`、来源、时间和当时内容快照。这是本批唯一可引用的证据。
+- 已有 active units：每条带 `unit_id`、type、content、confidence。可被 confirm / revise / retract。
+- 墓碑 tombstones：已被标记为错误(false)或过时(outdated)的旧信念。对 false 严禁再次产出同义 unit；对 outdated 仅在有新证据时才可重新成立。
+
+## 输出：只输出一个 JSON 对象，无 Markdown、无解释
+{
+  "summary": "本轮对账的一句话摘要",
+  "ops": [
+    {"op": "add", "type": "identity|preference|goal|state|relationship|insight|freeform", "content": "跨证据的抽象陈述", "confidence": 0.0, "tier": "core|contextual|episodic", "importance": 0.0, "evidence_event_ids": [本批 event_id]},
+    {"op": "confirm", "target_id": "unit_id", "evidence_event_ids": [本批 event_id], "confidence": 0.0},
+    {"op": "revise", "target_id": "unit_id", "content": "更新后的陈述", "evidence_event_ids": [本批 event_id]},
+    {"op": "retract", "target_id": "unit_id", "reason": "false|outdated"}
+  ]
+}
+
+## 硬规则
+1. 只能引用本批给出的 event_id；不得编造 event_id 或引用历史事件。
+2. add 必须是**跨证据的抽象**，不得逐帖复述单条事件——除非是用户明确声明、天然具有持续效力的事实/偏好（这类允许单条证据）。逐字转写属于证据层，永不作为 unit。
+3. content 是关于用户/关系的抽象信念，不是某条 raw 的转写。短期状态用 state 且 tier 不应为 core。
+4. 新证据与某 active unit 矛盾时：若只是措辞/细节更新用 revise；若是事实翻转用 retract(reason=outdated)。
+5. confidence ∈ [0,1]：明确反复印证趋近 1，单条弱证据 ≤ 0.6。
+6. 没有可靠的增量时，ops 可为空数组。宁缺毋滥。
+7. target_id 必须来自“已有 active units”列表中的 unit_id。
+
+## 当前时间
+{current_datetime}
+"""
+
+
+def call_memory_reconcile(
+    client: LLMClient,
+    model: str,
+    *,
+    boundary_text: str,
+    events_text: str,
+    active_units_text: str,
+    tombstones_text: str,
+    trace_context: dict | None = None,
+) -> dict | None:
+    """Produce a batch of memory unit ops for one (owner, visibility) bucket."""
+    user_content = (
+        f"## 记忆边界\n\n{boundary_text}\n\n"
+        "---\n\n"
+        f"## 新证据事件（本批唯一可引用证据）\n\n{events_text or '（无）'}\n\n"
+        "---\n\n"
+        f"## 已有 active units\n\n{active_units_text or '（无）'}\n\n"
+        "---\n\n"
+        f"## 墓碑 tombstones\n\n{tombstones_text or '（无）'}"
+    )
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="memory_reconcile",
+        timeout=45,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": MEMORY_RECONCILE_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": user_content},
+        ],
+        parser=_parse_memory_reconcile_content,
+        trace_context=trace_context,
+    )
+
+
+_RECONCILE_OPS = {"add", "confirm", "revise", "retract"}
+_RECONCILE_TYPES = {"identity", "preference", "goal", "state", "relationship", "insight", "freeform"}
+_RECONCILE_TIERS = {"core", "contextual", "episodic"}
+
+
+def _coerce_event_ids(value) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    ids: list[int] = []
+    for item in value:
+        try:
+            ids.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _coerce_float(value, default: float) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(1.0, result))
+
+
+def _parse_memory_reconcile_content(content: str | None) -> dict | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    raw_ops = data.get("ops")
+    if not isinstance(raw_ops, list):
+        raw_ops = []
+
+    ops: list[dict] = []
+    for item in raw_ops:
+        if not isinstance(item, dict):
+            continue
+        op = item.get("op")
+        if op not in _RECONCILE_OPS:
+            continue
+        normalized: dict = {"op": op, "evidence_event_ids": _coerce_event_ids(item.get("evidence_event_ids"))}
+        if op == "add":
+            unit_type = item.get("type")
+            normalized["type"] = unit_type if unit_type in _RECONCILE_TYPES else "insight"
+            normalized["content"] = str(item.get("content") or "").strip()
+            normalized["confidence"] = _coerce_float(item.get("confidence"), 0.6)
+            tier = item.get("tier")
+            normalized["tier"] = tier if tier in _RECONCILE_TIERS else "contextual"
+            normalized["importance"] = _coerce_float(item.get("importance"), 0.5)
+        elif op == "confirm":
+            normalized["target_id"] = str(item.get("target_id") or "")
+            if item.get("confidence") is not None:
+                normalized["confidence"] = _coerce_float(item.get("confidence"), 0.6)
+        elif op == "revise":
+            normalized["target_id"] = str(item.get("target_id") or "")
+            normalized["content"] = str(item.get("content") or "").strip()
+            if item.get("type") in _RECONCILE_TYPES:
+                normalized["type"] = item.get("type")
+            if item.get("tier") in _RECONCILE_TIERS:
+                normalized["tier"] = item.get("tier")
+            if item.get("confidence") is not None:
+                normalized["confidence"] = _coerce_float(item.get("confidence"), 0.6)
+        elif op == "retract":
+            normalized["target_id"] = str(item.get("target_id") or "")
+            reason = item.get("reason")
+            normalized["reason"] = reason if reason in {"false", "outdated"} else None
+        ops.append(normalized)
+
+    summary = data.get("summary")
+    return {"ops": ops, "summary": summary.strip() if isinstance(summary, str) else ""}
