@@ -100,17 +100,30 @@ def main() -> None:
         _synthesize_views(client, model)
 
 
+def _print_view_body(content_md: str) -> None:
+    import re
+
+    body = re.sub(r"<!--.*?-->", "", content_md, flags=re.DOTALL).strip()
+    for line in body.splitlines():
+        print(f"    │ {line}")
+
+
 def _synthesize_views(client, model) -> None:
-    """Re-synthesize identity views from the freshly written core units."""
+    """Re-synthesize identity views from the freshly written core units.
+
+    The v2 portrait lives in the memory_views table (not a workspace file —
+    user.md is non-editable in v2, so a file would only be a stale duplicate).
+    We print it here so it's inspectable."""
     from core import db, memory_view_service as mvs
     from core.memory_view_producer import make_llm_synthesizer
 
-    print("\n[views] 重综合身份画像 ...")
-    # global+public -> user.md view
+    print("\n[views] 重综合身份画像（存入 memory_views 表，不写 workspace 文件）...")
+    # global+public -> user portrait view
     synth = make_llm_synthesizer(client, model, mvs.VIEW_USER_MD)
     view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD, synthesizer=synth)
     label = "模板兜底" if view.used_fallback else "LLM 综合"
-    print(f"  user_md（{label}，{len(view.unit_ids)} 个 core units）已写入 memory_views。")
+    print(f"  用户画像（{label}，{len(view.unit_ids)} 个 core units）：")
+    _print_view_body(view.content_md)
 
     # each soul with private-chat units -> soul private memory view (soul's view of the user)
     soul_owners = db.query_all(
@@ -126,7 +139,8 @@ def _synthesize_views(client, model) -> None:
         synth = make_llm_synthesizer(client, model, mvs.VIEW_SOUL_PRIVATE)
         v = mvs.synthesize_view(owner, vis, mvs.VIEW_SOUL_PRIVATE, synthesizer=synth)
         label = "模板兜底" if v.used_fallback else "LLM 综合"
-        print(f"  {owner} 私聊画像（{label}，{len(v.unit_ids)} 个 core units）已写入。")
+        print(f"\n  {owner} 私聊画像（{label}，{len(v.unit_ids)} 个 core units）：")
+        _print_view_body(v.content_md)
 
 
 if __name__ == "__main__":

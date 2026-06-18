@@ -264,9 +264,10 @@ def build_comment_context(
 
     sections: list[str] = []
 
-    profile = profile_service.read_profile().strip()
-    if profile:
-        sections.append(f"# 用户档案\n\n{profile}")
+    if not memory_read.memory_reading_enabled():
+        profile = profile_service.read_profile().strip()
+        if profile:
+            sections.append(f"# 用户档案\n\n{profile}")
 
     post = _get_post(post_id)
     if post is not None:

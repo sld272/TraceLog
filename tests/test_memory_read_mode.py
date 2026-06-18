@@ -53,6 +53,43 @@ class ReadModeFlagTest(unittest.TestCase):
             self.assertEqual(memory_read.read_mode(), "legacy")
             self.assertFalse(memory_read.memory_reading_enabled())
 
+    def test_v2_portrait_is_table_only_no_workspace_file(self) -> None:
+        from core import memory_view_service as mvs
+
+        ev = self._ev_for_core()
+        uid = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="identity", content="南大法语生，自学计算机", confidence=0.9, tier="core",
+            importance=0.9, evidence_event_ids=[ev],
+        )
+        view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        # portrait persisted in the table...
+        self.assertIsNotNone(mvs.get_view("global", "public", mvs.VIEW_USER_MD))
+        self.assertIn(uid, view.unit_ids)
+        # ...but NOT written as a workspace file (user.md is non-editable in v2)
+        self.assertFalse((self.workspace / "user.md").exists())
+
+    def _ev_for_core(self) -> int:
+        with db.transaction() as conn:
+            return mes.record_post_mutation(conn, post_id="pc", op="create", content="e", occurred_at=1.0).id
+
+    def test_v2_mode_suppresses_legacy_profile_injection(self) -> None:
+        from core import context_builder, profile_service
+
+        old_path = profile_service.USER_MD_PATH
+        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
+        try:
+            self.workspace.mkdir(parents=True, exist_ok=True)
+            Path(profile_service.USER_MD_PATH).write_text("# 用户档案\n我是旧档案", encoding="utf-8")
+            with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "units"}):
+                v2 = context_builder.build_context(query=None)
+            self.assertNotIn("用户档案", v2.shared_context)  # v2 portrait owns this channel
+            with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "legacy"}):
+                legacy = context_builder.build_context(query=None)
+            self.assertIn("用户档案", legacy.shared_context)  # unchanged in legacy
+        finally:
+            profile_service.USER_MD_PATH = old_path
+
 
 if __name__ == "__main__":
     unittest.main()

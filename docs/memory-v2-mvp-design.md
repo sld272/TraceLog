@@ -388,13 +388,15 @@ in_md_slice = 1 当且仅当：
 
 ### 3.5 与回复读路的衔接
 
-综合产物仍写到现有文件路径，但注入语义收紧：
+**实现决定（与早期设想不同）：v2 综合产物只存 `memory_views` 表，不再写回 `workspace/user.md` / `soul_memories/<name>.md` 文件。** 理由：v2 里 md 是纯综合产物、**禁止用户直接编辑**（编辑落在 unit 工作台，§4），一个 workspace 文件只会变成"没人能改、还可能与表不同步"的陈旧副本。读路从表里读画像（`memory_read._portrait_text` → `memory_views.content_md`），工作台 glance 也读表。注入语义：
 
-- `user.md` = `global + public` 的常驻公共画像，可进入 public/comment/private。
-- `soul_memories/<name>.md` = `soul:<name> + private:soul:<name>` 的私聊画像，**只进入该 SOUL 私聊**；公共 post 和评论不再直接注入它。
-- `thread:<post_id>` 与 SOUL-public unit 不生成共享 md，按 query 进入 ThreadContext / SoulContext。
+- 用户画像 view（`view_type=user_md`，`global + public`）：常驻公共画像，可进入 public/comment/private。
+- soul 私聊画像 view（`view_type=soul_private_memory`，`soul:<name> + private:soul:<name>`）：**只进入该 SOUL 私聊**。
+- `thread:<post_id>` 与 SOUL-public unit 不生成常驻画像，按 query 进入检索。
 
-因此文件形状兼容，但 `context_builder` / `chat_service` / `comment_service` 的注入位置必须按 §7 拆开。本期读路在允许的 md 之外加入独立 unit 检索、evidence hydrate 与有预算 freshness seam；md 不再是回复唯一的记忆来源。
+**与旧 `user.md` 文件的关系**：旧文件由 legacy 深反思维护，仅在 `MEMORY_V2_READ_MODE=legacy` 时注入；**v2 读模式下，三条读路（`context_builder`/`comment_service`/`chat_service`）抑制旧 `# 用户档案` 注入**，由表里的 `[基线认知]` 画像独占该通道，避免双画像。md 不再是回复唯一的记忆来源（另有独立 unit 检索、当前状态块、freshness seam）。
+
+生成的 view content 仍带 §3.5 文件头注释（标 `editable=false` + hash），但它现在是表里 `content_md` 的头部，不是磁盘文件。
 
 **生成文件头**（廉价卫生，声明它是产物、为未来冲突检测埋线）：综合时在文件头写
 

@@ -190,9 +190,10 @@ def build_chat_context(
     retrieval_query = _build_retrieval_query(user_message, llm_messages)
     sections: list[str] = []
 
-    profile = profile_service.read_profile().strip()
-    if profile:
-        sections.append(f"# 用户档案\n\n{profile}")
+    if not memory_read.memory_reading_enabled():
+        profile = profile_service.read_profile().strip()
+        if profile:
+            sections.append(f"# 用户档案\n\n{profile}")
 
     rewritten_query = reply_context.rewrite_for_retrieval(client, model, retrieval_query, "chat", thread_id=thread_id, soul_name=thread.soul_name)
     retrieval_hits = reply_context.hybrid_search_documents_with_rewrite(

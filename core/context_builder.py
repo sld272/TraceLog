@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, logging_service, profile_service, record_service, reply_context, todo_service, tool_config_service
+from core import db, logging_service, memory_read, profile_service, record_service, reply_context, todo_service, tool_config_service
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext, list_enabled_souls
 
@@ -28,9 +28,12 @@ def build_context(
     enabled_souls = list_enabled_souls()
     sections: list[str] = []
 
-    profile = profile_service.read_profile().strip()
-    if profile and profile != profile_service.DEFAULT_USER_MD.strip():
-        sections.append(f"# 用户档案\n\n{profile}")
+    # In v2 read mode the synthesized portrait ([基线认知]) owns this channel;
+    # suppress the legacy user.md profile to avoid a double portrait.
+    if not memory_read.memory_reading_enabled():
+        profile = profile_service.read_profile().strip()
+        if profile and profile != profile_service.DEFAULT_USER_MD.strip():
+            sections.append(f"# 用户档案\n\n{profile}")
 
     effective_relevant_ids: list[str] = []
     if relevant_post_ids:
