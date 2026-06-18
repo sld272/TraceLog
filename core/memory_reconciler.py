@@ -217,6 +217,10 @@ def _require_unit_in_bucket(
     return row
 
 
+class _DryRunAbort(Exception):
+    """Internal sentinel to roll back a dry-run reconcile transaction."""
+
+
 def reconcile_bucket(
     owner_scope: str,
     visibility_scope: str,
@@ -225,10 +229,16 @@ def reconcile_bucket(
     reflection_type: str,
     trigger: str = "manual",
     limit: int = 200,
+    dry_run: bool = False,
 ) -> ReconcileSummary | None:
     """Reconcile one bucket. ``op_producer`` is called OUTSIDE the transaction
     with (boundary, events, active_units, tombstones) and returns a list of op
-    dicts. Returns None when there is nothing new to consume."""
+    dicts. Returns None when there is nothing new to consume.
+
+    When ``dry_run`` is True, ops are validated and applied inside a transaction
+    that is then rolled back: nothing is persisted and the cursor does not
+    advance, but the returned summary reflects what *would* happen. This powers
+    the shadow / preview workflow before the live flip."""
     mus.validate_boundary(owner_scope, visibility_scope)
     cursor = mes.get_cursor(owner_scope, visibility_scope)
     events = mes.list_events_after(owner_scope, visibility_scope, cursor, limit=limit)
@@ -261,27 +271,34 @@ def reconcile_bucket(
         last_event_id=event_ids[-1],
     )
 
-    with db.immediate_transaction() as conn:
-        reflection_id = _insert_reflection_row(
-            conn,
-            reflection_type=reflection_type,
-            owner_scope=owner_scope,
-            visibility_scope=visibility_scope,
-            trigger=trigger,
-            event_ids=event_ids,
-            summary_text=summary_text or f"reconcile {len(event_ids)} events",
-        )
-        summary.reflection_id = reflection_id
-        apply_ops(
-            conn,
-            owner_scope=owner_scope,
-            visibility_scope=visibility_scope,
-            ops=ops,
-            allowed_event_ids=set(event_ids),
-            reflection_id=reflection_id,
-            summary=summary,
-        )
-        mes.advance_cursor(conn, owner_scope, visibility_scope, event_ids[-1])
+    try:
+        with db.immediate_transaction() as conn:
+            reflection_id = None
+            if not dry_run:
+                reflection_id = _insert_reflection_row(
+                    conn,
+                    reflection_type=reflection_type,
+                    owner_scope=owner_scope,
+                    visibility_scope=visibility_scope,
+                    trigger=trigger,
+                    event_ids=event_ids,
+                    summary_text=summary_text or f"reconcile {len(event_ids)} events",
+                )
+                summary.reflection_id = reflection_id
+            apply_ops(
+                conn,
+                owner_scope=owner_scope,
+                visibility_scope=visibility_scope,
+                ops=ops,
+                allowed_event_ids=set(event_ids),
+                reflection_id=reflection_id,
+                summary=summary,
+            )
+            if dry_run:
+                raise _DryRunAbort
+            mes.advance_cursor(conn, owner_scope, visibility_scope, event_ids[-1])
+    except _DryRunAbort:
+        pass
 
     logging_service.log_event(
         "memory_reconcile_bucket",

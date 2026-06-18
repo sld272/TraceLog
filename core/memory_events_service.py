@@ -251,6 +251,26 @@ def advance_cursor(
     )
 
 
+def buckets_with_pending_events(limit_buckets: int = 500) -> list[tuple[str, str]]:
+    """All (owner_scope, visibility_scope) buckets whose newest event id exceeds
+    their reconcile cursor — i.e. buckets with unconsumed evidence."""
+    rows = db.query_all(
+        """
+        SELECT e.owner_scope AS owner_scope,
+               e.visibility_scope AS visibility_scope
+        FROM memory_ingest_events e
+        LEFT JOIN memory_reconcile_cursors c
+          ON c.owner_scope = e.owner_scope AND c.visibility_scope = e.visibility_scope
+        GROUP BY e.owner_scope, e.visibility_scope
+        HAVING MAX(e.id) > COALESCE(MAX(c.last_event_id), 0)
+        ORDER BY e.owner_scope ASC, e.visibility_scope ASC
+        LIMIT ?
+        """,
+        (int(limit_buckets),),
+    )
+    return [(r["owner_scope"], r["visibility_scope"]) for r in rows]
+
+
 def list_events_after(
     owner_scope: str,
     visibility_scope: str,
