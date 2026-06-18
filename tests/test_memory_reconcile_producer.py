@@ -81,10 +81,32 @@ class ReconcileProducerTest(unittest.TestCase):
 
         self.assertIn("event_id=7", captured["events_text"])
         self.assertIn("考研倒计时", captured["events_text"])
+        self.assertIn("【用户】", captured["events_text"])  # events labelled as user-authored
         self.assertIn("unit_id=mu_x", captured["units_text"])
         self.assertIn("false", captured["tombstones_text"])
-        self.assertIn("owner_scope=global", captured["boundary_text"])
+        # scene is natural language, never the raw owner label that confused the model
+        self.assertNotIn("owner_scope", captured["boundary_text"])
+        self.assertIn("用户", captured["boundary_text"])
         self.assertEqual(result["summary"], "s")
+
+    def test_describe_scene_keeps_soul_as_context_not_subject(self) -> None:
+        # comment scene: soul appears as context, with an explicit "don't describe the soul" instruction
+        comment = producer_mod.describe_scene(
+            {"owner_scope": "soul:喜多郁代", "visibility_scope": "thread:20260616-001"}
+        )
+        self.assertIn("喜多郁代", comment)
+        self.assertIn("用户", comment)
+        self.assertIn("绝不要描述", comment)
+
+        post = producer_mod.describe_scene({"owner_scope": "global", "visibility_scope": "public"})
+        self.assertIn("用户本人", post)
+        self.assertNotIn("绝不要描述", post)  # no soul to confuse here
+
+        private = producer_mod.describe_scene(
+            {"owner_scope": "soul:luna", "visibility_scope": "private:soul:luna"}
+        )
+        self.assertIn("私聊", private)
+        self.assertIn("luna", private)
 
     def test_producer_returns_empty_on_none(self) -> None:
         with patch.object(reflection_router, "call_memory_reconcile", lambda *a, **k: None):

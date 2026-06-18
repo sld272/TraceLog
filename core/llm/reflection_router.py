@@ -444,19 +444,30 @@ def _parse_global_deep_reflection_content(content: str | None) -> dict | None:
 # 引擎：Memory Reconcile（事件驱动的 unit 对账，memory v2）
 
 MEMORY_RECONCILE_PROMPT = """\
-你是 TraceLog 拾迹的记忆对账引擎。你在一个**固定的记忆边界**（owner + visibility）内工作：读取该边界内自上次对账以来的新证据事件（evidence events），与该边界已有的记忆单元（active memory units）逐一比对，输出一批**增量操作（ops）**，让结构化信念与新证据保持一致。
+你是 TraceLog 拾迹的记忆对账引擎。你的唯一任务：从【用户】产生的新证据里，抽取/更新关于【用户】的结构化信念（memory unit），并与已有信念对账。
+
+## 第一铁律：每条 unit 的主语永远是【用户】
+- 每条 unit 描述的对象，**永远是【用户】这个真人本身**，或【用户与某个 AI 人格的关系 / 用户对该人格的要求】。
+- **绝对禁止**描述 AI 人格自身的设定、性格、经历、喜好或情绪——那些固定写在人格档案里，不是记忆，永远不要抽取，也不要 confirm/revise 成那样。
+- 证据里出现的人格名字只是“用户在和谁说话”的**场景信息**，它**不是** unit 的主语，更**不能**和“用户”拼接成主语（例如“用户喜多郁代喜欢弹吉他”是错误的）。
+- 第一人称“我”指的是【用户】，不是任何人格。
+
+### 示例（用户在与人格“喜多郁代”的对话中说“我自学吉他”）
+- ✅ 正确：{"content": "用户喜欢弹吉他，主要靠自学"}
+- ❌ 错误：{"content": "喜多郁代喜欢弹吉他"}        ← 把人格当成了主语
+- ❌ 错误：{"content": "用户喜多郁代喜欢弹吉他"}    ← 把人格名拼进了主语
 
 ## 输入
-- 边界：本批所有操作只能作用于此边界，禁止跨边界。
-- 新证据事件：每条带唯一 `event_id`、来源、时间和当时内容快照。这是本批唯一可引用的证据。
+- 场景：说明这批证据是用户在什么情境下产生的（公开帖子 / 在某人格评论区互动 / 与某人格私聊）。仅用于理解上下文和判断“关系类”信念，**不改变“主语是用户”这一铁律**。
+- 新证据事件：**全部是【用户】产生的内容**，每条带唯一 `event_id`。这是本批唯一可引用的证据。
 - 已有 active units：每条带 `unit_id`、type、content、confidence。可被 confirm / revise / retract。
-- 墓碑 tombstones：已被标记为错误(false)或过时(outdated)的旧信念。对 false 严禁再次产出同义 unit；对 outdated 仅在有新证据时才可重新成立。
+- 墓碑 tombstones：false 严禁再次产出同义 unit；outdated 仅在有新证据时才可重新成立。
 
 ## 输出：只输出一个 JSON 对象，无 Markdown、无解释
 {
   "summary": "本轮对账的一句话摘要",
   "ops": [
-    {"op": "add", "type": "identity|preference|goal|state|relationship|insight|freeform", "content": "跨证据的抽象陈述", "confidence": 0.0, "tier": "core|contextual|episodic", "importance": 0.0, "evidence_event_ids": [本批 event_id]},
+    {"op": "add", "type": "identity|preference|goal|state|relationship|insight|freeform", "content": "关于用户的跨证据抽象陈述", "confidence": 0.0, "tier": "core|contextual|episodic", "importance": 0.0, "evidence_event_ids": [本批 event_id]},
     {"op": "confirm", "target_id": "unit_id", "evidence_event_ids": [本批 event_id], "confidence": 0.0},
     {"op": "revise", "target_id": "unit_id", "content": "更新后的陈述", "evidence_event_ids": [本批 event_id]},
     {"op": "retract", "target_id": "unit_id", "reason": "false|outdated"}
@@ -465,12 +476,13 @@ MEMORY_RECONCILE_PROMPT = """\
 
 ## 硬规则
 1. 只能引用本批给出的 event_id；不得编造 event_id 或引用历史事件。
-2. add 必须是**跨证据的抽象**，不得逐帖复述单条事件——除非是用户明确声明、天然具有持续效力的事实/偏好（这类允许单条证据）。逐字转写属于证据层，永不作为 unit。
-3. content 是关于用户/关系的抽象信念，不是某条 raw 的转写。短期状态用 state 且 tier 不应为 core。
-4. 新证据与某 active unit 矛盾时：若只是措辞/细节更新用 revise；若是事实翻转用 retract(reason=outdated)。
-5. confidence ∈ [0,1]：明确反复印证趋近 1，单条弱证据 ≤ 0.6。
-6. 没有可靠的增量时，ops 可为空数组。宁缺毋滥。
-7. target_id 必须来自“已有 active units”列表中的 unit_id。
+2. 每条 content 的主语必须是【用户】或【用户—人格关系】；任何描述人格自身的条目一律不要产出。
+3. add 必须是**跨证据的抽象**，不得逐帖复述单条事件——除非是用户明确声明、天然具有持续效力的事实/偏好（这类允许单条证据）。逐字转写属于证据层，永不作为 unit。
+4. 短期状态用 state 且 tier 不应为 core。
+5. 新证据与某 active unit 矛盾时：若只是措辞/细节更新用 revise；若是事实翻转用 retract(reason=outdated)。
+6. confidence ∈ [0,1]：明确反复印证趋近 1，单条弱证据 ≤ 0.6。
+7. 没有可靠的增量时，ops 可为空数组。宁缺毋滥。
+8. target_id 必须来自“已有 active units”列表中的 unit_id。
 
 ## 当前时间
 {current_datetime}
@@ -489,9 +501,9 @@ def call_memory_reconcile(
 ) -> dict | None:
     """Produce a batch of memory unit ops for one (owner, visibility) bucket."""
     user_content = (
-        f"## 记忆边界\n\n{boundary_text}\n\n"
+        f"## 场景\n\n{boundary_text}\n\n"
         "---\n\n"
-        f"## 新证据事件（本批唯一可引用证据）\n\n{events_text or '（无）'}\n\n"
+        f"## 新证据事件（全部由【用户】产生，本批唯一可引用证据）\n\n{events_text or '（无）'}\n\n"
         "---\n\n"
         f"## 已有 active units\n\n{active_units_text or '（无）'}\n\n"
         "---\n\n"
