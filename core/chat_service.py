@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from core import attachment_service, db, evidence_service, logging_service, memory_events_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, evidence_service, logging_service, memory_events_service, memory_read, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -227,6 +227,10 @@ def build_chat_context(
     )
     if web_section:
         sections.append(web_section)
+
+    memory_section = memory_read.memory_section_for("chat", thread.soul_name, user_message)
+    if memory_section:
+        sections.append(f"# 记忆\n\n{memory_section}")
 
     context_text = "\n\n---\n\n".join(sections)
     logging_service.log_event(

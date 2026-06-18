@@ -18,11 +18,33 @@ reach a prompt — never left to the model to self-censor.
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from dataclasses import dataclass, field
 
 from core import db, memory_scope_policy as policy, memory_view_service as mvs
+
+# read-mode flag (design §7.2). legacy = pre-v2 behavior, no unit reading.
+READ_MODE_ENV = "MEMORY_V2_READ_MODE"
+_READ_MODES = ("legacy", "units", "units_and_freshness")
+
+
+def read_mode() -> str:
+    mode = os.environ.get(READ_MODE_ENV, "legacy").strip().lower()
+    return mode if mode in _READ_MODES else "legacy"
+
+
+def memory_reading_enabled() -> bool:
+    return read_mode() != "legacy"
+
+
+def memory_section_for(channel: str, reply_soul: str | None, query: str) -> str:
+    """Single entry the reply paths call. Returns '' in legacy mode (zero change)
+    or when there is no memory to inject."""
+    if not memory_reading_enabled():
+        return ""
+    return build_memory_section(channel, reply_soul, query).text
 
 # current-state block
 STATE_BLOCK_LIMIT = 5

@@ -11,6 +11,7 @@ from core import (
     evidence_service,
     logging_service,
     memory_events_service,
+    memory_read,
     profile_service,
     record_service,
     reply_context,
@@ -324,6 +325,10 @@ def build_comment_context(
     )
     if web_section:
         sections.append(web_section)
+
+    memory_section = memory_read.memory_section_for("comment", soul_name, user_message)
+    if memory_section:
+        sections.append(f"# 记忆\n\n{memory_section}")
 
     context_text = "\n\n---\n\n".join(sections)
     relevant_post_ids = _post_ids_from_hits(retrieval_hits)

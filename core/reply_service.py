@@ -6,7 +6,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from core import db, evidence_service, logging_service, memory_events_service, record_service
+from core import db, evidence_service, logging_service, memory_events_service, memory_read, record_service
 from core.context_builder import BuiltContext
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -88,11 +88,12 @@ def _call_one_soul(
     model: str,
     shared_context: str,
 ) -> SoulReplyResult:
+    soul_context = _with_memory_section(shared_context, "public_post", soul.name, user_input)
     data = reply_router.call_soul_post_reply(
         user_input,
         client,
         model,
-        shared_context,
+        soul_context,
         soul,
         trace_context={"post_id": post_id, "soul_name": soul.name},
     )
@@ -128,6 +129,15 @@ def _call_one_soul(
         reply=reply.strip(),
         error=None,
     )
+
+
+def _with_memory_section(base_context: str, channel: str, soul_name: str, query: str) -> str:
+    """Append the per-soul v2 memory block (scope-filtered) when read mode is on;
+    no-op in legacy mode."""
+    section = memory_read.memory_section_for(channel, soul_name, query)
+    if not section:
+        return base_context
+    return f"{base_context}\n\n---\n\n# 记忆\n\n{section}" if base_context else f"# 记忆\n\n{section}"
 
 
 def _failed_result(soul: SoulContext, error: str) -> SoulReplyResult:
