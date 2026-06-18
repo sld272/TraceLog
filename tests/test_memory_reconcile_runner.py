@@ -54,6 +54,9 @@ class DryRunTest(unittest.TestCase):
         self.assertEqual(mes.get_cursor("global", "public"), 0)
         self.assertEqual(len(db.query_all("SELECT * FROM reflections")), 0)
         self.assertIsNone(summary.reflection_id)
+        # preview shows the unit contents that WOULD result
+        self.assertEqual(len(summary.preview_units), 1)
+        self.assertEqual(summary.preview_units[0]["content"], "预览不落库")
 
     def test_live_run_after_dry_run_still_works(self) -> None:
         ids = self._public_events(1)

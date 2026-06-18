@@ -55,6 +55,8 @@ class ReconcileSummary:
     skipped: int = 0
     by_op: dict[str, int] = field(default_factory=dict)
     skipped_details: list[dict] = field(default_factory=list)
+    summary_text: str = ""
+    preview_units: list[dict] = field(default_factory=list)  # populated in dry_run
 
     def _count(self, op: str) -> None:
         self.by_op[op] = self.by_op.get(op, 0) + 1
@@ -269,6 +271,7 @@ def reconcile_bucket(
         visibility_scope=visibility_scope,
         event_count=len(event_ids),
         last_event_id=event_ids[-1],
+        summary_text=summary_text,
     )
 
     try:
@@ -295,6 +298,16 @@ def reconcile_bucket(
                 summary=summary,
             )
             if dry_run:
+                preview_rows = conn.execute(
+                    """
+                    SELECT id, type, content, confidence, tier, importance, status
+                    FROM memory_units
+                    WHERE owner_scope = ? AND visibility_scope = ? AND status = 'active'
+                    ORDER BY updated_at DESC, id DESC
+                    """,
+                    (owner_scope, visibility_scope),
+                ).fetchall()
+                summary.preview_units = [dict(r) for r in preview_rows]
                 raise _DryRunAbort
             mes.advance_cursor(conn, owner_scope, visibility_scope, event_ids[-1])
     except _DryRunAbort:
