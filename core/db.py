@@ -78,6 +78,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     )
     _ensure_column(conn, "memory_ingest_events", "author", "TEXT")
     _backfill_memory_event_authors(conn)
+    _migrate_comment_event_ownership(conn)
     _backfill_memory_events(conn)
 
 
@@ -99,6 +100,20 @@ def _backfill_memory_event_authors(conn: sqlite3.Connection) -> None:
         "  SELECT role FROM chat_messages WHERE CAST(chat_messages.id AS TEXT) = memory_ingest_events.source_id"
         ") WHERE author IS NULL AND source_type = 'chat_message' "
         "AND EXISTS (SELECT 1 FROM chat_messages WHERE CAST(chat_messages.id AS TEXT) = memory_ingest_events.source_id)"
+    )
+
+
+def _migrate_comment_event_ownership(conn: sqlite3.Connection) -> None:
+    # Comment events used to put user comments under owner_scope='global'; they
+    # now belong to the soul whose thread they're in (so comment interactions
+    # build that soul's relationship memory). Re-own legacy user-comment events
+    # to soul:<comments.soul_name>. Runs AFTER author backfill, which relied on
+    # the old owner mapping. Idempotent (only touches owner_scope='global').
+    conn.execute(
+        "UPDATE memory_ingest_events SET owner_scope = 'soul:' || ("
+        "  SELECT soul_name FROM comments WHERE CAST(comments.id AS TEXT) = memory_ingest_events.source_id"
+        ") WHERE source_type = 'comment_message' AND owner_scope = 'global' "
+        "AND EXISTS (SELECT 1 FROM comments WHERE CAST(comments.id AS TEXT) = memory_ingest_events.source_id)"
     )
 
 

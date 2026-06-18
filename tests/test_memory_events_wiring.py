@@ -88,7 +88,8 @@ class MemoryEventsWiringTest(unittest.TestCase):
         events = _events("comment_message", str(msg.id))
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["op"], "create")
-        self.assertEqual(events[0]["owner_scope"], "global")  # user-authored
+        self.assertEqual(events[0]["owner_scope"], "soul:luna")  # owned by the thread's soul
+        self.assertEqual(events[0]["author"], "user")
         self.assertEqual(events[0]["visibility_scope"], f"thread:{post_id}")
 
     def test_delete_comment_appends_delete_events(self) -> None:

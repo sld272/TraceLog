@@ -182,10 +182,13 @@ def record_comment_mutation(
     occurred_at: float,
     created_at: float | None = None,
 ) -> IngestEvent:
-    """Comment -> owner depends on author (user=global, soul=soul:<name>),
-    visibility always thread:<post_id>. Thread membership never auto-promotes to
-    public; that requires an explicit promote op in a later phase."""
-    owner = GLOBAL_SCOPE if role == "user" else soul_scope(soul_name)
+    """Comment -> owned by the SOUL whose thread it is (both roles), visibility
+    thread:<post_id>. A comment conversation is the user interacting with that
+    soul, so the memory it yields is that soul's relationship memory; the user's
+    own comments (author='user') are what reconcile mines, the soul's replies are
+    provenance only. Thread membership never auto-promotes to a durable soul
+    portrait / public; that requires an explicit promote op in a later phase."""
+    owner = soul_scope(soul_name)
     return append_event(
         conn,
         owner_scope=owner,
