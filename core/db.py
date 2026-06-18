@@ -76,6 +76,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    _backfill_memory_events(conn)
+
+
+def _backfill_memory_events(conn: sqlite3.Connection) -> None:
+    # Lazy import to avoid a circular import (memory_events_service imports db).
+    from core import memory_events_service
+
+    memory_events_service.backfill_from_existing(conn)
 
 
 def _ensure_post_soul_orders(conn: sqlite3.Connection) -> None:

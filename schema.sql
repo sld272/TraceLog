@@ -414,3 +414,41 @@ CREATE INDEX IF NOT EXISTS idx_vector_outbox_collection_status
     ON vector_outbox(collection_name, status, id);
 CREATE INDEX IF NOT EXISTS idx_vector_outbox_doc_status
     ON vector_outbox(collection_name, doc_id, status);
+
+-- ---------------------------------------------------------------------------
+-- memory v2: append-only evidence event ledger
+-- Every create/edit/rerun/delete on a business row (post/comment/chat) appends
+-- an immutable evidence event in the SAME transaction. memory units bind to
+-- these event versions (not to mutable source rows), so edits never silently
+-- rewrite history. `id` is the monotonic consumption cursor for reconcile.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS memory_ingest_events (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_scope      TEXT NOT NULL,              -- 'global' | 'soul:<name>'
+    visibility_scope TEXT NOT NULL,              -- 'public' | 'thread:<post_id>' | 'private:soul:<name>'
+    source_channel   TEXT NOT NULL
+                       CHECK(source_channel IN ('post','comment','chat')),
+    source_type      TEXT NOT NULL
+                       CHECK(source_type IN ('post','comment_message','chat_message')),
+    source_id        TEXT NOT NULL,
+    source_revision  INTEGER NOT NULL,           -- monotonic from 1 per source_id
+    op               TEXT NOT NULL
+                       CHECK(op IN ('create','edit','rerun','delete')),
+    content_snapshot TEXT,                        -- version at the time; delete may be NULL
+    content_hash     TEXT,                        -- sha256(content_snapshot)
+    occurred_at      REAL NOT NULL,               -- business action time
+    created_at       REAL NOT NULL,               -- ledger insert time
+    UNIQUE(source_type, source_id, source_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_events_boundary_id
+    ON memory_ingest_events(owner_scope, visibility_scope, id);
+CREATE INDEX IF NOT EXISTS idx_memory_events_source
+    ON memory_ingest_events(source_type, source_id, source_revision);
+
+CREATE TABLE IF NOT EXISTS memory_reconcile_cursors (
+    owner_scope      TEXT NOT NULL,
+    visibility_scope TEXT NOT NULL,
+    last_event_id    INTEGER NOT NULL DEFAULT 0,
+    updated_at       REAL NOT NULL,
+    PRIMARY KEY(owner_scope, visibility_scope)
+);
