@@ -10,6 +10,7 @@ from core import (
     attachment_service,
     evidence_service,
     logging_service,
+    memory_events_service,
     profile_service,
     record_service,
     reply_context,
@@ -202,6 +203,17 @@ def append_comment(
             ),
         )
         comment_id = db.require_lastrowid(cursor, "comment insert")
+        if body:
+            memory_events_service.record_comment_mutation(
+                conn,
+                comment_id=comment_id,
+                post_id=post_id,
+                soul_name=soul_name,
+                role=role,
+                op="create",
+                content=body,
+                occurred_at=now,
+            )
     attachment_service.attach_to_comment(comment_id, attachment_ids)
     message = get_message(comment_id)
     if message.content.strip():
@@ -424,6 +436,21 @@ def get_message(message_id: int) -> CommentMessage:
     return _message_from_row(row)
 
 
+def _record_comment_deletes(conn, post_id: str, soul_name: str, deleted_rows: list[tuple[int, str]]) -> None:
+    now = db.now_ts()
+    for comment_id, role in deleted_rows:
+        memory_events_service.record_comment_mutation(
+            conn,
+            comment_id=comment_id,
+            post_id=post_id,
+            soul_name=soul_name,
+            role=role,
+            op="delete",
+            content=None,
+            occurred_at=now,
+        )
+
+
 def delete_message(message_id: int) -> dict:
     message = get_message(message_id)
     if message.role != "user":
@@ -431,15 +458,17 @@ def delete_message(message_id: int) -> dict:
     if message.seq == 0:
         rows = db.query_all(
             """
-            SELECT id
+            SELECT id, role
             FROM comments
             WHERE post_id = ? AND soul_name = ?
             ORDER BY seq ASC, id ASC
             """,
             (message.post_id, message.soul_name),
         )
-        deleted_ids = [int(row["id"]) for row in rows]
+        deleted_rows = [(int(row["id"]), str(row["role"])) for row in rows]
+        deleted_ids = [item[0] for item in deleted_rows]
         with db.transaction() as conn:
+            _record_comment_deletes(conn, message.post_id, message.soul_name, deleted_rows)
             conn.execute(
                 "DELETE FROM comments WHERE post_id = ? AND soul_name = ?",
                 (message.post_id, message.soul_name),
@@ -447,15 +476,17 @@ def delete_message(message_id: int) -> dict:
     else:
         rows = db.query_all(
             """
-            SELECT id
+            SELECT id, role
             FROM comments
             WHERE post_id = ? AND soul_name = ? AND seq >= ?
             ORDER BY seq ASC, id ASC
             """,
             (message.post_id, message.soul_name, message.seq),
         )
-        deleted_ids = [int(row["id"]) for row in rows]
+        deleted_rows = [(int(row["id"]), str(row["role"])) for row in rows]
+        deleted_ids = [item[0] for item in deleted_rows]
         with db.transaction() as conn:
+            _record_comment_deletes(conn, message.post_id, message.soul_name, deleted_rows)
             conn.execute(
                 "DELETE FROM comments WHERE post_id = ? AND soul_name = ? AND seq >= ?",
                 (message.post_id, message.soul_name, message.seq),
@@ -535,6 +566,16 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
             """,
             (reply.strip(), json.dumps(metadata, ensure_ascii=False), now, message.id),
         )
+        memory_events_service.record_comment_mutation(
+            conn,
+            comment_id=message.id,
+            post_id=message.post_id,
+            soul_name=message.soul_name,
+            role="assistant",
+            op="rerun",
+            content=reply.strip(),
+            occurred_at=now,
+        )
 
     updated = get_message(message.id)
     record_service.index_comment_embedding(
@@ -602,6 +643,16 @@ def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClie
             WHERE id = ?
             """,
             (reply.strip(), json.dumps(metadata, ensure_ascii=False), now, message.id),
+        )
+        memory_events_service.record_comment_mutation(
+            conn,
+            comment_id=message.id,
+            post_id=message.post_id,
+            soul_name=message.soul_name,
+            role="assistant",
+            op="rerun",
+            content=reply.strip(),
+            occurred_at=now,
         )
 
     updated = get_message(message.id)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from core import db, logging_service, vector_index_service
+from core import db, logging_service, memory_events_service, vector_index_service
 
 
 def save_post(content: str, *, index_immediately: bool = True, track_embedding: bool = True) -> str:
@@ -23,6 +23,14 @@ def save_post(content: str, *, index_immediately: bool = True, track_embedding: 
             (post_id, now.isoformat(), body, now.timestamp(), now.timestamp()),
         )
         _snapshot_post_soul_order(conn, post_id, now.timestamp())
+        memory_events_service.record_post_mutation(
+            conn,
+            post_id=post_id,
+            op="create",
+            content=body,
+            occurred_at=now.timestamp(),
+            created_at=now.timestamp(),
+        )
         if track_embedding:
             doc = vector_index_service.build_post_doc(post_id, body)
             if doc is not None:

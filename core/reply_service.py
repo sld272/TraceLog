@@ -6,7 +6,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from core import db, evidence_service, logging_service, record_service
+from core import db, evidence_service, logging_service, memory_events_service, record_service
 from core.context_builder import BuiltContext
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -182,5 +182,16 @@ def _save_comment(post_id: str, result: SoulReplyResult, model: str, built_conte
                 WHERE id = ?
                 """,
                 (result.reply, json.dumps(metadata, ensure_ascii=False), comment_id),
+            )
+        if str(result.reply or "").strip():
+            memory_events_service.record_comment_mutation(
+                conn,
+                comment_id=comment_id,
+                post_id=post_id,
+                soul_name=result.soul_name,
+                role="assistant",
+                op="create",
+                content=result.reply,
+                occurred_at=now,
             )
     record_service.index_comment_embedding(comment_id, post_id, result.soul_name, "assistant", 0, result.reply)

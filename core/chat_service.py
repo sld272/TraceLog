@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from core import attachment_service, db, evidence_service, logging_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, evidence_service, logging_service, memory_events_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -354,6 +354,15 @@ def _append_message(
             (thread_id, role, body, now, json.dumps(metadata, ensure_ascii=False) if metadata else None),
         )
         message_id = db.require_lastrowid(cursor, "chat message insert")
+        if body:
+            memory_events_service.record_chat_mutation(
+                conn,
+                message_id=message_id,
+                soul_name=thread.soul_name,
+                op="create",
+                content=body,
+                occurred_at=now,
+            )
         conn.execute(
             """
             UPDATE chat_threads
@@ -394,6 +403,7 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
         raise ValueError("私聊消息不能为空")
 
     deleted_ids = _message_ids_after(message.thread_id, message.id)
+    soul_name = get_thread(message.thread_id).soul_name
     now = db.now_ts()
     with db.transaction() as conn:
         conn.execute(
@@ -403,6 +413,9 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
             WHERE id = ?
             """,
             (body, now, message.id),
+        )
+        memory_events_service.record_chat_mutation(
+            conn, message_id=message.id, soul_name=soul_name, op="edit", content=body, occurred_at=now,
         )
         conn.execute("DELETE FROM chat_message_attachments WHERE message_id = ?", (message.id,))
         conn.executemany(
@@ -417,6 +430,10 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
             [(now, attachment_id) for attachment_id in attachment_ids],
         )
         if deleted_ids:
+            for deleted_id in deleted_ids:
+                memory_events_service.record_chat_mutation(
+                    conn, message_id=deleted_id, soul_name=soul_name, op="delete", content=None, occurred_at=now,
+                )
             conn.execute(
                 f"DELETE FROM chat_messages WHERE id IN ({','.join('?' for _ in deleted_ids)})",
                 tuple(deleted_ids),
@@ -498,7 +515,14 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
             """,
             (reply.strip(), json.dumps(metadata, ensure_ascii=False), now, message.id),
         )
+        memory_events_service.record_chat_mutation(
+            conn, message_id=message.id, soul_name=thread.soul_name, op="rerun", content=reply.strip(), occurred_at=now,
+        )
         if deleted_ids:
+            for deleted_id in deleted_ids:
+                memory_events_service.record_chat_mutation(
+                    conn, message_id=deleted_id, soul_name=thread.soul_name, op="delete", content=None, occurred_at=now,
+                )
             conn.execute(
                 f"DELETE FROM chat_messages WHERE id IN ({','.join('?' for _ in deleted_ids)})",
                 tuple(deleted_ids),
