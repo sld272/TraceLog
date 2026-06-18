@@ -247,15 +247,39 @@ def reconcile_bucket(
     if not events:
         return None
 
-    event_ids = [int(e["id"]) for e in events]
+    all_event_ids = [int(e["id"]) for e in events]
+    last_event_id = all_event_ids[-1]
+
+    # Memory is formed from what the USER said/did, never from the AI's own
+    # output. Assistant-authored events stay in the ledger (provenance/audit)
+    # but are not belief-generating evidence — this is what stops a SOUL's
+    # replies from being mined into first-person persona "memories". Deletes
+    # (content_snapshot NULL) are not evidence either.
+    user_events = [
+        e for e in events if e["author"] == "user" and e["content_snapshot"] is not None
+    ]
+    if not user_events:
+        if not dry_run:
+            with db.immediate_transaction() as conn:
+                mes.advance_cursor(conn, owner_scope, visibility_scope, last_event_id)
+        logging_service.log_event(
+            "memory_reconcile_no_user_evidence",
+            owner_scope=owner_scope,
+            visibility_scope=visibility_scope,
+            event_count=len(all_event_ids),
+        )
+        return None
+
+    event_ids = [int(e["id"]) for e in user_events]
     active_units = mus.list_active_units_in_bucket(owner_scope, visibility_scope)
     tombstones = _load_tombstones(owner_scope, visibility_scope)
 
     boundary = {"owner_scope": owner_scope, "visibility_scope": visibility_scope}
-    # LLM / producer runs outside the write transaction.
+    # LLM / producer runs outside the write transaction. It only ever sees
+    # user-authored evidence.
     result = op_producer(
         boundary=boundary,
-        events=[dict(e) for e in events],
+        events=[dict(e) for e in user_events],
         active_units=[dict(u) for u in active_units],
         tombstones=tombstones,
     ) or {}
@@ -270,7 +294,7 @@ def reconcile_bucket(
         owner_scope=owner_scope,
         visibility_scope=visibility_scope,
         event_count=len(event_ids),
-        last_event_id=event_ids[-1],
+        last_event_id=last_event_id,
         summary_text=summary_text,
     )
 
@@ -309,7 +333,7 @@ def reconcile_bucket(
                 ).fetchall()
                 summary.preview_units = [dict(r) for r in preview_rows]
                 raise _DryRunAbort
-            mes.advance_cursor(conn, owner_scope, visibility_scope, event_ids[-1])
+            mes.advance_cursor(conn, owner_scope, visibility_scope, last_event_id)
     except _DryRunAbort:
         pass
 

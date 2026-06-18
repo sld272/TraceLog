@@ -102,7 +102,7 @@ def main() -> None:
 
 def _synthesize_views(client, model) -> None:
     """Re-synthesize identity views from the freshly written core units."""
-    from core import memory_view_service as mvs
+    from core import db, memory_view_service as mvs
     from core.memory_view_producer import make_llm_synthesizer
 
     print("\n[views] 重综合身份画像 ...")
@@ -111,6 +111,22 @@ def _synthesize_views(client, model) -> None:
     view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD, synthesizer=synth)
     label = "模板兜底" if view.used_fallback else "LLM 综合"
     print(f"  user_md（{label}，{len(view.unit_ids)} 个 core units）已写入 memory_views。")
+
+    # each soul with private-chat units -> soul private memory view (soul's view of the user)
+    soul_owners = db.query_all(
+        """
+        SELECT DISTINCT owner_scope, visibility_scope
+        FROM memory_units
+        WHERE owner_scope LIKE 'soul:%' AND visibility_scope LIKE 'private:soul:%'
+              AND status = 'active'
+        """
+    )
+    for row in soul_owners:
+        owner, vis = row["owner_scope"], row["visibility_scope"]
+        synth = make_llm_synthesizer(client, model, mvs.VIEW_SOUL_PRIVATE)
+        v = mvs.synthesize_view(owner, vis, mvs.VIEW_SOUL_PRIVATE, synthesizer=synth)
+        label = "模板兜底" if v.used_fallback else "LLM 综合"
+        print(f"  {owner} 私聊画像（{label}，{len(v.unit_ids)} 个 core units）已写入。")
 
 
 if __name__ == "__main__":

@@ -76,7 +76,30 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    _ensure_column(conn, "memory_ingest_events", "author", "TEXT")
+    _backfill_memory_event_authors(conn)
     _backfill_memory_events(conn)
+
+
+def _backfill_memory_event_authors(conn: sqlite3.Connection) -> None:
+    # Posts are always user-authored.
+    conn.execute(
+        "UPDATE memory_ingest_events SET author = 'user' "
+        "WHERE author IS NULL AND source_type = 'post'"
+    )
+    # For comments, owner_scope encodes authorship exactly (global=user, soul=assistant).
+    conn.execute(
+        "UPDATE memory_ingest_events SET author = "
+        "CASE WHEN owner_scope = 'global' THEN 'user' ELSE 'assistant' END "
+        "WHERE author IS NULL AND source_type = 'comment_message'"
+    )
+    # Chat owner is the soul for both roles, so derive role from the message row.
+    conn.execute(
+        "UPDATE memory_ingest_events SET author = ("
+        "  SELECT role FROM chat_messages WHERE CAST(chat_messages.id AS TEXT) = memory_ingest_events.source_id"
+        ") WHERE author IS NULL AND source_type = 'chat_message' "
+        "AND EXISTS (SELECT 1 FROM chat_messages WHERE CAST(chat_messages.id AS TEXT) = memory_ingest_events.source_id)"
+    )
 
 
 def _backfill_memory_events(conn: sqlite3.Connection) -> None:

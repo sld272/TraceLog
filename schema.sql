@@ -434,6 +434,8 @@ CREATE TABLE IF NOT EXISTS memory_ingest_events (
     source_revision  INTEGER NOT NULL,           -- monotonic from 1 per source_id
     op               TEXT NOT NULL
                        CHECK(op IN ('create','edit','rerun','delete')),
+    author           TEXT                          -- 'user' | 'assistant' | NULL(unknown)
+                       CHECK(author IS NULL OR author IN ('user','assistant')),
     content_snapshot TEXT,                        -- version at the time; delete may be NULL
     content_hash     TEXT,                        -- sha256(content_snapshot)
     occurred_at      REAL NOT NULL,               -- business action time

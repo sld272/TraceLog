@@ -84,12 +84,15 @@ def append_event(
     op: str,
     content_snapshot: str | None,
     occurred_at: float,
+    author: str | None = None,
     created_at: float | None = None,
 ) -> IngestEvent:
     """Append one evidence event using the caller's open transaction.
 
     The caller MUST pass the same ``conn`` it used to mutate the business row, so
-    that the business write and its evidence event commit atomically.
+    that the business write and its evidence event commit atomically. ``author``
+    ('user'/'assistant') records who produced the content; reconcile only treats
+    user-authored evidence as belief-generating.
     """
     if source_channel not in SOURCE_CHANNELS:
         raise ValueError(f"非法 source_channel：{source_channel}")
@@ -97,6 +100,8 @@ def append_event(
         raise ValueError(f"非法 source_type：{source_type}")
     if op not in EVENT_OPS:
         raise ValueError(f"非法 op：{op}")
+    if author not in (None, "user", "assistant"):
+        raise ValueError(f"非法 author：{author}")
     if not owner_scope or not visibility_scope:
         raise ValueError("owner_scope / visibility_scope 不能为空")
 
@@ -107,9 +112,9 @@ def append_event(
         """
         INSERT INTO memory_ingest_events(
             owner_scope, visibility_scope, source_channel, source_type,
-            source_id, source_revision, op, content_snapshot, content_hash,
+            source_id, source_revision, op, author, content_snapshot, content_hash,
             occurred_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             owner_scope,
@@ -119,6 +124,7 @@ def append_event(
             source_id,
             revision,
             op,
+            author,
             content_snapshot,
             _content_hash(content_snapshot),
             float(occurred_at),
@@ -148,7 +154,7 @@ def record_post_mutation(
     occurred_at: float,
     created_at: float | None = None,
 ) -> IngestEvent:
-    """Public post -> global + public."""
+    """Public post -> global + public (always user-authored)."""
     return append_event(
         conn,
         owner_scope=GLOBAL_SCOPE,
@@ -159,6 +165,7 @@ def record_post_mutation(
         op=op,
         content_snapshot=content,
         occurred_at=occurred_at,
+        author="user",
         created_at=created_at,
     )
 
@@ -189,6 +196,7 @@ def record_comment_mutation(
         op=op,
         content_snapshot=content,
         occurred_at=occurred_at,
+        author=role if role in ("user", "assistant") else None,
         created_at=created_at,
     )
 
@@ -201,9 +209,11 @@ def record_chat_mutation(
     op: str,
     content: str | None,
     occurred_at: float,
+    role: str | None = None,
     created_at: float | None = None,
 ) -> IngestEvent:
-    """Private chat -> soul:<name> + private:soul:<name> (both roles)."""
+    """Private chat -> soul:<name> + private:soul:<name> (both roles). Owner does
+    not encode role here, so ``role`` must be passed to record authorship."""
     return append_event(
         conn,
         owner_scope=soul_scope(soul_name),
@@ -214,6 +224,7 @@ def record_chat_mutation(
         op=op,
         content_snapshot=content,
         occurred_at=occurred_at,
+        author=role if role in ("user", "assistant") else None,
         created_at=created_at,
     )
 
@@ -345,7 +356,7 @@ def backfill_from_existing(conn: sqlite3.Connection) -> int:
     for row in conn.execute(
         """
         SELECT cm.id AS id, cm.content AS content, cm.created_at AS created_at,
-               ct.soul_name AS soul_name
+               cm.role AS role, ct.soul_name AS soul_name
         FROM chat_messages cm
         JOIN chat_threads ct ON ct.id = cm.thread_id
         WHERE CAST(cm.id AS TEXT) NOT IN (
@@ -361,6 +372,7 @@ def backfill_from_existing(conn: sqlite3.Connection) -> int:
             op="create",
             content=str(row["content"] or ""),
             occurred_at=float(row["created_at"]),
+            role=str(row["role"]) if row["role"] in ("user", "assistant") else None,
             created_at=float(row["created_at"]),
         )
         inserted += 1

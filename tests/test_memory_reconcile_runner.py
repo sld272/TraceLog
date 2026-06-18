@@ -102,7 +102,7 @@ class BucketDiscoveryTest(unittest.TestCase):
     def test_runner_reconciles_all_buckets_with_injected_producer(self) -> None:
         with db.transaction() as conn:
             pe = mes.record_post_mutation(conn, post_id="p1", op="create", content="公开", occurred_at=1.0).id
-            ce = mes.record_chat_mutation(conn, message_id=1, soul_name="luna", op="create", content="私聊", occurred_at=2.0).id
+            ce = mes.record_chat_mutation(conn, message_id=1, soul_name="luna", op="create", content="私聊", occurred_at=2.0, role="user").id
 
         def producer(*, boundary, events, active_units, tombstones):
             ids = [e["id"] for e in events]

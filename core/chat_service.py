@@ -362,6 +362,7 @@ def _append_message(
                 op="create",
                 content=body,
                 occurred_at=now,
+                role=role,
             )
         conn.execute(
             """
@@ -415,7 +416,7 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
             (body, now, message.id),
         )
         memory_events_service.record_chat_mutation(
-            conn, message_id=message.id, soul_name=soul_name, op="edit", content=body, occurred_at=now,
+            conn, message_id=message.id, soul_name=soul_name, op="edit", content=body, occurred_at=now, role="user",
         )
         conn.execute("DELETE FROM chat_message_attachments WHERE message_id = ?", (message.id,))
         conn.executemany(
@@ -516,7 +517,7 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
             (reply.strip(), json.dumps(metadata, ensure_ascii=False), now, message.id),
         )
         memory_events_service.record_chat_mutation(
-            conn, message_id=message.id, soul_name=thread.soul_name, op="rerun", content=reply.strip(), occurred_at=now,
+            conn, message_id=message.id, soul_name=thread.soul_name, op="rerun", content=reply.strip(), occurred_at=now, role="assistant",
         )
         if deleted_ids:
             for deleted_id in deleted_ids:
