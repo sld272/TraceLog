@@ -59,6 +59,8 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 
 **复用已有投资**：轻反思已抽出 entities / emotions / events / relations 四张表，现"解耦、留作可视化基建"基本是死重。但 `entities.mention_count`、`relations.strength` 本就是跨帖累积的抽象，不是复述。把这套结构从死表提升为 **unit 的骨架**（实体图 + 情节事件做支架，语义信念 unit 挂其上），既清死重，又天然满足"genuine abstraction"。
 
+> **MVP 现状（见 memory-v2-mvp-design.md）**：轻反思**禁用**，在线侧改由每帖一次独立 LLM 产候选 unit（`proposed`），深反思跨证据消解为 active。本节「实体图升为 unit 骨架」是 v2 增强，届时需重启轻反思或由候选 proposer 补吐实体/关系。
+
 ### 2.3 unit 模型解锁了什么
 
 - **触发问题消失。** reconcile 从"批量重写"变成"流式对账"：每条新 evidence → 几个候选 op（confirm / revise / retract / add）。增量、便宜、可流式。不再攒 5 帖、不再挑空档。它就是后台车道里持续滴流的小操作——社媒大量 idle 时间正好喂这种轻整理（业界称 *sleep-time compute*：用空闲算力预先整理记忆，让在线回复更便宜）。v1 的"双车道 + 在途闸门"隔离设计，正是它的天然底座。
@@ -151,7 +153,7 @@ md / unit 都派生自 raw，故：
 
 现有 reconcile 能跑，且有比赛 deadline，故不推倒重来。下**一个最高杠杆的赌注**，其余按需叠加：
 
-1. **第一步（核心赌注）**：引入 memory unit 表；深反思**改为输出 unit ops 而非文本 patch**；`user.md` / `soul_memories` 改由 core unit 低频综合（synthesis）。一步同时解决：触发难题消解、遗忘/审计/工作台近乎免费、scaling cliff 解除。ROI 最高的单点。
+1. **第一步（核心赌注）**：引入 memory unit 表；深反思**改为输出 unit ops 而非文本 patch**；`user.md` / `soul_memories` 改由 core unit 低频综合（synthesis）。一步同时解决：触发难题消解、遗忘/审计/工作台近乎免费、scaling cliff 解除。ROI 最高的单点。（**MVP 细化**：unit 生产前移到每帖候选、轻反思禁用，对账+md 仍批量；详见 memory-v2-mvp-design.md。）
 2. **第二步**：unit 进检索池；读路改为 md 核心画像 + 检索 unit + 接缝 raw（第 4 节）。
 3. **第三步**：decay + 第 3 档重组。
 4. **可选增强**：图谱化（实体支架、矛盾边失效），不阻塞主线。
