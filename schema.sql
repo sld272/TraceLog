@@ -452,3 +452,105 @@ CREATE TABLE IF NOT EXISTS memory_reconcile_cursors (
     updated_at       REAL NOT NULL,
     PRIMARY KEY(owner_scope, visibility_scope)
 );
+
+-- ---------------------------------------------------------------------------
+-- memory v2: structured belief layer (memory units) + audit + view objects
+-- A memory unit is a first-class cross-evidence belief: stable id, confidence,
+-- evidence chain, status, time. Reconcile writes units (not md). owner_scope =
+-- who manages it; visibility_scope = where it may be used (orthogonal). CHECK
+-- enums are written in full now (SQLite cannot ALTER a CHECK) to avoid future
+-- table rebuilds.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS memory_units (
+    id               TEXT PRIMARY KEY,            -- mu_<ulid>
+    owner_scope      TEXT NOT NULL,              -- 'global' | 'soul:<name>'
+    visibility_scope TEXT NOT NULL,              -- 'public' | 'thread:<post_id>' | 'private:soul:<name>'
+    source_channel   TEXT NOT NULL
+                       CHECK(source_channel IN ('post','comment','chat','user','migration')),
+    prompt_policy    TEXT NOT NULL DEFAULT 'allow'
+                       CHECK(prompt_policy IN ('allow','no_prompt')),
+    type             TEXT NOT NULL,              -- identity/preference/goal/state/relationship/insight/freeform
+    content          TEXT NOT NULL,             -- cross-evidence abstraction, NOT a single raw transcription
+    confidence       REAL NOT NULL DEFAULT 0.6,
+
+    source           TEXT NOT NULL DEFAULT 'reflected'
+                       CHECK(source IN ('reflected','user_authored','migrated')),
+    status           TEXT NOT NULL DEFAULT 'active'
+                       CHECK(status IN ('active','pending','dormant',
+                                        'retracted_by_model','retracted_by_user',
+                                        'superseded','challenged')),
+    retraction_reason TEXT
+                       CHECK(retraction_reason IS NULL OR
+                             retraction_reason IN ('false','outdated')),
+
+    tier             TEXT NOT NULL DEFAULT 'contextual'
+                       CHECK(tier IN ('core','contextual','episodic')),
+    profile_policy   TEXT NOT NULL DEFAULT 'auto'
+                       CHECK(profile_policy IN ('auto','force_include','force_exclude')),
+    importance       REAL NOT NULL DEFAULT 0.5,
+    sensitivity      TEXT NOT NULL DEFAULT 'normal'
+                       CHECK(sensitivity IN ('high','normal','low')),
+
+    in_md_slice      INTEGER NOT NULL DEFAULT 0, -- selector result cache (not intent/budget/privacy)
+    normalized_claim TEXT,                        -- reserved: tombstone dedup, MVP may be null
+    superseded_by    TEXT REFERENCES memory_units(id) ON DELETE SET NULL,
+
+    first_seen       REAL NOT NULL,
+    last_confirmed   REAL NOT NULL,
+    retrieval_count  INTEGER NOT NULL DEFAULT 0, -- reserved for later phases
+    metadata         TEXT,
+    created_at       REAL NOT NULL,
+    updated_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_units_boundary_status
+    ON memory_units(owner_scope, visibility_scope, status, prompt_policy);
+CREATE INDEX IF NOT EXISTS idx_units_slice
+    ON memory_units(owner_scope, visibility_scope, in_md_slice, status);
+
+CREATE TABLE IF NOT EXISTS memory_unit_evidence (
+    unit_id     TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
+    event_id    INTEGER NOT NULL REFERENCES memory_ingest_events(id) ON DELETE RESTRICT,
+    relation    TEXT NOT NULL DEFAULT 'supports'
+                  CHECK(relation IN ('supports','contradicts','revises','source')),
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (unit_id, event_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_unit_evidence_event ON memory_unit_evidence(event_id);
+
+CREATE TABLE IF NOT EXISTS memory_unit_ops (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    unit_id         TEXT NOT NULL,
+    related_unit_id TEXT,
+    op              TEXT NOT NULL,   -- add/confirm/revise/retract/supersede/
+                                     -- user_create/user_edit/user_delete/migrate
+    actor           TEXT NOT NULL,   -- 'reconciler' | 'user' | 'migration'
+    before_json     TEXT,
+    after_json      TEXT,
+    reflection_id   INTEGER REFERENCES reflections(id) ON DELETE SET NULL,
+    created_at      REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_unit_ops_unit ON memory_unit_ops(unit_id, id);
+CREATE INDEX IF NOT EXISTS idx_unit_ops_reflection ON memory_unit_ops(reflection_id);
+
+CREATE TABLE IF NOT EXISTS memory_views (
+    id                   TEXT PRIMARY KEY,       -- mv_<ulid>
+    owner_scope          TEXT NOT NULL,
+    visibility_scope     TEXT NOT NULL,
+    view_type            TEXT NOT NULL,          -- 'user_md' | 'soul_private_memory'
+    content_md           TEXT NOT NULL,
+    source_unit_set_hash TEXT NOT NULL,
+    renderer_version     TEXT NOT NULL,
+    status               TEXT NOT NULL DEFAULT 'fresh'
+                          CHECK(status IN ('fresh','stale','failed')),
+    generated_at         REAL NOT NULL,
+    updated_at           REAL NOT NULL,
+    metadata             TEXT,
+    UNIQUE(owner_scope, visibility_scope, view_type)
+);
+
+CREATE TABLE IF NOT EXISTS memory_view_units (
+    view_id     TEXT NOT NULL REFERENCES memory_views(id) ON DELETE CASCADE,
+    unit_id     TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
+    order_index INTEGER NOT NULL,
+    PRIMARY KEY (view_id, unit_id)
+);
