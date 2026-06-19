@@ -157,32 +157,71 @@ class RelevantMemoryEvidenceTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
-    def test_relevant_memory_hangs_most_relevant_evidence(self) -> None:
+    def _post(self, pid: str, content: str) -> int:
         with db.transaction() as conn:
-            e1 = mes.record_post_mutation(conn, post_id="p1", op="create", content="随便记一笔", occurred_at=1.0).id
-            e2 = mes.record_post_mutation(conn, post_id="p2", op="create", content="模拟考没考好但不想放弃", occurred_at=2.0).id
-        mus.add_unit(
-            owner_scope="global", visibility_scope="public", source_channel="post",
-            type="goal", content="用户在准备考研", confidence=0.9, tier="core",
-            importance=0.85, evidence_event_ids=[e1, e2],
-        )
-        section = memory_read.build_memory_section("public_post", None, "考研 模拟考").text
-        self.assertIn("用户在准备考研", section)        # unit anchor
-        self.assertIn("模拟考没考好", section)          # most-overlap evidence original text
-        self.assertNotIn("随便记一笔", section)         # the off-topic evidence is not chosen
+            return mes.record_post_mutation(conn, post_id=pid, op="create", content=content, occurred_at=1.0).id
 
-    def test_top_evidence_skips_assistant_and_prefers_recent(self) -> None:
+    def _comment(self, pid: str, soul: str, role: str, content: str) -> int:
+        self._cid = getattr(self, "_cid", 0) + 1
         with db.transaction() as conn:
-            old = mes.record_post_mutation(conn, post_id="p1", op="create", content="早期模糊想法", occurred_at=1.0).id
-            new = mes.record_post_mutation(conn, post_id="p2", op="create", content="最近的明确想法", occurred_at=9.0).id
-        uid = mus.add_unit(
-            owner_scope="global", visibility_scope="public", source_channel="post",
-            type="insight", content="用户的想法", confidence=0.8, tier="contextual",
-            importance=0.6, evidence_event_ids=[old, new],
+            return mes.record_comment_mutation(
+                conn, comment_id=self._cid, post_id=pid, soul_name=soul, role=role,
+                op="create", content=content, occurred_at=float(self._cid),
+            ).id
+
+    def _chat(self, soul: str, role: str, content: str) -> int:
+        self._mid = getattr(self, "_mid", 0) + 1
+        with db.transaction() as conn:
+            return mes.record_chat_mutation(
+                conn, message_id=self._mid, soul_name=soul, op="create", content=content,
+                occurred_at=float(self._mid), role=role,
+            ).id
+
+    def test_cross_soul_recall_includes_post_and_both_lines(self) -> None:
+        self._post("p1", "今天又在背单词")
+        self._comment("p1", "温柔树洞", "user", "我有点焦虑")       # reply soul A's own line
+        self._comment("p1", "温柔树洞", "assistant", "抱抱你")
+        evb = self._comment("p1", "毒舌好友", "user", "我想冲刺考研")  # hit soul B's line
+        mus.add_unit(
+            owner_scope="soul:毒舌好友", visibility_scope="thread:p1", source_channel="comment",
+            type="goal", content="用户想冲刺考研", confidence=0.9, tier="core",
+            importance=0.85, evidence_event_ids=[evb],
         )
-        # no query overlap with either evidence -> recency wins
-        snippet = memory_read._top_evidence_snippet(uid, memory_read._tokenize("无关词"))
-        self.assertEqual(snippet, "最近的明确想法")
+        # 温柔树洞(A) replies in the comment scene; hits 毒舌好友(B)'s thread unit
+        section = memory_read.build_memory_section("comment", "温柔树洞", "考研 冲刺").text
+        self.assertIn("相关对话原文", section)
+        self.assertIn("今天又在背单词", section)   # original post
+        self.assertIn("我有点焦虑", section)        # A's own comment line
+        self.assertIn("我想冲刺考研", section)      # B's comment line
+        self.assertIn("毒舌好友", section)
+
+    def test_same_post_deduped_across_units(self) -> None:
+        self._post("p1", "原贴内容")
+        e1 = self._comment("p1", "温柔树洞", "user", "评论一考研")
+        e2 = self._comment("p1", "温柔树洞", "user", "评论二考研")
+        for content, ev in (("信念一考研", e1), ("信念二考研", e2)):
+            mus.add_unit(
+                owner_scope="soul:温柔树洞", visibility_scope="thread:p1", source_channel="comment",
+                type="insight", content=content, confidence=0.8, tier="contextual",
+                importance=0.6, evidence_event_ids=[ev],
+            )
+        section = memory_read.build_memory_section("comment", "温柔树洞", "考研").text
+        self.assertEqual(section.count("〈帖子 p1〉"), 1)  # post recalled once
+
+    def test_private_chat_recall_is_discreet_in_public_and_isolated(self) -> None:
+        ec = self._chat("luna", "user", "我偷偷喜欢一个人")
+        mus.add_unit(
+            owner_scope="soul:luna", visibility_scope="private:soul:luna", source_channel="chat",
+            type="insight", content="用户暗恋某人", confidence=0.8, tier="contextual",
+            importance=0.6, evidence_event_ids=[ec],
+        )
+        # luna replying in a public scene: own private recalled but discretion-flagged
+        section = memory_read.build_memory_section("public_post", "luna", "喜欢 暗恋").text
+        self.assertIn("我偷偷喜欢一个人", section)
+        self.assertIn(memory_read._DISCRETION_TAG, section)
+        # another soul never sees luna's private chat
+        other = memory_read.build_memory_section("public_post", "毒舌好友", "喜欢 暗恋").text
+        self.assertNotIn("我偷偷喜欢一个人", other)
 
 
 class LastUserTextTest(unittest.TestCase):

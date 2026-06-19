@@ -285,6 +285,17 @@ def buckets_with_pending_events(limit_buckets: int = 500) -> list[tuple[str, str
     return [(r["owner_scope"], r["visibility_scope"]) for r in rows]
 
 
+def latest_post_snapshot(post_id: str) -> str | None:
+    """The most recent non-deleted content snapshot of a post, from the ledger."""
+    row = db.query_one(
+        "SELECT content_snapshot FROM memory_ingest_events "
+        "WHERE source_type = 'post' AND source_id = ? AND content_snapshot IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1",
+        (str(post_id),),
+    )
+    return row["content_snapshot"] if row is not None else None
+
+
 def list_events_after(
     owner_scope: str,
     visibility_scope: str,

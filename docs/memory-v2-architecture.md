@@ -47,8 +47,9 @@ legacy 的 light/deep 反思在 reconcile 写模式下不再入队。
 1. **[基线认知]**：用户画像（`user_md` view，去除生成头）。缺失/stale 时退化为基于 core units 的确定性模板，再退化为 legacy `user.md`，身份底色绝不消失。
 2. **[私聊画像]**（仅私聊场景）：该 SOUL 的 `soul_private_memory` view。
 3. **[当前状态]**：近期 active `state` units（recency×importance，7 天窗口）。
-4. **[相关记忆]**：与当前 query 相关的 units，每条以「unit 摘要（去噪的主题锚点）+ 一条最贴的 raw evidence 原文（用户原话，保真细节）」形式注入，带归属与 discretion，套总字数预算。其中 evidence 在该 unit 自己的证据集内按「关键词重叠 → 时效」选取——这是个语义同质的小集合，不需要再上向量。
-5. **[最近动态·尚未整理]**（仅 `units_and_freshness`）：游标之后、尚未被 reconcile 消费的近期用户证据，按 3 天窗口 + 事件/字数预算注入，带截断标记。
+4. **[相关记忆]**：与当前 query 相关的 units，作为去噪的主题锚点逐条列出。
+5. **[相关对话原文]**：对每个命中 unit，定位其最相关证据所在的对话单元，**整段召回原文**——原贴 + 当前回复 SOUL 在该贴的评论线 + 命中所在 SOUL 的评论线；私聊命中则召回该 SOUL 的近期私聊片段（公开场景标记自审）。多命中同一对话单元去重，套宽松字数预算 + 消息边界智能截断。对话单元的定位用「关键词重叠 → 时效」在该 unit 证据集内选取，不用向量。
+6. **[最近动态·尚未整理]**（仅 `units_and_freshness`）：游标之后、尚未被 reconcile 消费的近期用户证据，按 3 天窗口 + 事件/字数预算注入，带截断标记。
 
 公开回复的「SOUL 相处记忆」块在 v2 下完全由上述分层组装，不再注入 legacy 整块 `soul_memory`（旧文件把私聊记忆无判断地带进公开回复）。
 
@@ -56,7 +57,7 @@ legacy 的 light/deep 反思在 reconcile 写模式下不再入队。
 
 `retrieve_units` 先用 SQL 按 scope/状态/类型圈定候选（scope 边界在此强制），再混合两路相关性：关键词重叠（含中文 2-gram）+ 向量 ANN（`unit` 向量文档）。一个 unit 至少命中一路才注入（最低命中门，避免无关记忆按重要度兜底刷屏）。向量索引不可用或 query 为空时退化为纯关键词。ANN 结果始终与 scope 过滤后的 SQL 候选取交集，不会扩大可见性。
 
-设计分工：**向量只负责"找对主题"——把又长又乱、不适合直接 embedding 的 raw evidence 化简成短而干净的 unit，再对 unit 做 ANN 跨主题召回**。命中主题后，"挑哪条证据"是该 unit 证据子集内的小集合排序（关键词+时效），evidence 自始至终不进 embedding。于是 unit 承担"画像抽象 + 检索锚点"，raw evidence 承担"那一两条保真细节"。画像（基线认知/私聊画像）继续全量注入 unit 综合，不挂 evidence。
+设计分工：**向量只负责"找对主题"——把又长又乱、不适合直接 embedding 的 raw evidence 化简成短而干净的 unit，再对 unit 做 ANN 跨主题召回**。命中主题后，"挑哪条证据"是该 unit 证据子集内的小集合排序（关键词+时效），evidence 自始至终不进 embedding。于是 unit 承担"画像抽象 + 检索锚点"，命中后按**对话单元整段召回** raw evidence 原文作为保真细节（见 [相关对话原文]）。画像（基线认知/私聊画像）继续全量注入 unit 综合，不挂 evidence。
 
 ### 边界：人格不串戏
 

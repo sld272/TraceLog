@@ -80,15 +80,17 @@ FRESHNESS_MAX_EVENTS = 6
 FRESHNESS_WINDOW_DAYS = 3
 FRESHNESS_CHAR_BUDGET = 400
 
-# relevant-memory evidence hydration: each retrieved unit may carry ONE short
-# raw-evidence snippet (the user's own words) for fidelity. The unit is the
-# de-noised topic anchor; the snippet is the faithful detail. Picked from the
-# unit's own evidence by keyword overlap then recency — no vector here: the unit
-# vector hit already found the topic, and a unit's evidence is a semantically
-# homogeneous set where embeddings don't discriminate. A shared budget keeps the
-# block from bloating when many units match.
-EVIDENCE_SNIPPET_MAX_CHARS = 120
-EVIDENCE_TOTAL_CHAR_BUDGET = 400
+# relevant-memory raw recall: a hit unit anchors a topic; we then recall the
+# FULL conversation around its most-relevant evidence — original post + the reply
+# soul's own comment line + the hit soul's comment line; for a private-chat hit,
+# the recent chat tail. Targets are deduped across hits and rendered under a
+# generous budget with message-boundary (smart) truncation. The most-relevant
+# evidence is chosen within the unit's own evidence by keyword overlap then
+# recency — no vector here (that already happened at the unit level).
+RECALL_CHAR_BUDGET = 1200
+RECALL_MSG_MAX_CHARS = 200
+RECALL_THREAD_EVENT_LIMIT = 50
+RECALL_CHAT_TAIL = 8
 
 
 @dataclass(frozen=True)
@@ -241,14 +243,11 @@ def _semantic_unit_ranks(query: str) -> dict[str, int]:
     return ranks
 
 
-def _top_evidence_snippet(unit_id: str, terms: list[str]) -> str | None:
-    """The single most relevant raw-evidence snippet (the user's own words)
-    backing a unit, ranked by keyword overlap then recency within the unit's own
-    evidence. That evidence set is small and semantically homogeneous (all
-    support the same belief), so no vector is needed — keyword + recency are the
-    signals with discrimination here. Returns the trimmed snapshot, or None when
-    the unit has no user-authored evidence."""
-    best: str | None = None
+def _top_evidence_row(unit_id: str, terms: list[str]) -> sqlite3.Row | None:
+    """The most relevant user-authored evidence row backing a unit, ranked by
+    keyword overlap then recency within the unit's own (semantically homogeneous)
+    evidence — no vector needed. Used to locate the conversation to recall."""
+    best: sqlite3.Row | None = None
     best_key: tuple | None = None
     for row in mus.get_unit_evidence(unit_id):
         if row["author"] not in (None, "user"):
@@ -259,10 +258,116 @@ def _top_evidence_snippet(unit_id: str, terms: list[str]) -> str | None:
         key = (_keyword_overlap(snapshot, terms), float(row["occurred_at"]))
         if best_key is None or key > best_key:
             best_key = key
-            best = snapshot
-    if best is None:
-        return None
-    return best[:EVIDENCE_SNIPPET_MAX_CHARS]
+            best = row
+    return best
+
+
+def _clip(text: str, limit: int) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _format_dialogue(events: list[sqlite3.Row], soul_label: str) -> list[str]:
+    lines: list[str] = []
+    for event in events:
+        snapshot = str(event["content_snapshot"] or "").strip()
+        if not snapshot:
+            continue
+        speaker = "用户" if event["author"] in (None, "user") else soul_label
+        lines.append(f"{speaker}：{_clip(snapshot, RECALL_MSG_MAX_CHARS)}")
+    return lines
+
+
+def _recall_post_block(post_id: str, hit_souls: list[str], reply_soul: str | None) -> str:
+    """Original post + the reply soul's own comment line + each hit soul's line."""
+    parts: list[str] = []
+    snapshot = mes.latest_post_snapshot(post_id)
+    if snapshot:
+        parts.append(f"〈帖子 {post_id}〉{_clip(snapshot, RECALL_MSG_MAX_CHARS)}")
+    souls: list[str] = []
+    if reply_soul:
+        souls.append(reply_soul)
+    for soul in hit_souls:
+        if soul and soul not in souls:
+            souls.append(soul)
+    for soul in souls:
+        events = mes.list_events_after(f"soul:{soul}", f"thread:{post_id}", 0, limit=RECALL_THREAD_EVENT_LIMIT)
+        dialogue = _format_dialogue(events, soul)
+        if dialogue:
+            parts.append(f"  与{soul}：\n" + "\n".join(f"    {line}" for line in dialogue))
+    return "\n".join(parts) if parts else ""
+
+
+def _recall_chat_block(soul: str, *, discreet: bool) -> str:
+    events = mes.list_events_after(f"soul:{soul}", f"private:soul:{soul}", 0, limit=200)
+    dialogue = _format_dialogue(events[-RECALL_CHAT_TAIL:], soul)
+    if not dialogue:
+        return ""
+    header = f"〈与{soul}的私聊〉"
+    if discreet:
+        header += f" {_DISCRETION_TAG}（私聊内容，公开场合自行判断是否提及）"
+    return header + "\n" + "\n".join(f"  {line}" for line in dialogue)
+
+
+def _recall_conversations(hits: list[MemoryItem], channel: str, reply_soul: str | None, terms: list[str]) -> str:
+    """Recall the full conversation(s) around the hit units' most-relevant
+    evidence, deduped across hits, budgeted with smart truncation. Public posts
+    and comment threads are public-scene (cross-soul readable); a private chat is
+    only recalled for the reply soul itself and discretion-flagged in public."""
+    post_hit_souls: dict[str, list[str]] = {}
+    chat_souls: list[str] = []
+    order: list[tuple[str, str]] = []
+    for item in hits:
+        ev = _top_evidence_row(item.unit_id, terms)
+        if ev is None:
+            continue
+        vis = str(ev["visibility_scope"])
+        owner = str(ev["owner_scope"])
+        if vis == "public":
+            pid = str(ev["source_id"])
+            if pid not in post_hit_souls:
+                post_hit_souls[pid] = []
+                order.append(("post", pid))
+        elif vis.startswith("thread:"):
+            pid = vis[len("thread:"):]
+            soul = owner[len("soul:"):] if owner.startswith("soul:") else None
+            if pid not in post_hit_souls:
+                post_hit_souls[pid] = []
+                order.append(("post", pid))
+            if soul and soul not in post_hit_souls[pid]:
+                post_hit_souls[pid].append(soul)
+        elif vis.startswith("private:soul:"):
+            soul = vis[len("private:soul:"):]
+            # retrieve already restricts private hits to the reply soul; guard.
+            if reply_soul and soul == reply_soul and soul not in chat_souls:
+                chat_souls.append(soul)
+                order.append(("chat", soul))
+
+    if not order:
+        return ""
+    discreet = channel in policy.PUBLIC_CHANNELS
+    blocks: list[str] = []
+    used = 0
+    truncated = False
+    for kind, key in order:
+        if used >= RECALL_CHAR_BUDGET:
+            truncated = True
+            break
+        block = (
+            _recall_post_block(key, post_hit_souls[key], reply_soul)
+            if kind == "post"
+            else _recall_chat_block(key, discreet=discreet)
+        )
+        if not block:
+            continue
+        blocks.append(block)
+        used += len(block)
+    if not blocks:
+        return ""
+    text = "[相关对话原文]\n" + "\n\n".join(blocks)
+    if truncated:
+        text += "\n（更多相关对话已省略）"
+    return text
 
 
 # --- helpers ---------------------------------------------------------------
@@ -439,13 +544,11 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
             used.append(item.unit_id)
         sections.append("[当前状态]\n" + "\n".join(lines))
 
-    # 3. query-relevant beliefs: unit = de-noised topic anchor, plus one
-    #    faithful raw-evidence snippet (the user's own words) under a budget.
+    # 3. query-relevant beliefs (de-noised topic anchors)
     hits = retrieve_units(query, channel, reply_soul)
+    terms = _tokenize(query)
     if hits:
-        terms = _tokenize(query)
         lines = []
-        evidence_chars = 0
         for item in hits:
             tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
             has_discretion = has_discretion or item.needs_discretion
@@ -453,12 +556,14 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
             attr = f" {attribution}" if attribution else ""
             lines.append(f"- [{item.type}|置信{item.confidence:.1f}] {item.content}{attr}{tag}")
             used.append(item.unit_id)
-            if evidence_chars < EVIDENCE_TOTAL_CHAR_BUDGET:
-                snippet = _top_evidence_snippet(item.unit_id, terms)
-                if snippet:
-                    lines.append(f"  · 原话：{snippet}")
-                    evidence_chars += len(snippet)
         sections.append("[相关记忆]\n" + "\n".join(lines))
+
+        # 3.5 faithful raw recall: the full conversation(s) around the hit units'
+        #     most-relevant evidence (original post + relevant comment lines, or
+        #     chat tail), deduped across hits, budgeted with smart truncation.
+        recall = _recall_conversations(hits, channel, reply_soul, terms)
+        if recall:
+            sections.append(recall)
 
     # 4. freshness seam (units_and_freshness only): recent raw evidence not yet
     #    reconciled into units, so just-happened facts are available immediately.
