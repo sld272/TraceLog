@@ -78,11 +78,12 @@ def main() -> None:
     mode = "预览（dry-run，不落库）" if dry_run else "正式提交（写入 units）"
     print(f"模型: {model}  |  模式: {mode}")
 
-    summaries = runner.run_pending_reconcile(
+    result = runner.run_pending_reconcile(
         client, model, dry_run=dry_run, trigger="manual_script", limit_per_bucket=args.limit
     )
+    summaries = result.summaries
 
-    if not summaries:
+    if not summaries and not result.failures:
         print("\n没有待对账的 bucket（所有事件都已消费，或 workspace 为空）。")
         return
 
@@ -93,8 +94,14 @@ def main() -> None:
 
     print("\n" + "=" * 72)
     print(f"共处理 {len(summaries)} 个 bucket，{'拟' if dry_run else '已'}应用 {total_applied} 个 op。")
+    if result.failures:
+        print(f"失败 bucket（共 {len(result.failures)} 个）：")
+        for failure in result.failures:
+            print(f"  - {failure.owner_scope} | {failure.visibility_scope}: {failure.error}")
     if dry_run:
         print("这是预览。确认质量后，加 --commit 实际写入。")
+    elif result.failures:
+        raise SystemExit(1)
 
     if args.views and not dry_run:
         _synthesize_views(client, model)

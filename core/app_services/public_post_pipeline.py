@@ -25,6 +25,18 @@ class PublicPostReplyContext:
     built_context: context_builder.BuiltContext
 
 
+class MemoryReconcileRunError(RuntimeError):
+    """One or more memory buckets failed during a bounded reconcile pass."""
+
+    def __init__(self, failures: list[memory_reconcile_runner.ReconcileBucketFailure]) -> None:
+        self.failures = list(failures)
+        details = "; ".join(
+            f"{failure.owner_scope}/{failure.visibility_scope}: {failure.error}"
+            for failure in self.failures
+        )
+        super().__init__(f"memory reconcile failed for {len(self.failures)} bucket(s): {details}")
+
+
 def create_post(content: str, attachment_ids: list[str] | None = None) -> CreatedPost:
     """Persist one public post and enqueue its API background pipeline."""
     body = content.strip()
@@ -82,7 +94,7 @@ def execute_job(job: dict[str, Any], client: LLMClient, model: str) -> None:
     elif job_type == job_service.TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS:
         _run_trigger_soul_deep_reflections(payload, client, model)
     elif job_type == job_service.TYPE_RUN_MEMORY_RECONCILE:
-        _run_memory_reconcile(client, model)
+        _run_memory_reconcile(job_id, client, model)
     else:
         raise ValueError(f"unsupported job type: {job_type}")
 
@@ -358,14 +370,20 @@ def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClie
     )
 
 
-def _run_memory_reconcile(client: LLMClient, model: str) -> None:
+def _run_memory_reconcile(job_id: int, client: LLMClient, model: str) -> None:
     """v2 write path: reconcile every bucket with unconsumed evidence into units,
     then refresh any stale or missing identity views from the updated units."""
-    memory_reconcile_runner.run_pending_reconcile(client, model, trigger="api")
+    result = memory_reconcile_runner.run_pending_reconcile(client, model, trigger="api")
     memory_view_producer.refresh_views_after_reconcile(client, model)
     # Keep the unit vector docs in sync with the new/retracted units so semantic
     # retrieval sees them (hash-gated; unchanged docs are skipped).
     vector_index_service.rebuild_expected_docs()
+    if result.failures:
+        raise MemoryReconcileRunError(result.failures)
+    if result.has_pending_after_run:
+        job_service.enqueue_memory_reconcile_once(
+            {"trigger": "continuation", "previous_job_id": job_id}
+        )
 
 
 def _run_trigger_soul_deep_reflections(payload: dict[str, Any], client: LLMClient, model: str) -> None:

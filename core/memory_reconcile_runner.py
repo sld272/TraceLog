@@ -1,10 +1,10 @@
 """Orchestrates reconcile across all buckets with pending evidence.
 
-This is the additive production entry point for the memory-v2 write path: it
-finds every (owner, visibility) bucket with unconsumed events and reconciles
-each with the real LLM op-producer. Nothing calls it automatically yet — it is
-invoked manually (e.g. a preview/shadow script or, after the flip, the deep
-reflection job) so the legacy pipeline stays untouched until cutover.
+This is the production entry point for the memory-v2 write path: it finds each
+(owner, visibility) bucket with unconsumed events and reconciles a bounded pass
+with the real LLM op-producer. The background job invokes it automatically in
+reconcile write mode; the workspace script also exposes it for preview/manual
+operation.
 
 ``dry_run=True`` validates + previews ops without persisting (see
 memory_reconciler.reconcile_bucket), which is exactly what the shadow window and
@@ -13,9 +13,25 @@ a "show me what units you'd extract from my data" preview need.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from core import logging_service, memory_events_service as mes, memory_reconciler as recon
 from core.memory_reconcile_producer import make_llm_op_producer
 from core.llm.types import LLMClient
+
+
+@dataclass(frozen=True)
+class ReconcileBucketFailure:
+    owner_scope: str
+    visibility_scope: str
+    error: str
+
+
+@dataclass(frozen=True)
+class ReconcileRunResult:
+    summaries: list[recon.ReconcileSummary]
+    failures: list[ReconcileBucketFailure]
+    has_pending_after_run: bool
 
 
 def reflection_type_for_visibility(visibility_scope: str) -> str:
@@ -37,12 +53,19 @@ def run_pending_reconcile(
     limit_per_bucket: int = 200,
     op_producer=None,
     trace_context: dict | None = None,
-) -> list[recon.ReconcileSummary]:
+) -> ReconcileRunResult:
     """Reconcile every bucket with pending events. ``op_producer`` may be
     injected for testing; otherwise the real LLM producer is built from
-    client/model."""
+    client/model.
+
+    Bucket failures are collected instead of aborting the pass so healthy
+    buckets still make progress. Callers must treat a non-empty ``failures`` as
+    a failed run. ``has_pending_after_run`` reports bounded-batch backlog for
+    live runs; dry-runs intentionally leave every cursor untouched and
+    therefore always report False."""
     producer = op_producer or make_llm_op_producer(client, model, trace_context=trace_context)
     summaries: list[recon.ReconcileSummary] = []
+    failures: list[ReconcileBucketFailure] = []
     for owner_scope, visibility_scope in mes.buckets_with_pending_events():
         try:
             summary = recon.reconcile_bucket(
@@ -64,7 +87,19 @@ def run_pending_reconcile(
                 visibility_scope=visibility_scope,
                 error=str(exc),
             )
+            failures.append(
+                ReconcileBucketFailure(
+                    owner_scope=owner_scope,
+                    visibility_scope=visibility_scope,
+                    error=str(exc),
+                )
+            )
             continue
         if summary is not None:
             summaries.append(summary)
-    return summaries
+    has_pending = False if dry_run else bool(mes.buckets_with_pending_events(limit_buckets=1))
+    return ReconcileRunResult(
+        summaries=summaries,
+        failures=failures,
+        has_pending_after_run=has_pending,
+    )

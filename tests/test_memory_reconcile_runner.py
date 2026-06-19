@@ -84,6 +84,28 @@ class BucketDiscoveryTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
+    def _public_events(self, n: int) -> list[int]:
+        ids = []
+        with db.transaction() as conn:
+            for i in range(n):
+                ids.append(
+                    mes.record_post_mutation(
+                        conn,
+                        post_id=f"p{i}",
+                        op="create",
+                        content=f"c{i}",
+                        occurred_at=float(i),
+                    ).id
+                )
+        return ids
+
+    @staticmethod
+    def _producer(ops):
+        return lambda *, boundary, events, active_units, tombstones: {
+            "ops": list(ops),
+            "summary": "s",
+        }
+
     def test_buckets_with_pending_events(self) -> None:
         with db.transaction() as conn:
             mes.record_post_mutation(conn, post_id="p1", op="create", content="a", occurred_at=1.0)
@@ -109,10 +131,98 @@ class BucketDiscoveryTest(unittest.TestCase):
             return {"ops": [{"op": "add", "type": "insight", "content": f"来自 {boundary['visibility_scope']}",
                              "evidence_event_ids": ids}], "summary": ""}
 
-        summaries = runner.run_pending_reconcile(client=object(), model="m", op_producer=producer)
-        self.assertEqual(len(summaries), 2)
+        result = runner.run_pending_reconcile(client=object(), model="m", op_producer=producer)
+        self.assertEqual(len(result.summaries), 2)
+        self.assertEqual(result.failures, [])
+        self.assertFalse(result.has_pending_after_run)
         self.assertEqual(len(mus.list_units("global", "public")), 1)
         self.assertEqual(len(mus.list_units("soul:luna", "private:soul:luna")), 1)
+
+    def test_runner_collects_failure_and_continues_other_buckets(self) -> None:
+        with db.transaction() as conn:
+            public_id = mes.record_post_mutation(
+                conn, post_id="p1", op="create", content="公开", occurred_at=1.0
+            ).id
+            private_id = mes.record_chat_mutation(
+                conn,
+                message_id=1,
+                soul_name="luna",
+                op="create",
+                content="私聊",
+                occurred_at=2.0,
+                role="user",
+            ).id
+
+        def producer(*, boundary, events, active_units, tombstones):
+            del active_units, tombstones
+            if boundary["visibility_scope"] == "public":
+                raise RuntimeError("public boom")
+            return {"ops": [], "summary": f"consumed {len(events)}"}
+
+        result = runner.run_pending_reconcile(client=object(), model="m", op_producer=producer)
+
+        self.assertEqual(len(result.summaries), 1)
+        self.assertEqual(
+            result.failures,
+            [runner.ReconcileBucketFailure("global", "public", "public boom")],
+        )
+        self.assertTrue(result.has_pending_after_run)
+        self.assertEqual(mes.get_cursor("global", "public"), 0)
+        self.assertEqual(mes.get_cursor("soul:luna", "private:soul:luna"), private_id)
+        self.assertGreater(public_id, 0)
+
+    def test_runner_reports_backlog_after_bounded_bucket_batch(self) -> None:
+        event_ids = self._public_events(201)
+
+        result = runner.run_pending_reconcile(
+            client=object(),
+            model="m",
+            limit_per_bucket=200,
+            op_producer=self._producer([]),
+        )
+
+        self.assertEqual(len(result.summaries), 1)
+        self.assertEqual(result.summaries[0].event_count, 200)
+        self.assertTrue(result.has_pending_after_run)
+        self.assertEqual(mes.get_cursor("global", "public"), event_ids[199])
+
+    def test_runner_dry_run_never_reports_cursor_backlog(self) -> None:
+        self._public_events(201)
+
+        result = runner.run_pending_reconcile(
+            client=object(),
+            model="m",
+            dry_run=True,
+            limit_per_bucket=200,
+            op_producer=self._producer([]),
+        )
+
+        self.assertEqual(len(result.summaries), 1)
+        self.assertFalse(result.has_pending_after_run)
+        self.assertEqual(mes.get_cursor("global", "public"), 0)
+
+    def test_more_than_500_buckets_leave_backlog_for_continuation(self) -> None:
+        with db.transaction() as conn:
+            for index in range(501):
+                mes.record_chat_mutation(
+                    conn,
+                    message_id=index + 1,
+                    soul_name=f"s{index:03d}",
+                    op="create",
+                    content=f"message {index}",
+                    occurred_at=float(index),
+                    role="user",
+                )
+
+        result = runner.run_pending_reconcile(
+            client=object(),
+            model="m",
+            op_producer=self._producer([]),
+        )
+
+        self.assertEqual(len(result.summaries), 500)
+        self.assertTrue(result.has_pending_after_run)
+        self.assertEqual(len(mes.buckets_with_pending_events()), 1)
 
     def test_reflection_type_mapping(self) -> None:
         self.assertEqual(runner.reflection_type_for_visibility("public"), recon.RECONCILE_GLOBAL)

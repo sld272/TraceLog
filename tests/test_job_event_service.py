@@ -75,6 +75,49 @@ class JobEventServiceTest(unittest.TestCase):
         self.assertEqual("failed", failed["status"])
         self.assertEqual("401 invalid api key", failed["error"])
 
+    def test_memory_reconcile_failure_requeues_when_no_pending_peer_exists(self) -> None:
+        job_id = job_service.enqueue_memory_reconcile_once()
+        job_service.claim_next_pending()
+
+        job_service.mark_memory_reconcile_failed_or_retry(job_id, "llm timeout")
+
+        job = require_not_none(job_service.get_job(job_id))
+        self.assertEqual(job_service.STATUS_PENDING, job["status"])
+        self.assertEqual("llm timeout", job["error"])
+
+    def test_memory_reconcile_failure_finalizes_when_pending_peer_exists(self) -> None:
+        job_id = job_service.enqueue_memory_reconcile_once()
+        job_service.claim_next_pending()
+        peer_id = job_service.enqueue_memory_reconcile_once({"trigger": "write_during_run"})
+
+        job_service.mark_memory_reconcile_failed_or_retry(job_id, "llm timeout")
+
+        failed = require_not_none(job_service.get_job(job_id))
+        peer = require_not_none(job_service.get_job(int(peer_id)))
+        self.assertEqual(job_service.STATUS_FAILED, failed["status"])
+        self.assertEqual(job_service.STATUS_PENDING, peer["status"])
+        self.assertEqual(
+            1,
+            len(
+                db.query_all(
+                    "SELECT id FROM jobs WHERE type = ? AND status = ?",
+                    (job_service.TYPE_RUN_MEMORY_RECONCILE, job_service.STATUS_PENDING),
+                )
+            ),
+        )
+
+    def test_memory_reconcile_failure_stops_after_max_attempts(self) -> None:
+        job_id = job_service.enqueue_memory_reconcile_once()
+        for attempt in range(job_service.DEFAULT_MAX_ATTEMPTS):
+            claimed = require_not_none(job_service.claim_next_pending())
+            self.assertEqual(job_id, claimed["id"])
+            job_service.mark_memory_reconcile_failed_or_retry(job_id, f"boom {attempt}")
+
+        failed = require_not_none(job_service.get_job(job_id))
+        self.assertEqual(job_service.STATUS_FAILED, failed["status"])
+        self.assertEqual(job_service.DEFAULT_MAX_ATTEMPTS, failed["attempts"])
+        self.assertEqual("boom 2", failed["error"])
+
     def test_post_events_list_after_id(self) -> None:
         first = event_service.append_post_event("p-1", "post_created", {"ok": True})
         second = event_service.append_post_event("p-1", "reply_started", {"soul_name": "拾迹者"})

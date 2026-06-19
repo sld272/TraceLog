@@ -157,6 +157,51 @@ def mark_failed_or_retry(job_id: int, error: str) -> None:
     mark_failed(job_id, error)
 
 
+def mark_memory_reconcile_failed_or_retry(job_id: int, error: str) -> None:
+    """Retry one reconcile job without creating competing pending runners.
+
+    A write or a bounded-pass continuation may already have queued another
+    global reconcile while this job was running. In that case the existing
+    pending job owns all remaining evidence, so this failed job is finalized
+    instead of being re-queued alongside it.
+    """
+    now = db.now_ts()
+    with db.immediate_transaction() as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if job is None:
+            return
+        retryable = is_retryable_error(error) and int(job["attempts"]) < int(job["max_attempts"])
+        if retryable:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM jobs
+                WHERE type = ? AND status = ? AND id != ?
+                LIMIT 1
+                """,
+                (TYPE_RUN_MEMORY_RECONCILE, STATUS_PENDING, job_id),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = ?, updated_at = ?, error = ?,
+                        started_at = NULL, finished_at = NULL
+                    WHERE id = ?
+                    """,
+                    (STATUS_PENDING, now, error, job_id),
+                )
+                return
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status = ?, updated_at = ?, finished_at = ?, error = ?
+            WHERE id = ?
+            """,
+            (STATUS_FAILED, now, now, error, job_id),
+        )
+
+
 def is_retryable_error(error: str | None) -> bool:
     """Return whether a failed job should be retried automatically."""
     text = (error or "").strip().lower()
