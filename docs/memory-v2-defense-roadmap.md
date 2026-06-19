@@ -17,10 +17,13 @@
 - 健壮性：并发 reconcile 的 cursor CAS、人格不串戏边界回归测试。
 - 可解释：unit→raw evidence hydration(unit_detail)。
 - goal：list_goals 目标线呈现(生命周期走 unit active/retracted)。
+- 检索：unit 向量 ANN 与关键词混合(语义召回 + 关键词精确，scope 仍由 SQL 候选保证，索引不可用时退化关键词)。
+- 迁移：评论归属迁移清理 (global, thread:*) 孤立 units/cursors。
+- 文档：权威 v2 架构文档 `docs/memory-v2-architecture.md` + README v2 章节。
 - 两个开关均默认 legacy(零影响)：`MEMORY_V2_WRITE_MODE=reconcile`、`MEMORY_V2_READ_MODE=units|units_and_freshness`。
 
-待做：unit 独立向量索引(11 完整，当前是关键词+最低门 MVP)、前端记忆工作台 UI(18-20)、
-评论归属迁移 bucket(23)、权威文档统一到 v2(24/25)。
+待做：前端记忆工作台 UI(18-20，后端 hydration/编辑基础已就绪)、答辩 demo 数据与脚本(25)、
+goal 显式「达成 vs 放弃」区分。
 
 ## 记忆边界语义基线（产品定义，已与代码核对一致）
 
