@@ -235,6 +235,12 @@ class _DryRunAbort(Exception):
     """Internal sentinel to roll back a dry-run reconcile transaction."""
 
 
+class _ConcurrentReconcile(Exception):
+    """Another runner advanced this bucket's cursor past our snapshot between
+    reading it and committing; abort without re-applying to avoid duplicate
+    units. That runner already consumed this evidence."""
+
+
 def reconcile_bucket(
     owner_scope: str,
     visibility_scope: str,
@@ -312,6 +318,20 @@ def reconcile_bucket(
 
     try:
         with db.immediate_transaction() as conn:
+            if not dry_run:
+                # CAS: the op-producer (LLM) ran outside this transaction, so a
+                # concurrent runner may have consumed + advanced the cursor in
+                # the meantime. If so, abort instead of re-applying the same
+                # evidence into duplicate units. immediate_transaction's write
+                # lock serializes the check.
+                row = conn.execute(
+                    "SELECT last_event_id FROM memory_reconcile_cursors "
+                    "WHERE owner_scope = ? AND visibility_scope = ?",
+                    (owner_scope, visibility_scope),
+                ).fetchone()
+                current_cursor = int(row["last_event_id"]) if row else 0
+                if current_cursor != cursor:
+                    raise _ConcurrentReconcile()
             reflection_id = None
             if not dry_run:
                 reflection_id = _insert_reflection_row(
@@ -348,6 +368,14 @@ def reconcile_bucket(
             mes.advance_cursor(conn, owner_scope, visibility_scope, last_event_id)
     except _DryRunAbort:
         pass
+    except _ConcurrentReconcile:
+        logging_service.log_event(
+            "memory_reconcile_skipped_concurrent",
+            owner_scope=owner_scope,
+            visibility_scope=visibility_scope,
+            at_cursor=cursor,
+        )
+        return None
 
     if not dry_run:
         # Keep in_md_slice current so a first-time bucket becomes eligible for a

@@ -181,6 +181,26 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
         self.assertEqual(mes.get_cursor("global", "public"), cursor_before)
         self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 0)
 
+    def test_concurrent_cursor_advance_aborts(self) -> None:
+        # If another runner advances the cursor while our op-producer runs, the
+        # CAS check must abort our commit so we don't create duplicate units.
+        with db.transaction() as conn:
+            e1 = mes.record_post_mutation(conn, post_id="p1", op="create", content="我在准备考研", occurred_at=1.0).id
+
+        def racing_producer(*, boundary, events, active_units, tombstones):
+            with db.immediate_transaction() as conn:
+                mes.advance_cursor(conn, "global", "public", e1)
+            return {"summary": "s", "ops": [{
+                "op": "add", "type": "goal", "content": "用户在准备考研",
+                "confidence": 0.9, "tier": "core", "importance": 0.85, "evidence_event_ids": [e1],
+            }]}
+
+        summary = recon.reconcile_bucket(
+            "global", "public", op_producer=racing_producer, reflection_type=recon.RECONCILE_GLOBAL
+        )
+        self.assertIsNone(summary)
+        self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
