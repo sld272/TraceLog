@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import attachment_service, context_builder, db, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service, vision_service
+from core import attachment_service, context_builder, db, memory_read, memory_reconcile_runner, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service, vision_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
@@ -45,12 +45,20 @@ def create_post(content: str, attachment_ids: list[str] | None = None) -> Create
     if body and tool_config_service.is_tool_enabled("todo"):
         job_ids.append(job_service.enqueue(job_service.TYPE_RUN_TODO_TOOL, {"post_id": post_id}))
     if body or attachment_ids:
-        job_ids.extend(
-            [
-                job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id}),
-                job_service.enqueue(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, {"post_id": post_id}),
-            ]
-        )
+        if memory_read.reconcile_write_enabled():
+            # v2 write path: a single global reconcile pass replaces the legacy
+            # light + deep markdown reflections. Deduped + no post_id so it stays
+            # a global job and does not gate this post's pipeline_done.
+            reconcile_id = job_service.enqueue_memory_reconcile_once({"trigger": "post"})
+            if reconcile_id is not None:
+                job_ids.append(reconcile_id)
+        else:
+            job_ids.extend(
+                [
+                    job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id}),
+                    job_service.enqueue(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, {"post_id": post_id}),
+                ]
+            )
     return CreatedPost(post_id=post_id, job_ids=job_ids)
 
 
@@ -73,6 +81,8 @@ def execute_job(job: dict[str, Any], client: LLMClient, model: str) -> None:
         _run_trigger_global_deep_reflection(payload, client, model)
     elif job_type == job_service.TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS:
         _run_trigger_soul_deep_reflections(payload, client, model)
+    elif job_type == job_service.TYPE_RUN_MEMORY_RECONCILE:
+        _run_memory_reconcile(client, model)
     else:
         raise ValueError(f"unsupported job type: {job_type}")
 
@@ -346,6 +356,11 @@ def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClie
         trigger=trigger,
         limit=limit,
     )
+
+
+def _run_memory_reconcile(client: LLMClient, model: str) -> None:
+    """v2 write path: reconcile every bucket with unconsumed evidence into units."""
+    memory_reconcile_runner.run_pending_reconcile(client, model, trigger="api")
 
 
 def _run_trigger_soul_deep_reflections(payload: dict[str, Any], client: LLMClient, model: str) -> None:

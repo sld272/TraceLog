@@ -20,6 +20,7 @@ TYPE_RUN_LIGHT_REFLECTION = "run_light_reflection"
 TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION = "maybe_trigger_global_deep_reflection"
 TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION = "trigger_global_deep_reflection"
 TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS = "trigger_soul_deep_reflections"
+TYPE_RUN_MEMORY_RECONCILE = "run_memory_reconcile"
 
 DEFAULT_MAX_ATTEMPTS = 3
 
@@ -32,6 +33,7 @@ VALID_TYPES = {
     TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION,
     TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION,
     TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS,
+    TYPE_RUN_MEMORY_RECONCILE,
 }
 
 
@@ -49,6 +51,40 @@ def enqueue(job_type: str, payload: dict[str, Any], *, max_attempts: int = DEFAU
             (job_type, STATUS_PENDING, json.dumps(payload, ensure_ascii=False), max_attempts, now, now),
         )
         return db.require_lastrowid(cur, "job insert")
+
+
+def enqueue_memory_reconcile_once(payload: dict[str, Any] | None = None) -> int | None:
+    """Enqueue a memory-reconcile job unless one is already pending (dedupe).
+
+    Reconcile scans every bucket with unconsumed evidence, so one pending job
+    already covers all writes that land before it runs; enqueuing one per write
+    would create a redundant storm. Returns the new job id, or None when a
+    pending reconcile job already exists. The dedupe check + insert share one
+    immediate transaction so concurrent writers can't both slip a job in.
+    """
+    now = db.now_ts()
+    with db.immediate_transaction() as conn:
+        existing = conn.execute(
+            "SELECT id FROM jobs WHERE type = ? AND status = ? LIMIT 1",
+            (TYPE_RUN_MEMORY_RECONCILE, STATUS_PENDING),
+        ).fetchone()
+        if existing is not None:
+            return None
+        cur = conn.execute(
+            """
+            INSERT INTO jobs(type, status, payload_json, attempts, max_attempts, created_at, updated_at)
+            VALUES (?, ?, ?, 0, ?, ?, ?)
+            """,
+            (
+                TYPE_RUN_MEMORY_RECONCILE,
+                STATUS_PENDING,
+                json.dumps(payload or {}, ensure_ascii=False),
+                DEFAULT_MAX_ATTEMPTS,
+                now,
+                now,
+            ),
+        )
+        return db.require_lastrowid(cur, "reconcile job insert")
 
 
 def claim_next_pending() -> dict[str, Any] | None:

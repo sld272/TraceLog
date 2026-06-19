@@ -39,6 +39,22 @@ def memory_reading_enabled() -> bool:
     return read_mode() != "legacy"
 
 
+# write-mode flag (design §7.2). legacy = pre-v2 light/deep reflection rewriting
+# markdown; reconcile = event-driven unit reconcile is the write path. Kept here
+# beside the read-mode flag so all memory-v2 toggles live in one place.
+WRITE_MODE_ENV = "MEMORY_V2_WRITE_MODE"
+_WRITE_MODES = ("legacy", "reconcile")
+
+
+def write_mode() -> str:
+    mode = os.environ.get(WRITE_MODE_ENV, "legacy").strip().lower()
+    return mode if mode in _WRITE_MODES else "legacy"
+
+
+def reconcile_write_enabled() -> bool:
+    return write_mode() == "reconcile"
+
+
 def memory_section_for(channel: str, reply_soul: str | None, query: str) -> str:
     """Single entry the reply paths call. Returns '' in legacy mode (zero change)
     or when there is no memory to inject."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from core import attachment_service, db, evidence_service, logging_service, memory_events_service, memory_read, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
+from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -171,7 +172,10 @@ def append_user_message(thread_id: int, content: str, attachment_ids: list[str] 
     """Append a user message to a writable chat thread."""
     thread = get_thread(thread_id)
     _assert_soul_writable(thread.soul_name)
-    return _append_message(thread_id, "user", content, attachment_ids=attachment_ids)
+    message = _append_message(thread_id, "user", content, attachment_ids=attachment_ids)
+    if message.content.strip() and memory_read.reconcile_write_enabled():
+        job_service.enqueue_memory_reconcile_once({"trigger": "chat", "soul_name": thread.soul_name})
+    return message
 
 
 def build_chat_context(

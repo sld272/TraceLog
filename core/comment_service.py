@@ -26,7 +26,7 @@ from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
-from core.app_services import public_post_pipeline
+from core.app_services import job_service, public_post_pipeline
 
 COMMENT_HISTORY_LIMIT = 30
 # 检索 k 必须覆盖配额总和,否则高分 post 会占满名额,comment/chat 配额永远填不上
@@ -219,6 +219,9 @@ def append_comment(
     message = get_message(comment_id)
     if message.content.strip():
         record_service.index_comment_embedding(message.id, message.post_id, message.soul_name, message.role, message.seq, message.content)
+    if role == "user" and body and memory_read.reconcile_write_enabled():
+        # Only the user's own comments are belief-generating evidence.
+        job_service.enqueue_memory_reconcile_once({"trigger": "comment", "post_id": post_id})
     return message
 
 
