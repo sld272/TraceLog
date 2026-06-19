@@ -80,7 +80,95 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _backfill_memory_event_authors(conn)
     _migrate_comment_event_ownership(conn)
     _backfill_memory_events(conn)
+    _migrate_goal_units_to_goaltool(conn)
     _repair_historical_challenged_units(conn)
+
+
+def _migrate_goal_units_to_goaltool(conn: sqlite3.Connection) -> None:
+    """Move active legacy goal units into the dedicated goaltool once."""
+    marker_key = "memory_v2_goaltool_migration_v1"
+    marker = conn.execute("SELECT value FROM meta WHERE key = ?", (marker_key,)).fetchone()
+    if marker is not None:
+        return
+
+    from core import goal_service, memory_unit_service
+
+    rows = conn.execute(
+        """
+        SELECT id, content, owner_scope, visibility_scope
+        FROM memory_units
+        WHERE type = 'goal' AND status = 'active'
+        ORDER BY created_at ASC, id ASC
+        """
+    ).fetchall()
+    migrated_ids: list[str] = []
+    for row in rows:
+        content = str(row["content"] or "").strip()
+        if not content:
+            continue
+        horizon = _goal_horizon_from_content(content)
+        goal_service.create_goal(
+            content,
+            None,
+            horizon,
+            source="suggested_accepted",
+            focus=horizon == "short",
+            conn=conn,
+        )
+        memory_unit_service.retract_unit(
+            str(row["id"]),
+            by="migration",
+            reason="outdated",
+            actor="goaltool_migration",
+            conn=conn,
+        )
+        migrated_ids.append(str(row["id"]))
+
+    if migrated_ids:
+        placeholders = ",".join("?" for _ in migrated_ids)
+        conn.execute(
+            f"UPDATE memory_units SET in_md_slice = 0 WHERE id IN ({placeholders})",
+            tuple(migrated_ids),
+        )
+        conn.execute(
+            f"""
+            UPDATE memory_views
+            SET status = 'stale', updated_at = ?
+            WHERE id IN (
+                SELECT DISTINCT view_id
+                FROM memory_view_units
+                WHERE unit_id IN ({placeholders})
+            )
+            """,
+            (now_ts(), *migrated_ids),
+        )
+
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?)",
+        (marker_key, str(len(migrated_ids))),
+    )
+
+
+def _goal_horizon_from_content(content: str) -> str:
+    """Conservative migration heuristic: only explicit near-term wording is short."""
+    short_markers = (
+        "今天",
+        "明天",
+        "本周",
+        "这周",
+        "下周",
+        "本月",
+        "这个月",
+        "月底",
+        "本学期",
+        "这学期",
+        "近期",
+        "短期",
+        "天内",
+        "周内",
+        "月内",
+    )
+    return "short" if any(marker in content for marker in short_markers) else "long"
 
 
 def _repair_historical_challenged_units(conn: sqlite3.Connection) -> None:

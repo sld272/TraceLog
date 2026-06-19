@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db
+from core import db, memory_events_service, memory_unit_service, memory_view_service
 from tests.helpers import require_not_none
 
 
@@ -119,6 +119,57 @@ class DbTest(unittest.TestCase):
             ("p-order",),
         )
         self.assertEqual([("B", 0), ("A", 1)], [(row["soul_name"], row["sort_order"]) for row in rows])
+
+    def test_goal_unit_migration_is_idempotent_and_stales_portrait(self) -> None:
+        with db.transaction() as conn:
+            event = memory_events_service.record_post_mutation(
+                conn,
+                post_id="p-goal",
+                op="create",
+                content="这学期完成课程项目",
+                occurred_at=1.0,
+            )
+        unit_id = memory_unit_service.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="post",
+            type="goal",
+            content="这学期完成课程项目",
+            confidence=0.95,
+            tier="core",
+            importance=0.9,
+            evidence_event_ids=[event.id],
+            source="user_authored",
+        )
+        memory_view_service.synthesize_view("global", "public", memory_view_service.VIEW_USER_MD)
+        db.execute(
+            "DELETE FROM meta WHERE key = 'memory_v2_goaltool_migration_v1'"
+        )
+
+        db.init_db()
+
+        goals = db.query_all("SELECT * FROM goals")
+        unit = require_not_none(db.query_one("SELECT * FROM memory_units WHERE id = ?", (unit_id,)))
+        view = require_not_none(
+            db.query_one(
+                """
+                SELECT * FROM memory_views
+                WHERE owner_scope = 'global' AND visibility_scope = 'public'
+                  AND view_type = 'user_md'
+                """
+            )
+        )
+        self.assertEqual(1, len(goals))
+        self.assertEqual("short", goals[0]["horizon"])
+        self.assertEqual("suggested_accepted", goals[0]["source"])
+        self.assertEqual(1, goals[0]["focus"])
+        self.assertEqual("retracted_by_model", unit["status"])
+        self.assertEqual("outdated", unit["retraction_reason"])
+        self.assertEqual(0, unit["in_md_slice"])
+        self.assertEqual("stale", view["status"])
+
+        db.init_db()
+        self.assertEqual(1, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM goals"))["count"])
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(

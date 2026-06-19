@@ -342,9 +342,9 @@ def retract_unit(
     reflection_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    if by not in {"model", "user"}:
+    if by not in {"model", "user", "migration"}:
         raise ValueError(f"非法 retract by：{by}")
-    status = "retracted_by_model" if by == "model" else "retracted_by_user"
+    status = "retracted_by_user" if by == "user" else "retracted_by_model"
     if by == "user" and reason not in {None, "false", "outdated"}:
         raise ValueError(f"非法 retraction_reason：{reason}")
     now = db.now_ts()
