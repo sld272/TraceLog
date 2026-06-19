@@ -147,6 +147,33 @@ def build_post_vision_doc(post_id: str, content: str, attachment_ids: list[str])
     )
 
 
+def build_unit_doc(
+    unit_id: str,
+    content: str,
+    owner_scope: str,
+    visibility_scope: str,
+    unit_type: str,
+) -> VectorDoc | None:
+    body = str(content or "").strip()
+    uid = str(unit_id or "").strip()
+    if not body or not uid:
+        return None
+    return VectorDoc(
+        doc_id=f"unit-{uid}",
+        doc_type="unit",
+        source_table="memory_units",
+        source_id=uid,
+        content=body,
+        metadata={
+            "type": "unit",
+            "unit_id": uid,
+            "owner_scope": str(owner_scope),
+            "visibility_scope": str(visibility_scope),
+            "unit_type": str(unit_type),
+        },
+    )
+
+
 def upsert_doc(doc: VectorDoc, *, conn: sqlite3.Connection | None = None) -> int:
     if conn is None:
         with db.transaction() as tx:
@@ -418,6 +445,19 @@ def expected_docs_from_sqlite() -> list[VectorDoc]:
         content = str(row["descriptions"] or "").strip()
         attachment_ids = [item for item in str(row["attachment_ids"] or "").split(",") if item]
         doc = build_post_vision_doc(row["post_id"], content, attachment_ids)
+        if doc is not None:
+            docs.append(doc)
+    for row in db.query_all(
+        """
+        SELECT id, content, owner_scope, visibility_scope, type
+        FROM memory_units
+        WHERE status = 'active'
+        ORDER BY id ASC
+        """
+    ):
+        doc = build_unit_doc(
+            row["id"], row["content"], row["owner_scope"], row["visibility_scope"], row["type"]
+        )
         if doc is not None:
             docs.append(doc)
     return docs

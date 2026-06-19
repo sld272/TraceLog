@@ -184,19 +184,51 @@ def retrieve_units(
 
     terms = _tokenize(query)
     now = db.now_ts()
+    semantic = _semantic_unit_ranks(query)
 
     def score(r: sqlite3.Row) -> tuple:
         overlap = _keyword_overlap(str(r["content"]), terms)
-        return (overlap, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
+        sem_rank = semantic.get(str(r["id"]))
+        sem_score = (1.0 / (1 + sem_rank)) if sem_rank is not None else 0.0
+        combined = overlap + 2.0 * sem_score
+        return (combined, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
 
-    scored = sorted(((score(r), r) for r in rows), key=lambda x: x[0], reverse=True)
-    # minimum-hit gate: a unit that shares no keyword with the query is not
-    # injected as importance-ranked filler — that surfaced off-topic memory and
-    # let it crowd out the current subject. The always-on portrait + state block
-    # still carry identity. (Full fix: a dedicated unit vector index; keyword
-    # overlap is the MVP relevance signal.)
-    hits = [r for (s, r) in scored if s[0] > 0]
-    return [_row_to_item(r, channel, reply_soul) for r in hits[:k]]
+    # relevance gate: keep units matching on keyword OR semantic similarity.
+    # Semantic recall catches paraphrases keyword overlap misses; keyword catches
+    # exact terms the embedding blurs. Units matching neither are not injected as
+    # importance-ranked filler. Scope/discretion is still enforced by the SQL
+    # candidate set above, so ANN results can never widen visibility.
+    kept = [
+        r for r in rows
+        if _keyword_overlap(str(r["content"]), terms) > 0 or str(r["id"]) in semantic
+    ]
+    ranked = sorted(kept, key=score, reverse=True)
+    return [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
+
+
+def _semantic_unit_ranks(query: str) -> dict[str, int]:
+    """unit_id -> ANN rank for the query, from the unit vector docs. Empty when
+    the query is blank or the vector index is unavailable / not query-ready, in
+    which case retrieval degrades to keyword-only. Scope is NOT applied here; the
+    caller intersects these with its scope-filtered SQL candidates."""
+    if not str(query or "").strip():
+        return {}
+    try:
+        from core import vectorstore
+        hits = vectorstore.query_documents(query, n_results=RETRIEVE_DEFAULT_K * 3, where={"type": "unit"})
+    except Exception:
+        return {}
+    ranks: dict[str, int] = {}
+    for hit in hits:
+        meta = getattr(hit, "metadata", None) or {}
+        uid = meta.get("unit_id")
+        if not uid:
+            doc_id = str(getattr(hit, "doc_id", ""))
+            if doc_id.startswith("unit-"):
+                uid = doc_id[len("unit-"):]
+        if uid:
+            ranks.setdefault(str(uid), int(getattr(hit, "rank", len(ranks) + 1)))
+    return ranks
 
 
 # --- helpers ---------------------------------------------------------------
