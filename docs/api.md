@@ -346,7 +346,8 @@ curl -F "file=@photo.jpg" http://127.0.0.1:8000/attachments/upload
     "reply": "可以先把下一步切成三块...",
     "user_message_id": 3,
     "assistant_message_id": 4,
-    "error": null
+    "error": null,
+    "suggestions": []
   },
   "messages": []
 }
@@ -392,7 +393,8 @@ data: {"id":4,"post_id":"20260612-001","soul_name":"拾迹者","role":"assistant
     "reply": "我在。",
     "user_message_id": 10,
     "assistant_message_id": 11,
-    "error": null
+    "error": null,
+    "suggestions": []
   },
   "messages": []
 }
@@ -467,9 +469,9 @@ SOUL 对象：
 }
 ```
 
-## 10. Todo
+## 10. Todo、Goal 与 Suggestions
 
-Todo 由公开 post 中的 TodoTool 自动抽取，也可以通过 API 手动管理。私聊和评论不会自动抽取 Todo。
+Todo 默认由公开 post 中的 TodoTool 自动抽取，也可以通过 API 手动管理。设置 `TODO_SUGGESTIONS_ENABLED=1` 后，TodoTool 和三路回复只生成建议，用户采纳后才创建、更新或删除 todo。
 
 | 方法 | 路径 | 请求 | 说明 |
 | --- | --- | --- | --- |
@@ -496,6 +498,26 @@ Todo 对象：
 ```
 
 `status` 取值：`未完成` / `已完成`。创建时省略 `status` 会默认为 `未完成`。
+
+Goal 接口：
+
+| 方法 | 路径 | 请求/参数 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/goals` | 可选 `status`、`horizon` | 列出目标 |
+| `POST` | `/goals` | `{ "title": "...", "detail": null, "horizon": "short", "focus": true }` | 手动创建目标 |
+| `PATCH` | `/goals/{goal_id}` | title/detail/horizon/status/focus 任意字段 | 更新目标 |
+| `POST` | `/goals/{goal_id}/progress` | 无 | 记录推进；短期目标同时恢复 focus |
+| `DELETE` | `/goals/{goal_id}` | 无 | 删除目标 |
+
+`horizon` 取值 `short` / `long`；`status` 取值 `active` / `done` / `abandoned` / `paused`。
+
+Suggestion 接口：
+
+| 方法 | 路径 | 请求/参数 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/suggestions` | 可选 `kind=goal\|todo` | 列出 pending 建议 |
+| `POST` | `/suggestions/{id}/accept` | 无 | 原子采纳并创建/更新/删除对应对象 |
+| `POST` | `/suggestions/{id}/dismiss` | 无 | 永久忽略；保留 normalized-key 墓碑 |
 
 ## 11. 反思
 

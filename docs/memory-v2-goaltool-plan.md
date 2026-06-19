@@ -1,6 +1,6 @@
 # goaltool 实施计划（完整方案 A）
 
-> 状态：实现前计划（feat/memory-v2 分支）。本文是把 [memory-v2-state-goals-suggestions-design.md](./memory-v2-state-goals-suggestions-design.md) 落成可执行步骤的施工计划，**采用完整方案 A**：reconcile 停产 `type=goal` unit、目标全部归 goaltool、引入统一建议机制（系统提议 + 对话当下确认）。
+> 状态：**已完整实施**（2026-06-19，feat/memory-v2 分支）。本文是把 [memory-v2-state-goals-suggestions-design.md](./memory-v2-state-goals-suggestions-design.md) 落成可执行步骤的施工计划，采用完整方案 A：reconcile 停产 `type=goal` unit、目标全部归 goaltool、引入统一建议机制（系统提议 + 对话当下确认）。当前权威现状见 [memory-v2-architecture.md](./memory-v2-architecture.md)。
 >
 > 已与代码核对的现状见文末「附录：现状基线」。已实现部分的权威说明见 [memory-v2-architecture.md](./memory-v2-architecture.md)。
 
@@ -159,12 +159,12 @@ CREATE INDEX IF NOT EXISTS idx_suggestions_normkey ON suggestions(normalized_key
 
 ---
 
-## 附录：现状基线（已与代码核对）
+## 附录：实现前历史基线（已被本计划替代）
 
 - **goal 现状**：reconcile 仍产 `type=goal` unit（`reflection_router._RECONCILE_TYPES` 含 goal）；`memory_read.list_goals` 读 `type=goal AND status=active` unit。无 `goals` / `suggestions` 表。
 - **todo 三件套（goaltool 蓝本）**：`core/todo_service.py`（load/list/apply/format）、`core/app_services/todo_editor.py`、`core/llm/todo_router.py`、`frontend/src/pages/TodosPage.tsx`；`todos` 表见 `schema.sql:269`。
 - **todo 注入**：`context_builder.py:56` 自动注入 `# 待办事项`（`list_active_todos`），**非**建议+确认。
 - **todo 入队**：`public_post_pipeline` 的 `TYPE_RUN_TODO_TOOL` job（`run_for_post_safely`）。
-- **当前状态块**：`memory_read` 的 `[当前状态]` 读 `type=state` unit（recency×importance，7 天窗口）；"当前关注=goaltool 投影"未实现（无 goaltool）。
-- **回复返回结构**：`chat_service.ChatReplyResult` 等，目前无 suggestions 字段。
+- **当时的当前状态块**：`memory_read` 的 `[当前状态]` 只读 `type=state` unit（recency×importance，7 天窗口），尚无 goaltool 当前关注投影。
+- **当时的回复返回结构**：`chat_service.ChatReplyResult` 等尚无 suggestions 字段。
 - **工作台后端**：`memory_review_service` 仅读写 legacy md，无 unit/goal 编辑 API。

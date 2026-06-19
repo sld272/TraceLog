@@ -4,7 +4,7 @@
 与旧设计文档（memory-v2-design / state-goals-suggestions）冲突时，以本文件为准；
 记忆边界（"人格不串戏"）的产品定义以 `memory-v2-defense-roadmap.md` 的「记忆边界语义基线」一节为准。
 
-## 与 legacy 的关系：两个开关，默认零影响
+## 与 legacy 的关系：记忆双开关 + 工具回退开关
 
 memory-v2 由两个环境变量控制，默认都是 legacy，行为与旧版完全一致：
 
@@ -13,12 +13,18 @@ memory-v2 由两个环境变量控制，默认都是 legacy，行为与旧版完
 
 两者独立可开。未开启时不读写任何 unit，旧 `user.md` / `soul_memories` 路径不变。
 
+goaltool 与 suggestions 使用独立开关：
+
+- `GOAL_TOOL_ENABLED=0`：关闭目标上下文注入；默认开启。
+- `GOAL_SUGGESTIONS_ENABLED=1`：在 public/comment/chat 回复后抽取目标建议；默认关闭。
+- `TODO_SUGGESTIONS_ENABLED=1`：TodoTool 与三路回复只生成 todo 建议，用户采纳后才改 `todos`；默认关闭，因此旧 TodoTool 自动写入行为保持不变。
+
 ## 三层数据模型
 
 记忆是一条单向 DAG：raw evidence → memory units → views（画像）。下层是上层的唯一来源，上层不持有独立真相，因此不会漂移。
 
 1. **Evidence ledger**（`memory_ingest_events`）：每次对 post / comment / chat 的 create/edit/rerun/delete 都 append 一条不可变事件，冻结内容快照与可见性边界。自增 `id` 同时充当 per-bucket 的消费游标。
-2. **Memory units**（`memory_units`）：关于【用户】的结构化信念（identity / preference / goal / state / relationship / insight / freeform），绑定到 evidence 事件版本而非可变业务行。带 confidence（信不信为真）与 importance（值不值得记）两个正交维度。
+2. **Memory units**（`memory_units`）：关于【用户】的结构化信念（identity / preference / state / relationship / insight / freeform），绑定到 evidence 事件版本而非可变业务行。schema 为兼容旧库仍允许 `goal`，但新 reconcile 会把旧模型输出的 `goal` 兜底映射为 `insight`，不再产 goal unit。带 confidence（信不信为真）与 importance（值不值得记）两个正交维度。
 3. **Views**（`memory_views`）：core 子集的低频综合画像（用户画像 `user_md`、各 SOUL 私聊画像 `soul_private_memory`），作为恒在的身份底色注入。
 
 证据按 `(owner_scope, visibility_scope)` 分桶：原贴 `global/public`、评论 `soul:<name>/thread:<post_id>`、私聊 `soul:<name>/private:soul:<name>`。
@@ -65,6 +71,8 @@ delete 后有效 evidence 已归零时由代码确定性 retract，不调用 LLM
 
 ## 读路：分层注入
 
+goaltool 的 active 长期目标以 `# 长期目标` 恒定注入；`focus=1` 的 active 短期目标以 `# 当前状态 / [当前关注]` 注入。短期关注 30 天无推进时惰性清除 focus，但目标本体保持 active。相关 memory unit 若与 active goal 标题同题，会在注入层去重。
+
 开启读模式后，回复 prompt 的记忆块由 `build_memory_section` 分层组装：
 
 1. **[基线认知]**：用户画像（`user_md` view，去除生成头）。缺失/stale 时退化为基于 core units 的确定性模板，再退化为 legacy `user.md`，身份底色绝不消失。
@@ -89,9 +97,11 @@ delete 后有效 evidence 已归零时由代码确定性 retract，不调用 LLM
 - SOUL 可读到自己的私聊记忆，但在公开场景标记为「私密·谨慎」，由提示词让模型自行判断是否说出（不是硬过滤、不是持久隐私字段）。
 - 检索结果带归属（「用户在 X 的评论区」），避免把别人的对话当成对自己说的。
 
-## goal 与可解释
+## goaltool、统一建议与可解释
 
-- **goal**：作为 `type=goal` 的 unit 经通用 reconcile 沉淀，进入画像「目标」章节与检索；`list_goals` 读取当前在追踪的目标。生命周期走 unit 状态机：达成/放弃由后续 reconcile retract（active→retracted）。
+- **goaltool**：`goals` 是目标唯一真相源，支持 short/long、active/done/abandoned/paused、focus 与最近推进时间。Web「目标」页和 `/goals` API 提供完整管理面。
+- **统一建议**：`suggestions` 同时承载 goal/todo。系统只写 pending，用户在回复下或建议托盘采纳/忽略；采纳时原子创建/更新/删除目标对象，忽略后 normalized key 作为永久墓碑，记忆 unit 不受影响。
+- **三路当下确认**：public post、评论追问、私聊的 assistant metadata/返回结果均可携带 suggestions，前端在回复气泡下渲染确认操作。
 - **evidence hydration**：`unit_detail(unit_id)` 返回 unit + raw evidence，并标记 `current/superseded/deleted`，支撑「为什么系统这么认为」的可解释与未来工作台下钻。
 
 ## 迁移
@@ -99,6 +109,8 @@ delete 后有效 evidence 已归零时由代码确定性 retract，不调用 LLM
 评论归属迁移（`_migrate_comment_event_ownership`）把 legacy `global` 的用户评论事件改归 `soul:<name>`，并清理迁移前可能残留的 `(global, thread:*)` 孤立 units/cursors，让新 soul bucket 从头 reconcile。global+public 用户画像桶不受影响；幂等。
 
 `memory_v2_rechallenge_v1` 幂等扫描修复旧版本已经越过 edit/delete cursor 的 active units：按 source 最新 revision 补 challenge/review，不回退 cursor；启动时发现 pending reviews 会自动入队 reconcile。
+
+`memory_v2_goaltool_migration_v1` 幂等迁移旧 active `type=goal` units：明确近期限的内容落 short，其余保守落 long；新 goal 使用 `suggested_accepted` 来源，旧 unit 以 `retracted_by_model/outdated` 退出并把相关画像标 stale。
 
 ## 已知未完成
 
@@ -113,7 +125,6 @@ delete 后有效 evidence 已归零时由代码确定性 retract，不调用 LLM
 
 - 每帖增量对账（trickle reconcile）：当前是按 bucket 批量 reconcile + 读路 freshness seam 兜新鲜度；trickle 是 memory-v2-design §3.1 的目标形态，未实现。
 - decay / 第三档重组：unit 的 `dormant` 衰减、低频合并压缩、按存活轮数的稳定缓冲，均未实现（`status='dormant'`、`retrieval_count` 列已预留但不写）。
-- goal 的显式「达成 vs 放弃」区分：当前用 unit active/retracted 表达「在追踪/不再追踪」；独立 goaltool / 用户确认的建议机制（见 state-goals-suggestions 设计）未实现。
 - 用户删除分意图（false/outdated/不进画像/回复禁用）、user_authored 对账免疫的完整 UX：schema 已支持（`retraction_reason`、`source`、`prompt_policy`、`profile_policy`），但缺面向用户的入口。
 
 **读路/检索增强**

@@ -61,11 +61,15 @@
 
 用户手动覆盖长期记忆时同样写 revision：`user.md` 使用 `source='user'` 与 `{"op":"overwrite_user_memory"}`；`soul_memories/<name>.md` 使用 `source='user'` 与 `{"op":"overwrite_soul_memory"}`。用户写入不经过 AI patch gate。
 
-### 2.5 SOUL、待办与系统状态
+### 2.5 SOUL、待办、目标、建议与系统状态
 
 - `souls`：SOUL 文件路径、启用状态、排序、描述。
 - `todos`：公开 post 抽取出的待办。
+- `goals`：用户确认的短/长期目标，保存 lifecycle status、focus 与最近推进时间；是目标唯一真相源。
+- `suggestions`：goal/todo 共用的 pending/accepted/dismissed 建议队列；`normalized_key` 同时承担重试去重与 dismissed 墓碑。
 - `meta`：schema version、pending vector docs、pending light reflection、deep reflection cursor 等系统状态。
+
+旧库 active `type=goal` memory units 会由 `memory_v2_goaltool_migration_v1` 一次性迁移进 `goals`，原 unit retract 并退出画像。
 
 当前 SOUL 深反思 cursor 使用 `meta.soul_thread_deep_cursor:<soul_name>`，value 是 JSON：
 

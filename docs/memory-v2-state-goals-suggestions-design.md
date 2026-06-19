@@ -1,10 +1,10 @@
 # TraceLog 记忆 v2 — 当前状态块 · goaltool · 统一建议机制 设计
 
-> **实现状态：本文绝大部分尚未实现，与当前代码存在重大偏差。** 作为未来方向的设计存档保留，不要当作现状参考。
-> 具体偏差：
-> - goal 仍由 reconcile 产出 `type=goal` 的 memory unit（本文 §3.2 主张"reconcile 不再产 goal 单元"——**未采纳**）；独立的 `goaltool` / `goals` 表 / `suggestions` 表 / 建议确认机制**均未实现**。
-> - "当前状态块"部分落地：`type=state` unit 经 recency×importance 进 always-on 块、7 天窗口（见 [memory-v2-architecture.md](./memory-v2-architecture.md) 读路 [当前状态]）；但"当前关注=goaltool 短期目标投影"未实现（无 goaltool）。
-> - importance 三段分层、回想价值门、`MIN_ADD_IMPORTANCE=0.30` / `MIN_IMPORTANCE=0.70` 等常量**已实现**。
+> **实现状态：本文的 goaltool、当前关注投影与统一建议机制已于 2026-06-19 完整落地。**
+> - reconcile 已停产 `type=goal` unit；目标唯一真相源为 `goals`。
+> - `suggestions` 已统一承载 goal/todo 的 pending → accepted/dismissed 流程，并提供对话内联确认与工作台托盘。
+> - 短期关注有 30 天惰性窗口；长期目标恒定注入。
+> - importance 三段分层、回想价值门、`MIN_ADD_IMPORTANCE=0.30` / `MIN_IMPORTANCE=0.70` 等常量保持不变。
 >
 > 已实现状态以 [memory-v2-architecture.md](./memory-v2-architecture.md) 为权威。
 >
@@ -121,7 +121,7 @@ v2 **不能**把短期状态塞进 `user.md`：`user.md` 是 core unit 的低频
 - **短期目标**：active 的进"当前关注"块（§2.2）。
 - **迁移**：goaltool 上线时，把现有 `type=goal` 单元（如"跨专业考研"）迁移成 goaltool 长期/短期目标；记忆库只保留"用户正在为某目标努力"这种关系/状态痕迹。
 
-### 3.4 schema 草案（设计，未实现）
+### 3.4 schema（已实现）
 
 ```sql
 CREATE TABLE IF NOT EXISTS goals (
