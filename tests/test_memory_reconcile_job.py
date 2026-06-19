@@ -6,8 +6,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db, memory_read
+from core import (
+    db,
+    memory_events_service as mes,
+    memory_read,
+    memory_unit_service as mus,
+    memory_view_service as mvs,
+)
 from core.app_services import job_service, public_post_pipeline
+from core.llm import reflection_router
 
 
 class MemoryReconcileJobTest(unittest.TestCase):
@@ -72,6 +79,37 @@ class MemoryReconcileJobTest(unittest.TestCase):
         with patch("core.memory_reconcile_runner.run_pending_reconcile", fake_run):
             public_post_pipeline.execute_job(job, client=object(), model="m")
         self.assertEqual(calls, ["api"])
+
+    def test_reconcile_job_end_to_end_builds_unit_and_view(self) -> None:
+        # The full v2 spine through one job: evidence -> reconcile -> unit ->
+        # recompute slice -> view synthesis -> fresh portrait.
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="p1", op="create", content="我在准备考研", occurred_at=1.0)
+        job_id = job_service.enqueue_memory_reconcile_once()
+        job = job_service.get_job(int(job_id))
+
+        def fake_reconcile(client, model, *, boundary_text, events_text, active_units_text, tombstones_text, trace_context=None):
+            ids = [int(t.split("event_id=")[1].split(" ")[0]) for t in events_text.split("- ") if "event_id=" in t]
+            return {
+                "summary": "s",
+                "ops": [{
+                    "op": "add", "type": "goal", "content": "用户在准备考研",
+                    "confidence": 0.9, "tier": "core", "importance": 0.85,
+                    "evidence_event_ids": ids,
+                }],
+            }
+
+        with patch.object(reflection_router, "call_memory_reconcile", fake_reconcile), \
+                patch.object(reflection_router, "call_view_synthesis", lambda *a, **k: "你正在备考考研。"):
+            public_post_pipeline.execute_job(job, client=object(), model="m")
+
+        units = mus.list_active_units_in_bucket("global", "public")
+        self.assertEqual(len(units), 1)
+        self.assertEqual(units[0]["content"], "用户在准备考研")
+        view = mvs.get_view("global", "public", mvs.VIEW_USER_MD)
+        self.assertIsNotNone(view)
+        self.assertEqual(view["status"], "fresh")
+        self.assertIn("备考考研", view["content_md"])
 
 
 if __name__ == "__main__":
