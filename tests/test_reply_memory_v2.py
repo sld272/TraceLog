@@ -109,6 +109,39 @@ class RetrieveGateTest(unittest.TestCase):
         self.assertEqual(memory_read.retrieve_units("量子物理", "public_post", None), [])
 
 
+class UnitDetailTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name) / "workspace"
+        self.old_workspace = db.WORKSPACE_DIR
+        self.old_db_path = db.DB_PATH
+        db.WORKSPACE_DIR = self.workspace
+        db.DB_PATH = self.workspace / "state.db"
+        db.init_db()
+
+    def tearDown(self) -> None:
+        db.WORKSPACE_DIR = self.old_workspace
+        db.DB_PATH = self.old_db_path
+        self.tmp.cleanup()
+
+    def test_unit_detail_hydrates_evidence(self) -> None:
+        with db.transaction() as conn:
+            e1 = mes.record_post_mutation(conn, post_id="p1", op="create", content="我在准备考研", occurred_at=1.0).id
+        uid = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="goal", content="用户在准备考研", confidence=0.9, tier="core",
+            importance=0.85, evidence_event_ids=[e1],
+        )
+        detail = memory_read.unit_detail(uid)
+        self.assertEqual(detail.content, "用户在准备考研")
+        self.assertEqual(len(detail.evidence), 1)
+        self.assertEqual(detail.evidence[0].event_id, e1)
+        self.assertEqual(detail.evidence[0].content, "我在准备考研")
+
+    def test_unit_detail_missing_returns_none(self) -> None:
+        self.assertIsNone(memory_read.unit_detail("nope"))
+
+
 class LastUserTextTest(unittest.TestCase):
     def test_returns_last_user_message(self) -> None:
         msgs = [

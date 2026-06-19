@@ -23,7 +23,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from core import db, memory_events_service as mes, memory_scope_policy as policy, memory_view_service as mvs
+from core import db, memory_events_service as mes, memory_scope_policy as policy, memory_unit_service as mus, memory_view_service as mvs
 
 # read-mode flag (design §7.2). legacy = pre-v2 behavior, no unit reading.
 READ_MODE_ENV = "MEMORY_V2_READ_MODE"
@@ -418,4 +418,67 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
         text="\n\n".join(sections),
         used_unit_ids=used,
         has_discretion_items=has_discretion,
+    )
+
+
+# --- evidence hydration (unit -> raw evidence, for the workbench) ----------
+
+@dataclass(frozen=True)
+class EvidenceRef:
+    event_id: int
+    source_channel: str
+    source_type: str
+    source_id: str
+    content: str
+    occurred_at: float
+    author: str | None
+
+
+@dataclass(frozen=True)
+class UnitDetail:
+    unit_id: str
+    type: str
+    content: str
+    confidence: float
+    importance: float
+    tier: str
+    status: str
+    owner_scope: str
+    visibility_scope: str
+    in_md_slice: bool
+    evidence: list[EvidenceRef]
+
+
+def unit_detail(unit_id: str) -> UnitDetail | None:
+    """One unit plus the raw evidence events it was derived from — the bottom
+    layer of the workbench's portrait -> unit -> evidence drill-down, and the
+    'why does the system believe this' explanation. Returns None if no such
+    unit."""
+    row = mus.get_unit(unit_id)
+    if row is None:
+        return None
+    evidence = [
+        EvidenceRef(
+            event_id=int(e["id"]),
+            source_channel=str(e["source_channel"]),
+            source_type=str(e["source_type"]),
+            source_id=str(e["source_id"]),
+            content=str(e["content_snapshot"] or ""),
+            occurred_at=float(e["occurred_at"]),
+            author=e["author"],
+        )
+        for e in mus.get_unit_evidence(unit_id)
+    ]
+    return UnitDetail(
+        unit_id=row["id"],
+        type=row["type"],
+        content=row["content"],
+        confidence=float(row["confidence"]),
+        importance=float(row["importance"]),
+        tier=row["tier"],
+        status=row["status"],
+        owner_scope=row["owner_scope"],
+        visibility_scope=row["visibility_scope"],
+        in_md_slice=bool(row["in_md_slice"]),
+        evidence=evidence,
     )
