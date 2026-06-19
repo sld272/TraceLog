@@ -191,6 +191,22 @@ def _row_to_item(row: sqlite3.Row, channel: str, reply_soul: str | None) -> Memo
     )
 
 
+def _attribution(item: MemoryItem, reply_soul: str | None) -> str:
+    """A short provenance tag so a soul knows whose public conversation a unit
+    came from, and never mistakes another soul's comment thread for something
+    said to itself. Own private memory is flagged via discretion, not here."""
+    vis = item.visibility_scope
+    if vis.startswith("thread:"):
+        owner = item.owner_scope
+        soul = owner[len("soul:"):] if owner.startswith("soul:") else None
+        if soul and soul != reply_soul:
+            return f"（用户在 {soul} 的评论区）"
+        return "（评论区）"
+    if vis == "public":
+        return "（公开帖子）"
+    return ""
+
+
 def _recency_weight(last_confirmed: float, now: float) -> float:
     age_days = max(0.0, (now - float(last_confirmed)) / DAY_SECONDS)
     # gentle exponential-ish decay; 1.0 fresh, ~0.5 at one week
@@ -279,7 +295,9 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
         for item in hits:
             tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
             has_discretion = has_discretion or item.needs_discretion
-            lines.append(f"- [{item.type}|置信{item.confidence:.1f}] {item.content}{tag}")
+            attribution = _attribution(item, reply_soul)
+            attr = f" {attribution}" if attribution else ""
+            lines.append(f"- [{item.type}|置信{item.confidence:.1f}] {item.content}{attr}{tag}")
             used.append(item.unit_id)
         sections.append("[相关记忆]\n" + "\n".join(lines))
 

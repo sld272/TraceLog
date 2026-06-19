@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import json
 
-from core import logging_service
+from core import logging_service, memory_read
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
+
+
+def _relationship_memory(soul: SoulContext, *, channel: str, query: str) -> str:
+    """The "SOUL 相处记忆" block. In v2 read mode this is the layered unit/view
+    memory (baseline portrait + current state + relevant units, discretion-
+    tagged, with provenance), NOT the legacy whole-file soul_memory — that file
+    mixed private-chat memory into public replies with no discretion. Legacy
+    mode is unchanged."""
+    if memory_read.memory_reading_enabled():
+        section = memory_read.memory_section_for(channel, soul.name, query).strip()
+        return section or "（暂无）"
+    return soul.soul_memory.strip() or "（暂无）"
 
 
 # 引擎 1：Post Reply
@@ -122,10 +134,10 @@ def call_soul_post_reply(
     trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a public post reply."""
-    soul_memory = soul.soul_memory.strip() or "（暂无）"
+    relationship = _relationship_memory(soul, channel="public_post", query=user_input)
     system_msg = (
         f"## SOUL 人格\n{soul.soul.strip()}\n\n"
-        f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
+        f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
         f"---\n\n{_post_reply_task_prompt()}"
     )
     return _call_post_reply_json(
@@ -148,10 +160,12 @@ def call_soul_chat_reply(
     trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a private chat reply."""
-    soul_memory = soul.soul_memory.strip() or "（暂无）"
+    # query="" is fine: baseline/state/private-portrait layers are query-
+    # independent; relevant-unit retrieval falls back to importance ranking.
+    relationship = _relationship_memory(soul, channel="chat", query="")
     system_msg = (
         f"## SOUL 人格\n{soul.soul.strip()}\n\n"
-        f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
+        f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
         f"---\n\n{_chat_reply_task_prompt()}"
     )
     messages = _build_multi_turn_messages(system_msg, chat_context.context, chat_context.messages)
@@ -175,10 +189,10 @@ def call_soul_comment_reply(
     trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a post comment thread reply."""
-    soul_memory = soul.soul_memory.strip() or "（暂无）"
+    relationship = _relationship_memory(soul, channel="comment", query="")
     system_msg = (
         f"## SOUL 人格\n{soul.soul.strip()}\n\n"
-        f"---\n\n## SOUL 相处记忆\n{soul_memory}\n\n"
+        f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
         f"---\n\n{_comment_reply_task_prompt()}"
     )
     messages = _build_multi_turn_messages(system_msg, comment_context.context, comment_context.messages)
