@@ -2,6 +2,8 @@
 
 本文档描述当前 TraceLog 的技术架构：记忆系统分层、数据存储布局、回复上下文、反思器、SOUL 边界和后续扩展方向。
 
+> **记忆系统 v2（实验，默认关闭）**：本文「记忆分层 / 反思器」等章节描述的是 legacy 记忆模型（轻反思 + 深反思重写 `user.md` / `soul_memories`），它在默认配置下仍然有效、准确。另有一套事件驱动的 memory-v2 引擎（evidence ledger → memory unit → 画像 view、reconcile 写路、unit 向量检索、freshness seam、edit/delete 重判），由 `MEMORY_V2_WRITE_MODE` / `MEMORY_V2_READ_MODE` 两个开关控制，默认 legacy。启用后记忆的写路、读路与画像来源均改变。其权威说明见 [memory-v2-architecture.md](./memory-v2-architecture.md)。
+
 ---
 
 ## 1. 总体架构

@@ -2,6 +2,8 @@
 
 本文档描述当前 `schema.sql` 的主要数据结构、索引策略和初始化约束。SQLite 是 TraceLog 的事实源；ChromaDB 保存统一检索池中的公开 post、公开 post 图片摘要（`post_vision`）、comment 和 chat message 向量索引。
 
+> **memory-v2 表未在本文覆盖**：`schema.sql` 还包含一组 memory-v2 表（`memory_ingest_events`、`memory_reconcile_cursors`、`memory_units`、`memory_unit_evidence`、`memory_unit_ops`、`memory_unit_reconcile_queue`、`memory_views`、`memory_view_units`），默认不参与读写（由 `MEMORY_V2_WRITE_MODE` / `MEMORY_V2_READ_MODE` 控制）。其数据模型与生命周期见 [memory-v2-architecture.md](./memory-v2-architecture.md)；下文 §5「反思相关持久化」描述的是 legacy 反思路径。
+
 ## 1. 初始化与版本
 
 `core.db.init_db()` 是唯一数据库初始化入口：

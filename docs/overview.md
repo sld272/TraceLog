@@ -2,6 +2,8 @@
 
 本文档介绍 TraceLog 的项目背景、产品定位、当前实现状态、架构总览、关键设计决策与风险。具体技术架构设计见 [architecture.md](./architecture.md)，数据库 Schema 见 [database.md](./database.md)，API 说明见 [api.md](./api.md)。
 
+> 本文「当前实现状态 / 反思器」等描述的是默认启用的 legacy 记忆模型。另有一套默认关闭的事件驱动 memory-v2 引擎（开关 `MEMORY_V2_WRITE_MODE` / `MEMORY_V2_READ_MODE`），见 [memory-v2-architecture.md](./memory-v2-architecture.md)。
+
 ## 1. 项目背景与定位
 
 TraceLog 是一款面向学生与青年用户的陪伴型 AI 产品，由两条核心支柱构成，并以递进的方式形成完整产品逻辑：
