@@ -22,6 +22,15 @@ def _relationship_memory(soul: SoulContext, *, channel: str, query: str) -> str:
     return soul.soul_memory.strip() or "（暂无）"
 
 
+def _last_user_text(messages) -> str:
+    """The most recent user message content, used as the memory-retrieval query
+    for chat/comment replies."""
+    for message in reversed(list(messages or [])):
+        if getattr(message, "role", None) == "user":
+            return getattr(message, "content", "") or ""
+    return ""
+
+
 # 引擎 1：Post Reply
 
 VIRTUAL_FRIEND_EXPRESSION_RULES = """\
@@ -160,9 +169,9 @@ def call_soul_chat_reply(
     trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a private chat reply."""
-    # query="" is fine: baseline/state/private-portrait layers are query-
-    # independent; relevant-unit retrieval falls back to importance ranking.
-    relationship = _relationship_memory(soul, channel="chat", query="")
+    relationship = _relationship_memory(
+        soul, channel="chat", query=_last_user_text(chat_context.messages)
+    )
     system_msg = (
         f"## SOUL 人格\n{soul.soul.strip()}\n\n"
         f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
@@ -189,7 +198,9 @@ def call_soul_comment_reply(
     trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a post comment thread reply."""
-    relationship = _relationship_memory(soul, channel="comment", query="")
+    relationship = _relationship_memory(
+        soul, channel="comment", query=_last_user_text(comment_context.messages)
+    )
     system_msg = (
         f"## SOUL 人格\n{soul.soul.strip()}\n\n"
         f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"

@@ -189,8 +189,14 @@ def retrieve_units(
         overlap = _keyword_overlap(str(r["content"]), terms)
         return (overlap, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
 
-    ranked = sorted(rows, key=score, reverse=True)
-    return [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
+    scored = sorted(((score(r), r) for r in rows), key=lambda x: x[0], reverse=True)
+    # minimum-hit gate: a unit that shares no keyword with the query is not
+    # injected as importance-ranked filler — that surfaced off-topic memory and
+    # let it crowd out the current subject. The always-on portrait + state block
+    # still carry identity. (Full fix: a dedicated unit vector index; keyword
+    # overlap is the MVP relevance signal.)
+    hits = [r for (s, r) in scored if s[0] > 0]
+    return [_row_to_item(r, channel, reply_soul) for r in hits[:k]]
 
 
 # --- helpers ---------------------------------------------------------------

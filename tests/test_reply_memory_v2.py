@@ -80,5 +80,47 @@ class AttributionTest(unittest.TestCase):
         self.assertIn("用户在 毒舌好友 的评论区", section)
 
 
+class RetrieveGateTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name) / "workspace"
+        self.old_workspace = db.WORKSPACE_DIR
+        self.old_db_path = db.DB_PATH
+        db.WORKSPACE_DIR = self.workspace
+        db.DB_PATH = self.workspace / "state.db"
+        db.init_db()
+
+    def tearDown(self) -> None:
+        db.WORKSPACE_DIR = self.old_workspace
+        db.DB_PATH = self.old_db_path
+        self.tmp.cleanup()
+
+    def test_zero_overlap_units_are_gated_out(self) -> None:
+        with db.transaction() as conn:
+            ev = mes.record_post_mutation(conn, post_id="p1", op="create", content="弹吉他", occurred_at=1.0).id
+        mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="insight", content="用户喜欢弹吉他", confidence=0.7, tier="contextual",
+            importance=0.6, evidence_event_ids=[ev],
+        )
+        # query overlaps -> returned
+        self.assertEqual(len(memory_read.retrieve_units("吉他", "public_post", None)), 1)
+        # query shares nothing -> gated out instead of importance-ranked filler
+        self.assertEqual(memory_read.retrieve_units("量子物理", "public_post", None), [])
+
+
+class LastUserTextTest(unittest.TestCase):
+    def test_returns_last_user_message(self) -> None:
+        msgs = [
+            SimpleNamespace(role="user", content="A"),
+            SimpleNamespace(role="assistant", content="B"),
+            SimpleNamespace(role="user", content="C"),
+        ]
+        self.assertEqual(reply_router._last_user_text(msgs), "C")
+
+    def test_empty_messages(self) -> None:
+        self.assertEqual(reply_router._last_user_text([]), "")
+
+
 if __name__ == "__main__":
     unittest.main()
