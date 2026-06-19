@@ -157,5 +157,32 @@ class ContextBuilderPortraitTest(_DbTestBase):
         self.assertNotIn("VIEWMARK", ctx.shared_context)
 
 
+class GoalLifecycleTest(_DbTestBase):
+    def test_goal_listed_then_retracted_on_achievement(self) -> None:
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="p1", op="create", content="我要考研", occurred_at=1.0)
+        recon.reconcile_bucket(
+            "global", "public",
+            op_producer=_seed_goal_producer("用户的目标是考研"),
+            reflection_type=recon.RECONCILE_GLOBAL,
+        )
+        goals = memory_read.list_goals()
+        self.assertEqual(len(goals), 1)
+        self.assertIn("考研", goals[0].content)
+        unit_id = goals[0].unit_id
+
+        # later evidence: the goal is achieved -> reconcile retracts it
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="p2", op="create", content="我考上研究生啦", occurred_at=2.0)
+
+        def retract_producer(*, boundary, events, active_units, tombstones):
+            return {"summary": "目标达成", "ops": [{"op": "retract", "target_id": unit_id, "reason": "outdated"}]}
+
+        recon.reconcile_bucket(
+            "global", "public", op_producer=retract_producer, reflection_type=recon.RECONCILE_GLOBAL
+        )
+        self.assertEqual(memory_read.list_goals(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

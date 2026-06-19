@@ -421,6 +421,32 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
     )
 
 
+def list_goals(
+    owner_scope: str = "global",
+    visibility_scope: str = "public",
+) -> list[MemoryItem]:
+    """Active goal units in a bucket, importance-ranked — the user's currently
+    tracked goals, for display / the workbench.
+
+    Goal lifecycle rides the unit status machine rather than a dedicated column:
+    a goal that is achieved or abandoned is retracted by a later reconcile pass
+    (status != 'active'), so 'active goal units' are exactly the goals still in
+    play. An explicit achieved-vs-abandoned distinction would need a schema
+    column and is deferred."""
+    rows = db.query_all(
+        """
+        SELECT id, type, content, confidence, importance, owner_scope, visibility_scope,
+               last_confirmed
+        FROM memory_units
+        WHERE type = 'goal' AND status = 'active'
+          AND owner_scope = ? AND visibility_scope = ?
+        ORDER BY importance DESC, last_confirmed DESC
+        """,
+        (owner_scope, visibility_scope),
+    )
+    return [_row_to_item(r, "public_post", None) for r in rows]
+
+
 # --- evidence hydration (unit -> raw evidence, for the workbench) ----------
 
 @dataclass(frozen=True)
