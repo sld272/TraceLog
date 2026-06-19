@@ -123,7 +123,11 @@ def accept(suggestion_id: str) -> dict[str, Any]:
                 conn=conn,
             )
         else:
-            created = _create_todo(conn, suggestion["payload"], suggestion.get("evidence_ref"))
+            created = _apply_todo_suggestion(
+                conn,
+                suggestion["payload"],
+                suggestion.get("evidence_ref"),
+            )
         decided_at = db.now_ts()
         conn.execute(
             "UPDATE suggestions SET status = 'accepted', decided_at = ? WHERE id = ?",
@@ -163,6 +167,8 @@ def normalized_key_for(kind: str, payload: dict[str, Any], evidence_ref: str | N
     else:
         material = {
             "kind": kind,
+            "action": payload.get("action", "create"),
+            "todo_id": payload.get("todo_id"),
             "task": _normalize_key_text(payload.get("task")),
             "date": payload.get("date"),
             "start_time": payload.get("start_time"),
@@ -193,13 +199,24 @@ def _normalize_payload(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
             "focus": bool(payload.get("focus", horizon == "short")),
         }
 
+    action = payload.get("action") or "create"
+    if action not in {"create", "update", "delete"}:
+        raise ValueError("todo suggestion action 只支持：create、update、delete")
+    todo_id = payload.get("todo_id")
+    if action in {"update", "delete"} and (not isinstance(todo_id, str) or not todo_id.strip()):
+        raise ValueError("todo suggestion update/delete 必须提供 todo_id")
     task = payload.get("task")
     if not isinstance(task, str) or not task.strip():
         raise ValueError("todo suggestion task 不能为空")
     status = payload.get("status") or "未完成"
     if status not in {"未完成", "已完成"}:
         status = "未完成"
-    normalized: dict[str, Any] = {"task": task.strip(), "status": status}
+    normalized: dict[str, Any] = {
+        "action": action,
+        "todo_id": todo_id.strip() if isinstance(todo_id, str) and todo_id.strip() else None,
+        "task": task.strip(),
+        "status": status,
+    }
     for field in ("date", "start_time", "end_time"):
         value = payload.get(field)
         if value is not None and not isinstance(value, str):
@@ -208,11 +225,17 @@ def _normalize_payload(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def _create_todo(
+def _apply_todo_suggestion(
     conn: sqlite3.Connection,
     payload: dict[str, Any],
     evidence_ref: str | None,
 ) -> dict[str, Any]:
+    action = payload.get("action") or "create"
+    if action == "update":
+        return _update_todo(conn, payload)
+    if action == "delete":
+        return _delete_todo(conn, payload)
+
     todo_id = f"manual-{uuid.uuid4().hex[:12]}"
     now = db.now_ts()
     source_post = _source_post_from_evidence(conn, evidence_ref)
@@ -247,6 +270,64 @@ def _create_todo(
         (todo_id,),
     ).fetchone()
     return dict(row)
+
+
+def _update_todo(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
+    todo_id = payload["todo_id"]
+    current = conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
+    if current is None:
+        raise ValueError("待更新 todo 不存在")
+    now = db.now_ts()
+    completed_at = current["completed_at"]
+    if payload["status"] == "已完成" and completed_at is None:
+        completed_at = now
+    if payload["status"] != "已完成":
+        completed_at = None
+    conn.execute(
+        """
+        UPDATE todos
+        SET task = ?, date = ?, start_time = ?, end_time = ?, status = ?,
+            updated_at = ?, completed_at = ?
+        WHERE id = ?
+        """,
+        (
+            payload["task"],
+            payload.get("date"),
+            payload.get("start_time"),
+            payload.get("end_time"),
+            payload["status"],
+            now,
+            completed_at,
+            todo_id,
+        ),
+    )
+    row = conn.execute(
+        """
+        SELECT id, task, date, start_time, end_time, status,
+               source_post, created_at, updated_at, completed_at
+        FROM todos WHERE id = ?
+        """,
+        (todo_id,),
+    ).fetchone()
+    return dict(row)
+
+
+def _delete_todo(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
+    todo_id = payload["todo_id"]
+    row = conn.execute(
+        """
+        SELECT id, task, date, start_time, end_time, status,
+               source_post, created_at, updated_at, completed_at
+        FROM todos WHERE id = ?
+        """,
+        (todo_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("待删除 todo 不存在")
+    deleted = dict(row)
+    deleted["deleted"] = True
+    conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
+    return deleted
 
 
 def _source_post_from_evidence(conn: sqlite3.Connection, evidence_ref: str | None) -> str | None:

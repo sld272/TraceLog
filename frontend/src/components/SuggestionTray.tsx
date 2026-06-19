@@ -118,8 +118,13 @@ function suggestionMeta(suggestion: Suggestion): string {
   const parts = [`置信度 ${Math.round(suggestion.confidence * 100)}%`]
   if (suggestion.kind === 'goal') {
     parts.push(suggestion.payload.horizon === 'short' ? '短期' : '长期')
-  } else if (typeof suggestion.payload.date === 'string' && suggestion.payload.date) {
-    parts.push(suggestion.payload.date)
+  } else {
+    if (suggestion.payload.action === 'update') parts.push('更新待办')
+    if (suggestion.payload.action === 'delete') parts.push('删除待办')
+    if (suggestion.payload.action === 'create') parts.push('新增待办')
+    if (typeof suggestion.payload.date === 'string' && suggestion.payload.date) {
+      parts.push(suggestion.payload.date)
+    }
   }
   if (suggestion.evidence_ref) parts.push(`来源 ${suggestion.evidence_ref}`)
   return parts.join(' · ')

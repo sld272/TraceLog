@@ -47,7 +47,7 @@ export function InlineSuggestions({ suggestions }: InlineSuggestionsProps) {
           <span className={styles.label}>{suggestion.kind === 'goal' ? '目标建议' : '待办建议'}</span>
           <p className={styles.title}>{suggestionTitle(suggestion)}</p>
           <p className={styles.question}>
-            {suggestion.kind === 'goal' ? '要正式记进目标吗？' : '要记进待办吗？'}
+            {suggestionQuestion(suggestion)}
           </p>
           <div className={styles.actions}>
             <button
@@ -75,4 +75,11 @@ export function InlineSuggestions({ suggestions }: InlineSuggestionsProps) {
 function suggestionTitle(suggestion: Suggestion): string {
   const value = suggestion.kind === 'goal' ? suggestion.payload.title : suggestion.payload.task
   return typeof value === 'string' && value.trim() ? value : '未命名建议'
+}
+
+function suggestionQuestion(suggestion: Suggestion): string {
+  if (suggestion.kind === 'goal') return '要正式记进目标吗？'
+  if (suggestion.payload.action === 'update') return '要更新这条待办吗？'
+  if (suggestion.payload.action === 'delete') return '要删除这条待办吗？'
+  return '要记进待办吗？'
 }

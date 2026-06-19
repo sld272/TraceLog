@@ -416,7 +416,7 @@ def call_comment_reply(
         )
         return _failed_result(post_id, soul_name, user_message_row.id, error)
 
-    suggestions = suggestion_pipeline.collect_goal_suggestions(
+    suggestions = suggestion_pipeline.collect_reply_suggestions(
         user_input=user_message_row.content,
         evidence_ref=f"comment:{user_message_row.id}",
         client=client,

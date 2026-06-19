@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from core import context_builder, db, profile_service, soul_memory_service, soul_service, todo_service, tool_config_service
+from core import context_builder, db, profile_service, soul_memory_service, soul_service, suggestion_pipeline, suggestion_service, todo_service, tool_config_service
 from core.llm import todo_router
 from tests.helpers import require_not_none
 
@@ -86,6 +88,37 @@ class TodoServiceTest(unittest.TestCase):
         self.assertEqual(1, result.upserted)
         self.assertEqual("20260525-001", row["source_post"])
         self.assertEqual(("2026-05-26", "15:00"), (row["date"], row["start_time"]))
+
+    def test_todo_suggestion_mode_waits_for_user_acceptance(self) -> None:
+        client = FakeClient(
+            {
+                "todos_to_upsert": [
+                    {
+                        "id": None,
+                        "task": "交项目 PPT",
+                        "date": "2026-05-26",
+                        "start_time": "15:00",
+                        "end_time": None,
+                        "status": "未完成",
+                    }
+                ],
+                "todos_to_delete": [],
+            }
+        )
+        with patch.dict(
+            os.environ,
+            {suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "1"},
+        ):
+            result = todo_service.run_for_post("20260525-001", client, "fake-model")
+
+        self.assertEqual(1, result.suggested)
+        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM todos"))["count"])
+        pending = suggestion_service.list_pending("todo")
+        self.assertEqual("交项目 PPT", pending[0]["payload"]["task"])
+
+        accepted = suggestion_service.accept(pending[0]["id"])
+        self.assertEqual("交项目 PPT", accepted["created"]["task"])
+        self.assertEqual("20260525-001", accepted["created"]["source_post"])
 
     def test_todo_tool_disabled_skips_call_and_context(self) -> None:
         tool_config_service.set_tool_enabled("todo", False)

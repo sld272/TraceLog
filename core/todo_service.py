@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from core import db, tool_config_service
+from core import db, suggestion_pipeline, tool_config_service
 from core.llm import todo_router
 from core.llm.types import LLMClient
 
@@ -19,6 +19,7 @@ class TodoToolResult:
     deleted: int
     skipped: bool
     error: str | None = None
+    suggested: int = 0
 
 
 def load_todos() -> list[dict]:
@@ -63,6 +64,20 @@ def run_for_post(post_id: str, client: LLMClient, model: str) -> TodoToolResult:
             deleted=0,
             skipped=False,
             error="TodoTool returned invalid JSON",
+        )
+
+    if suggestion_pipeline.todo_suggestions_enabled():
+        suggestions = suggestion_pipeline.persist_todo_candidates(
+            data,
+            evidence_ref=f"post:{post_id}",
+        )
+        return TodoToolResult(
+            post_id=post_id,
+            applied=bool(suggestions),
+            upserted=0,
+            deleted=0,
+            skipped=False,
+            suggested=len(suggestions),
         )
 
     upserted, deleted = apply_post_todos(

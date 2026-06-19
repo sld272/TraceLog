@@ -73,3 +73,32 @@ class SuggestionPipelineTest(unittest.TestCase):
             )
         self.assertEqual([], duplicate)
 
+    def test_todo_reply_extraction_creates_inline_pending_suggestion(self) -> None:
+        env = {suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "1"}
+        data = {
+            "todos_to_upsert": [
+                {
+                    "id": None,
+                    "task": "明天交作业",
+                    "date": "2026-06-20",
+                    "start_time": None,
+                    "end_time": None,
+                    "status": "未完成",
+                }
+            ],
+            "todos_to_delete": [],
+        }
+        with patch.dict(os.environ, env), patch(
+            "core.suggestion_pipeline.todo_router.call_todo_tool",
+            return_value=data,
+        ):
+            suggestions = suggestion_pipeline.collect_reply_suggestions(
+                user_input="提醒我明天交作业",
+                evidence_ref="comment:3",
+                client=object(),
+                model="m",
+            )
+
+        self.assertEqual(1, len(suggestions))
+        self.assertEqual("todo", suggestions[0]["kind"])
+        self.assertEqual("明天交作业", suggestions[0]["payload"]["task"])

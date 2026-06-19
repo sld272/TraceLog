@@ -323,7 +323,7 @@ def _call_assistant_reply_for_user_message(
         )
         return _failed_result(chat_context.thread, user_message_row.id, error)
 
-    suggestions = suggestion_pipeline.collect_goal_suggestions(
+    suggestions = suggestion_pipeline.collect_reply_suggestions(
         user_input=user_message_row.content,
         evidence_ref=f"chat:{user_message_row.id}",
         client=client,

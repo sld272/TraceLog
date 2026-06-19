@@ -118,6 +118,47 @@ class SuggestionServiceTest(unittest.TestCase):
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(1, len(suggestion_service.list_pending("goal")))
 
+    def test_todo_update_and_delete_suggestions_apply_only_on_accept(self) -> None:
+        db.execute(
+            """
+            INSERT INTO todos(id, task, status, created_at, updated_at)
+            VALUES ('todo-1', '旧任务', '未完成', 1.0, 1.0)
+            """
+        )
+        update = suggestion_service.create_suggestion(
+            "todo",
+            {
+                "action": "update",
+                "todo_id": "todo-1",
+                "task": "新任务",
+                "date": None,
+                "start_time": None,
+                "end_time": None,
+                "status": "已完成",
+            },
+            "chat:1",
+            0.8,
+        )
+        self.assertEqual("旧任务", db.query_one("SELECT task FROM todos WHERE id = 'todo-1'")["task"])
+        updated = suggestion_service.accept(update["id"])["created"]
+        self.assertEqual("新任务", updated["task"])
+        self.assertEqual("已完成", updated["status"])
+
+        delete = suggestion_service.create_suggestion(
+            "todo",
+            {
+                "action": "delete",
+                "todo_id": "todo-1",
+                "task": "新任务",
+                "status": "已完成",
+            },
+            "comment:2",
+            0.8,
+        )
+        deleted = suggestion_service.accept(delete["id"])["created"]
+        self.assertTrue(deleted["deleted"])
+        self.assertIsNone(db.query_one("SELECT id FROM todos WHERE id = 'todo-1'"))
+
 
 class FakeClient:
     def __init__(self, payload: dict) -> None:

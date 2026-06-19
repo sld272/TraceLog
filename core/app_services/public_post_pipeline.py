@@ -139,7 +139,7 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
     for soul in public_context.built_context.enabled_souls:
         event_service.append_post_event(post_id, "reply_started", {"soul_name": soul.name}, job_id=job_id)
     results = reply_service.fanout(post_id, llm_content, client, model, public_context.built_context)
-    suggestions = suggestion_pipeline.collect_goal_suggestions(
+    suggestions = suggestion_pipeline.collect_reply_suggestions(
         user_input=content,
         evidence_ref=f"post:{post_id}",
         client=client,
@@ -229,6 +229,7 @@ def _run_todo_tool(job_id: int, payload: dict[str, Any], client: LLMClient, mode
             "applied": result.applied,
             "upserted": result.upserted,
             "deleted": result.deleted,
+            "suggested": result.suggested,
             "skipped": result.skipped,
         },
         job_id=job_id,
