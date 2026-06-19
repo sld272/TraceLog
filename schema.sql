@@ -519,11 +519,27 @@ CREATE TABLE IF NOT EXISTS memory_unit_evidence (
 );
 CREATE INDEX IF NOT EXISTS idx_unit_evidence_event ON memory_unit_evidence(event_id);
 
+CREATE TABLE IF NOT EXISTS memory_unit_reconcile_queue (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    unit_id          TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
+    trigger_event_id INTEGER NOT NULL REFERENCES memory_ingest_events(id) ON DELETE RESTRICT,
+    reason           TEXT NOT NULL CHECK(reason IN ('edit','delete')),
+    status           TEXT NOT NULL DEFAULT 'pending'
+                       CHECK(status IN ('pending','resolved')),
+    created_at       REAL NOT NULL,
+    resolved_at      REAL,
+    UNIQUE(unit_id, trigger_event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_unit_reconcile_queue_pending
+    ON memory_unit_reconcile_queue(status, unit_id, id);
+CREATE INDEX IF NOT EXISTS idx_unit_reconcile_queue_trigger
+    ON memory_unit_reconcile_queue(trigger_event_id, status);
+
 CREATE TABLE IF NOT EXISTS memory_unit_ops (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     unit_id         TEXT NOT NULL,
     related_unit_id TEXT,
-    op              TEXT NOT NULL,   -- add/confirm/revise/retract/supersede/
+    op              TEXT NOT NULL,   -- add/challenge/retain/confirm/revise/retract/supersede/
                                      -- user_create/user_edit/user_delete/migrate
     actor           TEXT NOT NULL,   -- 'reconciler' | 'user' | 'migration'
     before_json     TEXT,

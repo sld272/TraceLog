@@ -12,6 +12,7 @@ from core import (
     logging_service,
     memory_events_service,
     memory_read,
+    memory_unit_service,
     profile_service,
     record_service,
     reply_context,
@@ -448,7 +449,7 @@ def get_message(message_id: int) -> CommentMessage:
 def _record_comment_deletes(conn, post_id: str, soul_name: str, deleted_rows: list[tuple[int, str]]) -> None:
     now = db.now_ts()
     for comment_id, role in deleted_rows:
-        memory_events_service.record_comment_mutation(
+        event = memory_events_service.record_comment_mutation(
             conn,
             comment_id=comment_id,
             post_id=post_id,
@@ -458,6 +459,7 @@ def _record_comment_deletes(conn, post_id: str, soul_name: str, deleted_rows: li
             content=None,
             occurred_at=now,
         )
+        memory_unit_service.challenge_units_for_source(conn, event.id)
 
 
 def delete_message(message_id: int) -> dict:
@@ -503,6 +505,10 @@ def delete_message(message_id: int) -> dict:
 
     for deleted_id in deleted_ids:
         record_service.delete_comment_embedding(deleted_id)
+    if any(role == "user" for _, role in deleted_rows) and memory_read.reconcile_write_enabled():
+        job_service.enqueue_memory_reconcile_once(
+            {"trigger": "comment_delete", "post_id": message.post_id}
+        )
     return {
         "ok": True,
         "post_id": message.post_id,

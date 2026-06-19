@@ -86,6 +86,23 @@ class ApiPostsTest(unittest.TestCase):
         self.assertEqual(409, response.status_code)
         self.assertIn("请先在设置页完成模型配置", response.json()["detail"])
 
+    def test_patch_post_updates_content(self) -> None:
+        from core.app_services.post_mutation import EditPostResult
+
+        with patch(
+            "api.routes.posts.post_mutation.edit_post",
+            return_value=EditPostResult(
+                post_id="p-1",
+                content="修改后",
+                updated_at=2.0,
+            ),
+        ):
+            with self._client() as client:
+                response = client.patch("/posts/p-1", json={"content": "修改后"})
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("修改后", response.json()["content"])
+
     def test_search_posts_returns_wrapped_keyword_shape_in_retrieval_order(self) -> None:
         from core import db, retrieval
 

@@ -263,7 +263,10 @@ def confirm_unit(
             else min(0.99, float(row["confidence"]) + confidence_delta)
         )
         c.execute(
-            "UPDATE memory_units SET confidence = ?, last_confirmed = ?, updated_at = ? WHERE id = ?",
+            "UPDATE memory_units SET confidence = ?, "
+            "status = CASE WHEN status = 'challenged' THEN 'active' ELSE status END, "
+            "retraction_reason = CASE WHEN status = 'challenged' THEN NULL ELSE retraction_reason END, "
+            "last_confirmed = ?, updated_at = ? WHERE id = ?",
             (new_conf, now, now, unit_id),
         )
         _link_evidence(c, unit_id, event_ids)
@@ -311,6 +314,11 @@ def revise_unit(
                 type = COALESCE(?, type),
                 tier = COALESCE(?, tier),
                 importance = COALESCE(?, importance),
+                status = CASE WHEN status = 'challenged' THEN 'active' ELSE status END,
+                retraction_reason = CASE
+                    WHEN status = 'challenged' THEN NULL
+                    ELSE retraction_reason
+                END,
                 last_confirmed = ?,
                 updated_at = ?
             WHERE id = ?
@@ -391,6 +399,123 @@ def supersede_unit(
         )
 
 
+def retain_unit(
+    unit_id: str,
+    *,
+    actor: str = "reconciler",
+    reflection_id: int | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Restore a challenged unit without changing its claim or evidence."""
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        if row["source"] == "user_authored":
+            raise BoundaryError("user_authored unit 不参与自动重判")
+        if row["status"] != "challenged":
+            raise ValueError("retain 只能恢复 challenged unit")
+        before = _row_to_dict(row)
+        c.execute(
+            "UPDATE memory_units SET status = 'active', retraction_reason = NULL, updated_at = ? "
+            "WHERE id = ?",
+            (now, unit_id),
+        )
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c,
+            unit_id=unit_id,
+            op="retain",
+            actor=actor,
+            before=before,
+            after=after,
+            reflection_id=reflection_id,
+        )
+
+
+def challenge_units_for_source(
+    conn: sqlite3.Connection,
+    trigger_event_id: int,
+    *,
+    actor: str = "reconciler",
+) -> list[str]:
+    """Challenge reflected units backed by any revision of the mutated source."""
+    trigger = conn.execute(
+        "SELECT * FROM memory_ingest_events WHERE id = ?",
+        (int(trigger_event_id),),
+    ).fetchone()
+    if trigger is None:
+        raise ValueError(f"trigger event 不存在：{trigger_event_id}")
+    if trigger["op"] not in {"edit", "delete"}:
+        return []
+    rows = conn.execute(
+        """
+        SELECT DISTINCT u.*
+        FROM memory_units u
+        JOIN memory_unit_evidence ue ON ue.unit_id = u.id
+        JOIN memory_ingest_events e ON e.id = ue.event_id
+        WHERE e.source_type = ? AND e.source_id = ?
+          AND u.source IN ('reflected','migrated')
+          AND u.status IN ('active','challenged')
+        ORDER BY u.id
+        """,
+        (trigger["source_type"], trigger["source_id"]),
+    ).fetchall()
+    now = db.now_ts()
+    challenged: list[str] = []
+    for row in rows:
+        unit_id = str(row["id"])
+        if row["status"] == "active":
+            before = _row_to_dict(row)
+            conn.execute(
+                "UPDATE memory_units SET status = 'challenged', in_md_slice = 0, updated_at = ? "
+                "WHERE id = ?",
+                (now, unit_id),
+            )
+            after = _row_to_dict(_get_unit_row(conn, unit_id))
+            _record_op(
+                conn,
+                unit_id=unit_id,
+                op="challenge",
+                actor=actor,
+                before=before,
+                after=after,
+            )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO memory_unit_reconcile_queue(
+                unit_id, trigger_event_id, reason, status, created_at
+            ) VALUES (?, ?, ?, 'pending', ?)
+            """,
+            (unit_id, int(trigger_event_id), str(trigger["op"]), now),
+        )
+        _mark_bucket_view_stale(conn, row["owner_scope"], row["visibility_scope"], now)
+        challenged.append(unit_id)
+    return challenged
+
+
+def _mark_bucket_view_stale(
+    conn: sqlite3.Connection,
+    owner_scope: str,
+    visibility_scope: str,
+    now: float,
+) -> None:
+    if owner_scope == "global" and visibility_scope == "public":
+        conn.execute(
+            "UPDATE memory_views SET status = 'stale', updated_at = ? "
+            "WHERE owner_scope = ? AND visibility_scope = ? AND view_type = 'user_md'",
+            (now, owner_scope, visibility_scope),
+        )
+    elif str(visibility_scope).startswith("private:soul:"):
+        conn.execute(
+            "UPDATE memory_views SET status = 'stale', updated_at = ? "
+            "WHERE owner_scope = ? AND visibility_scope = ? "
+            "AND view_type = 'soul_private_memory'",
+            (now, owner_scope, visibility_scope),
+        )
+
+
 # --- read helpers ----------------------------------------------------------
 
 def get_unit(unit_id: str) -> sqlite3.Row | None:
@@ -444,6 +569,90 @@ def list_active_units_in_bucket(owner_scope: str, visibility_scope: str) -> list
         ORDER BY id ASC
         """,
         (owner_scope, visibility_scope),
+    )
+
+
+def list_reconcile_units_in_bucket(
+    owner_scope: str,
+    visibility_scope: str,
+) -> list[sqlite3.Row]:
+    return db.query_all(
+        """
+        SELECT * FROM memory_units
+        WHERE owner_scope = ? AND visibility_scope = ?
+          AND status IN ('active','challenged')
+        ORDER BY id ASC
+        """,
+        (owner_scope, visibility_scope),
+    )
+
+
+def list_pending_reviews(
+    owner_scope: str,
+    visibility_scope: str,
+) -> list[sqlite3.Row]:
+    return db.query_all(
+        """
+        SELECT q.*, e.source_type, e.source_id, e.source_revision,
+               e.op AS trigger_op, u.status AS unit_status
+        FROM memory_unit_reconcile_queue q
+        JOIN memory_units u ON u.id = q.unit_id
+        JOIN memory_ingest_events e ON e.id = q.trigger_event_id
+        WHERE q.status = 'pending'
+          AND u.owner_scope = ? AND u.visibility_scope = ?
+        ORDER BY q.id ASC
+        """,
+        (owner_scope, visibility_scope),
+    )
+
+
+def current_effective_evidence_for_unit(
+    unit_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[sqlite3.Row]:
+    sql = """
+        WITH linked_sources AS (
+            SELECT DISTINCT linked.source_type, linked.source_id
+            FROM memory_unit_evidence ue
+            JOIN memory_ingest_events linked ON linked.id = ue.event_id
+            WHERE ue.unit_id = ?
+        )
+        SELECT latest.*, 'supports' AS relation
+        FROM linked_sources source
+        JOIN memory_ingest_events latest
+          ON latest.source_type = source.source_type
+         AND latest.source_id = source.source_id
+        WHERE latest.id = (
+              SELECT newest.id
+              FROM memory_ingest_events newest
+              WHERE newest.source_type = source.source_type
+                AND newest.source_id = source.source_id
+              ORDER BY newest.source_revision DESC, newest.id DESC
+              LIMIT 1
+          )
+          AND latest.op != 'delete'
+          AND latest.author = 'user'
+          AND TRIM(COALESCE(latest.content_snapshot, '')) != ''
+        ORDER BY latest.id ASC
+    """
+    if conn is not None:
+        return conn.execute(sql, (unit_id,)).fetchall()
+    return db.query_all(sql, (unit_id,))
+
+
+def resolve_review_rows(
+    conn: sqlite3.Connection,
+    review_ids: list[int],
+) -> None:
+    if not review_ids:
+        return
+    placeholders = ",".join("?" for _ in review_ids)
+    conn.execute(
+        f"UPDATE memory_unit_reconcile_queue "
+        f"SET status = 'resolved', resolved_at = ? "
+        f"WHERE status = 'pending' AND id IN ({placeholders})",
+        (db.now_ts(), *[int(item) for item in review_ids]),
     )
 
 

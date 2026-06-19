@@ -23,6 +23,7 @@ class ReconcileParserTest(unittest.TestCase):
             "ops": [
                 {"op": "add", "type": "goal", "content": " 考研 ", "confidence": 1.5,
                  "tier": "core", "importance": 0.8, "evidence_event_ids": [1, "2", "x"]},
+                {"op": "retain", "target_id": "mu_review"},
                 {"op": "confirm", "target_id": "mu_a", "evidence_event_ids": [3]},
                 {"op": "revise", "target_id": "mu_b", "content": "改了"},
                 {"op": "retract", "target_id": "mu_c", "reason": "outdated"},
@@ -33,7 +34,7 @@ class ReconcileParserTest(unittest.TestCase):
         parsed = reflection_router._parse_memory_reconcile_content(raw)
         ops = parsed["ops"]
         self.assertEqual(parsed["summary"], "本轮发现一个目标")
-        self.assertEqual(len(ops), 4)  # bogus + non-dict dropped
+        self.assertEqual(len(ops), 5)  # bogus + non-dict dropped
 
         add = ops[0]
         self.assertEqual(add["type"], "goal")
@@ -41,7 +42,12 @@ class ReconcileParserTest(unittest.TestCase):
         self.assertEqual(add["confidence"], 1.0)  # clamped
         self.assertEqual(add["evidence_event_ids"], [1, 2])  # "x" dropped
 
-        self.assertEqual(ops[3]["reason"], "outdated")
+        self.assertEqual(ops[1], {
+            "op": "retain",
+            "evidence_event_ids": [],
+            "target_id": "mu_review",
+        })
+        self.assertEqual(ops[4]["reason"], "outdated")
 
     def test_parser_coerces_unknown_type_to_insight(self) -> None:
         raw = json.dumps({"ops": [

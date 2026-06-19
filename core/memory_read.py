@@ -113,6 +113,7 @@ class FreshnessItem:
     owner_scope: str
     visibility_scope: str
     needs_discretion: bool
+    reviewing: bool = False
 
 
 def _allowed_visibility_sql(plan: dict) -> tuple[str, list]:
@@ -249,7 +250,7 @@ def _top_evidence_row(unit_id: str, terms: list[str]) -> sqlite3.Row | None:
     evidence — no vector needed. Used to locate the conversation to recall."""
     best: sqlite3.Row | None = None
     best_key: tuple | None = None
-    for row in mus.get_unit_evidence(unit_id):
+    for row in mus.current_effective_evidence_for_unit(unit_id):
         if row["author"] not in (None, "user"):
             continue
         snapshot = str(row["content_snapshot"] or "").strip()
@@ -269,7 +270,7 @@ def _clip(text: str, limit: int) -> str:
 
 def _format_dialogue(events: list[sqlite3.Row], soul_label: str) -> list[str]:
     lines: list[str] = []
-    for event in events:
+    for event in mes.collapse_to_current_events(events):
         snapshot = str(event["content_snapshot"] or "").strip()
         if not snapshot:
             continue
@@ -291,7 +292,11 @@ def _recall_post_block(post_id: str, hit_souls: list[str], reply_soul: str | Non
         if soul and soul not in souls:
             souls.append(soul)
     for soul in souls:
-        events = mes.list_events_after(f"soul:{soul}", f"thread:{post_id}", 0, limit=RECALL_THREAD_EVENT_LIMIT)
+        events = mes.list_current_events_in_bucket(
+            f"soul:{soul}",
+            f"thread:{post_id}",
+            limit=RECALL_THREAD_EVENT_LIMIT,
+        )
         dialogue = _format_dialogue(events, soul)
         if dialogue:
             parts.append(f"  与{soul}：\n" + "\n".join(f"    {line}" for line in dialogue))
@@ -299,7 +304,11 @@ def _recall_post_block(post_id: str, hit_souls: list[str], reply_soul: str | Non
 
 
 def _recall_chat_block(soul: str, *, discreet: bool) -> str:
-    events = mes.list_events_after(f"soul:{soul}", f"private:soul:{soul}", 0, limit=200)
+    events = mes.list_current_events_in_bucket(
+        f"soul:{soul}",
+        f"private:soul:{soul}",
+        limit=200,
+    )
     dialogue = _format_dialogue(events[-RECALL_CHAT_TAIL:], soul)
     if not dialogue:
         return ""
@@ -414,6 +423,7 @@ def freshness_seam(
     reply_soul: str | None,
     *,
     now: float | None = None,
+    query: str = "",
 ) -> tuple[list[FreshnessItem], bool]:
     """Recent user evidence past each admissible bucket's reconcile cursor — raw
     facts not yet folded into units. Most-recent first, gated by an age window
@@ -424,14 +434,15 @@ def freshness_seam(
     cutoff = now - FRESHNESS_WINDOW_DAYS * DAY_SECONDS
     plan = policy.admissible_visibility_filters(channel, reply_soul)
 
-    candidates: list[sqlite3.Row] = []
+    candidates: dict[int, tuple[sqlite3.Row, bool]] = {}
     for owner_scope, visibility_scope in mes.buckets_with_pending_events():
         if not _vis_admissible(visibility_scope, plan):
             continue
         cursor = mes.get_cursor(owner_scope, visibility_scope)
-        for event in mes.list_events_after(
+        pending_events = mes.list_events_after(
             owner_scope, visibility_scope, cursor, limit=FRESHNESS_MAX_EVENTS * 4
-        ):
+        )
+        for event in mes.collapse_to_current_events(pending_events):
             if event["author"] != "user":
                 continue
             snapshot = str(event["content_snapshot"] or "").strip()
@@ -439,13 +450,39 @@ def freshness_seam(
                 continue
             if float(event["occurred_at"]) < cutoff:
                 continue
-            candidates.append(event)
+            candidates[int(event["id"])] = (event, False)
 
-    candidates.sort(key=lambda e: (float(e["occurred_at"]), int(e["id"])), reverse=True)
-    truncated = len(candidates) > FRESHNESS_MAX_EVENTS
+        for review in mus.list_pending_reviews(owner_scope, visibility_scope):
+            unit_id = str(review["unit_id"])
+            review_events = mus.current_effective_evidence_for_unit(unit_id)
+            trigger_current = mes.current_effective_event(
+                str(review["source_type"]),
+                str(review["source_id"]),
+            )
+            if trigger_current is not None:
+                review_events = [*review_events, trigger_current]
+            for event in review_events:
+                if event["author"] != "user":
+                    continue
+                if not str(event["content_snapshot"] or "").strip():
+                    continue
+                candidates[int(event["id"])] = (event, True)
+
+    terms = _tokenize(query)
+    ordered = sorted(
+        candidates.values(),
+        key=lambda item: (
+            _keyword_overlap(str(item[0]["content_snapshot"] or ""), terms),
+            1 if item[1] else 0,
+            float(item[0]["occurred_at"]),
+            int(item[0]["id"]),
+        ),
+        reverse=True,
+    )
+    truncated = len(ordered) > FRESHNESS_MAX_EVENTS
     items: list[FreshnessItem] = []
     used_chars = 0
-    for event in candidates[:FRESHNESS_MAX_EVENTS]:
+    for event, reviewing in ordered[:FRESHNESS_MAX_EVENTS]:
         snapshot = str(event["content_snapshot"]).strip()
         if items and used_chars + len(snapshot) > FRESHNESS_CHAR_BUDGET:
             truncated = True
@@ -459,6 +496,7 @@ def freshness_seam(
             owner_scope=str(event["owner_scope"]),
             visibility_scope=vis,
             needs_discretion=_discretion_for(vis, channel, reply_soul),
+            reviewing=reviewing,
         ))
     return items, truncated
 
@@ -504,11 +542,7 @@ class MemoryPrompt:
 
 
 def _portrait_text(owner_scope: str, visibility_scope: str, view_type: str) -> str:
-    view = mvs.get_view(owner_scope, visibility_scope, view_type)
-    if view is None:
-        return ""
-    body = _HTML_COMMENT.sub("", str(view["content_md"] or "")).strip()
-    return body
+    return mvs.read_portrait_body(owner_scope, visibility_scope, view_type)
 
 
 def build_memory_section(channel: str, reply_soul: str | None, query: str) -> MemoryPrompt:
@@ -568,7 +602,7 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
     # 4. freshness seam (units_and_freshness only): recent raw evidence not yet
     #    reconciled into units, so just-happened facts are available immediately.
     if read_mode() == "units_and_freshness":
-        fresh_items, truncated = freshness_seam(channel, reply_soul)
+        fresh_items, truncated = freshness_seam(channel, reply_soul, query=query)
         if fresh_items:
             lines = []
             for fitem in fresh_items:
@@ -576,9 +610,10 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
                 has_discretion = has_discretion or fitem.needs_discretion
                 attribution = _attribution_for(fitem.visibility_scope, fitem.owner_scope, reply_soul)
                 attr = f"{attribution} " if attribution else ""
-                lines.append(f"- {attr}{fitem.content}{tag}")
+                state = "（unit 重判中）" if fitem.reviewing else "（新近未整理）"
+                lines.append(f"- {state}{attr}{fitem.content}{tag}")
             note = "（仅最近部分）" if truncated else ""
-            sections.append(f"[最近动态·尚未整理]{note}\n" + "\n".join(lines))
+            sections.append(f"[尚未稳定沉淀的原始证据]{note}\n" + "\n".join(lines))
 
     if not sections:
         return MemoryPrompt(text="", used_unit_ids=[], has_discretion_items=False)
@@ -637,6 +672,7 @@ class EvidenceRef:
     content: str
     occurred_at: float
     author: str | None
+    state: str
 
 
 @dataclass(frozen=True)
@@ -662,18 +698,26 @@ def unit_detail(unit_id: str) -> UnitDetail | None:
     row = mus.get_unit(unit_id)
     if row is None:
         return None
-    evidence = [
-        EvidenceRef(
-            event_id=int(e["id"]),
-            source_channel=str(e["source_channel"]),
-            source_type=str(e["source_type"]),
-            source_id=str(e["source_id"]),
-            content=str(e["content_snapshot"] or ""),
-            occurred_at=float(e["occurred_at"]),
-            author=e["author"],
+    evidence = []
+    for e in mus.get_unit_evidence(unit_id):
+        latest = mes.latest_source_event(str(e["source_type"]), str(e["source_id"]))
+        state = "superseded"
+        if latest is not None and latest["op"] == "delete":
+            state = "deleted"
+        elif latest is not None and int(latest["id"]) == int(e["id"]):
+            state = "current"
+        evidence.append(
+            EvidenceRef(
+                event_id=int(e["id"]),
+                source_channel=str(e["source_channel"]),
+                source_type=str(e["source_type"]),
+                source_id=str(e["source_id"]),
+                content=str(e["content_snapshot"] or ""),
+                occurred_at=float(e["occurred_at"]),
+                author=e["author"],
+                state=state,
+            )
         )
-        for e in mus.get_unit_evidence(unit_id)
-    ]
     return UnitDetail(
         unit_id=row["id"],
         type=row["type"],

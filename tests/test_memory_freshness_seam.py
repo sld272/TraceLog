@@ -72,11 +72,11 @@ class FreshnessSeamTest(unittest.TestCase):
         self._post("我刚开始学法语", now - 50)
         with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "units_and_freshness"}):
             text = memory_read.build_memory_section("public_post", None, "法语").text
-        self.assertIn("最近动态", text)
+        self.assertIn("尚未稳定沉淀的原始证据", text)
         self.assertIn("我刚开始学法语", text)
         with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "units"}):
             text2 = memory_read.build_memory_section("public_post", None, "法语").text
-        self.assertNotIn("最近动态", text2)
+        self.assertNotIn("尚未稳定沉淀的原始证据", text2)
 
 
 if __name__ == "__main__":

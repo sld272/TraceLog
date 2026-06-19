@@ -69,6 +69,10 @@ class ReconcileSummary:
         self.by_op[op] = self.by_op.get(op, 0) + 1
 
 
+class ReconcileReviewError(RuntimeError):
+    """The model did not provide a complete, valid challenged-unit decision set."""
+
+
 def _load_tombstones(owner_scope: str, visibility_scope: str) -> list[dict]:
     """User/model retractions in this bucket, with reason — fed to the producer
     so it can suppress zombie re-derivation (branch E1)."""
@@ -130,7 +134,9 @@ def apply_ops(
     owner_scope: str,
     visibility_scope: str,
     ops: list[dict],
-    allowed_event_ids: set[int],
+    allowed_add_event_ids: set[int],
+    review_event_ids_by_unit: dict[str, set[int]],
+    required_review_unit_ids: set[str],
     reflection_id: int | None,
     summary: ReconcileSummary,
 ) -> None:
@@ -146,9 +152,15 @@ def apply_ops(
         try:
             op = str(op_obj.get("op"))
             event_ids = [int(e) for e in (op_obj.get("evidence_event_ids") or [])]
+            target_id = str(op_obj.get("target_id") or "")
+            allowed_ids = (
+                review_event_ids_by_unit.get(target_id, set())
+                if target_id in required_review_unit_ids
+                else allowed_add_event_ids
+            )
             for eid in event_ids:
-                if eid not in allowed_event_ids:
-                    raise mus.BoundaryError(f"op 引用了非本批 event：{eid}")
+                if eid not in allowed_ids:
+                    raise mus.BoundaryError(f"op 引用了非当前有效 event：{eid}")
 
             if op == "add":
                 if not event_ids:
@@ -172,10 +184,21 @@ def apply_ops(
                     reflection_id=reflection_id,
                     conn=conn,
                 )
-            elif op in {"confirm", "revise", "retract"}:
-                target_id = str(op_obj.get("target_id") or "")
+            elif op in {"retain", "confirm", "revise", "retract"}:
                 self_unit = _require_unit_in_bucket(conn, target_id, owner_scope, visibility_scope)
-                if op == "confirm":
+                if op == "retain":
+                    if target_id not in required_review_unit_ids:
+                        raise ValueError("retain 只能用于待重判 challenged unit")
+                    if event_ids:
+                        raise ValueError("retain 不应引用 evidence")
+                    mus.retain_unit(
+                        target_id,
+                        reflection_id=reflection_id,
+                        conn=conn,
+                    )
+                elif op == "confirm":
+                    if target_id in required_review_unit_ids and not event_ids:
+                        raise ValueError("challenged unit 的 confirm 必须引用当前有效 evidence")
                     mus.confirm_unit(
                         target_id,
                         evidence_event_ids=event_ids,
@@ -184,6 +207,8 @@ def apply_ops(
                         conn=conn,
                     )
                 elif op == "revise":
+                    if target_id in required_review_unit_ids and not event_ids:
+                        raise ValueError("challenged unit 的 revise 必须引用当前有效 evidence")
                     mus.revise_unit(
                         target_id,
                         content=str(op_obj.get("content") or ""),
@@ -211,8 +236,123 @@ def apply_ops(
             summary.applied += 1
             summary._count(op)
         except (ValueError, mus.BoundaryError) as exc:
+            if str(op_obj.get("target_id") or "") in required_review_unit_ids:
+                raise ReconcileReviewError(str(exc)) from exc
             summary.skipped += 1
             summary.skipped_details.append({"op": op_obj.get("op"), "reason": str(exc)})
+
+
+def _dedupe_events(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    seen: set[int] = set()
+    out: list[sqlite3.Row] = []
+    for row in rows:
+        event_id = int(row["id"])
+        if event_id in seen:
+            continue
+        seen.add(event_id)
+        out.append(row)
+    return out
+
+
+def _review_context(
+    reviews: list[sqlite3.Row],
+) -> tuple[dict[str, dict], set[str], set[str], dict[tuple[str, str], int]]:
+    grouped: dict[str, dict] = {}
+    deterministic_retracts: set[str] = set()
+    required_decisions: set[str] = set()
+    source_versions: dict[tuple[str, str], int] = {}
+    for review in reviews:
+        unit_id = str(review["unit_id"])
+        item = grouped.setdefault(
+            unit_id,
+            {
+                "review_ids": [],
+                "reasons": set(),
+                "trigger_event_ids": [],
+                "current_evidence": mus.current_effective_evidence_for_unit(unit_id),
+            },
+        )
+        item["review_ids"].append(int(review["id"]))
+        item["reasons"].add(str(review["reason"]))
+        item["trigger_event_ids"].append(int(review["trigger_event_id"]))
+        key = (str(review["source_type"]), str(review["source_id"]))
+        latest = mes.latest_source_event(*key)
+        if latest is not None:
+            source_versions[key] = int(latest["id"])
+    for unit_id, item in grouped.items():
+        current = _dedupe_events(item["current_evidence"])
+        item["current_evidence"] = current
+        for event in current:
+            key = (str(event["source_type"]), str(event["source_id"]))
+            latest = mes.latest_source_event(*key)
+            if latest is not None:
+                source_versions[key] = int(latest["id"])
+        if item["reasons"] == {"delete"} and not current:
+            deterministic_retracts.add(unit_id)
+        else:
+            required_decisions.add(unit_id)
+    return grouped, deterministic_retracts, required_decisions, source_versions
+
+
+def _validate_review_decisions(ops: list[dict], required_unit_ids: set[str]) -> None:
+    decisions: dict[str, list[str]] = {unit_id: [] for unit_id in required_unit_ids}
+    for op in ops:
+        target = str(op.get("target_id") or "")
+        if target not in required_unit_ids:
+            continue
+        kind = str(op.get("op") or "")
+        if kind not in {"retain", "confirm", "revise", "retract"}:
+            raise ReconcileReviewError(f"challenged unit {target} 收到非法决定：{kind}")
+        decisions[target].append(kind)
+    invalid = {
+        unit_id: kinds
+        for unit_id, kinds in decisions.items()
+        if len(kinds) != 1
+    }
+    if invalid:
+        details = ", ".join(f"{unit_id}={kinds or ['missing']}" for unit_id, kinds in invalid.items())
+        raise ReconcileReviewError(f"challenged unit 决定不完整或重复：{details}")
+
+
+def _assert_reconcile_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    owner_scope: str,
+    visibility_scope: str,
+    cursor: int,
+    review_ids: set[int],
+    review_ids_by_unit: dict[str, set[int]],
+    source_versions: dict[tuple[str, str], int],
+) -> None:
+    row = conn.execute(
+        "SELECT last_event_id FROM memory_reconcile_cursors "
+        "WHERE owner_scope = ? AND visibility_scope = ?",
+        (owner_scope, visibility_scope),
+    ).fetchone()
+    current_cursor = int(row["last_event_id"]) if row else 0
+    if current_cursor != cursor:
+        raise _ConcurrentReconcile()
+    if review_ids:
+        placeholders = ",".join("?" for _ in review_ids)
+        rows = conn.execute(
+            f"SELECT id FROM memory_unit_reconcile_queue "
+            f"WHERE status = 'pending' AND id IN ({placeholders})",
+            tuple(sorted(review_ids)),
+        ).fetchall()
+        if {int(item["id"]) for item in rows} != review_ids:
+            raise _ConcurrentReconcile()
+    for unit_id, expected_ids in review_ids_by_unit.items():
+        rows = conn.execute(
+            "SELECT id FROM memory_unit_reconcile_queue "
+            "WHERE status = 'pending' AND unit_id = ? ORDER BY id",
+            (unit_id,),
+        ).fetchall()
+        if {int(item["id"]) for item in rows} != expected_ids:
+            raise _ConcurrentReconcile()
+    for (source_type, source_id), expected_event_id in source_versions.items():
+        latest = mes.latest_source_event(source_type, source_id, conn=conn)
+        if latest is None or int(latest["id"]) != expected_event_id:
+            raise _ConcurrentReconcile()
 
 
 def _require_unit_in_bucket(
@@ -262,21 +402,45 @@ def reconcile_bucket(
     mus.validate_boundary(owner_scope, visibility_scope)
     cursor = mes.get_cursor(owner_scope, visibility_scope)
     events = mes.list_events_after(owner_scope, visibility_scope, cursor, limit=limit)
-    if not events:
+    reviews = mus.list_pending_reviews(owner_scope, visibility_scope)
+    if not events and not reviews:
         return None
 
     all_event_ids = [int(e["id"]) for e in events]
-    last_event_id = all_event_ids[-1]
+    last_event_id = all_event_ids[-1] if all_event_ids else cursor
 
-    # Memory is formed from what the USER said/did, never from the AI's own
-    # output. Assistant-authored events stay in the ledger (provenance/audit)
-    # but are not belief-generating evidence — this is what stops a SOUL's
-    # replies from being mined into first-person persona "memories". Deletes
-    # (content_snapshot NULL) are not evidence either.
+    # Only the latest revision of a source may generate a belief. Older create
+    # or edit events can still be consumed, but are omitted when a newer
+    # revision already exists (including beyond this bounded batch).
+    current_events = mes.collapse_to_current_events(events)
     user_events = [
-        e for e in events if e["author"] == "user" and e["content_snapshot"] is not None
+        e
+        for e in current_events
+        if e["author"] == "user"
+        and e["op"] != "delete"
+        and str(e["content_snapshot"] or "").strip()
     ]
-    if not user_events:
+    review_context, deterministic_retracts, required_decisions, source_versions = (
+        _review_context(reviews)
+    )
+    existing_user_event_ids = {int(event["id"]) for event in user_events}
+    for review in reviews:
+        if review["reason"] != "edit":
+            continue
+        current = mes.current_effective_event(
+            str(review["source_type"]),
+            str(review["source_id"]),
+        )
+        if current is not None and int(current["id"]) not in existing_user_event_ids:
+            user_events.append(current)
+            existing_user_event_ids.add(int(current["id"]))
+    user_events.sort(key=lambda event: int(event["id"]))
+    for event in user_events:
+        key = (str(event["source_type"]), str(event["source_id"]))
+        latest = mes.latest_source_event(*key)
+        if latest is not None:
+            source_versions[key] = int(latest["id"])
+    if not user_events and not reviews:
         if not dry_run:
             with db.immediate_transaction() as conn:
                 mes.advance_cursor(conn, owner_scope, visibility_scope, last_event_id)
@@ -289,17 +453,41 @@ def reconcile_bucket(
         return None
 
     event_ids = [int(e["id"]) for e in user_events]
-    active_units = mus.list_active_units_in_bucket(owner_scope, visibility_scope)
+    reconcile_units = mus.list_reconcile_units_in_bucket(owner_scope, visibility_scope)
+    producer_units: list[dict] = []
+    for unit in reconcile_units:
+        unit_id = str(unit["id"])
+        if unit_id in deterministic_retracts:
+            continue
+        item = dict(unit)
+        if unit_id in review_context:
+            context = review_context[unit_id]
+            item["review_reasons"] = sorted(context["reasons"])
+            item["review_trigger_event_ids"] = list(context["trigger_event_ids"])
+            item["current_evidence"] = [
+                {
+                    "event_id": int(e["id"]),
+                    "source_type": str(e["source_type"]),
+                    "source_id": str(e["source_id"]),
+                    "op": str(e["op"]),
+                    "content": str(e["content_snapshot"] or ""),
+                }
+                for e in context["current_evidence"]
+            ]
+        producer_units.append(item)
     tombstones = _load_tombstones(owner_scope, visibility_scope)
 
     boundary = {"owner_scope": owner_scope, "visibility_scope": visibility_scope}
-    # LLM / producer runs outside the write transaction. It only ever sees
-    # user-authored evidence.
-    result = op_producer(
-        boundary=boundary,
-        events=[dict(e) for e in user_events],
-        active_units=[dict(u) for u in active_units],
-        tombstones=tombstones,
+    needs_llm = bool(user_events or required_decisions)
+    result = (
+        op_producer(
+            boundary=boundary,
+            events=[dict(e) for e in user_events],
+            active_units=producer_units,
+            tombstones=tombstones,
+        )
+        if needs_llm
+        else {"ops": [], "summary": "deterministic delete retraction"}
     ) or {}
     ops = result.get("ops") if isinstance(result, dict) else None
     if not isinstance(ops, list):
@@ -307,6 +495,16 @@ def reconcile_bucket(
     summary_text = ""
     if isinstance(result, dict):
         summary_text = str(result.get("summary") or "")
+    _validate_review_decisions(ops, required_decisions)
+
+    review_event_ids_by_unit = {
+        unit_id: {int(e["id"]) for e in item["current_evidence"]}
+        for unit_id, item in review_context.items()
+    }
+    review_ids = {int(review["id"]) for review in reviews}
+    review_ids_by_unit: dict[str, set[int]] = {}
+    for review in reviews:
+        review_ids_by_unit.setdefault(str(review["unit_id"]), set()).add(int(review["id"]))
 
     summary = ReconcileSummary(
         owner_scope=owner_scope,
@@ -319,19 +517,15 @@ def reconcile_bucket(
     try:
         with db.immediate_transaction() as conn:
             if not dry_run:
-                # CAS: the op-producer (LLM) ran outside this transaction, so a
-                # concurrent runner may have consumed + advanced the cursor in
-                # the meantime. If so, abort instead of re-applying the same
-                # evidence into duplicate units. immediate_transaction's write
-                # lock serializes the check.
-                row = conn.execute(
-                    "SELECT last_event_id FROM memory_reconcile_cursors "
-                    "WHERE owner_scope = ? AND visibility_scope = ?",
-                    (owner_scope, visibility_scope),
-                ).fetchone()
-                current_cursor = int(row["last_event_id"]) if row else 0
-                if current_cursor != cursor:
-                    raise _ConcurrentReconcile()
+                _assert_reconcile_snapshot(
+                    conn,
+                    owner_scope=owner_scope,
+                    visibility_scope=visibility_scope,
+                    cursor=cursor,
+                    review_ids=review_ids,
+                    review_ids_by_unit=review_ids_by_unit,
+                    source_versions=source_versions,
+                )
             reflection_id = None
             if not dry_run:
                 reflection_id = _insert_reflection_row(
@@ -340,19 +534,32 @@ def reconcile_bucket(
                     owner_scope=owner_scope,
                     visibility_scope=visibility_scope,
                     trigger=trigger,
-                    event_ids=event_ids,
-                    summary_text=summary_text or f"reconcile {len(event_ids)} events",
+                    event_ids=all_event_ids,
+                    summary_text=summary_text or f"reconcile {len(all_event_ids)} events",
                 )
                 summary.reflection_id = reflection_id
+            for unit_id in sorted(deterministic_retracts):
+                mus.retract_unit(
+                    unit_id,
+                    by="model",
+                    reason="outdated",
+                    reflection_id=reflection_id,
+                    conn=conn,
+                )
+                summary.applied += 1
+                summary._count("retract")
             apply_ops(
                 conn,
                 owner_scope=owner_scope,
                 visibility_scope=visibility_scope,
                 ops=ops,
-                allowed_event_ids=set(event_ids),
+                allowed_add_event_ids=set(event_ids),
+                review_event_ids_by_unit=review_event_ids_by_unit,
+                required_review_unit_ids=required_decisions,
                 reflection_id=reflection_id,
                 summary=summary,
             )
+            mus.resolve_review_rows(conn, sorted(review_ids))
             if dry_run:
                 preview_rows = conn.execute(
                     """

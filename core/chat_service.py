@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from core import attachment_service, db, evidence_service, logging_service, memory_events_service, memory_read, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, evidence_service, logging_service, memory_events_service, memory_read, memory_unit_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -412,7 +412,8 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
     if not body and not attachment_ids:
         raise ValueError("私聊消息不能为空")
 
-    deleted_ids = _message_ids_after(message.thread_id, message.id)
+    deleted_rows = _messages_after(message.thread_id, message.id)
+    deleted_ids = [int(row["id"]) for row in deleted_rows]
     soul_name = get_thread(message.thread_id).soul_name
     now = db.now_ts()
     with db.transaction() as conn:
@@ -424,9 +425,10 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
             """,
             (body, now, message.id),
         )
-        memory_events_service.record_chat_mutation(
+        edit_event = memory_events_service.record_chat_mutation(
             conn, message_id=message.id, soul_name=soul_name, op="edit", content=body, occurred_at=now, role="user",
         )
+        memory_unit_service.challenge_units_for_source(conn, edit_event.id)
         conn.execute("DELETE FROM chat_message_attachments WHERE message_id = ?", (message.id,))
         conn.executemany(
             """
@@ -440,10 +442,17 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
             [(now, attachment_id) for attachment_id in attachment_ids],
         )
         if deleted_ids:
-            for deleted_id in deleted_ids:
-                memory_events_service.record_chat_mutation(
-                    conn, message_id=deleted_id, soul_name=soul_name, op="delete", content=None, occurred_at=now,
+            for deleted_row in deleted_rows:
+                delete_event = memory_events_service.record_chat_mutation(
+                    conn,
+                    message_id=int(deleted_row["id"]),
+                    soul_name=soul_name,
+                    op="delete",
+                    content=None,
+                    occurred_at=now,
+                    role=str(deleted_row["role"]),
                 )
+                memory_unit_service.challenge_units_for_source(conn, delete_event.id)
             conn.execute(
                 f"DELETE FROM chat_messages WHERE id IN ({','.join('?' for _ in deleted_ids)})",
                 tuple(deleted_ids),
@@ -455,6 +464,10 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
     updated = get_message(message.id)
     thread = get_thread(message.thread_id)
     record_service.index_chat_message_embedding(updated.id, updated.thread_id, thread.soul_name, updated.role, updated.content)
+    if memory_read.reconcile_write_enabled():
+        job_service.enqueue_memory_reconcile_once(
+            {"trigger": "chat_edit", "soul_name": soul_name}
+        )
     return {
         "thread": thread,
         "message": updated,
@@ -508,7 +521,8 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
     if not isinstance(reply, str) or not reply.strip():
         raise RuntimeError("chat rerun returned empty reply")
 
-    deleted_ids = _message_ids_after(thread.id, message.id)
+    deleted_rows = _messages_after(thread.id, message.id)
+    deleted_ids = [int(row["id"]) for row in deleted_rows]
     now = db.now_ts()
     metadata = {
         "status": "ok",
@@ -529,10 +543,17 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
             conn, message_id=message.id, soul_name=thread.soul_name, op="rerun", content=reply.strip(), occurred_at=now, role="assistant",
         )
         if deleted_ids:
-            for deleted_id in deleted_ids:
-                memory_events_service.record_chat_mutation(
-                    conn, message_id=deleted_id, soul_name=thread.soul_name, op="delete", content=None, occurred_at=now,
+            for deleted_row in deleted_rows:
+                delete_event = memory_events_service.record_chat_mutation(
+                    conn,
+                    message_id=int(deleted_row["id"]),
+                    soul_name=thread.soul_name,
+                    op="delete",
+                    content=None,
+                    occurred_at=now,
+                    role=str(deleted_row["role"]),
                 )
+                memory_unit_service.challenge_units_for_source(conn, delete_event.id)
             conn.execute(
                 f"DELETE FROM chat_messages WHERE id IN ({','.join('?' for _ in deleted_ids)})",
                 tuple(deleted_ids),
@@ -544,6 +565,10 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
     updated = get_message(message.id)
     thread = get_thread(thread.id)
     record_service.index_chat_message_embedding(updated.id, updated.thread_id, thread.soul_name, updated.role, updated.content)
+    if any(str(row["role"]) == "user" for row in deleted_rows) and memory_read.reconcile_write_enabled():
+        job_service.enqueue_memory_reconcile_once(
+            {"trigger": "chat_rerun_delete", "soul_name": thread.soul_name}
+        )
     return {
         "thread": thread,
         "message": updated,
@@ -604,16 +629,19 @@ def _last_user_message_content_for_llm(messages: list[ChatMessage]) -> str:
 
 
 def _message_ids_after(thread_id: int, message_id: int) -> list[int]:
-    rows = db.query_all(
+    return [int(row["id"]) for row in _messages_after(thread_id, message_id)]
+
+
+def _messages_after(thread_id: int, message_id: int) -> list:
+    return db.query_all(
         """
-        SELECT id
+        SELECT id, role
         FROM chat_messages
         WHERE thread_id = ? AND id > ?
         ORDER BY id ASC
         """,
         (thread_id, message_id),
     )
-    return [int(row["id"]) for row in rows]
 
 
 def _refresh_thread_activity(conn, thread_id: int, now: float) -> None:

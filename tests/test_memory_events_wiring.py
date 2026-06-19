@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core import (
     chat_service,
     comment_service,
     db,
+    memory_read,
     record_service,
 )
-from core.app_services import post_mutation
+from core.app_services import job_service, post_mutation
 
 
 def _events(source_type: str, source_id: str) -> list:
@@ -69,6 +72,26 @@ class MemoryEventsWiringTest(unittest.TestCase):
         self.assertEqual(events[1]["source_revision"], 2)
         self.assertIsNone(events[1]["content_snapshot"])
 
+    def test_delete_post_appends_delete_events_for_cascaded_comments(self) -> None:
+        post_id = record_service.save_post("帖子", index_immediately=False, track_embedding=False)
+        self._seed_root_comment(post_id)
+        user = comment_service.append_comment(post_id, "luna", "user", "会一起删除")
+
+        post_mutation.delete_post(post_id)
+
+        root = db.query_one(
+            "SELECT source_id FROM memory_ingest_events "
+            "WHERE source_type = 'comment_message' AND author = 'assistant' LIMIT 1"
+        )
+        self.assertEqual(
+            [row["op"] for row in _events("comment_message", root["source_id"])],
+            ["delete"],
+        )
+        self.assertEqual(
+            [row["op"] for row in _events("comment_message", str(user.id))],
+            ["create", "delete"],
+        )
+
     # --- comments ----------------------------------------------------------
 
     def _seed_root_comment(self, post_id: str) -> None:
@@ -99,6 +122,17 @@ class MemoryEventsWiringTest(unittest.TestCase):
         comment_service.delete_message(msg.id)
         events = _events("comment_message", str(msg.id))
         self.assertEqual([e["op"] for e in events], ["create", "delete"])
+
+    def test_delete_comment_enqueues_reconcile_in_v2_write_mode(self) -> None:
+        post_id = record_service.save_post("帖子", index_immediately=False, track_embedding=False)
+        self._seed_root_comment(post_id)
+        msg = comment_service.append_comment(post_id, "luna", "user", "要删除")
+        with patch.dict(os.environ, {memory_read.WRITE_MODE_ENV: "reconcile"}):
+            comment_service.delete_message(msg.id)
+        self.assertEqual(
+            [row["type"] for row in db.query_all("SELECT type FROM jobs")],
+            [job_service.TYPE_RUN_MEMORY_RECONCILE],
+        )
 
     # --- chat --------------------------------------------------------------
 
@@ -134,6 +168,24 @@ class MemoryEventsWiringTest(unittest.TestCase):
         # the subsequent assistant message is cascade-deleted -> delete event
         assistant_events = _events("chat_message", str(assistant_msg.id))
         self.assertEqual([e["op"] for e in assistant_events], ["create", "delete"])
+        self.assertEqual(assistant_events[-1]["author"], "assistant")
+
+    def test_chat_edit_enqueues_reconcile_and_preserves_deleted_user_role(self) -> None:
+        thread_id = self._seed_thread()
+        first = chat_service._append_message(thread_id, "user", "第一句")
+        chat_service._append_message(thread_id, "assistant", "回答")
+        later_user = chat_service._append_message(thread_id, "user", "后续问题")
+
+        with patch.dict(os.environ, {memory_read.WRITE_MODE_ENV: "reconcile"}):
+            chat_service.edit_user_message(first.id, "第一句修改")
+
+        later_events = _events("chat_message", str(later_user.id))
+        self.assertEqual(later_events[-1]["op"], "delete")
+        self.assertEqual(later_events[-1]["author"], "user")
+        self.assertEqual(
+            [row["type"] for row in db.query_all("SELECT type FROM jobs")],
+            [job_service.TYPE_RUN_MEMORY_RECONCILE],
+        )
 
 
 if __name__ == "__main__":

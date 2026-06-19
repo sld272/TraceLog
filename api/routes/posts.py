@@ -23,6 +23,10 @@ class CreatePostRequest(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=9)
 
 
+class UpdatePostRequest(BaseModel):
+    content: str = Field(default="", max_length=20_000)
+
+
 @router.get("/health")
 async def health():
     runtime = get_runtime()
@@ -75,6 +79,17 @@ async def get_post(post_id: str):
     if post is None:
         raise HTTPException(status_code=404, detail="post not found")
     return post
+
+
+@router.patch("/posts/{post_id}")
+async def update_post(post_id: str, request: UpdatePostRequest):
+    try:
+        result = await run_sync(post_mutation.edit_post, post_id, request.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="post not found")
+    return {"ok": True, **asdict(result)}
 
 
 @router.delete("/posts/{post_id}")

@@ -381,13 +381,12 @@ def read_portrait_body(
 ) -> str:
     """Best-effort portrait text to inject — no LLM, never writes.
 
-    Prefers the synthesized view body (header stripped). A stale view is still
-    returned: it beats an empty identity floor and the reconcile job will
-    re-synthesize it shortly. If there is no view yet, falls back to the
-    deterministic template over the current core units. Returns '' when there
-    is nothing stable to say (caller may then fall back to legacy)."""
+    Prefers a fresh synthesized view body (header stripped). Missing or stale
+    views fall back to the deterministic template over the current active core
+    units so challenged beliefs cannot leak through an old portrait. Returns ''
+    when there is nothing stable to say (caller may then fall back to legacy)."""
     view = get_view(owner_scope, visibility_scope, view_type)
-    if view is not None:
+    if view is not None and view["status"] == "fresh":
         body = strip_generated_header(view["content_md"]).strip()
         if body:
             return body

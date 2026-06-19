@@ -80,6 +80,51 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _backfill_memory_event_authors(conn)
     _migrate_comment_event_ownership(conn)
     _backfill_memory_events(conn)
+    _repair_historical_challenged_units(conn)
+
+
+def _repair_historical_challenged_units(conn: sqlite3.Connection) -> None:
+    marker = conn.execute(
+        "SELECT value FROM meta WHERE key = 'memory_v2_rechallenge_v1'"
+    ).fetchone()
+    if marker is not None:
+        return
+    from core import memory_unit_service
+
+    rows = conn.execute(
+        """
+        SELECT DISTINCT latest.id AS trigger_event_id
+        FROM memory_units u
+        JOIN memory_unit_evidence ue ON ue.unit_id = u.id
+        JOIN memory_ingest_events linked ON linked.id = ue.event_id
+        JOIN memory_ingest_events latest
+          ON latest.source_type = linked.source_type
+         AND latest.source_id = linked.source_id
+        WHERE u.status = 'active'
+          AND u.source IN ('reflected','migrated')
+          AND latest.id = (
+              SELECT newest.id
+              FROM memory_ingest_events newest
+              WHERE newest.source_type = linked.source_type
+                AND newest.source_id = linked.source_id
+              ORDER BY newest.source_revision DESC, newest.id DESC
+              LIMIT 1
+          )
+          AND latest.id != linked.id
+          AND latest.op IN ('edit','delete')
+        ORDER BY latest.id
+        """
+    ).fetchall()
+    for row in rows:
+        memory_unit_service.challenge_units_for_source(
+            conn,
+            int(row["trigger_event_id"]),
+            actor="migration",
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES ('memory_v2_rechallenge_v1', ?)",
+        (str(len(rows)),),
+    )
 
 
 def _backfill_memory_event_authors(conn: sqlite3.Connection) -> None:

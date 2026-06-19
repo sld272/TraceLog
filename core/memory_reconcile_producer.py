@@ -71,10 +71,26 @@ def _format_units(units: list[dict]) -> str:
         return ""
     parts = []
     for unit in units:
-        parts.append(
+        text = (
             f"- unit_id={unit.get('id')} | type={unit.get('type')} "
-            f"| confidence={unit.get('confidence')} | tier={unit.get('tier')}\n  {unit.get('content')}"
+            f"| status={unit.get('status')} | confidence={unit.get('confidence')} "
+            f"| tier={unit.get('tier')}\n  {unit.get('content')}"
         )
+        reasons = unit.get("review_reasons") or []
+        evidence = unit.get("current_evidence") or []
+        if reasons:
+            text += f"\n  待重判原因: {', '.join(str(item) for item in reasons)}"
+            text += "\n  当前仍有效 evidence:"
+            if evidence:
+                for item in evidence:
+                    text += (
+                        f"\n    - event_id={item.get('event_id')} "
+                        f"{item.get('source_type')}/{item.get('source_id')}: "
+                        f"{item.get('content')}"
+                    )
+            else:
+                text += " （无）"
+        parts.append(text)
     return "\n".join(parts)
 
 

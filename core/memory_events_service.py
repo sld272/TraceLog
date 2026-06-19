@@ -266,18 +266,27 @@ def advance_cursor(
 
 
 def buckets_with_pending_events(limit_buckets: int = 500) -> list[tuple[str, str]]:
-    """All (owner_scope, visibility_scope) buckets whose newest event id exceeds
-    their reconcile cursor — i.e. buckets with unconsumed evidence."""
+    """Buckets with unconsumed events or pending challenged-unit reviews."""
     rows = db.query_all(
         """
-        SELECT e.owner_scope AS owner_scope,
-               e.visibility_scope AS visibility_scope
-        FROM memory_ingest_events e
-        LEFT JOIN memory_reconcile_cursors c
-          ON c.owner_scope = e.owner_scope AND c.visibility_scope = e.visibility_scope
-        GROUP BY e.owner_scope, e.visibility_scope
-        HAVING MAX(e.id) > COALESCE(MAX(c.last_event_id), 0)
-        ORDER BY e.owner_scope ASC, e.visibility_scope ASC
+        SELECT owner_scope, visibility_scope
+        FROM (
+            SELECT e.owner_scope AS owner_scope,
+                   e.visibility_scope AS visibility_scope
+            FROM memory_ingest_events e
+            LEFT JOIN memory_reconcile_cursors c
+              ON c.owner_scope = e.owner_scope AND c.visibility_scope = e.visibility_scope
+            GROUP BY e.owner_scope, e.visibility_scope
+            HAVING MAX(e.id) > COALESCE(MAX(c.last_event_id), 0)
+
+            UNION
+
+            SELECT u.owner_scope, u.visibility_scope
+            FROM memory_unit_reconcile_queue q
+            JOIN memory_units u ON u.id = q.unit_id
+            WHERE q.status = 'pending'
+        )
+        ORDER BY owner_scope ASC, visibility_scope ASC
         LIMIT ?
         """,
         (int(limit_buckets),),
@@ -286,14 +295,61 @@ def buckets_with_pending_events(limit_buckets: int = 500) -> list[tuple[str, str
 
 
 def latest_post_snapshot(post_id: str) -> str | None:
-    """The most recent non-deleted content snapshot of a post, from the ledger."""
-    row = db.query_one(
-        "SELECT content_snapshot FROM memory_ingest_events "
-        "WHERE source_type = 'post' AND source_id = ? AND content_snapshot IS NOT NULL "
-        "ORDER BY id DESC LIMIT 1",
-        (str(post_id),),
-    )
-    return row["content_snapshot"] if row is not None else None
+    """Current post snapshot; deletion removes it instead of exposing old text."""
+    row = latest_source_event("post", str(post_id))
+    if row is None or row["op"] == "delete":
+        return None
+    return row["content_snapshot"]
+
+
+def latest_source_event(
+    source_type: str,
+    source_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> sqlite3.Row | None:
+    sql = """
+        SELECT *
+        FROM memory_ingest_events
+        WHERE source_type = ? AND source_id = ?
+        ORDER BY source_revision DESC, id DESC
+        LIMIT 1
+    """
+    params = (str(source_type), str(source_id))
+    if conn is not None:
+        return conn.execute(sql, params).fetchone()
+    return db.query_one(sql, params)
+
+
+def current_effective_event(
+    source_type: str,
+    source_id: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> sqlite3.Row | None:
+    row = latest_source_event(source_type, source_id, conn=conn)
+    if row is None or row["op"] == "delete" or row["author"] != "user":
+        return None
+    if not str(row["content_snapshot"] or "").strip():
+        return None
+    return row
+
+
+def collapse_to_current_events(events: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """Keep only source revisions that are still current and not deleted."""
+    out: list[sqlite3.Row] = []
+    seen: set[tuple[str, str]] = set()
+    for event in reversed(events):
+        key = (str(event["source_type"]), str(event["source_id"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        latest = latest_source_event(*key)
+        if latest is None or int(latest["id"]) != int(event["id"]) or latest["op"] == "delete":
+            continue
+        out.append(event)
+    out.reverse()
+    return out
 
 
 def list_events_after(
@@ -312,6 +368,36 @@ def list_events_after(
         """,
         (owner_scope, visibility_scope, int(after_id), int(limit)),
     )
+
+
+def list_current_events_in_bucket(
+    owner_scope: str,
+    visibility_scope: str,
+    *,
+    limit: int = 200,
+) -> list[sqlite3.Row]:
+    """Current non-deleted revision of each source in a bucket, oldest first."""
+    rows = db.query_all(
+        """
+        SELECT e.*
+        FROM memory_ingest_events e
+        WHERE e.owner_scope = ? AND e.visibility_scope = ?
+          AND e.id = (
+              SELECT newest.id
+              FROM memory_ingest_events newest
+              WHERE newest.source_type = e.source_type
+                AND newest.source_id = e.source_id
+              ORDER BY newest.source_revision DESC, newest.id DESC
+              LIMIT 1
+          )
+          AND e.op != 'delete'
+          AND TRIM(COALESCE(e.content_snapshot, '')) != ''
+        ORDER BY e.id DESC
+        LIMIT ?
+        """,
+        (owner_scope, visibility_scope, int(limit)),
+    )
+    return list(reversed(rows))
 
 
 # --- backfill (seed revision=1 create events for pre-existing content) ------

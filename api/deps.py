@@ -10,7 +10,7 @@ from openai import OpenAI
 from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
-from core import db, logging_service, record_service, vector_index_service, vectorstore, workspace_service
+from core import db, logging_service, memory_read, record_service, vector_index_service, vectorstore, workspace_service
 from core.app_services import job_service
 from core.app_services.api_runtime import ApiRuntime, JobWorker
 from core.cli.config import CONFIG_FILE, normalize_vision_config, normalize_web_search_config
@@ -208,3 +208,7 @@ def _enqueue_startup_retries() -> None:
         post_id = str(row["key"])[len("pending_reflect:"):]
         if post_id:
             job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id})
+    if memory_read.reconcile_write_enabled() and db.query_one(
+        "SELECT 1 FROM memory_unit_reconcile_queue WHERE status = 'pending' LIMIT 1"
+    ):
+        job_service.enqueue_memory_reconcile_once({"trigger": "startup_review_repair"})
