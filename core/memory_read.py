@@ -80,6 +80,16 @@ FRESHNESS_MAX_EVENTS = 6
 FRESHNESS_WINDOW_DAYS = 3
 FRESHNESS_CHAR_BUDGET = 400
 
+# relevant-memory evidence hydration: each retrieved unit may carry ONE short
+# raw-evidence snippet (the user's own words) for fidelity. The unit is the
+# de-noised topic anchor; the snippet is the faithful detail. Picked from the
+# unit's own evidence by keyword overlap then recency — no vector here: the unit
+# vector hit already found the topic, and a unit's evidence is a semantically
+# homogeneous set where embeddings don't discriminate. A shared budget keeps the
+# block from bloating when many units match.
+EVIDENCE_SNIPPET_MAX_CHARS = 120
+EVIDENCE_TOTAL_CHAR_BUDGET = 400
+
 
 @dataclass(frozen=True)
 class MemoryItem:
@@ -229,6 +239,30 @@ def _semantic_unit_ranks(query: str) -> dict[str, int]:
         if uid:
             ranks.setdefault(str(uid), int(getattr(hit, "rank", len(ranks) + 1)))
     return ranks
+
+
+def _top_evidence_snippet(unit_id: str, terms: list[str]) -> str | None:
+    """The single most relevant raw-evidence snippet (the user's own words)
+    backing a unit, ranked by keyword overlap then recency within the unit's own
+    evidence. That evidence set is small and semantically homogeneous (all
+    support the same belief), so no vector is needed — keyword + recency are the
+    signals with discrimination here. Returns the trimmed snapshot, or None when
+    the unit has no user-authored evidence."""
+    best: str | None = None
+    best_key: tuple | None = None
+    for row in mus.get_unit_evidence(unit_id):
+        if row["author"] not in (None, "user"):
+            continue
+        snapshot = str(row["content_snapshot"] or "").strip()
+        if not snapshot:
+            continue
+        key = (_keyword_overlap(snapshot, terms), float(row["occurred_at"]))
+        if best_key is None or key > best_key:
+            best_key = key
+            best = snapshot
+    if best is None:
+        return None
+    return best[:EVIDENCE_SNIPPET_MAX_CHARS]
 
 
 # --- helpers ---------------------------------------------------------------
@@ -405,10 +439,13 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
             used.append(item.unit_id)
         sections.append("[当前状态]\n" + "\n".join(lines))
 
-    # 3. query-relevant beliefs
+    # 3. query-relevant beliefs: unit = de-noised topic anchor, plus one
+    #    faithful raw-evidence snippet (the user's own words) under a budget.
     hits = retrieve_units(query, channel, reply_soul)
     if hits:
+        terms = _tokenize(query)
         lines = []
+        evidence_chars = 0
         for item in hits:
             tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
             has_discretion = has_discretion or item.needs_discretion
@@ -416,6 +453,11 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
             attr = f" {attribution}" if attribution else ""
             lines.append(f"- [{item.type}|置信{item.confidence:.1f}] {item.content}{attr}{tag}")
             used.append(item.unit_id)
+            if evidence_chars < EVIDENCE_TOTAL_CHAR_BUDGET:
+                snippet = _top_evidence_snippet(item.unit_id, terms)
+                if snippet:
+                    lines.append(f"  · 原话：{snippet}")
+                    evidence_chars += len(snippet)
         sections.append("[相关记忆]\n" + "\n".join(lines))
 
     # 4. freshness seam (units_and_freshness only): recent raw evidence not yet
