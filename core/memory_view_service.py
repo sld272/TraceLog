@@ -317,3 +317,47 @@ def mark_stale_if_changed(owner_scope: str, visibility_scope: str, view_type: st
             (db.now_ts(), view["id"]),
         )
     return True
+
+
+def view_type_for_bucket(owner_scope: str, visibility_scope: str) -> str | None:
+    """Which synthesized view a reconcile bucket feeds, or None.
+
+    Only the user portrait (global/public) and each soul's private memory
+    (private:soul:*) get an always-on synthesized view. Public comment threads
+    contribute units but have no standalone portrait."""
+    if owner_scope == "global" and visibility_scope == "public":
+        return VIEW_USER_MD
+    if visibility_scope.startswith("private:soul:"):
+        return VIEW_SOUL_PRIVATE
+    return None
+
+
+def mark_stale_for_bucket(owner_scope: str, visibility_scope: str) -> bool:
+    """Mark this bucket's view stale if its core set changed. No-op for buckets
+    without a synthesized view (e.g. comment threads)."""
+    view_type = view_type_for_bucket(owner_scope, visibility_scope)
+    if view_type is None:
+        return False
+    return mark_stale_if_changed(owner_scope, visibility_scope, view_type)
+
+
+def buckets_needing_view() -> list[tuple[str, str, str]]:
+    """Coordinates whose view should be (re)synthesized: every stale view, plus
+    buckets that have core units (in_md_slice=1) but no view row yet. Hash-gated
+    synthesize keeps the actual LLM work low-frequency."""
+    out: list[tuple[str, str, str]] = []
+    for row in db.query_all(
+        "SELECT owner_scope, visibility_scope, view_type FROM memory_views WHERE status = 'stale'"
+    ):
+        out.append((row["owner_scope"], row["visibility_scope"], row["view_type"]))
+    for row in db.query_all(
+        "SELECT DISTINCT owner_scope, visibility_scope FROM memory_units "
+        "WHERE in_md_slice = 1 AND status = 'active'"
+    ):
+        owner_scope, visibility_scope = row["owner_scope"], row["visibility_scope"]
+        view_type = view_type_for_bucket(owner_scope, visibility_scope)
+        if view_type is None:
+            continue
+        if get_view(owner_scope, visibility_scope, view_type) is None:
+            out.append((owner_scope, visibility_scope, view_type))
+    return out

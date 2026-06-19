@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 
+from core import memory_view_service as mvs
 from core.llm import reflection_router
 from core.llm.types import LLMClient
 
@@ -46,3 +47,24 @@ def make_llm_synthesizer(
         )
 
     return synthesizer
+
+
+def refresh_views_after_reconcile(
+    client: LLMClient,
+    model: str,
+    *,
+    trace_context: dict | None = None,
+) -> list[mvs.SynthesizedView]:
+    """Re-synthesize every stale or missing view after a reconcile pass.
+
+    Hash-gated by buckets_needing_view: a bucket whose core set is unchanged
+    stays 'fresh' and is skipped, so the LLM synthesis stays low-frequency.
+    Synthesis errors fall back to the deterministic template inside
+    synthesize_view, so one bad LLM call never aborts the batch."""
+    results: list[mvs.SynthesizedView] = []
+    for owner_scope, visibility_scope, view_type in mvs.buckets_needing_view():
+        synthesizer = make_llm_synthesizer(client, model, view_type, trace_context=trace_context)
+        results.append(
+            mvs.synthesize_view(owner_scope, visibility_scope, view_type, synthesizer=synthesizer)
+        )
+    return results

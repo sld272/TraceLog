@@ -22,7 +22,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from core import db, logging_service, memory_events_service as mes, memory_unit_service as mus
+from core import db, logging_service, memory_events_service as mes, memory_unit_service as mus, memory_view_service as mvs
 
 # A new unit must clear a minimum importance to be worth remembering at all.
 # The LLM already scores momentary trivia low (e.g. "用户正在上课" -> ~0.2); this
@@ -348,6 +348,15 @@ def reconcile_bucket(
             mes.advance_cursor(conn, owner_scope, visibility_scope, last_event_id)
     except _DryRunAbort:
         pass
+
+    if not dry_run:
+        # Keep in_md_slice current so a first-time bucket becomes eligible for a
+        # view (buckets_needing_view keys off it), and mark an existing view
+        # stale if its core set changed. Hash-gated, so a no-op reconcile leaves
+        # a fresh view fresh. LLM re-synthesis runs in the reconcile job after
+        # the whole pass.
+        mvs.recompute_slice(owner_scope, visibility_scope)
+        mvs.mark_stale_for_bucket(owner_scope, visibility_scope)
 
     logging_service.log_event(
         "memory_reconcile_bucket",

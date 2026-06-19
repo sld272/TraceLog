@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import attachment_service, context_builder, db, memory_read, memory_reconcile_runner, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service, vision_service
+from core import attachment_service, context_builder, db, memory_read, memory_reconcile_runner, memory_view_producer, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service, vision_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
@@ -359,8 +359,10 @@ def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClie
 
 
 def _run_memory_reconcile(client: LLMClient, model: str) -> None:
-    """v2 write path: reconcile every bucket with unconsumed evidence into units."""
+    """v2 write path: reconcile every bucket with unconsumed evidence into units,
+    then refresh any stale or missing identity views from the updated units."""
     memory_reconcile_runner.run_pending_reconcile(client, model, trigger="api")
+    memory_view_producer.refresh_views_after_reconcile(client, model)
 
 
 def _run_trigger_soul_deep_reflections(payload: dict[str, Any], client: LLMClient, model: str) -> None:
