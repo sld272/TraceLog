@@ -204,7 +204,7 @@ class MemoryReconcileJobTest(unittest.TestCase):
             return {
                 "summary": "s",
                 "ops": [{
-                    "op": "add", "type": "goal", "content": "用户在准备考研",
+                    "op": "add", "type": "insight", "content": "用户在准备考研",
                     "confidence": 0.9, "tier": "core", "importance": 0.85,
                     "evidence_event_ids": ids,
                 }],

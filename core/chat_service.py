@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from core import attachment_service, db, evidence_service, logging_service, memory_events_service, memory_read, memory_unit_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, evidence_service, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -198,6 +198,8 @@ def build_chat_context(
         profile = profile_service.read_profile().strip()
         if profile:
             sections.append(f"# 用户档案\n\n{profile}")
+
+    sections.extend(goal_service.prompt_sections())
 
     rewritten_query = reply_context.rewrite_for_retrieval(client, model, retrieval_query, "chat", thread_id=thread_id, soul_name=thread.soul_name)
     retrieval_hits = reply_context.hybrid_search_documents_with_rewrite(

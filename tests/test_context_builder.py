@@ -7,7 +7,7 @@ from pathlib import Path
 
 from unittest.mock import patch
 
-from core import context_builder, db, logging_service, profile_service, soul_memory_service, soul_service, tool_config_service, web_search_gate, web_search_service
+from core import context_builder, db, goal_service, logging_service, profile_service, soul_memory_service, soul_service, tool_config_service, web_search_gate, web_search_service
 
 
 class ContextBuilderTest(unittest.TestCase):
@@ -58,6 +58,8 @@ class ContextBuilderTest(unittest.TestCase):
             """,
             ("todo-1", "整理比赛材料", "未完成", 1.0, 1.0),
         )
+        goal_service.create_goal("跨专业考研", None, "long")
+        goal_service.create_goal("完成课程项目", None, "short", focus=True)
 
         built = context_builder.build_context(
             relevant_post_ids=["p-related", "missing", "p-related-2", "p-related"],
@@ -74,6 +76,10 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertIn('source: "current_user_public_post"', built.shared_context)
         self.assertIn("# 待办事项", built.shared_context)
         self.assertIn("整理比赛材料", built.shared_context)
+        self.assertIn("# 长期目标", built.shared_context)
+        self.assertIn("跨专业考研", built.shared_context)
+        self.assertIn("# 当前状态", built.shared_context)
+        self.assertIn("完成课程项目", built.shared_context)
         self.assertNotIn("# 相关记忆", built.shared_context)
         self.assertNotIn("# 近期帖子", built.shared_context)
         self.assertEqual(["p-related", "p-related-2"], built.relevant_post_ids)
@@ -82,7 +88,10 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertEqual("public_post", event["context_type"])
         self.assertEqual(["p-related", "p-related-2"], event["relevant_post_ids"])
         self.assertTrue(event["raw_related_posts_present"])
-        self.assertEqual(["# 用户档案", "# 当前用户的历史相关帖子", "# 待办事项"], [item["title"] for item in event["sections"]])
+        self.assertEqual(
+            ["# 用户档案", "# 长期目标", "# 当前状态", "# 当前用户的历史相关帖子", "# 待办事项"],
+            [item["title"] for item in event["sections"]],
+        )
 
     def test_public_context_omits_related_posts_when_none_are_found(self) -> None:
         built = context_builder.build_context(relevant_post_ids=["missing"])

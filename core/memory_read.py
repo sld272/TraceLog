@@ -23,7 +23,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from core import db, memory_events_service as mes, memory_scope_policy as policy, memory_unit_service as mus, memory_view_service as mvs
+from core import db, goal_service, memory_events_service as mes, memory_scope_policy as policy, memory_unit_service as mus, memory_view_service as mvs
 
 # read-mode flag (design §7.2). legacy = pre-v2 behavior, no unit reading.
 READ_MODE_ENV = "MEMORY_V2_READ_MODE"
@@ -214,6 +214,10 @@ def retrieve_units(
     kept = [
         r for r in rows
         if _keyword_overlap(str(r["content"]), terms) > 0 or str(r["id"]) in semantic
+    ]
+    kept = [
+        r for r in kept
+        if not goal_service.memory_content_duplicates_active_goal(str(r["content"]))
     ]
     ranked = sorted(kept, key=score, reverse=True)
     return [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
@@ -635,30 +639,9 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
     )
 
 
-def list_goals(
-    owner_scope: str = "global",
-    visibility_scope: str = "public",
-) -> list[MemoryItem]:
-    """Active goal units in a bucket, importance-ranked — the user's currently
-    tracked goals, for display / the workbench.
-
-    Goal lifecycle rides the unit status machine rather than a dedicated column:
-    a goal that is achieved or abandoned is retracted by a later reconcile pass
-    (status != 'active'), so 'active goal units' are exactly the goals still in
-    play. An explicit achieved-vs-abandoned distinction would need a schema
-    column and is deferred."""
-    rows = db.query_all(
-        """
-        SELECT id, type, content, confidence, importance, owner_scope, visibility_scope,
-               last_confirmed
-        FROM memory_units
-        WHERE type = 'goal' AND status = 'active'
-          AND owner_scope = ? AND visibility_scope = ?
-        ORDER BY importance DESC, last_confirmed DESC
-        """,
-        (owner_scope, visibility_scope),
-    )
-    return [_row_to_item(r, "public_post", None) for r in rows]
+def list_goals() -> list[dict]:
+    """Compatibility read entry now backed by goaltool, the sole truth source."""
+    return goal_service.list_goals(status="active")
 
 
 # --- evidence hydration (unit -> raw evidence, for the workbench) ----------

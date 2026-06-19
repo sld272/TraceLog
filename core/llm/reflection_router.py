@@ -467,7 +467,7 @@ MEMORY_RECONCILE_PROMPT = """\
 {
   "summary": "本轮对账的一句话摘要",
   "ops": [
-    {"op": "add", "type": "identity|preference|goal|state|relationship|insight|freeform", "content": "关于用户的跨证据抽象陈述", "confidence": 0.0, "tier": "core|contextual|episodic", "importance": 0.0, "evidence_event_ids": [本批 event_id]},
+    {"op": "add", "type": "identity|preference|state|relationship|insight|freeform", "content": "关于用户的跨证据抽象陈述", "confidence": 0.0, "tier": "core|contextual|episodic", "importance": 0.0, "evidence_event_ids": [本批 event_id]},
     {"op": "retain", "target_id": "challenged unit_id"},
     {"op": "confirm", "target_id": "unit_id", "evidence_event_ids": [本批 event_id], "confidence": 0.0},
     {"op": "revise", "target_id": "unit_id", "content": "更新后的陈述", "evidence_event_ids": [本批 event_id]},
@@ -492,17 +492,18 @@ MEMORY_RECONCILE_PROMPT = """\
 2. 每条 content 的主语必须是【用户】或【用户—人格关系】；任何描述人格自身的条目一律不要产出。
 3. add 必须是**跨证据的抽象**，不得逐帖复述单条事件——除非是用户明确声明、天然具有持续效力的事实/偏好（这类允许单条证据）。逐字转写属于证据层，永不作为 unit。
 4. 先过"回想价值测试"：无回想价值的瞬时琐事一律不产出，宁可 ops 为空。
-5. 短期状态用 state 且 tier 不应为 core。
-6. 新证据与某 active unit 矛盾时：若只是措辞/细节更新用 revise；若是事实翻转用 retract(reason=outdated)。
-7. confidence ∈ [0,1]：明确反复印证趋近 1，单条弱证据 ≤ 0.6（confidence 是"信不信为真"，与 importance"值不值得记"正交）。
-8. 没有可靠且值得记的增量时，ops 可为空数组。宁缺毋滥。
-9. target_id 必须来自“已有 active units”列表中的 unit_id。
-10. status=challenged 的 unit 是因原 evidence 被编辑/删除而暂停使用的结论。每个 challenged unit 必须且只能给出一个 retain/confirm/revise/retract 决定：
+5. 目标类信息不在记忆对账中建立 goal；用户对某方向的兴趣、倾向或持续处境，只在确有回想价值时抽成 preference、insight 或 state。正式目标由独立目标管理机制提议并经用户确认。
+6. 短期状态用 state 且 tier 不应为 core。
+7. 新证据与某 active unit 矛盾时：若只是措辞/细节更新用 revise；若是事实翻转用 retract(reason=outdated)。
+8. confidence ∈ [0,1]：明确反复印证趋近 1，单条弱证据 ≤ 0.6（confidence 是"信不信为真"，与 importance"值不值得记"正交）。
+9. 没有可靠且值得记的增量时，ops 可为空数组。宁缺毋滥。
+10. target_id 必须来自“已有 active units”列表中的 unit_id。
+11. status=challenged 的 unit 是因原 evidence 被编辑/删除而暂停使用的结论。每个 challenged unit 必须且只能给出一个 retain/confirm/revise/retract 决定：
     - retain：当前剩余 evidence 仍完整支持原结论，不改变内容；
     - confirm：最新编辑内容继续支持原结论，必须引用当前有效 event_id；
     - revise：当前 evidence 支持一个调整后的结论，必须引用当前有效 event_id；
     - retract：当前 evidence 已不支持该结论。
-11. 编辑后的新 event 同时是普通新 evidence：即使它与旧 unit 完全无关，也要独立判断是否值得 add 新 unit。
+12. 编辑后的新 event 同时是普通新 evidence：即使它与旧 unit 完全无关，也要独立判断是否值得 add 新 unit。
 
 ## 当前时间
 {current_datetime}
@@ -545,7 +546,7 @@ def call_memory_reconcile(
 
 
 _RECONCILE_OPS = {"add", "retain", "confirm", "revise", "retract"}
-_RECONCILE_TYPES = {"identity", "preference", "goal", "state", "relationship", "insight", "freeform"}
+_RECONCILE_TYPES = {"identity", "preference", "state", "relationship", "insight", "freeform"}
 _RECONCILE_TIERS = {"core", "contextual", "episodic"}
 
 
@@ -592,6 +593,8 @@ def _parse_memory_reconcile_content(content: str | None) -> dict | None:
         normalized: dict = {"op": op, "evidence_event_ids": _coerce_event_ids(item.get("evidence_event_ids"))}
         if op == "add":
             unit_type = item.get("type")
+            if unit_type == "goal":
+                unit_type = "insight"
             normalized["type"] = unit_type if unit_type in _RECONCILE_TYPES else "insight"
             normalized["content"] = str(item.get("content") or "").strip()
             normalized["confidence"] = _coerce_float(item.get("confidence"), 0.6)
@@ -609,8 +612,11 @@ def _parse_memory_reconcile_content(content: str | None) -> dict | None:
         elif op == "revise":
             normalized["target_id"] = str(item.get("target_id") or "")
             normalized["content"] = str(item.get("content") or "").strip()
-            if item.get("type") in _RECONCILE_TYPES:
-                normalized["type"] = item.get("type")
+            revised_type = item.get("type")
+            if revised_type == "goal":
+                revised_type = "insight"
+            if revised_type in _RECONCILE_TYPES:
+                normalized["type"] = revised_type
             if item.get("tier") in _RECONCILE_TIERS:
                 normalized["tier"] = item.get("tier")
             if item.get("confidence") is not None:

@@ -37,7 +37,7 @@ class ReconcileParserTest(unittest.TestCase):
         self.assertEqual(len(ops), 5)  # bogus + non-dict dropped
 
         add = ops[0]
-        self.assertEqual(add["type"], "goal")
+        self.assertEqual(add["type"], "insight")
         self.assertEqual(add["content"], "考研")  # trimmed
         self.assertEqual(add["confidence"], 1.0)  # clamped
         self.assertEqual(add["evidence_event_ids"], [1, 2])  # "x" dropped
@@ -166,6 +166,7 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
         self.assertEqual(summary.applied, 1)
         units = mus.list_active_units_in_bucket("global", "public")
         self.assertEqual(len(units), 1)
+        self.assertEqual(units[0]["type"], "insight")
         self.assertEqual(units[0]["content"], "用户在准备考研，焦虑但坚持")
         self.assertEqual({e["id"] for e in mus.get_unit_evidence(units[0]["id"])}, {e1, e2})
 

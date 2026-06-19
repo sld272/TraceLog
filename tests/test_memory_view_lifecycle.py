@@ -9,6 +9,7 @@ from unittest.mock import patch
 from core import (
     context_builder,
     db,
+    goal_service,
     memory_events_service as mes,
     memory_read,
     memory_reconciler as recon,
@@ -18,14 +19,14 @@ from core import (
 from core.llm import reflection_router
 
 
-def _seed_goal_producer(content: str = "用户在准备考研"):
-    """A producer that adds one core-eligible goal unit citing the batch events."""
+def _seed_core_producer(content: str = "用户持续投入考研准备"):
+    """A producer that adds one core-eligible non-goal unit citing the batch events."""
     def producer(*, boundary, events, active_units, tombstones):
         ids = [e["id"] for e in events]
         return {
             "summary": "s",
             "ops": [{
-                "op": "add", "type": "goal", "content": content,
+                "op": "add", "type": "preference", "content": content,
                 "confidence": 0.9, "tier": "core", "importance": 0.85,
                 "evidence_event_ids": ids,
             }],
@@ -51,7 +52,7 @@ class ViewLifecycleTest(unittest.TestCase):
     def _reconcile(self, content: str) -> None:
         recon.reconcile_bucket(
             "global", "public",
-            op_producer=_seed_goal_producer(content),
+            op_producer=_seed_core_producer(content),
             reflection_type=recon.RECONCILE_GLOBAL,
         )
 
@@ -116,7 +117,7 @@ class _DbTestBase(unittest.TestCase):
             mes.record_post_mutation(conn, post_id="p1", op="create", content="我在准备考研", occurred_at=1.0)
         recon.reconcile_bucket(
             "global", "public",
-            op_producer=_seed_goal_producer(content),
+            op_producer=_seed_core_producer(content),
             reflection_type=recon.RECONCILE_GLOBAL,
         )
 
@@ -158,29 +159,12 @@ class ContextBuilderPortraitTest(_DbTestBase):
 
 
 class GoalLifecycleTest(_DbTestBase):
-    def test_goal_listed_then_retracted_on_achievement(self) -> None:
-        with db.transaction() as conn:
-            mes.record_post_mutation(conn, post_id="p1", op="create", content="我要考研", occurred_at=1.0)
-        recon.reconcile_bucket(
-            "global", "public",
-            op_producer=_seed_goal_producer("用户的目标是考研"),
-            reflection_type=recon.RECONCILE_GLOBAL,
-        )
+    def test_goal_listed_then_completed_in_goaltool(self) -> None:
+        goal = goal_service.create_goal("考研", None, "long")
         goals = memory_read.list_goals()
         self.assertEqual(len(goals), 1)
-        self.assertIn("考研", goals[0].content)
-        unit_id = goals[0].unit_id
-
-        # later evidence: the goal is achieved -> reconcile retracts it
-        with db.transaction() as conn:
-            mes.record_post_mutation(conn, post_id="p2", op="create", content="我考上研究生啦", occurred_at=2.0)
-
-        def retract_producer(*, boundary, events, active_units, tombstones):
-            return {"summary": "目标达成", "ops": [{"op": "retract", "target_id": unit_id, "reason": "outdated"}]}
-
-        recon.reconcile_bucket(
-            "global", "public", op_producer=retract_producer, reflection_type=recon.RECONCILE_GLOBAL
-        )
+        self.assertEqual("考研", goals[0]["title"])
+        goal_service.set_status(goal["id"], "done")
         self.assertEqual(memory_read.list_goals(), [])
 
 

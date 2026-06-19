@@ -141,12 +141,16 @@ class MemoryViewServiceTest(unittest.TestCase):
 
     def test_template_render_groups_by_type(self) -> None:
         self._confirmed_core_unit("我是研究生", type="identity")
-        self._confirmed_core_unit("想考上理想院校", type="goal")
+        self._confirmed_core_unit("偏好安静学习", type="preference")
         view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
         self.assertTrue(view.used_fallback)
         self.assertIn("## 身份", view.content_md)
-        self.assertIn("## 目标", view.content_md)
+        self.assertIn("## 偏好", view.content_md)
         self.assertIn("generated_by=tracelog", view.content_md)
+
+    def test_goal_units_never_enter_portrait_slice(self) -> None:
+        goal = self._confirmed_core_unit("想考上理想院校", type="goal")
+        self.assertNotIn(goal, mvs.recompute_slice("global", "public"))
 
     def test_synthesize_persists_view_and_members(self) -> None:
         u1 = self._confirmed_core_unit("信念一")

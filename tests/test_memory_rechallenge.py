@@ -46,7 +46,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             owner_scope="global",
             visibility_scope="public",
             source_channel="post",
-            type="goal",
+            type="insight",
             content=content,
             confidence=0.8,
             tier="core",

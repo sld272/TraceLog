@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import re
 import secrets
 import sqlite3
 import time
+import unicodedata
 from typing import Any
 
 from core import db
@@ -16,6 +19,12 @@ EDITABLE_FIELDS = {"title", "detail", "horizon", "status", "focus"}
 
 FOCUS_WINDOW_DAYS = 30
 DAY_SECONDS = 86400.0
+GOAL_TOOL_ENABLED_ENV = "GOAL_TOOL_ENABLED"
+
+
+def goal_tool_enabled() -> bool:
+    value = os.environ.get(GOAL_TOOL_ENABLED_ENV, "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "disabled"}
 
 
 def list_goals(*, status: str | None = None, horizon: str | None = None) -> list[dict[str, Any]]:
@@ -199,6 +208,42 @@ def format_goal_for_context(goal: dict[str, Any], *, include_status: bool = Fals
     return f"- [{goal.get('id') or '?'}] {goal.get('title', '')}{detail_text}（{horizon}{focus}{status}）"
 
 
+def prompt_sections() -> list[str]:
+    """Always-on prompt sections shared by public, comment and chat replies."""
+    if not goal_tool_enabled():
+        return []
+    sections: list[str] = []
+    long_term = list_active_long_term()
+    if long_term:
+        sections.append(
+            "# 长期目标\n\n"
+            + "\n".join(format_goal_for_context(goal) for goal in long_term)
+        )
+    current = list_current_focus()
+    if current:
+        sections.append(
+            "# 当前状态\n\n[当前关注]\n"
+            + "\n".join(format_goal_for_context(goal) for goal in current)
+        )
+    return sections
+
+
+def memory_content_duplicates_active_goal(content: str) -> bool:
+    """Whether a memory belief would merely restate an active goal title."""
+    if not goal_tool_enabled():
+        return False
+    content_key = _topic_key(content)
+    if not content_key:
+        return False
+    for goal in list_goals(status="active"):
+        title_key = _topic_key(goal["title"])
+        if not title_key:
+            continue
+        if title_key in content_key or content_key in title_key:
+            return True
+    return False
+
+
 def _normalize_create(
     title: str,
     detail: str | None,
@@ -261,6 +306,12 @@ def _validate_status(status: Any) -> None:
 def _new_goal_id() -> str:
     stamp = int(time.time() * 1000).to_bytes(6, "big").hex()
     return f"g_{stamp}{secrets.token_hex(5)}"
+
+
+def _topic_key(value: Any) -> str:
+    text = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    text = re.sub(r"^(用户|我)(正在|计划|决定|希望|想要|想|要|对)?", "", text)
+    return re.sub(r"[\W_]+", "", text, flags=re.UNICODE)
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:

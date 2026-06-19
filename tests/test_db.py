@@ -141,7 +141,22 @@ class DbTest(unittest.TestCase):
             evidence_event_ids=[event.id],
             source="user_authored",
         )
-        memory_view_service.synthesize_view("global", "public", memory_view_service.VIEW_USER_MD)
+        legacy_view = memory_view_service.synthesize_view(
+            "global", "public", memory_view_service.VIEW_USER_MD
+        )
+        with db.transaction() as conn:
+            conn.execute("UPDATE memory_units SET in_md_slice = 1 WHERE id = ?", (unit_id,))
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO memory_view_units(view_id, unit_id, order_index)
+                VALUES (?, ?, 0)
+                """,
+                (legacy_view.view_id, unit_id),
+            )
+            conn.execute(
+                "UPDATE memory_views SET content_md = ?, status = 'fresh' WHERE id = ?",
+                ("## 目标\n- 这学期完成课程项目", legacy_view.view_id),
+            )
         db.execute(
             "DELETE FROM meta WHERE key = 'memory_v2_goaltool_migration_v1'"
         )

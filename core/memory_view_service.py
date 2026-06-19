@@ -44,10 +44,9 @@ VIEW_USER_MD = "user_md"
 VIEW_SOUL_PRIVATE = "soul_private_memory"
 
 # md section ordering + labels by unit type
-_TYPE_ORDER = ["identity", "goal", "relationship", "preference", "state", "insight", "freeform"]
+_TYPE_ORDER = ["identity", "relationship", "preference", "state", "insight", "freeform"]
 _TYPE_LABEL = {
     "identity": "身份",
-    "goal": "目标",
     "relationship": "关系",
     "preference": "偏好",
     "state": "近期状态",
@@ -73,6 +72,8 @@ def _passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bo
     if unit["status"] != "active":
         return False
     if unit["prompt_policy"] != "allow":
+        return False
+    if unit["type"] == "goal":
         return False
     profile_policy = unit["profile_policy"]
     if profile_policy == "force_exclude":

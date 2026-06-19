@@ -6,6 +6,7 @@ from pathlib import Path
 
 from core import (
     db,
+    goal_service,
     memory_events_service as mes,
     memory_read,
     memory_unit_service as mus,
@@ -177,6 +178,18 @@ class MemoryReadTest(unittest.TestCase):
         prompt = memory_read.build_memory_section("public_post", "gotoh", "随便")
         self.assertEqual(prompt.text, "")
         self.assertEqual(prompt.used_unit_ids, [])
+
+    def test_relevant_memory_deduplicates_active_goal_topic(self) -> None:
+        goal_service.create_goal("跨专业考研", None, "long")
+        self._unit(
+            "global",
+            "public",
+            type="preference",
+            content="用户想跨专业考研",
+            importance=0.6,
+        )
+        hits = memory_read.retrieve_units("跨专业考研", "public_post", "gotoh")
+        self.assertEqual([], hits)
 
 
 if __name__ == "__main__":

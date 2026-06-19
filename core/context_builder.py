@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, logging_service, memory_read, memory_view_service, profile_service, record_service, reply_context, todo_service, tool_config_service
+from core import db, goal_service, logging_service, memory_read, memory_view_service, profile_service, record_service, reply_context, todo_service, tool_config_service
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext, list_enabled_souls
 
@@ -46,6 +46,8 @@ def build_context(
         profile = profile_service.read_profile().strip()
         if profile and profile != profile_service.DEFAULT_USER_MD.strip():
             sections.append(f"# 用户档案\n\n{profile}")
+
+    sections.extend(goal_service.prompt_sections())
 
     effective_relevant_ids: list[str] = []
     if relevant_post_ids:

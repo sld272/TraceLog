@@ -9,6 +9,7 @@ from core import (
     db,
     attachment_service,
     evidence_service,
+    goal_service,
     logging_service,
     memory_events_service,
     memory_read,
@@ -272,6 +273,8 @@ def build_comment_context(
         profile = profile_service.read_profile().strip()
         if profile:
             sections.append(f"# 用户档案\n\n{profile}")
+
+    sections.extend(goal_service.prompt_sections())
 
     post = _get_post(post_id)
     if post is not None:
