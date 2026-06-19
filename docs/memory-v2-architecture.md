@@ -102,6 +102,27 @@ delete 后有效 evidence 已归零时由代码确定性 retract，不调用 LLM
 
 ## 已知未完成
 
-- 前端记忆工作台 UI（unit 编辑、三层下钻、生命周期控制）；后端 hydration（`unit_detail`）已就绪。
-- goal 的显式「达成 vs 放弃」区分（当前用 active/retracted 表达「在追踪/不再追踪」）。
-- 旧 README/architecture/overview 仍主要描述 legacy 模型；本文件为 v2 权威来源。
+按优先级/价值排列，便于后续接手。
+
+**工作台（最高价值，答辩演示用）**
+
+- 前端记忆工作台 UI：画像（view）→ 支撑 unit → raw evidence 三层下钻；展示 view fresh/stale + 手动重综合；展示 challenged/pending 重判与 freshness seam。后端 `unit_detail`（带 evidence 的 `current/superseded/deleted` 标记）已就绪。
+- 工作台后端从编辑 md 改为编辑 unit：`memory_review_service` 目前仍只读写 legacy `user.md` / `soul_memories`；需要 `create_unit`（user_authored）/ `update_unit`（reflected→新建 user_authored + supersede）/ `set_profile_policy` / `set_prompt_policy` 等面向用户的 API（`retract_unit` 已存在但仅 reconciler 用）。v2 启用后旧 md 编辑入口应禁用或标只读，避免「保存成功但回复不读」。
+
+**写路/整理增强**
+
+- 每帖增量对账（trickle reconcile）：当前是按 bucket 批量 reconcile + 读路 freshness seam 兜新鲜度；trickle 是 memory-v2-design §3.1 的目标形态，未实现。
+- decay / 第三档重组：unit 的 `dormant` 衰减、低频合并压缩、按存活轮数的稳定缓冲，均未实现（`status='dormant'`、`retrieval_count` 列已预留但不写）。
+- goal 的显式「达成 vs 放弃」区分：当前用 unit active/retracted 表达「在追踪/不再追踪」；独立 goaltool / 用户确认的建议机制（见 state-goals-suggestions 设计）未实现。
+- 用户删除分意图（false/outdated/不进画像/回复禁用）、user_authored 对账免疫的完整 UX：schema 已支持（`retraction_reason`、`source`、`prompt_policy`、`profile_policy`），但缺面向用户的入口。
+
+**读路/检索增强**
+
+- `retrieve_units` 多信号打分（语义+关键词+实体+时间+importance）：当前是关键词重叠 + 向量 ANN 两路混合的 MVP。
+- `in_md_slice` 成员在检索中「降权而非硬排除」：当前硬排除（`in_md_slice = 0`）。
+- 物理遗忘 / raw scrub：彻底擦除 source/event/unit/vector/view/revision 的高风险流程未实现；当前删除是逻辑层 challenge + retract，证据链保留。
+
+**其他**
+
+- 旧 README/architecture/overview/database 仍主要描述 legacy 模型，已各加 v2 指针；本文件为 v2 权威来源。
+- 答辩 demo 数据与脚本。
