@@ -15,6 +15,8 @@
   view stale→重综合生命周期、v2 读模式注入画像+兜底、reply 三入口替换 legacy soul_memory+归属。
 - 读路：freshness seam(units_and_freshness 真正实现)、chat/comment 真实 query + 最低命中门。
 - 健壮性：并发 reconcile 的 cursor CAS、人格不串戏边界回归测试。
+- 生命周期：edit/delete 精确 challenge 受影响 unit、持久重判队列、source revision CAS、
+  challenged evidence raw fallback、历史脏 unit 幂等修复。
 - 可解释：unit→raw evidence hydration(unit_detail)。
 - goal：list_goals 目标线呈现(生命周期走 unit active/retracted)。
 - 检索：unit 向量 ANN 与关键词混合(语义召回 + 关键词精确，scope 仍由 SQL 候选保证，索引不可用时退化关键词)。

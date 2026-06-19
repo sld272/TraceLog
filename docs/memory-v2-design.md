@@ -1,8 +1,10 @@
 # TraceLog 记忆架构 v2 设计构想
 
-> 状态：构想 / 探索（feature/memory-v2 分支）。本文记录对记忆系统的一次"格局打开"式重构思路，既含高维判断，也含落地细节，作为 v2 的路线底稿；v1 自动整理方案仍以当前代码与主架构文档为准。
+> 状态：北极星构想（feat/memory-v2 分支）。本文记录对记忆系统的一次"格局打开"式重构思路，作为 v2 的路线底稿。
 >
-> 相关：[architecture.md](./architecture.md)（当前架构）、[database.md](./database.md)、[overview.md](./overview.md)。
+> **实现状态**：核心三层（evidence ledger → unit → view）、按 bucket 的 reconcile 写路、边界、unit 向量检索、freshness seam、edit/delete challenge 重判**均已实现**——已实现部分的权威说明见 [memory-v2-architecture.md](./memory-v2-architecture.md)，与本文冲突时以该文件为准。本文中**尚未实现**的部分：每帖增量对账（trickle，§3.1）、第 3 档重组/decay（§3）、实体图升为 unit 骨架（§2.2）、读写闭环 retrieval_count 浮沉（§5）、图谱化矛盾边失效（§6 可选增强）。
+>
+> 相关：[memory-v2-architecture.md](./memory-v2-architecture.md)（已实现状态，权威）、[architecture.md](./architecture.md)（legacy 架构）、[database.md](./database.md)、[overview.md](./overview.md)。
 
 ---
 
@@ -72,7 +74,7 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 
 **复用已有投资**：轻反思已抽出 entities / emotions / events / relations 四张表，现"解耦、留作可视化基建"基本是死重。但 `entities.mention_count`、`relations.strength` 本就是跨帖累积的抽象，不是复述。把这套结构从死表提升为 **unit 的骨架**（实体图 + 情节事件做支架，语义信念 unit 挂其上），既清死重，又天然满足"genuine abstraction"。
 
-> **MVP 现状（见 memory-v2-mvp-design.md）**：轻反思**禁用**；写端用批量深反思直接从 raw 抽 unit（不做每帖 proposer——单帖无跨证据视野 = observation 2.0，见 §3.1）。本节「实体图升为 unit 骨架」是 v2 增强，届时需重启轻反思或由每帖增量对账（§3.1）补吐实体/关系。
+> **已实现现状（见 [memory-v2-architecture.md](./memory-v2-architecture.md)）**：轻反思**禁用**；写端用批量 reconcile 直接从 raw 抽 unit（不做每帖 proposer——单帖无跨证据视野 = observation 2.0，见 §3.1）。本节「实体图升为 unit 骨架」尚未实现，是 v2 增强，届时需重启轻反思或由每帖增量对账（§3.1）补吐实体/关系。
 
 ### 2.3 unit 模型解锁了什么
 
@@ -98,7 +100,7 @@ unit 必须过的坎：**是跨证据的抽象，不是单条证据的转写。*
 
 ### 3.1 第二档的落地形态：每帖增量对账（trickle reconcile）
 
-> 这是 MVP（[memory-v2-mvp-design.md](./memory-v2-mvp-design.md)）**刻意延后**的设计，在此存档为 v2 第三步的目标形态。MVP 写端按 visibility bucket 批量消费 evidence events（每条事件不立即产 unit），新鲜度由读路的有预算 event seam 兜住。
+> 这是当前实现**刻意延后**的设计（**尚未实现**），在此存档为 v2 第三步的目标形态。当前写端按 visibility bucket 批量消费 evidence events（每条事件不立即产 unit），新鲜度由读路的有预算 event seam 兜住。
 
 **为什么不能"每帖单独抽 unit"**（核心陷阱，必须钉死）：per-post 一次 LLM 若只看这一条 post，**by construction 没有跨证据视野，只能转写**——这就是被砍掉的 observation 2.0。给它套一层"候选/可丢弃（proposed）+ 深反思再 promote/drop"也救不了：壳只降低了垃圾**进 active 的风险**，没降低**产垃圾的成本**；drop 率高，LLM 花在产废、深反思还要趟废堆。
 
@@ -204,7 +206,7 @@ md / unit 都派生自 evidence events，故：
 
 现有 reconcile 能跑，且有比赛 deadline，故不推倒重来。下**一个最高杠杆的赌注**，其余按需叠加：
 
-1. **第一步（MVP，核心赌注）**：先落 evidence event ledger、`owner_scope + visibility_scope + prompt_policy` 硬边界与 per-bucket cursor；再引入 memory unit/ops/view；深反思改为按 bucket 输出 unit ops；`user.md` / 私聊 `soul_memories` 改由允许进入画像的 core unit 低频综合；最后把独立 unit collection 与有预算的 freshness seam 受控接入读路。详见 memory-v2-mvp-design.md。
+1. **第一步（核心赌注，已实现）**：先落 evidence event ledger、`owner_scope + visibility_scope + prompt_policy` 硬边界与 per-bucket cursor；再引入 memory unit/ops/view；深反思改为按 bucket 输出 unit ops；`user.md` / 私聊 `soul_memories` 改由允许进入画像的 core unit 低频综合；最后把 unit 向量检索与有预算的 freshness seam 受控接入读路。已实现状态详见 [memory-v2-architecture.md](./memory-v2-architecture.md)。
 2. **第二步**：unit 检索多信号打分、precedence 权重调优、provenance 精确归因，以及 thread → public 的人工 promote UX。
 3. **第三步**：decay + 第 3 档重组 + **每帖增量对账（§3.1）**。
 4. **可选增强**：图谱化（实体支架、矛盾边失效），不阻塞主线。

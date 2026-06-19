@@ -1,7 +1,7 @@
 # Memory v2 架构（已实现状态）
 
 本文件是 memory-v2 **已实现**部分的权威说明，反映代码现状（feat/memory-v2 分支）。
-与旧设计文档（memory-v2-design / mvp-design / state-goals-suggestions）冲突时，以本文件为准；
+与旧设计文档（memory-v2-design / state-goals-suggestions）冲突时，以本文件为准；
 记忆边界（"人格不串戏"）的产品定义以 `memory-v2-defense-roadmap.md` 的「记忆边界语义基线」一节为准。
 
 ## 与 legacy 的关系：两个开关，默认零影响
@@ -27,18 +27,41 @@ memory-v2 由两个环境变量控制，默认都是 legacy，行为与旧版完
 
 开启 `reconcile` 写模式后，用户每次写入（post/comment/chat）入队一个**去重的全局 reconcile job**（`enqueue_memory_reconcile_once`），后台 worker 领取后：
 
-1. `run_pending_reconcile` 遍历每个有未消费证据的 bucket，逐桶 reconcile。
-2. 每桶：取游标后的用户证据 + 桶内 active units + 墓碑 → LLM 产出 add/confirm/revise/retract ops → 在一个事务内 apply + 推进游标。
+1. `run_pending_reconcile` 在单次有界 pass 中遍历最多 500 个未消费 bucket，每桶最多消费 200 条事件。
+2. 每桶：取游标后的当前版本用户证据 + active/challenged units + pending unit reviews + 墓碑 → LLM 产出 add/retain/confirm/revise/retract ops → 在一个事务内 apply、resolve reviews、推进游标。
 3. `refresh_views_after_reconcile` 重综合 stale/missing 的画像（hash 门控，core 集未变则跳过）。
 4. `rebuild_expected_docs` 把 active units 同步为 `unit` 向量文档。
+5. 若批次上限后仍有未消费证据，当前 job 入队一个去重的 continuation job，由下一轮继续消费。
 
 关键正确性保证：
 
-- **失败不丢证据**：LLM 调用失败（超时/报错/非法 JSON）抛 `ReconcileProducerError`，游标不推进，该批证据下次重试。只有成功解析（含合法空结果）才推进游标。
+- **失败不丢证据**：LLM 调用失败（超时/报错/非法 JSON）抛 `ReconcileProducerError`，游标不推进；runner 继续处理其他 bucket，最终汇总失败并让当前 job 进入自动重试。只有成功解析（含合法空结果）才推进游标。
+- **有界续跑**：单个 job 不无限占用 worker；超过每桶/每轮上限的积压由去重 continuation job 接管。达到最大重试次数后，失败 job 保留为 `failed`，对应 cursor 仍停在失败证据之前，等待手动重试或后续写入触发新 job。
 - **并发安全**：提交事务内对游标做 CAS 重检；若另一 runner 已推进则放弃本次提交，避免重复 unit。
+- **版本安全**：只有 source 的最新 revision 能生成或支撑 unit；LLM 调用期间 source 再次 edit/delete 时，source revision CAS 会拒绝旧结果。
 - **画像生命周期**：reconcile 提交后 recompute slice + 标记受影响 view 为 stale，由后续重综合刷新；读侧缺失/stale 时有兜底（见下）。
 
 legacy 的 light/deep 反思在 reconcile 写模式下不再入队。
+
+### edit/delete：challenge 与重判
+
+用户 edit/delete 时，业务 mutation 与以下动作在同一事务提交：
+
+1. append 新 revision 事件；
+2. 反查引用该 source 任一历史 revision 的 reflected/migrated units；
+3. 将 active unit 立即改为 `challenged`，写入 `memory_unit_reconcile_queue`；
+4. 将相关画像标 stale。
+
+`challenged` unit 不进入普通检索、画像或 unit 向量文档。Reconcile 必须对每个 pending unit 给出且只给出一个决定：
+
+- `retain`：剩余 evidence 仍完整支持，原样恢复 active；
+- `confirm`：最新版本继续支持，绑定当前有效 evidence；
+- `revise`：按当前 evidence 更新结论；
+- `retract`：当前 evidence 已不支持。
+
+delete 后有效 evidence 已归零时由代码确定性 retract，不调用 LLM；其余 delete 与所有 edit 交给 LLM。Edit 的最新内容同时作为普通新 evidence，可独立 `add` 新 unit。漏答、重复决定、非法 evidence 引用或并发 revision 变化都会使整批回滚，unit 保持 challenged。
+
+帖子支持 `PATCH /posts/{post_id}` 编辑文本。删帖会在级联删除前为所有评论补 delete events；评论删除、chat 编辑及其级联删除同样触发 challenge 和 reconcile。
 
 ## 读路：分层注入
 
@@ -49,7 +72,7 @@ legacy 的 light/deep 反思在 reconcile 写模式下不再入队。
 3. **[当前状态]**：近期 active `state` units（recency×importance，7 天窗口）。
 4. **[相关记忆]**：与当前 query 相关的 units，作为去噪的主题锚点逐条列出。
 5. **[相关对话原文]**：对每个命中 unit，定位其最相关证据所在的对话单元，**整段召回原文**——原贴 + 当前回复 SOUL 在该贴的评论线 + 命中所在 SOUL 的评论线；私聊命中则召回该 SOUL 的近期私聊片段（公开场景标记自审）。多命中同一对话单元去重，套宽松字数预算 + 消息边界智能截断。对话单元的定位用「关键词重叠 → 时效」在该 unit 证据集内选取，不用向量。
-6. **[最近动态·尚未整理]**（仅 `units_and_freshness`）：游标之后、尚未被 reconcile 消费的近期用户证据，按 3 天窗口 + 事件/字数预算注入，带截断标记。
+6. **[尚未稳定沉淀的原始证据]**（仅 `units_and_freshness`）：合并游标后的近期用户证据与 pending challenged unit 的当前有效 evidence。后者即使早于 cursor 也可作为 raw fallback；被 edit 取代或 delete 的旧版本绝不注入。
 
 公开回复的「SOUL 相处记忆」块在 v2 下完全由上述分层组装，不再注入 legacy 整块 `soul_memory`（旧文件把私聊记忆无判断地带进公开回复）。
 
@@ -69,11 +92,13 @@ legacy 的 light/deep 反思在 reconcile 写模式下不再入队。
 ## goal 与可解释
 
 - **goal**：作为 `type=goal` 的 unit 经通用 reconcile 沉淀，进入画像「目标」章节与检索；`list_goals` 读取当前在追踪的目标。生命周期走 unit 状态机：达成/放弃由后续 reconcile retract（active→retracted）。
-- **evidence hydration**：`unit_detail(unit_id)` 返回 unit + 其依据的 raw evidence，支撑「为什么系统这么认为」的可解释与未来工作台的下钻。
+- **evidence hydration**：`unit_detail(unit_id)` 返回 unit + raw evidence，并标记 `current/superseded/deleted`，支撑「为什么系统这么认为」的可解释与未来工作台下钻。
 
 ## 迁移
 
 评论归属迁移（`_migrate_comment_event_ownership`）把 legacy `global` 的用户评论事件改归 `soul:<name>`，并清理迁移前可能残留的 `(global, thread:*)` 孤立 units/cursors，让新 soul bucket 从头 reconcile。global+public 用户画像桶不受影响；幂等。
+
+`memory_v2_rechallenge_v1` 幂等扫描修复旧版本已经越过 edit/delete cursor 的 active units：按 source 最新 revision 补 challenge/review，不回退 cursor；启动时发现 pending reviews 会自动入队 reconcile。
 
 ## 已知未完成
 
