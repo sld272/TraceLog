@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, logging_service, memory_read, profile_service, record_service, reply_context, todo_service, tool_config_service
+from core import db, logging_service, memory_read, memory_view_service, profile_service, record_service, reply_context, todo_service, tool_config_service
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext, list_enabled_souls
 
@@ -28,9 +28,21 @@ def build_context(
     enabled_souls = list_enabled_souls()
     sections: list[str] = []
 
-    # In v2 read mode the synthesized portrait ([基线认知]) owns this channel;
-    # suppress the legacy user.md profile to avoid a double portrait.
-    if not memory_read.memory_reading_enabled():
+    # In v2 read mode the synthesized portrait owns this channel: inject the
+    # user_md view (or its template fallback), and only if that yields nothing
+    # fall back to the legacy user.md so the identity floor never vanishes. In
+    # legacy mode, behave exactly as before.
+    if memory_read.memory_reading_enabled():
+        portrait = memory_view_service.read_portrait_body(
+            "global", "public", memory_view_service.VIEW_USER_MD
+        )
+        if not portrait:
+            legacy = profile_service.read_profile().strip()
+            if legacy and legacy != profile_service.DEFAULT_USER_MD.strip():
+                portrait = legacy
+        if portrait:
+            sections.append(f"# 用户档案\n\n{portrait}")
+    else:
         profile = profile_service.read_profile().strip()
         if profile and profile != profile_service.DEFAULT_USER_MD.strip():
             sections.append(f"# 用户档案\n\n{profile}")

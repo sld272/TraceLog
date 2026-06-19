@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from core import (
+    context_builder,
     db,
     memory_events_service as mes,
+    memory_read,
     memory_reconciler as recon,
     memory_view_producer as view_producer,
     memory_view_service as mvs,
@@ -91,6 +94,67 @@ class ViewLifecycleTest(unittest.TestCase):
 
         self.assertEqual(mvs.get_view("global", "public", mvs.VIEW_USER_MD)["status"], "stale")
         self.assertIn(("global", "public", mvs.VIEW_USER_MD), mvs.buckets_needing_view())
+
+
+class _DbTestBase(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name) / "workspace"
+        self.old_workspace = db.WORKSPACE_DIR
+        self.old_db_path = db.DB_PATH
+        db.WORKSPACE_DIR = self.workspace
+        db.DB_PATH = self.workspace / "state.db"
+        db.init_db()
+
+    def tearDown(self) -> None:
+        db.WORKSPACE_DIR = self.old_workspace
+        db.DB_PATH = self.old_db_path
+        self.tmp.cleanup()
+
+    def _seed_core_unit(self, content: str = "用户在准备考研") -> None:
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="p1", op="create", content="我在准备考研", occurred_at=1.0)
+        recon.reconcile_bucket(
+            "global", "public",
+            op_producer=_seed_goal_producer(content),
+            reflection_type=recon.RECONCILE_GLOBAL,
+        )
+
+
+class PortraitReadTest(_DbTestBase):
+    def test_read_portrait_uses_view_body_without_header(self) -> None:
+        self._seed_core_unit("用户在准备考研")
+        with patch.object(reflection_router, "call_view_synthesis", lambda *a, **k: "你正在备考。"):
+            view_producer.refresh_views_after_reconcile(client=object(), model="m")
+        body = mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD)
+        self.assertEqual(body, "你正在备考。")
+        self.assertNotIn("generated_by", body)
+
+    def test_read_portrait_template_fallback_when_no_view(self) -> None:
+        self._seed_core_unit("用户在准备考研")
+        body = mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD)
+        self.assertIn("准备考研", body)  # deterministic template over core units
+
+    def test_read_portrait_empty_when_nothing(self) -> None:
+        self.assertEqual(mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD), "")
+
+
+class ContextBuilderPortraitTest(_DbTestBase):
+    def test_v2_mode_injects_view_portrait(self) -> None:
+        self._seed_core_unit("用户在准备考研")
+        with patch.object(reflection_router, "call_view_synthesis", lambda *a, **k: "VIEWMARK 你在备考。"):
+            view_producer.refresh_views_after_reconcile(client=object(), model="m")
+        with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "units"}):
+            ctx = context_builder.build_context()
+        self.assertIn("VIEWMARK", ctx.shared_context)
+        self.assertNotIn("generated_by", ctx.shared_context)  # header stripped
+
+    def test_legacy_mode_does_not_inject_view(self) -> None:
+        self._seed_core_unit("用户在准备考研")
+        with patch.object(reflection_router, "call_view_synthesis", lambda *a, **k: "VIEWMARK"):
+            view_producer.refresh_views_after_reconcile(client=object(), model="m")
+        ctx = context_builder.build_context()  # default legacy read mode
+        self.assertNotIn("VIEWMARK", ctx.shared_context)
 
 
 if __name__ == "__main__":

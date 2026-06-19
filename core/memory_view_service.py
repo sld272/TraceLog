@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -361,3 +362,38 @@ def buckets_needing_view() -> list[tuple[str, str, str]]:
         if get_view(owner_scope, visibility_scope, view_type) is None:
             out.append((owner_scope, visibility_scope, view_type))
     return out
+
+
+_HEADER_RE = re.compile(r"^<!--.*?-->\s*", re.DOTALL)
+
+
+def strip_generated_header(content_md: str) -> str:
+    """Drop the leading generated-by metadata comment for prompt injection."""
+    return _HEADER_RE.sub("", content_md or "", count=1)
+
+
+def read_portrait_body(
+    owner_scope: str,
+    visibility_scope: str,
+    view_type: str,
+    *,
+    char_budget: int | None = None,
+) -> str:
+    """Best-effort portrait text to inject — no LLM, never writes.
+
+    Prefers the synthesized view body (header stripped). A stale view is still
+    returned: it beats an empty identity floor and the reconcile job will
+    re-synthesize it shortly. If there is no view yet, falls back to the
+    deterministic template over the current core units. Returns '' when there
+    is nothing stable to say (caller may then fall back to legacy)."""
+    view = get_view(owner_scope, visibility_scope, view_type)
+    if view is not None:
+        body = strip_generated_header(view["content_md"]).strip()
+        if body:
+            return body
+    units = _core_units_for_render(owner_scope, visibility_scope)
+    if units:
+        if char_budget is None:
+            char_budget = USER_MD_CHAR_BUDGET if view_type == VIEW_USER_MD else SOUL_MEMORY_CHAR_BUDGET
+        return render_template(units, char_budget=char_budget)
+    return ""
