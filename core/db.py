@@ -115,6 +115,25 @@ def _migrate_comment_event_ownership(conn: sqlite3.Connection) -> None:
         ") WHERE source_type = 'comment_message' AND owner_scope = 'global' "
         "AND EXISTS (SELECT 1 FROM comments WHERE CAST(comments.id AS TEXT) = memory_ingest_events.source_id)"
     )
+    # If reconcile ran before this migration, units/cursors for the old
+    # (global, thread:*) buckets are now orphaned — their evidence just moved to
+    # soul-owned buckets. A global+thread bucket could also mix several souls'
+    # comments, so re-mapping isn't clean; drop those units (+ evidence links)
+    # and cursors and let the new soul-owned buckets reconcile the migrated
+    # evidence from scratch. Idempotent: in steady state there are none.
+    orphan_unit_ids = [
+        row["id"]
+        for row in conn.execute(
+            "SELECT id FROM memory_units WHERE owner_scope = 'global' AND visibility_scope LIKE 'thread:%'"
+        ).fetchall()
+    ]
+    if orphan_unit_ids:
+        placeholders = ",".join("?" for _ in orphan_unit_ids)
+        conn.execute(f"DELETE FROM memory_unit_evidence WHERE unit_id IN ({placeholders})", orphan_unit_ids)
+        conn.execute(f"DELETE FROM memory_units WHERE id IN ({placeholders})", orphan_unit_ids)
+    conn.execute(
+        "DELETE FROM memory_reconcile_cursors WHERE owner_scope = 'global' AND visibility_scope LIKE 'thread:%'"
+    )
 
 
 def _backfill_memory_events(conn: sqlite3.Connection) -> None:
