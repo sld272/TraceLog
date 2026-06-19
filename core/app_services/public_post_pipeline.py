@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import attachment_service, context_builder, db, memory_read, memory_reconcile_runner, memory_view_producer, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service, vector_index_service, vision_service
+from core import attachment_service, context_builder, db, memory_read, memory_reconcile_runner, memory_view_producer, query_rewriter, record_service, reflector, reply_service, retrieval, suggestion_pipeline, todo_service, tool_config_service, vector_index_service, vision_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
@@ -139,8 +139,24 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
     for soul in public_context.built_context.enabled_souls:
         event_service.append_post_event(post_id, "reply_started", {"soul_name": soul.name}, job_id=job_id)
     results = reply_service.fanout(post_id, llm_content, client, model, public_context.built_context)
+    suggestions = suggestion_pipeline.collect_goal_suggestions(
+        user_input=content,
+        evidence_ref=f"post:{post_id}",
+        client=client,
+        model=model,
+        context="公开 post",
+        trace_context={"channel": "public_post", "post_id": post_id},
+    )
+    first_success = next((result for result in results if result.ok), None)
+    if first_success is not None:
+        reply_service.attach_suggestions_to_root_comment(
+            post_id,
+            first_success.soul_name,
+            suggestions,
+        )
     for result in results:
         event_type = "reply_succeeded" if result.ok else "reply_failed"
+        inline_suggestions = suggestions if first_success is not None and result.soul_name == first_success.soul_name else []
         event_service.append_post_event(
             post_id,
             event_type,
@@ -148,6 +164,7 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
                 "soul_name": result.soul_name,
                 "reply": result.reply,
                 "error": result.error,
+                "suggestions": inline_suggestions,
             },
             job_id=job_id,
         )

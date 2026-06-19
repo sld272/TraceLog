@@ -3,12 +3,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 import io
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
 
-from core import attachment_service, db, query_rewriter, retrieval, tool_config_service, vector_index_service
+from core import attachment_service, db, query_rewriter, reply_service, retrieval, tool_config_service, vector_index_service
 from core.app_services import event_service, job_service, public_post_pipeline
 from tests.helpers import require_not_none
 
@@ -163,6 +164,71 @@ class PublicPostPipelineTest(unittest.TestCase):
         exclusion = captured["exclusion"]
         self.assertIsInstance(exclusion, retrieval.RetrievalExclusion)
         self.assertEqual(frozenset({created.post_id}), exclusion.post_ids)
+
+    def test_public_reply_event_and_root_metadata_receive_inline_suggestion(self) -> None:
+        created = public_post_pipeline.create_post("我决定准备考研")
+        job_id = require_not_none(
+            db.query_one(
+                "SELECT id FROM jobs WHERE type = ? AND json_extract(payload_json, '$.post_id') = ?",
+                (job_service.TYPE_GENERATE_POST_REPLIES, created.post_id),
+            )
+        )["id"]
+        built_context = SimpleNamespace(
+            enabled_souls=[SimpleNamespace(name="拾迹者")],
+            relevant_post_ids=[],
+        )
+        public_context = public_post_pipeline.PublicPostReplyContext(
+            llm_content="我决定准备考研",
+            relevant_post_ids=[],
+            built_context=built_context,
+        )
+        suggestion = {
+            "id": "s_1",
+            "kind": "goal",
+            "payload": {"title": "准备考研", "horizon": "long"},
+            "evidence_ref": f"post:{created.post_id}",
+            "confidence": 0.9,
+            "status": "pending",
+            "normalized_key": "sha256:x",
+            "created_at": 1.0,
+            "decided_at": None,
+        }
+        result = reply_service.SoulReplyResult(
+            soul_name="拾迹者",
+            sort_order=0,
+            ok=True,
+            reply="认真规划。",
+            error=None,
+        )
+
+        with (
+            patch(
+                "core.app_services.public_post_pipeline.build_public_post_reply_context",
+                return_value=public_context,
+            ),
+            patch("core.app_services.public_post_pipeline.reply_service.fanout", return_value=[result]),
+            patch(
+                "core.app_services.public_post_pipeline.suggestion_pipeline.collect_goal_suggestions",
+                return_value=[suggestion],
+            ),
+            patch(
+                "core.app_services.public_post_pipeline.reply_service.attach_suggestions_to_root_comment"
+            ) as attach,
+        ):
+            public_post_pipeline._run_generate_post_replies(
+                int(job_id),
+                {"post_id": created.post_id},
+                client=object(),
+                model="m",
+            )
+
+        reply_event = [
+            event
+            for event in event_service.list_post_events(created.post_id)
+            if event["event_type"] == "reply_succeeded" and event["payload"].get("soul_name")
+        ][-1]
+        self.assertEqual([suggestion], reply_event["payload"]["suggestions"])
+        attach.assert_called_once_with(created.post_id, "拾迹者", [suggestion])
 
     def test_reply_job_fails_when_soul_reply_fails(self) -> None:
         db.execute(

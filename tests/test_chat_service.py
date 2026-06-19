@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, tool_config_service, web_search_gate, web_search_service
+from core import chat_service, db, logging_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, suggestion_pipeline, tool_config_service, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
 from tests.helpers import require_not_none
@@ -399,6 +400,30 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIsNotNone(result.assistant_message_id)
         self.assertEqual(["user", "assistant"], [message.role for message in messages])
         self.assertEqual("先睡一下也行。", messages[-1].content)
+
+    def test_chat_reply_attaches_inline_goal_suggestion_when_enabled(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        candidate = {
+            "title": "准备考研",
+            "detail": None,
+            "horizon": "long",
+            "confidence": 0.92,
+        }
+        with patch.dict(os.environ, {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "1"}), patch(
+            "core.suggestion_pipeline.goal_router.call_goal_router",
+            return_value=[candidate],
+        ):
+            result = chat_service.call_chat_reply(
+                thread.id,
+                "我决定准备考研",
+                FakeClient({"reply": "那我们认真规划。"}),
+                "fake-model",
+            )
+
+        assistant = chat_service.get_message(require_not_none(result.assistant_message_id))
+        metadata = json.loads(assistant.metadata or "{}")
+        self.assertEqual("准备考研", result.suggestions[0]["payload"]["title"])
+        self.assertEqual(result.suggestions, metadata["suggestions"])
 
     def test_chat_reply_metadata_includes_evidence_snapshot_and_rerun_refreshes_it(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")

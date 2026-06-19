@@ -30,6 +30,8 @@ def create_suggestion(
     are also reused so retries and reply reruns cannot create duplicates.
     """
     normalized_payload = _normalize_payload(kind, payload)
+    if kind == "goal" and goal_service.has_active_goal_title(normalized_payload["title"]):
+        return None
     normalized_ref = _normalize_optional_text(evidence_ref)
     normalized_key = normalized_key_for(kind, normalized_payload, normalized_ref)
     normalized_confidence = _coerce_confidence(confidence)

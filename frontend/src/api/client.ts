@@ -225,6 +225,7 @@ export interface ChatReplyResult {
   user_message_id: number
   assistant_message_id: number | null
   error: string | null
+  suggestions: Suggestion[]
 }
 
 export interface CommentReplyResult {
@@ -235,6 +236,7 @@ export interface CommentReplyResult {
   user_message_id: number
   assistant_message_id: number | null
   error: string | null
+  suggestions: Suggestion[]
 }
 
 export type EvidenceChannel = 'chat' | 'comment' | 'public_post'
@@ -515,6 +517,27 @@ export function parseMessageEvidence(metadata: string | null | undefined): Evide
   } catch {
     return []
   }
+}
+
+export function parseMessageSuggestions(metadata: string | null | undefined): Suggestion[] {
+  if (!metadata) return []
+  try {
+    const parsed = JSON.parse(metadata) as { suggestions?: unknown }
+    if (!Array.isArray(parsed.suggestions)) return []
+    return parsed.suggestions.filter(isSuggestion)
+  } catch {
+    return []
+  }
+}
+
+function isSuggestion(value: unknown): value is Suggestion {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Record<string, unknown>
+  return typeof item.id === 'string'
+    && (item.kind === 'goal' || item.kind === 'todo')
+    && item.status === 'pending'
+    && typeof item.payload === 'object'
+    && item.payload !== null
 }
 
 export function submitEvidenceFeedback(channel: EvidenceChannel, messageId: number, docId: string) {

@@ -6,10 +6,12 @@ import {
   type CommentMessage,
   type PipelineJobSummary,
   type Post,
+  parseMessageSuggestions,
 } from '@/api/client'
 import { EvidencePanel } from './EvidencePanel'
 import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
+import { InlineSuggestions } from './InlineSuggestions'
 import { SoulAvatar } from './SoulAvatar'
 import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
@@ -314,6 +316,7 @@ function CommentPreview({
             <>
               {comment.content && <p className={styles.commentText}>{comment.content}</p>}
               <ImageGrid attachments={comment.attachments ?? []} />
+              <InlineSuggestions suggestions={parseMessageSuggestions(comment.metadata)} />
               <EvidencePanel
                 metadata={comment.metadata}
                 channel="public_post"
@@ -511,7 +514,10 @@ function ThreadMessage({
       )}
       <ImageGrid attachments={message.attachments ?? []} />
       {!isUser && !isFailedAssistant && !isPendingAssistant && (
-        <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
+        <>
+          <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
+          <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
+        </>
       )}
     </div>
   )

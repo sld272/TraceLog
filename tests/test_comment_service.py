@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ from core import (
     retrieval,
     soul_memory_service,
     soul_service,
+    suggestion_pipeline,
     tool_config_service,
     web_search_gate,
     web_search_service,
@@ -412,6 +414,31 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(0.73, item["score"])
         self.assertEqual(0.42, item["distance"])
         self.assertIn("别装了，继续讲重点", item["snippet"])
+
+    def test_comment_reply_attaches_inline_goal_suggestion_when_enabled(self) -> None:
+        candidate = {
+            "title": "完成课程项目",
+            "detail": "交付演示版本",
+            "horizon": "short",
+            "confidence": 0.88,
+        }
+        with patch.dict(os.environ, {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "1"}), patch(
+            "core.suggestion_pipeline.goal_router.call_goal_router",
+            return_value=[candidate],
+        ):
+            result = comment_service.call_comment_reply(
+                "20260525-001",
+                "拾迹者",
+                "我这周要完成课程项目",
+                FakeClient({"reply": "先把交付标准定下来。"}),
+                "fake-model",
+            )
+
+        message = comment_service.get_message(require_not_none(result.assistant_message_id))
+        metadata = json.loads(message.metadata or "{}")
+        self.assertEqual("完成课程项目", result.suggestions[0]["payload"]["title"])
+        self.assertTrue(result.suggestions[0]["payload"]["focus"])
+        self.assertEqual(result.suggestions, metadata["suggestions"])
 
     def test_rerun_failed_assistant_comment_keeps_failure_on_same_message(self) -> None:
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):

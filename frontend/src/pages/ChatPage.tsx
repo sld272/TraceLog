@@ -5,6 +5,7 @@ import {
   type ChatThread,
   getChatThread,
   listChatThreads,
+  parseMessageSuggestions,
   rerunChatMessage,
   sendChatMessage,
   streamChatMessages,
@@ -14,6 +15,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EvidencePanel } from '@/components/EvidencePanel'
 import { ImageGrid } from '@/components/ImageGrid'
 import { ImageUploader } from '@/components/ImageUploader'
+import { InlineSuggestions } from '@/components/InlineSuggestions'
 import { Notice } from '@/components/Notice'
 import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
@@ -813,7 +815,10 @@ function MessageBubble({
       )}
       <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
       {!isUser && !isFailedAssistant && !isPendingAssistant && editDraft === null && (
-        <EvidencePanel metadata={message.metadata} channel="chat" messageId={message.id} />
+        <>
+          <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
+          <EvidencePanel metadata={message.metadata} channel="chat" messageId={message.id} />
+        </>
       )}
       {editDraft !== null && (
         <div className={styles.messageMetaRow}>

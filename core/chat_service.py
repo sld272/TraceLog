@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
-from core import attachment_service, db, evidence_service, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
+from dataclasses import dataclass, field, replace
+from core import attachment_service, db, evidence_service, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -60,6 +60,7 @@ class ChatReplyResult:
     user_message_id: int
     assistant_message_id: int | None
     error: str | None
+    suggestions: list[dict] = field(default_factory=list)
 
 
 FAILED_REPLY_CONTENT = ""
@@ -322,6 +323,19 @@ def _call_assistant_reply_for_user_message(
         )
         return _failed_result(chat_context.thread, user_message_row.id, error)
 
+    suggestions = suggestion_pipeline.collect_goal_suggestions(
+        user_input=user_message_row.content,
+        evidence_ref=f"chat:{user_message_row.id}",
+        client=client,
+        model=model,
+        context=f"与 {chat_context.thread.soul_name} 的私聊",
+        trace_context={
+            "channel": "chat",
+            "thread_id": user_message_row.thread_id,
+            "soul_name": chat_context.thread.soul_name,
+            "user_message_id": user_message_row.id,
+        },
+    )
     assistant_message = _append_message(
         user_message_row.thread_id,
         "assistant",
@@ -329,6 +343,7 @@ def _call_assistant_reply_for_user_message(
         metadata={
             "status": "ok",
             "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
+            "suggestions": suggestions,
         },
     )
     return ChatReplyResult(
@@ -339,6 +354,7 @@ def _call_assistant_reply_for_user_message(
         user_message_id=user_message_row.id,
         assistant_message_id=assistant_message.id,
         error=None,
+        suggestions=suggestions,
     )
 
 
@@ -703,6 +719,7 @@ def _failed_result(thread: ChatThread, user_message_id: int, error: str) -> Chat
         user_message_id=user_message_id,
         assistant_message_id=assistant_message.id,
         error=error,
+        suggestions=[],
     )
 
 

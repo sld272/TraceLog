@@ -244,6 +244,13 @@ def memory_content_duplicates_active_goal(content: str) -> bool:
     return False
 
 
+def has_active_goal_title(title: str) -> bool:
+    title_key = _topic_key(title)
+    if not title_key:
+        return False
+    return any(_topic_key(goal["title"]) == title_key for goal in list_goals(status="active"))
+
+
 def _normalize_create(
     title: str,
     detail: str | None,

@@ -205,3 +205,34 @@ def _save_comment(post_id: str, result: SoulReplyResult, model: str, built_conte
                 occurred_at=now,
             )
     record_service.index_comment_embedding(comment_id, post_id, result.soul_name, "assistant", 0, result.reply)
+
+
+def attach_suggestions_to_root_comment(
+    post_id: str,
+    soul_name: str,
+    suggestions: list[dict],
+) -> None:
+    """Persist inline suggestions on one root reply without changing its content."""
+    if not suggestions:
+        return
+    row = db.query_one(
+        """
+        SELECT id, metadata
+        FROM comments
+        WHERE post_id = ? AND soul_name = ? AND seq = 0
+        """,
+        (post_id, soul_name),
+    )
+    if row is None:
+        return
+    try:
+        metadata = json.loads(row["metadata"] or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["suggestions"] = suggestions
+    db.execute(
+        "UPDATE comments SET metadata = ? WHERE id = ?",
+        (json.dumps(metadata, ensure_ascii=False), row["id"]),
+    )

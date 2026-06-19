@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from core import (
     db,
@@ -20,6 +20,7 @@ from core import (
     retrieval,
     soul_memory_service,
     soul_service,
+    suggestion_pipeline,
     todo_service,
     tool_config_service,
     vision_service,
@@ -82,6 +83,7 @@ class CommentReplyResult:
     user_message_id: int
     assistant_message_id: int | None
     error: str | None
+    suggestions: list[dict] = field(default_factory=list)
 
 
 def get_conversation(post_id: str, soul_name: str) -> CommentConversation:
@@ -414,6 +416,19 @@ def call_comment_reply(
         )
         return _failed_result(post_id, soul_name, user_message_row.id, error)
 
+    suggestions = suggestion_pipeline.collect_goal_suggestions(
+        user_input=user_message_row.content,
+        evidence_ref=f"comment:{user_message_row.id}",
+        client=client,
+        model=model,
+        context=f"post {post_id} 下与 {soul_name} 的评论对话",
+        trace_context={
+            "channel": "comment",
+            "post_id": post_id,
+            "soul_name": soul_name,
+            "user_message_id": user_message_row.id,
+        },
+    )
     assistant_message = append_comment(
         post_id,
         soul_name,
@@ -422,6 +437,7 @@ def call_comment_reply(
         metadata={
             "status": "ok",
             "evidence": evidence_service.evidence_metadata(comment_context.retrieval_hits),
+            "suggestions": suggestions,
         },
     )
     return CommentReplyResult(
@@ -432,6 +448,7 @@ def call_comment_reply(
         user_message_id=user_message_row.id,
         assistant_message_id=assistant_message.id,
         error=None,
+        suggestions=suggestions,
     )
 
 
@@ -775,6 +792,7 @@ def _failed_result(post_id: str, soul_name: str, user_message_id: int, error: st
         user_message_id=user_message_id,
         assistant_message_id=assistant_message.id,
         error=error,
+        suggestions=[],
     )
 
 
