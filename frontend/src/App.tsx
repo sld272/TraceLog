@@ -15,6 +15,7 @@ import { AppShell } from '@/components/AppShell'
 import { LeftNav } from '@/components/LeftNav'
 import { RightPanel } from '@/components/RightPanel'
 import { ChatPage } from '@/pages/ChatPage'
+import { GoalsPage } from '@/pages/GoalsPage'
 import { ReflectionsPage } from '@/pages/ReflectionsPage'
 import { PostDetailPage } from '@/pages/PostDetailPage'
 import { SettingsPage } from '@/pages/SettingsPage'
@@ -249,6 +250,7 @@ export function App() {
           />
         )}
         {route.kind === 'todos' && <TodosPage onTodosChanged={handleTodosChanged} />}
+        {route.kind === 'goals' && <GoalsPage onTodosChanged={refreshTodos} />}
         {route.kind === 'reflections' && <ReflectionsPage onReflectionSettled={refreshHomeContext} />}
         {route.kind === 'settings' && (
           <SettingsPage
@@ -304,6 +306,7 @@ function navKeyFromRoute(route: Route): string {
 
 function routeFromNavKey(page: string): Route {
   if (page === 'todos') return { kind: 'todos' }
+  if (page === 'goals') return { kind: 'goals' }
   if (page === 'reflections') return { kind: 'reflections' }
   if (page === 'settings') return { kind: 'settings' }
   if (page.startsWith('chat:')) return { kind: 'chat', soulName: page.slice('chat:'.length) }

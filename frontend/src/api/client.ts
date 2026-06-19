@@ -117,6 +117,34 @@ export interface Todo {
   completed_at?: number | null
 }
 
+export type GoalHorizon = 'short' | 'long'
+export type GoalStatus = 'active' | 'done' | 'abandoned' | 'paused'
+
+export interface Goal {
+  id: string
+  title: string
+  detail: string | null
+  horizon: GoalHorizon
+  status: GoalStatus
+  source: 'user' | 'suggested_accepted'
+  focus: boolean
+  last_progress_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+export interface Suggestion {
+  id: string
+  kind: 'todo' | 'goal'
+  payload: Record<string, unknown>
+  evidence_ref: string | null
+  confidence: number
+  status: 'pending' | 'accepted' | 'dismissed'
+  normalized_key: string | null
+  created_at: number
+  decided_at: number | null
+}
+
 export interface ChatThread {
   id: number
   soul_name: string
@@ -706,6 +734,64 @@ export function updateTodo(todoId: string, changes: Partial<Todo>) {
 export function deleteTodo(todoId: string) {
   return request<{ ok: boolean }>(`/todos/${todoId}`, {
     method: 'DELETE',
+  })
+}
+
+/* Goals */
+export function listGoals(filters: { status?: GoalStatus; horizon?: GoalHorizon } = {}) {
+  const search = new URLSearchParams()
+  if (filters.status) search.set('status', filters.status)
+  if (filters.horizon) search.set('horizon', filters.horizon)
+  const suffix = search.toString() ? `?${search.toString()}` : ''
+  return request<Goal[]>(`/goals${suffix}`)
+}
+
+export function createGoal(
+  changes: Pick<Goal, 'title' | 'horizon'> & Partial<Pick<Goal, 'detail' | 'focus'>>,
+) {
+  return request<Goal>('/goals', {
+    method: 'POST',
+    body: JSON.stringify(changes),
+  })
+}
+
+export function updateGoal(goalId: string, changes: Partial<Goal>) {
+  return request<Goal>(`/goals/${goalId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+}
+
+export function markGoalProgress(goalId: string) {
+  return request<Goal>(`/goals/${goalId}/progress`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function deleteGoal(goalId: string) {
+  return request<{ ok: boolean }>(`/goals/${goalId}`, {
+    method: 'DELETE',
+  })
+}
+
+/* Suggestions */
+export function listSuggestions(kind?: Suggestion['kind']) {
+  const suffix = kind ? `?kind=${kind}` : ''
+  return request<Suggestion[]>(`/suggestions${suffix}`)
+}
+
+export function acceptSuggestion(suggestionId: string) {
+  return request<{ suggestion: Suggestion; created: Goal | Todo }>(
+    `/suggestions/${suggestionId}/accept`,
+    { method: 'POST', body: JSON.stringify({}) },
+  )
+}
+
+export function dismissSuggestion(suggestionId: string) {
+  return request<Suggestion>(`/suggestions/${suggestionId}/dismiss`, {
+    method: 'POST',
+    body: JSON.stringify({}),
   })
 }
 

@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from PIL import Image
 
-from core import chat_service, db, logging_service, profile_service, retrieval, soul_memory_service, soul_service
+from core import chat_service, db, logging_service, profile_service, retrieval, soul_memory_service, soul_service, suggestion_service
 from core.app_services import job_service
 
 
@@ -400,6 +400,65 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(422, invalid_status.status_code)
         self.assertEqual(404, missing_patch.status_code)
         self.assertEqual(404, missing_delete.status_code)
+
+    def test_goal_routes_cover_crud_status_focus_and_progress(self) -> None:
+        with self._client() as client:
+            create_response = client.post(
+                "/goals",
+                json={
+                    "title": "完成课程项目",
+                    "detail": "做出可演示版本",
+                    "horizon": "short",
+                    "focus": True,
+                },
+            )
+            goal_id = create_response.json()["id"]
+            list_response = client.get("/goals?status=active&horizon=short")
+            patch_response = client.patch(
+                f"/goals/{goal_id}",
+                json={"status": "paused", "focus": False},
+            )
+            progress_response = client.post(f"/goals/{goal_id}/progress")
+            delete_response = client.delete(f"/goals/{goal_id}")
+            missing_response = client.patch("/goals/missing", json={"status": "done"})
+
+        self.assertEqual(200, create_response.status_code, create_response.text)
+        self.assertTrue(goal_id.startswith("g_"))
+        self.assertEqual([goal_id], [goal["id"] for goal in list_response.json()])
+        self.assertEqual("paused", patch_response.json()["status"])
+        self.assertFalse(patch_response.json()["focus"])
+        self.assertIsNotNone(progress_response.json()["last_progress_at"])
+        self.assertEqual(200, delete_response.status_code)
+        self.assertEqual(404, missing_response.status_code)
+
+    def test_suggestion_routes_accept_and_dismiss_both_kinds(self) -> None:
+        goal_suggestion = suggestion_service.create_suggestion(
+            "goal",
+            {"title": "准备考研", "horizon": "long"},
+            "chat:1",
+            0.9,
+        )
+        todo_suggestion = suggestion_service.create_suggestion(
+            "todo",
+            {"task": "整理错题", "date": "2026-06-20"},
+            "comment:2",
+            0.8,
+        )
+
+        with self._client() as client:
+            list_response = client.get("/suggestions")
+            accept_response = client.post(f"/suggestions/{goal_suggestion['id']}/accept")
+            dismiss_response = client.post(f"/suggestions/{todo_suggestion['id']}/dismiss")
+            list_after_response = client.get("/suggestions")
+            repeat_response = client.post(f"/suggestions/{goal_suggestion['id']}/accept")
+
+        self.assertEqual(2, len(list_response.json()))
+        self.assertEqual("goal", accept_response.json()["suggestion"]["kind"])
+        self.assertEqual("accepted", accept_response.json()["suggestion"]["status"])
+        self.assertEqual("准备考研", accept_response.json()["created"]["title"])
+        self.assertEqual("dismissed", dismiss_response.json()["status"])
+        self.assertEqual([], list_after_response.json())
+        self.assertEqual(409, repeat_response.status_code)
 
     def test_delete_post_route_hard_deletes_post_comments_and_cancels_pending_jobs(self) -> None:
         post_id = "post-delete-1"
