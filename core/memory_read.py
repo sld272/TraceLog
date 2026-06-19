@@ -23,7 +23,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from core import db, memory_scope_policy as policy, memory_view_service as mvs
+from core import db, memory_events_service as mes, memory_scope_policy as policy, memory_view_service as mvs
 
 # read-mode flag (design §7.2). legacy = pre-v2 behavior, no unit reading.
 READ_MODE_ENV = "MEMORY_V2_READ_MODE"
@@ -73,6 +73,13 @@ RETRIEVE_DEFAULT_K = 8
 # excluded here so relevant-memory retrieval surfaces the mid-tier beliefs.
 _RETRIEVE_EXCLUDED_TYPES = ("state",)
 
+# freshness seam (units_and_freshness mode): the most recent raw evidence that
+# reconcile has NOT yet folded into units, so "just happened" facts are usable
+# immediately instead of waiting for the next reconcile pass.
+FRESHNESS_MAX_EVENTS = 6
+FRESHNESS_WINDOW_DAYS = 3
+FRESHNESS_CHAR_BUDGET = 400
+
 
 @dataclass(frozen=True)
 class MemoryItem:
@@ -84,6 +91,16 @@ class MemoryItem:
     owner_scope: str
     visibility_scope: str
     needs_discretion: bool  # own-private memory surfaced in a public scene
+
+
+@dataclass(frozen=True)
+class FreshnessItem:
+    content: str
+    source_channel: str
+    occurred_at: float
+    owner_scope: str
+    visibility_scope: str
+    needs_discretion: bool
 
 
 def _allowed_visibility_sql(plan: dict) -> tuple[str, list]:
@@ -191,20 +208,82 @@ def _row_to_item(row: sqlite3.Row, channel: str, reply_soul: str | None) -> Memo
     )
 
 
-def _attribution(item: MemoryItem, reply_soul: str | None) -> str:
-    """A short provenance tag so a soul knows whose public conversation a unit
+def _attribution_for(visibility_scope: str, owner_scope: str, reply_soul: str | None) -> str:
+    """A short provenance tag so a soul knows whose public conversation an item
     came from, and never mistakes another soul's comment thread for something
     said to itself. Own private memory is flagged via discretion, not here."""
-    vis = item.visibility_scope
-    if vis.startswith("thread:"):
-        owner = item.owner_scope
-        soul = owner[len("soul:"):] if owner.startswith("soul:") else None
+    if visibility_scope.startswith("thread:"):
+        soul = owner_scope[len("soul:"):] if owner_scope.startswith("soul:") else None
         if soul and soul != reply_soul:
             return f"（用户在 {soul} 的评论区）"
         return "（评论区）"
-    if vis == "public":
+    if visibility_scope == "public":
         return "（公开帖子）"
     return ""
+
+
+def _attribution(item: MemoryItem, reply_soul: str | None) -> str:
+    return _attribution_for(item.visibility_scope, item.owner_scope, reply_soul)
+
+
+def _vis_admissible(visibility_scope: str, plan: dict) -> bool:
+    if visibility_scope == "public" or visibility_scope.startswith("thread:"):
+        return bool(plan.get("public"))
+    return plan.get("private_self") is not None and visibility_scope == plan["private_self"]
+
+
+def freshness_seam(
+    channel: str,
+    reply_soul: str | None,
+    *,
+    now: float | None = None,
+) -> tuple[list[FreshnessItem], bool]:
+    """Recent user evidence past each admissible bucket's reconcile cursor — raw
+    facts not yet folded into units. Most-recent first, gated by an age window
+    and an event + char budget. Returns (items, truncated). Same scope rules as
+    unit retrieval: public scene shared, own private admitted with discretion,
+    other souls' private never returned."""
+    now = db.now_ts() if now is None else now
+    cutoff = now - FRESHNESS_WINDOW_DAYS * DAY_SECONDS
+    plan = policy.admissible_visibility_filters(channel, reply_soul)
+
+    candidates: list[sqlite3.Row] = []
+    for owner_scope, visibility_scope in mes.buckets_with_pending_events():
+        if not _vis_admissible(visibility_scope, plan):
+            continue
+        cursor = mes.get_cursor(owner_scope, visibility_scope)
+        for event in mes.list_events_after(
+            owner_scope, visibility_scope, cursor, limit=FRESHNESS_MAX_EVENTS * 4
+        ):
+            if event["author"] != "user":
+                continue
+            snapshot = str(event["content_snapshot"] or "").strip()
+            if not snapshot:
+                continue
+            if float(event["occurred_at"]) < cutoff:
+                continue
+            candidates.append(event)
+
+    candidates.sort(key=lambda e: (float(e["occurred_at"]), int(e["id"])), reverse=True)
+    truncated = len(candidates) > FRESHNESS_MAX_EVENTS
+    items: list[FreshnessItem] = []
+    used_chars = 0
+    for event in candidates[:FRESHNESS_MAX_EVENTS]:
+        snapshot = str(event["content_snapshot"]).strip()
+        if items and used_chars + len(snapshot) > FRESHNESS_CHAR_BUDGET:
+            truncated = True
+            break
+        used_chars += len(snapshot)
+        vis = str(event["visibility_scope"])
+        items.append(FreshnessItem(
+            content=snapshot,
+            source_channel=str(event["source_channel"]),
+            occurred_at=float(event["occurred_at"]),
+            owner_scope=str(event["owner_scope"]),
+            visibility_scope=vis,
+            needs_discretion=_discretion_for(vis, channel, reply_soul),
+        ))
+    return items, truncated
 
 
 def _recency_weight(last_confirmed: float, now: float) -> float:
@@ -300,6 +379,21 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
             lines.append(f"- [{item.type}|置信{item.confidence:.1f}] {item.content}{attr}{tag}")
             used.append(item.unit_id)
         sections.append("[相关记忆]\n" + "\n".join(lines))
+
+    # 4. freshness seam (units_and_freshness only): recent raw evidence not yet
+    #    reconciled into units, so just-happened facts are available immediately.
+    if read_mode() == "units_and_freshness":
+        fresh_items, truncated = freshness_seam(channel, reply_soul)
+        if fresh_items:
+            lines = []
+            for fitem in fresh_items:
+                tag = f" {_DISCRETION_TAG}" if fitem.needs_discretion else ""
+                has_discretion = has_discretion or fitem.needs_discretion
+                attribution = _attribution_for(fitem.visibility_scope, fitem.owner_scope, reply_soul)
+                attr = f"{attribution} " if attribution else ""
+                lines.append(f"- {attr}{fitem.content}{tag}")
+            note = "（仅最近部分）" if truncated else ""
+            sections.append(f"[最近动态·尚未整理]{note}\n" + "\n".join(lines))
 
     if not sections:
         return MemoryPrompt(text="", used_unit_ids=[], has_discretion_items=False)
