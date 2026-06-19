@@ -1,0 +1,122 @@
+"""LLM extraction of trackable goal candidates.
+
+This router never creates active goals. It only returns candidates that the
+suggestion service may persist for explicit user confirmation.
+"""
+
+from __future__ import annotations
+
+import json
+
+from core.llm.common import call_json_completion, clean_json_content, now_str
+from core.llm.types import LLMClient
+
+
+GOAL_ROUTER_PROMPT = """\
+你是 TraceLog 拾迹的 Goal Router。请从用户本轮输入中识别“值得正式追踪、且用户已表达承诺”的目标候选。
+
+你只能输出一个标准 JSON 对象，不要输出 Markdown 或解释：
+
+{
+  "goals": [
+    {
+      "title": "简洁、可追踪的目标标题",
+      "detail": "必要的范围或成功标准；没有则为 null",
+      "horizon": "short|long",
+      "confidence": 0.0
+    }
+  ]
+}
+
+严格规则：
+1. 这里只提议，不代表目标已经成立；用户确认前绝不能进入 active goals。
+2. 明确承诺、决定、持续行动计划才是高置信候选，例如“我决定考研”“这学期要把 GPA 提到 3.7”。
+3. 随口愿望、兴趣、幻想、情绪或泛泛方向不是目标，例如“有点想做游戏”“以后也许学日语”；不要为了凑数输出。
+4. short 通常在数天到数月内推进；long 通常跨学期、跨年度或持续更久。
+5. title 不要加入“用户想要”等套话，直接写目标本身。
+6. 一次输入最多输出 3 个，宁缺毋滥；没有可靠候选时输出空数组。
+7. confidence ∈ [0,1]，低于 0.65 的候选不要输出。
+
+当前时间：
+{current_datetime}
+"""
+
+
+def call_goal_router(
+    client: LLMClient,
+    model: str,
+    *,
+    user_input: str,
+    context: str = "",
+    trace_context: dict | None = None,
+) -> list[dict]:
+    content = (
+        f"## 场景上下文\n\n{context.strip() or '（无）'}\n\n"
+        "---\n\n"
+        f"## 用户本轮输入\n\n{user_input.strip()}"
+    )
+    data = call_json_completion(
+        client=client,
+        model=model,
+        operation="goal_router",
+        timeout=30,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": GOAL_ROUTER_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": content},
+        ],
+        parser=_parse_goal_router_content,
+        trace_context=trace_context,
+    )
+    return data.get("goals", []) if isinstance(data, dict) else []
+
+
+def _parse_goal_router_content(content: str | None) -> dict | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_goals = data.get("goals")
+    if not isinstance(raw_goals, list):
+        raw_goals = []
+    goals: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in raw_goals:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        horizon = item.get("horizon")
+        if not isinstance(title, str) or not title.strip() or horizon not in {"short", "long"}:
+            continue
+        confidence = _coerce_confidence(item.get("confidence"))
+        if confidence < 0.65:
+            continue
+        detail = item.get("detail")
+        if detail is not None and not isinstance(detail, str):
+            detail = None
+        key = (title.strip().casefold(), horizon)
+        if key in seen:
+            continue
+        seen.add(key)
+        goals.append(
+            {
+                "title": title.strip(),
+                "detail": detail.strip() if isinstance(detail, str) and detail.strip() else None,
+                "horizon": horizon,
+                "confidence": confidence,
+            }
+        )
+        if len(goals) >= 3:
+            break
+    return {"goals": goals}
+
+
+def _coerce_confidence(value) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, result))

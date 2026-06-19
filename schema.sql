@@ -282,6 +282,42 @@ CREATE TABLE IF NOT EXISTS todos (
 CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status, date);
 CREATE INDEX IF NOT EXISTS idx_todos_date ON todos(date);
 
+CREATE TABLE IF NOT EXISTS goals (
+    id               TEXT PRIMARY KEY,
+    title            TEXT NOT NULL,
+    detail           TEXT,
+    horizon          TEXT NOT NULL CHECK(horizon IN ('short', 'long')),
+    status           TEXT NOT NULL DEFAULT 'active'
+                         CHECK(status IN ('active', 'done', 'abandoned', 'paused')),
+    source           TEXT NOT NULL DEFAULT 'user'
+                         CHECK(source IN ('user', 'suggested_accepted')),
+    focus            INTEGER NOT NULL DEFAULT 0 CHECK(focus IN (0, 1)),
+    last_progress_at REAL,
+    created_at       REAL NOT NULL,
+    updated_at       REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_goals_status_horizon
+    ON goals(status, horizon, id);
+
+CREATE TABLE IF NOT EXISTS suggestions (
+    id             TEXT PRIMARY KEY,
+    kind           TEXT NOT NULL CHECK(kind IN ('todo', 'goal')),
+    payload_json   TEXT NOT NULL,
+    evidence_ref   TEXT,
+    confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),
+    status         TEXT NOT NULL DEFAULT 'pending'
+                       CHECK(status IN ('pending', 'accepted', 'dismissed')),
+    normalized_key TEXT,
+    created_at     REAL NOT NULL,
+    decided_at     REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_suggestions_kind_status
+    ON suggestions(kind, status, id);
+CREATE INDEX IF NOT EXISTS idx_suggestions_normkey
+    ON suggestions(normalized_key);
+
 CREATE TABLE IF NOT EXISTS user_md_revisions (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     snapshot   TEXT NOT NULL,
