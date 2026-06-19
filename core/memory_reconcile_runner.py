@@ -13,7 +13,7 @@ a "show me what units you'd extract from my data" preview need.
 
 from __future__ import annotations
 
-from core import memory_events_service as mes, memory_reconciler as recon
+from core import logging_service, memory_events_service as mes, memory_reconciler as recon
 from core.memory_reconcile_producer import make_llm_op_producer
 from core.llm.types import LLMClient
 
@@ -44,15 +44,27 @@ def run_pending_reconcile(
     producer = op_producer or make_llm_op_producer(client, model, trace_context=trace_context)
     summaries: list[recon.ReconcileSummary] = []
     for owner_scope, visibility_scope in mes.buckets_with_pending_events():
-        summary = recon.reconcile_bucket(
-            owner_scope,
-            visibility_scope,
-            op_producer=producer,
-            reflection_type=reflection_type_for_visibility(visibility_scope),
-            trigger=trigger,
-            limit=limit_per_bucket,
-            dry_run=dry_run,
-        )
+        try:
+            summary = recon.reconcile_bucket(
+                owner_scope,
+                visibility_scope,
+                op_producer=producer,
+                reflection_type=reflection_type_for_visibility(visibility_scope),
+                trigger=trigger,
+                limit=limit_per_bucket,
+                dry_run=dry_run,
+            )
+        except Exception as exc:
+            # One bucket's LLM failure must not abort reconcile for the others.
+            # The failed bucket's cursor is left unadvanced (see producer error
+            # semantics), so its evidence is retried on the next run.
+            logging_service.log_event(
+                "memory_reconcile_bucket_failed",
+                owner_scope=owner_scope,
+                visibility_scope=visibility_scope,
+                error=str(exc),
+            )
+            continue
         if summary is not None:
             summaries.append(summary)
     return summaries

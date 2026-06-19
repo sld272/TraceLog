@@ -13,6 +13,18 @@ from core.llm import reflection_router
 from core.llm.types import LLMClient
 
 
+class ReconcileProducerError(RuntimeError):
+    """The LLM op-producer failed: timeout, API error, or unparseable JSON.
+
+    Raised so reconcile_bucket aborts WITHOUT advancing the cursor — the batch
+    of evidence stays unconsumed and gets retried. This is what separates a
+    genuine failure from a successful "no memory worth keeping" empty result,
+    which returns {"ops": []} and legitimately advances the cursor. Collapsing
+    the two (the old ``result or {"ops": []}``) silently dropped evidence on
+    every transient LLM error.
+    """
+
+
 def _soul_of(owner_scope: str) -> str | None:
     return owner_scope[len("soul:"):] if owner_scope.startswith("soul:") else None
 
@@ -92,6 +104,14 @@ def make_llm_op_producer(client: LLMClient, model: str, *, trace_context: dict |
             tombstones_text=_format_tombstones(tombstones),
             trace_context=ctx,
         )
-        return result or {"ops": [], "summary": ""}
+        if result is None:
+            # Failure (timeout / API error / unparseable JSON). Do NOT degrade
+            # to an empty op batch — that would advance the cursor and silently
+            # drop this evidence. Raise so reconcile_bucket aborts and the batch
+            # is retried later.
+            raise ReconcileProducerError(
+                "memory_reconcile LLM call failed or returned unparseable JSON"
+            )
+        return result
 
     return producer

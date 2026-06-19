@@ -108,12 +108,15 @@ class ReconcileProducerTest(unittest.TestCase):
         self.assertIn("私聊", private)
         self.assertIn("luna", private)
 
-    def test_producer_returns_empty_on_none(self) -> None:
+    def test_producer_raises_on_none(self) -> None:
+        # A failed LLM call (None) must surface as an error, not a silent empty
+        # batch — collapsing it to {"ops": []} would advance the cursor and drop
+        # this evidence forever.
         with patch.object(reflection_router, "call_memory_reconcile", lambda *a, **k: None):
             producer = producer_mod.make_llm_op_producer(client=object(), model="m")
-            result = producer(boundary={"owner_scope": "global", "visibility_scope": "public"},
-                              events=[], active_units=[], tombstones=[])
-        self.assertEqual(result, {"ops": [], "summary": ""})
+            with self.assertRaises(producer_mod.ReconcileProducerError):
+                producer(boundary={"owner_scope": "global", "visibility_scope": "public"},
+                         events=[], active_units=[], tombstones=[])
 
 
 class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
@@ -159,6 +162,24 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
         self.assertEqual(len(units), 1)
         self.assertEqual(units[0]["content"], "用户在准备考研，焦虑但坚持")
         self.assertEqual({e["id"] for e in mus.get_unit_evidence(units[0]["id"])}, {e1, e2})
+
+    def test_failed_producer_does_not_advance_cursor(self) -> None:
+        # On producer failure the batch must stay unconsumed: cursor unchanged,
+        # no units written. This is the regression guard for silent data loss.
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="p1", op="create", content="今天又在背单词", occurred_at=1.0)
+        cursor_before = mes.get_cursor("global", "public")
+
+        def failing_producer(**kwargs):
+            raise producer_mod.ReconcileProducerError("boom")
+
+        with self.assertRaises(producer_mod.ReconcileProducerError):
+            recon.reconcile_bucket(
+                "global", "public", op_producer=failing_producer, reflection_type=recon.RECONCILE_GLOBAL
+            )
+
+        self.assertEqual(mes.get_cursor("global", "public"), cursor_before)
+        self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 0)
 
 
 if __name__ == "__main__":
