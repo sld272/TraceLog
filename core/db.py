@@ -94,35 +94,118 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 def _legacy_soul_memory_entries(text: str) -> list[str]:
     entries: list[str] = []
     in_frontmatter = False
+    paragraph: list[str] = []
+    bullet: list[str] = []
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            entries.extend(_split_legacy_memory_entry(" ".join(paragraph)))
+            paragraph.clear()
+
+    def flush_bullet() -> None:
+        if bullet:
+            entries.extend(_split_legacy_memory_entry(" ".join(bullet)))
+            bullet.clear()
+
     for raw_line in text.splitlines():
         line = raw_line.strip()
         if line == "---":
+            flush_paragraph()
+            flush_bullet()
             in_frontmatter = not in_frontmatter
             continue
-        if in_frontmatter or not line or line.startswith("#") or line.startswith("<!--"):
+        if in_frontmatter:
             continue
-        line = re.sub(r"^[-*]\s+", "", line)
-        line = re.sub(r"\s*<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->\s*$", "", line).strip()
-        if line and line not in entries:
-            entries.append(line)
-    return entries
+        if not line or line.startswith("#"):
+            flush_paragraph()
+            flush_bullet()
+            continue
+        if line.startswith("<!--"):
+            continue
+
+        bullet_match = re.match(r"^[-*]\s+(.+)$", line)
+        if bullet_match:
+            flush_paragraph()
+            flush_bullet()
+            bullet.append(bullet_match.group(1))
+            continue
+        if bullet and raw_line[:1].isspace():
+            bullet.append(line)
+            continue
+
+        flush_bullet()
+        paragraph.append(line)
+
+    flush_paragraph()
+    flush_bullet()
+    return list(dict.fromkeys(entries))
+
+
+def _split_legacy_memory_entry(text: str, max_chars: int = 500) -> list[str]:
+    cleaned = re.sub(
+        r"\s*<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->\s*$",
+        "",
+        text,
+    ).strip()
+    if not cleaned:
+        return []
+    sentences = [
+        part.strip()
+        for part in re.split(r"(?<=[。！？!?；;])\s*", cleaned)
+        if part.strip()
+    ]
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences or [cleaned]:
+        if len(sentence) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(
+                sentence[index:index + max_chars]
+                for index in range(0, len(sentence), max_chars)
+            )
+            continue
+        candidate = f"{current} {sentence}".strip()
+        if current and len(candidate) > max_chars:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _migrate_legacy_soul_memories(conn: sqlite3.Connection) -> None:
     """Preserve legacy prose as hidden candidates, never as view truth."""
-    marker_key = "memory_v2_soul_relationship_migration_v1"
+    marker_key = "memory_v2_soul_relationship_migration_v2"
     if conn.execute("SELECT 1 FROM meta WHERE key = ?", (marker_key,)).fetchone():
         return
     from core import memory_unit_service
 
     memory_dir = WORKSPACE_DIR / "soul_memories"
+    if not memory_dir.exists():
+        return
+
+    # v2 reparses unresolved v1 candidates with paragraph-aware rules. Anything
+    # the user already confirmed or a later verifier resolved has left
+    # source=migrated/status=pending and is deliberately preserved.
+    conn.execute(
+        """
+        DELETE FROM memory_units
+        WHERE source = 'migrated'
+          AND status = 'pending'
+          AND type = 'relationship'
+          AND COALESCE(metadata, '') LIKE '%legacy_soul_memory%'
+        """
+    )
+
     migrated = 0
     now = now_ts()
     if memory_dir.exists():
         for path in sorted(memory_dir.glob("*.md")):
             soul_name = path.stem
-            if conn.execute("SELECT 1 FROM souls WHERE name = ?", (soul_name,)).fetchone() is None:
-                continue
             for content in _legacy_soul_memory_entries(path.read_text(encoding="utf-8")):
                 unit_id = memory_unit_service.new_unit_id()
                 metadata = json.dumps(

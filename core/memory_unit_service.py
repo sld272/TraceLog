@@ -506,6 +506,13 @@ def update_unit(
             if confidence is not None
             else max(float(row["confidence"]), 0.9)
         )
+        pending_candidate = row["status"] == "pending"
+        next_tier = tier or ("core" if pending_candidate else None)
+        next_importance = (
+            importance
+            if importance is not None
+            else (max(float(row["importance"]), 0.70) if pending_candidate else None)
+        )
         c.execute(
             """
             UPDATE memory_units
@@ -526,7 +533,16 @@ def update_unit(
                 updated_at = ?
             WHERE id = ?
             """,
-            (body, new_conf, type, tier, importance, now, now, unit_id),
+            (
+                body,
+                new_conf,
+                type,
+                next_tier,
+                next_importance,
+                now,
+                now,
+                unit_id,
+            ),
         )
         # existing links backed the previous wording -> await AI re-link
         c.execute(

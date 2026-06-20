@@ -127,6 +127,61 @@ def _format_relink_evidence(evidence: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _format_legacy_migration_evidence(evidence: list[dict]) -> str:
+    if not evidence:
+        return ""
+    parts: list[str] = []
+    for item in evidence:
+        snapshot = str(item.get("content_snapshot") or "").strip()[:600]
+        if not snapshot:
+            continue
+        text = (
+            f"- event_id={item.get('id')} | bucket={item.get('visibility_scope')} "
+            f"| {item.get('source_channel')}\n  【用户】{snapshot}"
+        )
+        context = item.get("conversation_context") or []
+        if context:
+            text += "\n  对话上下文（仅帮助理解，不能作为 evidence 引用）："
+            for message in context:
+                role = "用户" if message.get("role") == "user" else "SOUL"
+                body = str(message.get("content") or "").strip()[:300]
+                if body:
+                    text += f"\n    - 【{role}】{body}"
+        parts.append(text)
+    return "\n".join(parts)
+
+
+def make_legacy_relationship_judge(
+    client: LLMClient,
+    model: str,
+    *,
+    trace_context: dict | None = None,
+):
+    def judge(*, candidate: dict, evidence: list[dict]) -> dict:
+        ctx = dict(trace_context or {})
+        ctx.update(
+            {
+                "unit_id": candidate.get("id"),
+                "owner_scope": candidate.get("owner_scope"),
+                "evidence_count": len(evidence),
+            }
+        )
+        result = reflection_router.call_legacy_relationship_migration(
+            client,
+            model,
+            candidate_text=str(candidate.get("content") or ""),
+            evidence_text=_format_legacy_migration_evidence(evidence),
+            trace_context=ctx,
+        )
+        if result is None:
+            raise ReconcileProducerError(
+                "legacy relationship migration LLM call failed or returned invalid JSON"
+            )
+        return result
+
+    return judge
+
+
 def make_relink_judge(client: LLMClient, model: str, *, trace_context: dict | None = None):
     """Return a narrow judge for the post-edit re-link pass: given a unit's new
     content and its candidate evidence, decide which links still support it."""

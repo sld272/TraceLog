@@ -691,6 +691,95 @@ def _parse_memory_relink_content(content: str | None) -> dict | None:
     }
 
 
+LEGACY_RELATIONSHIP_MIGRATION_PROMPT = """\
+你是 TraceLog 拾迹的旧版 SOUL 关系记忆核验器。你会收到一条从旧 Markdown 迁移来的候选关系记忆，以及当前 SOUL 与用户的历史用户证据。旧记忆可能准确、过时、措辞不当，也可能完全无法核实。
+
+## 决策
+- confirm：历史证据明确支持候选原文。
+- revise：历史证据支持一个更准确的关系结论；输出修订后的 content。
+- retract：历史证据明确推翻候选，或候选明显是无效/虚构内容。
+- defer：现有证据不足以确认，也不足以判错。不要因为“没找到”就 retract。
+
+## 硬规则
+1. confirm/revise 必须引用至少一条输入中的用户 `event_id`。
+2. 所引用 evidence 必须全部来自同一个 bucket；若多个场景都能支持，只选最直接的一组。
+3. assistant/SOUL 对话只帮助理解语境，不能单独作为用户事实或共同记忆的证据。
+4. 不得把普通用户画像改写成关系记忆；只保留称呼、互动约定、回应偏好、语气节奏、边界、默契和稳定关系变化。
+5. evidence 不足时选择 defer，禁止为了保留旧记忆而脑补。
+
+## 输出：只输出 JSON
+{
+  "decision": "confirm|revise|retract|defer",
+  "content": "仅 revise 必填；confirm 可省略",
+  "evidence_event_ids": [整数],
+  "confidence": 0.0,
+  "importance": 0.0
+}
+
+## 当前时间
+{current_datetime}
+"""
+
+
+def call_legacy_relationship_migration(
+    client: LLMClient,
+    model: str,
+    *,
+    candidate_text: str,
+    evidence_text: str,
+    trace_context: dict | None = None,
+) -> dict | None:
+    user_content = (
+        f"## 旧版关系记忆候选\n\n{candidate_text}\n\n"
+        "---\n\n"
+        f"## 当前 SOUL 的历史用户证据\n\n{evidence_text or '（无）'}"
+    )
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="legacy_relationship_migration",
+        timeout=45,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": LEGACY_RELATIONSHIP_MIGRATION_PROMPT.replace(
+                    "{current_datetime}",
+                    now_str(),
+                ),
+            },
+            {"role": "user", "content": user_content},
+        ],
+        parser=_parse_legacy_relationship_migration_content,
+        trace_context=trace_context,
+    )
+
+
+def _parse_legacy_relationship_migration_content(
+    content: str | None,
+) -> dict | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    decision = data.get("decision")
+    if decision not in {"confirm", "revise", "retract", "defer"}:
+        return None
+    revised = str(data.get("content") or "").strip()
+    if decision == "revise" and not revised:
+        return None
+    return {
+        "decision": decision,
+        "content": revised,
+        "evidence_event_ids": _coerce_event_ids(data.get("evidence_event_ids")),
+        "confidence": _coerce_float(data.get("confidence"), 0.85),
+        "importance": _coerce_float(data.get("importance"), 0.8),
+    }
+
+
 # 引擎：Memory View Synthesis（core units -> 身份画像 prose，memory v2）
 
 MEMORY_VIEW_SYNTH_PROMPT = """\

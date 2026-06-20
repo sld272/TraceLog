@@ -62,12 +62,11 @@ def refresh_views_after_reconcile(
 ) -> list[mvs.SynthesizedView]:
     """Re-synthesize every stale or missing view after a reconcile pass.
 
-    Hash-gated by buckets_needing_view: a bucket whose core set is unchanged
-    stays 'fresh' and is skipped, so the LLM synthesis stays low-frequency.
-    Synthesis errors fall back to the deterministic template inside
-    synthesize_view, so one bad LLM call never aborts the batch."""
+    Each view module owns its own refresh enumeration. Hash-gated views whose
+    selected unit set is unchanged stay fresh and are skipped. Synthesis errors
+    fall back to deterministic templates."""
     results: list[mvs.SynthesizedView] = []
-    for owner_scope, visibility_scope, view_type in mvs.buckets_needing_view():
+    for owner_scope, visibility_scope, view_type in mvs.per_bucket_views_needing_refresh():
         synthesizer = make_llm_synthesizer(client, model, view_type, trace_context=trace_context)
         results.append(
             mvs.synthesize_view(owner_scope, visibility_scope, view_type, synthesizer=synthesizer)

@@ -82,6 +82,29 @@ class DbTest(unittest.TestCase):
         self.assertIn("rerun_at", chat_columns)
         self.assertIn("metadata", chat_columns)
 
+    def test_legacy_soul_memory_parser_preserves_bullets_and_paragraphs(self) -> None:
+        entries = db._legacy_soul_memory_entries(
+            "---\nschema: x\n---\n"
+            "## 互动约定\n"
+            "- 用户难过时先陪伴\n"
+            "  不要急着讲道理 <!-- id: rule-1 -->\n"
+            "\n"
+            "双方平时会互相开一点轻松的玩笑，\n"
+            "但用户认真求助时会立刻收住。\n"
+        )
+        self.assertEqual(
+            entries,
+            [
+                "用户难过时先陪伴 不要急着讲道理",
+                "双方平时会互相开一点轻松的玩笑， 但用户认真求助时会立刻收住。",
+            ],
+        )
+
+    def test_legacy_soul_memory_parser_caps_candidate_length(self) -> None:
+        entries = db._legacy_soul_memory_entries("## 关系\n" + ("很长的关系描述" * 120))
+        self.assertGreater(len(entries), 1)
+        self.assertTrue(all(len(entry) <= 500 for entry in entries))
+
     def test_post_soul_order_backfill_preserves_existing_display_order(self) -> None:
         self._insert_post("p-order")
         for name in ["A", "B"]:
@@ -213,8 +236,25 @@ class DbTest(unittest.TestCase):
             )
             """
         )
+        stale_candidate_id = memory_unit_service.new_unit_id()
         db.execute(
-            "DELETE FROM meta WHERE key = 'memory_v2_soul_relationship_migration_v1'"
+            """
+            INSERT INTO memory_units(
+                id, owner_scope, visibility_scope, source_channel, prompt_policy,
+                type, content, confidence, source, status, tier, profile_policy,
+                importance, sensitivity, metadata, first_seen, last_confirmed,
+                created_at, updated_at
+            ) VALUES (?, 'soul:luna', 'private:soul:luna', 'migration', 'no_prompt',
+                      'relationship', '旧解析残留', 0.4, 'migrated', 'pending',
+                      'contextual', 'auto', 0.5, 'normal', ?, 1.0, 1.0, 1.0, 1.0)
+            """,
+            (
+                stale_candidate_id,
+                '{"migration": "legacy_soul_memory"}',
+            ),
+        )
+        db.execute(
+            "DELETE FROM meta WHERE key = 'memory_v2_soul_relationship_migration_v2'"
         )
 
         db.init_db()
@@ -231,6 +271,7 @@ class DbTest(unittest.TestCase):
         self.assertTrue(all(row["type"] == "relationship" for row in rows))
         self.assertTrue(all(row["status"] == "pending" for row in rows))
         self.assertTrue(all(row["prompt_policy"] == "no_prompt" for row in rows))
+        self.assertNotIn(stale_candidate_id, {row["id"] for row in rows})
         self.assertIsNone(db.query_one("SELECT 1 FROM memory_views WHERE id = 'mv_old'"))
 
         candidate = rows[0]
@@ -239,6 +280,8 @@ class DbTest(unittest.TestCase):
         self.assertEqual("active", promoted["status"])
         self.assertEqual("user_authored", promoted["source"])
         self.assertEqual("allow", promoted["prompt_policy"])
+        self.assertEqual("core", promoted["tier"])
+        self.assertGreaterEqual(float(promoted["importance"]), 0.70)
 
         db.init_db()
         count = require_not_none(

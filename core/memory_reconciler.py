@@ -603,7 +603,7 @@ def reconcile_bucket(
 
     if not dry_run:
         # Keep in_md_slice current so a first-time bucket becomes eligible for a
-        # view (buckets_needing_view keys off it), and mark an existing view
+        # per-bucket view refresh, and mark an existing view
         # stale if its core set changed. Hash-gated, so a no-op reconcile leaves
         # a fresh view fresh. LLM re-synthesis runs in the reconcile job after
         # the whole pass.

@@ -67,7 +67,10 @@ class ViewLifecycleTest(unittest.TestCase):
         self._reconcile("用户在准备考研")
 
         # core unit in slice, no view yet -> this bucket needs a view
-        self.assertIn(("global", "public", mvs.VIEW_USER_MD), mvs.buckets_needing_view())
+        self.assertIn(
+            ("global", "public", mvs.VIEW_USER_MD),
+            mvs.per_bucket_views_needing_refresh(),
+        )
 
         with patch.object(reflection_router, "call_view_synthesis", lambda *a, **k: "你正在备考考研。"):
             results = view_producer.refresh_views_after_reconcile(client=object(), model="m")
@@ -76,7 +79,7 @@ class ViewLifecycleTest(unittest.TestCase):
         view = mvs.get_view("global", "public", mvs.VIEW_USER_MD)
         self.assertEqual(view["status"], "fresh")
         self.assertIn("备考考研", view["content_md"])
-        self.assertEqual(mvs.buckets_needing_view(), [])  # nothing left
+        self.assertEqual(mvs.per_bucket_views_needing_refresh(), [])  # nothing left
 
     def test_changed_core_set_marks_view_stale_and_re_lists(self) -> None:
         with db.transaction() as conn:
@@ -92,7 +95,10 @@ class ViewLifecycleTest(unittest.TestCase):
         self._reconcile("用户的目标院校是北大")
 
         self.assertEqual(mvs.get_view("global", "public", mvs.VIEW_USER_MD)["status"], "stale")
-        self.assertIn(("global", "public", mvs.VIEW_USER_MD), mvs.buckets_needing_view())
+        self.assertIn(
+            ("global", "public", mvs.VIEW_USER_MD),
+            mvs.per_bucket_views_needing_refresh(),
+        )
 
 
 class _DbTestBase(unittest.TestCase):

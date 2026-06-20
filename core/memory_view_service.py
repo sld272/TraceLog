@@ -390,10 +390,12 @@ def mark_stale_for_bucket(owner_scope: str, visibility_scope: str) -> bool:
     return srm.mark_stale_if_changed_for_bucket(owner_scope, visibility_scope) or changed
 
 
-def buckets_needing_view() -> list[tuple[str, str, str]]:
-    """Coordinates whose view should be (re)synthesized: every stale view, plus
-    buckets that have core units (in_md_slice=1) but no view row yet. Hash-gated
-    synthesize keeps the actual LLM work low-frequency."""
+def per_bucket_views_needing_refresh() -> list[tuple[str, str, str]]:
+    """Per-bucket portrait views needing refresh.
+
+    Cross-bucket views such as SOUL relationship memory are intentionally owned
+    by their own modules and must not be added to this enumeration.
+    """
     out: list[tuple[str, str, str]] = []
     for row in db.query_all(
         "SELECT owner_scope, visibility_scope, view_type FROM memory_views "
