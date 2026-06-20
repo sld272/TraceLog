@@ -45,6 +45,39 @@ class MemoryViewServiceTest(unittest.TestCase):
         mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=confidence)
         return unit_id
 
+    # --- policy / retract immediacy ---------------------------------------
+
+    def test_user_retract_marks_view_stale_and_leaves_portrait(self) -> None:
+        unit_id = self._confirmed_core_unit("我在准备考研")
+        view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        self.assertIn("考研", view.content_md)
+        self.assertIn("考研", mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD))
+        mus.retract_unit(unit_id, by="user", reason="false")
+        self.assertEqual(
+            mvs.get_view("global", "public", mvs.VIEW_USER_MD)["status"], "stale"
+        )
+        self.assertNotIn(
+            "考研", mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD)
+        )
+
+    def test_prompt_policy_round_trip_restores_slice(self) -> None:
+        unit_id = self._confirmed_core_unit("我喜欢安静的环境")
+        mvs.recompute_slice("global", "public")
+        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
+        mus.set_prompt_policy(unit_id, prompt_policy="no_prompt")
+        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 0)
+        mus.set_prompt_policy(unit_id, prompt_policy="allow")
+        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
+
+    def test_profile_policy_round_trip_restores_slice(self) -> None:
+        unit_id = self._confirmed_core_unit("我是研究生")
+        mvs.recompute_slice("global", "public")
+        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
+        mus.set_profile_policy(unit_id, profile_policy="force_exclude")
+        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 0)
+        mus.set_profile_policy(unit_id, profile_policy="force_include")
+        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
+
     # --- selector ----------------------------------------------------------
 
     def test_confirmed_core_unit_enters_slice(self) -> None:

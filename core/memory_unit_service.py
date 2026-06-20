@@ -361,13 +361,16 @@ def retract_unit(
                 f"只能删除 active/challenged 的记忆（当前 status={row['status']}）"
             )
         before = _row_to_dict(row)
-        # a retracted belief must leave the portrait immediately, not linger in a
-        # stale-view template fallback until the next recompute.
+        # A retracted belief must leave the portrait immediately. Dropping it from
+        # the slice only governs the template fallback; the live view must also be
+        # marked stale, otherwise read_portrait_body keeps serving the fresh
+        # synthesized text that still contains the deleted belief.
         c.execute(
             "UPDATE memory_units SET status = ?, retraction_reason = ?, "
             "in_md_slice = 0, updated_at = ? WHERE id = ?",
             (status, reason, now, unit_id),
         )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
             c, unit_id=unit_id, op="retract", actor=actor,
@@ -573,11 +576,14 @@ def set_prompt_policy(
             raise ValueError(f"unit 不存在：{unit_id}")
         before = _row_to_dict(row)
         c.execute(
-            "UPDATE memory_units SET prompt_policy = ?, "
-            "in_md_slice = CASE WHEN ? = 'no_prompt' THEN 0 ELSE in_md_slice END, "
-            "updated_at = ? WHERE id = ?",
-            (prompt_policy, prompt_policy, now, unit_id),
+            "UPDATE memory_units SET prompt_policy = ?, updated_at = ? WHERE id = ?",
+            (prompt_policy, now, unit_id),
         )
+        # recompute_slice respects prompt_policy in both directions: no_prompt drops
+        # it from the slice, allow restores it if it otherwise qualifies — so
+        # re-allowing a memory brings it back without waiting for a reconcile.
+        from core import memory_view_service as _mvs  # local import avoids cycle
+        _mvs.recompute_slice(row["owner_scope"], row["visibility_scope"], conn=c)
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
@@ -605,15 +611,15 @@ def set_profile_policy(
         if row is None:
             raise ValueError(f"unit 不存在：{unit_id}")
         before = _row_to_dict(row)
-        # force_exclude must take effect immediately: drop it from the slice now,
-        # so a stale-view template fallback can no longer render it into a prompt
-        # before the next recompute_slice runs.
         c.execute(
-            "UPDATE memory_units SET profile_policy = ?, "
-            "in_md_slice = CASE WHEN ? = 'force_exclude' THEN 0 ELSE in_md_slice END, "
-            "updated_at = ? WHERE id = ?",
-            (profile_policy, profile_policy, now, unit_id),
+            "UPDATE memory_units SET profile_policy = ?, updated_at = ? WHERE id = ?",
+            (profile_policy, now, unit_id),
         )
+        # recompute_slice respects profile_policy in both directions: force_exclude
+        # drops it now, force_include / auto restore it if it qualifies — so
+        # re-including a memory brings it back without waiting for a reconcile.
+        from core import memory_view_service as _mvs  # local import avoids cycle
+        _mvs.recompute_slice(row["owner_scope"], row["visibility_scope"], conn=c)
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
