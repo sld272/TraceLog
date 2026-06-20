@@ -222,25 +222,6 @@ def run_pending_reconcile(
     producer = op_producer or make_llm_op_producer(client, model, trace_context=trace_context)
     summaries: list[recon.ReconcileSummary] = []
     failures: list[ReconcileBucketFailure] = []
-    migration_failures: list[LegacyMigrationFailure] = []
-    if not dry_run:
-        try:
-            migration_failures = list(
-                run_pending_legacy_migrations(
-                    client,
-                    model,
-                    judge=migration_judge,
-                    trace_context=trace_context,
-                ).failures
-            )
-        except Exception as exc:
-            logging_service.log_event(
-                "legacy_relationship_migration_pass_failed",
-                error=str(exc),
-            )
-            migration_failures = [
-                LegacyMigrationFailure(unit_id="*", error=str(exc))
-            ]
     for owner_scope, visibility_scope in mes.buckets_with_pending_events():
         try:
             summary = recon.reconcile_bucket(
@@ -272,6 +253,31 @@ def run_pending_reconcile(
             continue
         if summary is not None:
             summaries.append(summary)
+    # Legacy relationship migration runs AFTER bucket reconcile. By then the
+    # bucket has consumed its evidence events and the migration judge sees the
+    # same current evidence set the producer did, so a confirm/revise cannot
+    # race a duplicate unit from the bucket pass over the same evidence. A
+    # migration failure does not unwind already-committed buckets: the candidate
+    # stays pending and is retried next pass.
+    migration_failures: list[LegacyMigrationFailure] = []
+    if not dry_run:
+        try:
+            migration_failures = list(
+                run_pending_legacy_migrations(
+                    client,
+                    model,
+                    judge=migration_judge,
+                    trace_context=trace_context,
+                ).failures
+            )
+        except Exception as exc:
+            logging_service.log_event(
+                "legacy_relationship_migration_pass_failed",
+                error=str(exc),
+            )
+            migration_failures = [
+                LegacyMigrationFailure(unit_id="*", error=str(exc))
+            ]
     # Post-edit re-link runs in the same background pass (separate from the
     # bucket loop). Skipped in dry-run. Per-unit judge failures are reported so
     # the caller can fail/retry the job, and any still-pending re-link counts as
