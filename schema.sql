@@ -610,7 +610,7 @@ CREATE TABLE IF NOT EXISTS memory_views (
     id                   TEXT PRIMARY KEY,       -- mv_<ulid>
     owner_scope          TEXT NOT NULL,
     visibility_scope     TEXT NOT NULL,
-    view_type            TEXT NOT NULL,          -- 'user_md' | 'soul_private_memory'
+    view_type            TEXT NOT NULL,          -- 'user_md' | 'soul_relationship_memory'
     content_md           TEXT NOT NULL,
     source_unit_set_hash TEXT NOT NULL,
     renderer_version     TEXT NOT NULL,

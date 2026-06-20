@@ -234,6 +234,7 @@ def add_unit(
             c, unit_id=unit_id, op="add", actor=actor,
             before=None, after=after, reflection_id=reflection_id,
         )
+        _mark_bucket_view_stale(c, owner_scope, visibility_scope, now)
     return unit_id
 
 
@@ -275,6 +276,7 @@ def confirm_unit(
             c, unit_id=unit_id, op="confirm", actor=actor,
             before=before, after=after, reflection_id=reflection_id,
         )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
 
 
 def revise_unit(
@@ -333,6 +335,7 @@ def revise_unit(
             c, unit_id=unit_id, op="revise", actor=actor,
             before=before, after=after, reflection_id=reflection_id,
         )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
 
 
 def retract_unit(
@@ -400,7 +403,8 @@ def supersede_unit(
             raise BoundaryError("supersede 只能发生在同一 bucket 内")
         before = _row_to_dict(old)
         c.execute(
-            "UPDATE memory_units SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ?",
+            "UPDATE memory_units SET status = 'superseded', superseded_by = ?, "
+            "in_md_slice = 0, updated_at = ? WHERE id = ?",
             (new_unit_id_, now, old_unit_id),
         )
         after = _row_to_dict(_get_unit_row(c, old_unit_id))
@@ -409,6 +413,7 @@ def supersede_unit(
             before=before, after=after, related_unit_id=new_unit_id_,
             reflection_id=reflection_id,
         )
+        _mark_bucket_view_stale(c, old["owner_scope"], old["visibility_scope"], now)
 
 
 def retain_unit(
@@ -442,6 +447,7 @@ def retain_unit(
             after=after,
             reflection_id=reflection_id,
         )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
 
 
 # --- user-facing workbench primitives --------------------------------------
@@ -482,9 +488,9 @@ def update_unit(
         row = _get_unit_row(c, unit_id)
         if row is None:
             raise ValueError(f"unit 不存在：{unit_id}")
-        if row["status"] not in {"active", "challenged"}:
+        if row["status"] not in {"active", "challenged", "pending"}:
             raise ValueError(
-                f"只能编辑 active/challenged 的记忆（当前 status={row['status']}）"
+                f"只能编辑 active/challenged/pending 的记忆（当前 status={row['status']}）"
             )
         pre_edit_event_ids = [
             int(e["event_id"])
@@ -510,6 +516,10 @@ def update_unit(
                 tier = COALESCE(?, tier),
                 importance = COALESCE(?, importance),
                 status = 'active',
+                prompt_policy = CASE
+                    WHEN status = 'pending' THEN 'allow'
+                    ELSE prompt_policy
+                END,
                 superseded_by = NULL,
                 retraction_reason = NULL,
                 last_confirmed = ?,
@@ -697,18 +707,40 @@ def _mark_bucket_view_stale(
     now: float,
 ) -> None:
     if owner_scope == "global" and visibility_scope == "public":
-        conn.execute(
-            "UPDATE memory_views SET status = 'stale', updated_at = ? "
+        from core import memory_view_service as _mvs
+        view = conn.execute(
+            "SELECT * FROM memory_views "
             "WHERE owner_scope = ? AND visibility_scope = ? AND view_type = 'user_md'",
-            (now, owner_scope, visibility_scope),
-        )
-    elif str(visibility_scope).startswith("private:soul:"):
-        conn.execute(
-            "UPDATE memory_views SET status = 'stale', updated_at = ? "
-            "WHERE owner_scope = ? AND visibility_scope = ? "
-            "AND view_type = 'soul_private_memory'",
-            (now, owner_scope, visibility_scope),
-        )
+            (owner_scope, visibility_scope),
+        ).fetchone()
+        if view is not None:
+            _mvs.recompute_slice(owner_scope, visibility_scope, conn=conn)
+            units = conn.execute(
+                """
+                SELECT *
+                FROM memory_units
+                WHERE owner_scope = ? AND visibility_scope = ?
+                  AND in_md_slice = 1 AND status = 'active'
+                """,
+                (owner_scope, visibility_scope),
+            ).fetchall()
+            if (
+                _mvs.source_unit_set_hash(_mvs.order_units(units))
+                != view["source_unit_set_hash"]
+                or view["renderer_version"] != _mvs.RENDERER_VERSION
+            ):
+                conn.execute(
+                    "UPDATE memory_views SET status = 'stale', updated_at = ? "
+                    "WHERE id = ?",
+                    (now, view["id"]),
+                )
+    from core import soul_relationship_memory as _srm
+    _srm.mark_stale_if_changed_for_bucket(
+        owner_scope,
+        visibility_scope,
+        conn=conn,
+        now=now,
+    )
 
 
 # --- read helpers ----------------------------------------------------------

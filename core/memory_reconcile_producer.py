@@ -41,12 +41,14 @@ def describe_scene(boundary: dict) -> str:
         return (
             f"用户在 AI 人格【{soul}】的公开评论区与其互动。"
             f"抽取关于【用户】（以及用户与{soul}的关系、用户对{soul}的要求）的信念；"
+            "特别留意稳定的称呼、互动约定、语气节奏、边界和默契；"
             f"绝不要描述{soul}自身的设定或性格。"
         )
     if vis.startswith("private:soul:") and soul:
         return (
             f"用户与 AI 人格【{soul}】的私聊。"
             f"抽取关于【用户】（以及用户与{soul}的关系、用户对{soul}的要求）的信念；"
+            "特别留意稳定的称呼、互动约定、语气节奏、边界和默契；"
             f"绝不要描述{soul}自身的设定或性格。"
         )
     return f"owner={owner}, visibility={vis}。抽取关于【用户】的信念。"
@@ -59,10 +61,19 @@ def _format_events(events: list[dict]) -> str:
     for event in events:
         snapshot = str(event.get("content_snapshot") or "").strip() or "（无内容/删除）"
         speaker = "用户" if event.get("author") in (None, "user") else f"AI:{event.get('author')}"
-        parts.append(
+        text = (
             f"- event_id={event.get('id')} | 【{speaker}】{event.get('source_channel')}/{event.get('op')}\n"
             f"  {snapshot}"
         )
+        context = event.get("conversation_context") or []
+        if context:
+            text += "\n  对话上下文（仅帮助理解互动，不能作为 evidence 引用）："
+            for message in context:
+                role = "用户" if message.get("role") == "user" else "SOUL"
+                content = str(message.get("content") or "").strip()
+                if content:
+                    text += f"\n    - 【{role}】{content}"
+        parts.append(text)
     return "\n".join(parts)
 
 

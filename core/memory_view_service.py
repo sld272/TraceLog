@@ -41,7 +41,9 @@ USER_MD_CHAR_BUDGET = 1200
 SOUL_MEMORY_CHAR_BUDGET = 600
 
 VIEW_USER_MD = "user_md"
+# Legacy view type kept only so old rows can be recognized and migrated away.
 VIEW_SOUL_PRIVATE = "soul_private_memory"
+VIEW_SOUL_RELATIONSHIP = "soul_relationship_memory"
 
 # md section ordering + labels by unit type
 _TYPE_ORDER = ["identity", "relationship", "preference", "state", "insight", "freeform"]
@@ -92,6 +94,11 @@ def _passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bo
     if float(unit["importance"]) < MIN_IMPORTANCE:
         return False
     return True
+
+
+def passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bool:
+    """Public selector seam for aggregate views that do not map to one bucket."""
+    return _passes_core_predicate(unit, currently_in_slice=currently_in_slice)
 
 
 def recompute_slice(owner_scope: str, visibility_scope: str, *, conn: sqlite3.Connection | None = None) -> list[str]:
@@ -145,6 +152,11 @@ def _order_units(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
         return (type_rank, -float(row["importance"]), -float(row["confidence"]))
 
     return sorted(rows, key=sort_key)
+
+
+def order_units(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """Public ordering seam shared by view dependency checks."""
+    return _order_units(rows)
 
 
 def source_unit_set_hash(units: list[sqlite3.Row]) -> str:
@@ -230,6 +242,33 @@ def synthesize_view(
     if recompute:
         recompute_slice(owner_scope, visibility_scope)
     units = _core_units_for_render(owner_scope, visibility_scope)
+    return synthesize_units_view(
+        owner_scope,
+        visibility_scope,
+        view_type,
+        units,
+        synthesizer=synthesizer,
+        char_budget=char_budget,
+    )
+
+
+def synthesize_units_view(
+    owner_scope: str,
+    visibility_scope: str,
+    view_type: str,
+    units: list[sqlite3.Row],
+    *,
+    synthesizer=None,
+    char_budget: int | None = None,
+) -> SynthesizedView:
+    """Materialize a view from an explicitly selected unit set.
+
+    Aggregate views use this interface so callers do not need to duplicate view
+    persistence, membership replacement, headers, fallback rendering, or hash
+    bookkeeping.
+    """
+    if char_budget is None:
+        char_budget = USER_MD_CHAR_BUDGET if view_type == VIEW_USER_MD else SOUL_MEMORY_CHAR_BUDGET
     unit_hash = source_unit_set_hash(units)
 
     used_fallback = True
@@ -332,23 +371,23 @@ def mark_stale_if_changed(owner_scope: str, visibility_scope: str, view_type: st
 def view_type_for_bucket(owner_scope: str, visibility_scope: str) -> str | None:
     """Which synthesized view a reconcile bucket feeds, or None.
 
-    Only the user portrait (global/public) and each soul's private memory
-    (private:soul:*) get an always-on synthesized view. Public comment threads
-    contribute units but have no standalone portrait."""
+    Only the global/public bucket maps directly to a view. SOUL relationship
+    memory is a cross-bucket aggregate managed by soul_relationship_memory."""
     if owner_scope == "global" and visibility_scope == "public":
         return VIEW_USER_MD
-    if visibility_scope.startswith("private:soul:"):
-        return VIEW_SOUL_PRIVATE
     return None
 
 
 def mark_stale_for_bucket(owner_scope: str, visibility_scope: str) -> bool:
     """Mark this bucket's view stale if its core set changed. No-op for buckets
     without a synthesized view (e.g. comment threads)."""
+    changed = False
     view_type = view_type_for_bucket(owner_scope, visibility_scope)
-    if view_type is None:
-        return False
-    return mark_stale_if_changed(owner_scope, visibility_scope, view_type)
+    if view_type is not None:
+        changed = mark_stale_if_changed(owner_scope, visibility_scope, view_type)
+    # Local import avoids the memory_unit_service -> view -> relationship cycle.
+    from core import soul_relationship_memory as srm
+    return srm.mark_stale_if_changed_for_bucket(owner_scope, visibility_scope) or changed
 
 
 def buckets_needing_view() -> list[tuple[str, str, str]]:
@@ -357,7 +396,9 @@ def buckets_needing_view() -> list[tuple[str, str, str]]:
     synthesize keeps the actual LLM work low-frequency."""
     out: list[tuple[str, str, str]] = []
     for row in db.query_all(
-        "SELECT owner_scope, visibility_scope, view_type FROM memory_views WHERE status = 'stale'"
+        "SELECT owner_scope, visibility_scope, view_type FROM memory_views "
+        "WHERE status = 'stale' AND view_type = ?",
+        (VIEW_USER_MD,),
     ):
         out.append((row["owner_scope"], row["visibility_scope"], row["view_type"]))
     for row in db.query_all(
@@ -403,5 +444,24 @@ def read_portrait_body(
     if units:
         if char_budget is None:
             char_budget = USER_MD_CHAR_BUDGET if view_type == VIEW_USER_MD else SOUL_MEMORY_CHAR_BUDGET
+        return render_template(units, char_budget=char_budget)
+    return ""
+
+
+def read_view_body_with_units(
+    owner_scope: str,
+    visibility_scope: str,
+    view_type: str,
+    units: list[sqlite3.Row],
+    *,
+    char_budget: int,
+) -> str:
+    """Read a cached aggregate view, falling back to its current selected units."""
+    view = get_view(owner_scope, visibility_scope, view_type)
+    if view is not None and view["status"] == "fresh":
+        body = strip_generated_header(view["content_md"]).strip()
+        if body:
+            return body
+    if units:
         return render_template(units, char_budget=char_budget)
     return ""

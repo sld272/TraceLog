@@ -400,6 +400,84 @@ def list_current_events_in_bucket(
     return list(reversed(rows))
 
 
+def conversation_context_for_event(
+    event: sqlite3.Row | dict,
+    *,
+    radius: int = 4,
+) -> list[dict]:
+    """Nearby dialogue for understanding interaction style.
+
+    These rows are context only: they deliberately expose no memory event ids,
+    so the reconcile model cannot cite assistant messages as belief evidence.
+    """
+    source_type = str(event["source_type"])
+    source_id = str(event["source_id"])
+    radius = max(1, min(int(radius), 10))
+
+    if source_type == "comment_message":
+        target = db.query_one(
+            "SELECT post_id, soul_name, seq FROM comments WHERE id = ?",
+            (int(source_id),),
+        )
+        if target is None:
+            return []
+        rows = db.query_all(
+            """
+            SELECT id, role, content, seq
+            FROM comments
+            WHERE post_id = ? AND soul_name = ?
+              AND seq BETWEEN ? AND ?
+            ORDER BY seq ASC
+            """,
+            (
+                target["post_id"],
+                target["soul_name"],
+                max(0, int(target["seq"]) - radius),
+                int(target["seq"]) + radius,
+            ),
+        )
+    elif source_type == "chat_message":
+        target = db.query_one(
+            "SELECT id, thread_id FROM chat_messages WHERE id = ?",
+            (int(source_id),),
+        )
+        if target is None:
+            return []
+        previous = db.query_all(
+            """
+            SELECT id, role, content
+            FROM chat_messages
+            WHERE thread_id = ? AND id <= ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (target["thread_id"], target["id"], radius + 1),
+        )
+        following = db.query_all(
+            """
+            SELECT id, role, content
+            FROM chat_messages
+            WHERE thread_id = ? AND id > ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (target["thread_id"], target["id"], radius),
+        )
+        rows = list(reversed(previous)) + list(following)
+    else:
+        return []
+
+    return [
+        {
+            "source_id": str(row["id"]),
+            "role": str(row["role"]),
+            "content": str(row["content"] or ""),
+        }
+        for row in rows
+        if str(row["content"] or "").strip()
+    ]
+
+
 # --- backfill (seed revision=1 create events for pre-existing content) ------
 
 def backfill_from_existing(conn: sqlite3.Connection) -> int:

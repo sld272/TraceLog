@@ -58,9 +58,7 @@ class ViewLifecycleTest(unittest.TestCase):
 
     def test_view_type_for_bucket(self) -> None:
         self.assertEqual(mvs.view_type_for_bucket("global", "public"), mvs.VIEW_USER_MD)
-        self.assertEqual(
-            mvs.view_type_for_bucket("soul:luna", "private:soul:luna"), mvs.VIEW_SOUL_PRIVATE
-        )
+        self.assertIsNone(mvs.view_type_for_bucket("soul:luna", "private:soul:luna"))
         self.assertIsNone(mvs.view_type_for_bucket("soul:luna", "thread:p1"))
 
     def test_first_reconcile_then_refresh_creates_fresh_view(self) -> None:

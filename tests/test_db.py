@@ -186,6 +186,69 @@ class DbTest(unittest.TestCase):
         db.init_db()
         self.assertEqual(1, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM goals"))["count"])
 
+    def test_legacy_soul_memory_becomes_hidden_candidates_and_old_view_is_removed(self) -> None:
+        db.execute(
+            """
+            INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+            VALUES ('luna', 'souls/luna.md', 1, 0, 1.0, 1.0)
+            """
+        )
+        memory_dir = self.workspace / "soul_memories"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        (memory_dir / "luna.md").write_text(
+            "# luna 的相处记忆\n\n"
+            "## 我们之间的互动约定\n"
+            "- 用户难过时希望先陪伴，不急着讲道理\n"
+            "- 双方习惯称呼彼此为老友\n",
+            encoding="utf-8",
+        )
+        db.execute(
+            """
+            INSERT INTO memory_views(
+                id, owner_scope, visibility_scope, view_type, content_md,
+                source_unit_set_hash, renderer_version, status, generated_at, updated_at
+            ) VALUES (
+                'mv_old', 'soul:luna', 'private:soul:luna', 'soul_private_memory',
+                'legacy', 'sha256:old', 'baseline-v1', 'fresh', 1.0, 1.0
+            )
+            """
+        )
+        db.execute(
+            "DELETE FROM meta WHERE key = 'memory_v2_soul_relationship_migration_v1'"
+        )
+
+        db.init_db()
+
+        rows = db.query_all(
+            """
+            SELECT *
+            FROM memory_units
+            WHERE owner_scope = 'soul:luna' AND source = 'migrated'
+            ORDER BY content
+            """
+        )
+        self.assertEqual(2, len(rows))
+        self.assertTrue(all(row["type"] == "relationship" for row in rows))
+        self.assertTrue(all(row["status"] == "pending" for row in rows))
+        self.assertTrue(all(row["prompt_policy"] == "no_prompt" for row in rows))
+        self.assertIsNone(db.query_one("SELECT 1 FROM memory_views WHERE id = 'mv_old'"))
+
+        candidate = rows[0]
+        memory_unit_service.update_unit(candidate["id"], content=candidate["content"])
+        promoted = require_not_none(memory_unit_service.get_unit(candidate["id"]))
+        self.assertEqual("active", promoted["status"])
+        self.assertEqual("user_authored", promoted["source"])
+        self.assertEqual("allow", promoted["prompt_policy"])
+
+        db.init_db()
+        count = require_not_none(
+            db.query_one(
+                "SELECT COUNT(*) AS count FROM memory_units "
+                "WHERE owner_scope = 'soul:luna' AND source = 'migrated'"
+            )
+        )
+        self.assertEqual(1, count["count"])
+
     def _insert_post(self, post_id: str) -> None:
         db.execute(
             """

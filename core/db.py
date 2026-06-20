@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sqlite3
 import time
 from collections.abc import Iterator, Sequence
@@ -85,6 +87,102 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     _backfill_memory_events(conn)
     _migrate_goal_units_to_goaltool(conn)
     _repair_historical_challenged_units(conn)
+    _migrate_legacy_soul_memories(conn)
+    _delete_legacy_soul_private_views(conn)
+
+
+def _legacy_soul_memory_entries(text: str) -> list[str]:
+    entries: list[str] = []
+    in_frontmatter = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line == "---":
+            in_frontmatter = not in_frontmatter
+            continue
+        if in_frontmatter or not line or line.startswith("#") or line.startswith("<!--"):
+            continue
+        line = re.sub(r"^[-*]\s+", "", line)
+        line = re.sub(r"\s*<!--\s*id:\s*[A-Za-z0-9_-]+\s*-->\s*$", "", line).strip()
+        if line and line not in entries:
+            entries.append(line)
+    return entries
+
+
+def _migrate_legacy_soul_memories(conn: sqlite3.Connection) -> None:
+    """Preserve legacy prose as hidden candidates, never as view truth."""
+    marker_key = "memory_v2_soul_relationship_migration_v1"
+    if conn.execute("SELECT 1 FROM meta WHERE key = ?", (marker_key,)).fetchone():
+        return
+    from core import memory_unit_service
+
+    memory_dir = WORKSPACE_DIR / "soul_memories"
+    migrated = 0
+    now = now_ts()
+    if memory_dir.exists():
+        for path in sorted(memory_dir.glob("*.md")):
+            soul_name = path.stem
+            if conn.execute("SELECT 1 FROM souls WHERE name = ?", (soul_name,)).fetchone() is None:
+                continue
+            for content in _legacy_soul_memory_entries(path.read_text(encoding="utf-8")):
+                unit_id = memory_unit_service.new_unit_id()
+                metadata = json.dumps(
+                    {
+                        "migration": "legacy_soul_memory",
+                        "source_file": str(path),
+                    },
+                    ensure_ascii=False,
+                )
+                conn.execute(
+                    """
+                    INSERT INTO memory_units(
+                        id, owner_scope, visibility_scope, source_channel,
+                        prompt_policy, type, content, confidence, source, status,
+                        tier, profile_policy, importance, sensitivity, in_md_slice,
+                        metadata, first_seen, last_confirmed, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'migration', 'no_prompt', 'relationship',
+                              ?, 0.4, 'migrated', 'pending', 'contextual', 'auto',
+                              0.5, 'normal', 0, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        unit_id,
+                        f"soul:{soul_name}",
+                        f"private:soul:{soul_name}",
+                        content,
+                        metadata,
+                        now,
+                        now,
+                        now,
+                        now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO memory_unit_ops(
+                        unit_id, op, actor, after_json, created_at
+                    ) VALUES (?, 'migrate', 'migration', ?, ?)
+                    """,
+                    (
+                        unit_id,
+                        json.dumps(
+                            {
+                                "content": content,
+                                "status": "pending",
+                                "source": "migrated",
+                            },
+                            ensure_ascii=False,
+                        ),
+                        now,
+                    ),
+                )
+                migrated += 1
+    conn.execute(
+        "INSERT INTO meta(key, value) VALUES (?, ?)",
+        (marker_key, str(migrated)),
+    )
+
+
+def _delete_legacy_soul_private_views(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM memory_views WHERE view_type = 'soul_private_memory'")
 
 
 def _migrate_goal_units_to_goaltool(conn: sqlite3.Connection) -> None:

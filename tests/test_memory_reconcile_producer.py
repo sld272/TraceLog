@@ -188,6 +188,68 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
         self.assertEqual(mes.get_cursor("global", "public"), cursor_before)
         self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 0)
 
+    def test_comment_reconcile_receives_assistant_dialogue_as_context_only(self) -> None:
+        now = db.now_ts()
+        with db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at) "
+                "VALUES ('luna', 'souls/luna.md', 1, 0, ?, ?)",
+                (now, now),
+            )
+            conn.execute(
+                "INSERT INTO posts(id, ts, content, created_at, updated_at) "
+                "VALUES ('p1', 't', '原帖', ?, ?)",
+                (now, now),
+            )
+            root = conn.execute(
+                "INSERT INTO comments(post_id, soul_name, role, content, seq, created_at) "
+                "VALUES ('p1', 'luna', 'assistant', '我先不讲大道理。', 0, ?)",
+                (now,),
+            )
+            user = conn.execute(
+                "INSERT INTO comments(post_id, soul_name, role, content, seq, created_at) "
+                "VALUES ('p1', 'luna', 'user', '对，你又开始懂我了。', 1, ?)",
+                (now + 1,),
+            )
+            mes.record_comment_mutation(
+                conn,
+                comment_id=int(root.lastrowid),
+                post_id="p1",
+                soul_name="luna",
+                role="assistant",
+                op="create",
+                content="我先不讲大道理。",
+                occurred_at=now,
+            )
+            mes.record_comment_mutation(
+                conn,
+                comment_id=int(user.lastrowid),
+                post_id="p1",
+                soul_name="luna",
+                role="user",
+                op="create",
+                content="对，你又开始懂我了。",
+                occurred_at=now + 1,
+            )
+
+        captured = {}
+
+        def producer(*, boundary, events, active_units, tombstones):
+            captured["events"] = events
+            return {"summary": "no-op", "ops": []}
+
+        recon.reconcile_bucket(
+            "soul:luna",
+            "thread:p1",
+            op_producer=producer,
+            reflection_type=recon.RECONCILE_THREAD,
+        )
+        self.assertEqual(len(captured["events"]), 1)
+        context = captured["events"][0]["conversation_context"]
+        self.assertEqual([item["role"] for item in context], ["assistant", "user"])
+        self.assertIn("不讲大道理", context[0]["content"])
+        self.assertNotIn("event_id", context[0])
+
     def test_concurrent_cursor_advance_aborts(self) -> None:
         # If another runner advances the cursor while our op-producer runs, the
         # CAS check must abort our commit so we don't create duplicate units.

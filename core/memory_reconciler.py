@@ -478,11 +478,16 @@ def reconcile_bucket(
     tombstones = _load_tombstones(owner_scope, visibility_scope)
 
     boundary = {"owner_scope": owner_scope, "visibility_scope": visibility_scope}
+    producer_events: list[dict] = []
+    for event in user_events:
+        item = dict(event)
+        item["conversation_context"] = mes.conversation_context_for_event(event)
+        producer_events.append(item)
     needs_llm = bool(user_events or required_decisions)
     result = (
         op_producer(
             boundary=boundary,
-            events=[dict(e) for e in user_events],
+            events=producer_events,
             active_units=producer_units,
             tombstones=tombstones,
         )

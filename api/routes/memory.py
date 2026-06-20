@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from api.deps import run_sync
-from core import memory_read, memory_unit_service as mus, memory_view_service as mvs
+from core import memory_read, memory_unit_service as mus, memory_view_service as mvs, soul_relationship_memory as srm
 from core.app_services import job_service
 
 router = APIRouter(prefix="/memory", tags=["memory"])
@@ -41,7 +41,7 @@ class ProfilePolicyRequest(BaseModel):
 class ResynthesizeViewRequest(BaseModel):
     owner_scope: str
     visibility_scope: str
-    view_type: Literal["user_md", "soul_private_memory"]
+    view_type: Literal["user_md", "soul_relationship_memory"]
 
 
 def _unit_detail_or_404(unit_id: str):
@@ -151,6 +151,20 @@ async def list_views():
 async def resynthesize_view(request: ResynthesizeViewRequest):
     """Deterministically re-render a portrait view from its current core units
     (no LLM) and mark it fresh — the workbench's manual 'refresh portrait'."""
+    if request.view_type == mvs.VIEW_SOUL_RELATIONSHIP:
+        soul_name = (
+            request.owner_scope[len("soul:"):]
+            if request.owner_scope.startswith("soul:")
+            else ""
+        )
+        if not soul_name or request.visibility_scope != srm.VIEW_VISIBILITY:
+            raise HTTPException(
+                status_code=422,
+                detail="SOUL 关系视图必须使用 soul:<name>/relationship 寻址",
+            )
+        view = await run_sync(srm.refresh_relationship_memory, soul_name)
+        return asdict(view)
+
     try:
         mus.validate_boundary(request.owner_scope, request.visibility_scope)
     except mus.BoundaryError as exc:

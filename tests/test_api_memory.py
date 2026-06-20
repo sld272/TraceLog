@@ -142,7 +142,7 @@ class ApiMemoryTest(unittest.TestCase):
             json={
                 "owner_scope": "global",
                 "visibility_scope": "public",
-                "view_type": "soul_private_memory",
+                "view_type": "soul_relationship_memory",
             },
         )
         self.assertEqual(422, resp2.status_code)
@@ -163,6 +163,40 @@ class ApiMemoryTest(unittest.TestCase):
         self.assertEqual(resp.json()["view_type"], "user_md")
         from core import memory_view_service as mvs
         self.assertEqual(mvs.get_view("global", "public", "user_md")["status"], "fresh")
+
+    def test_resynthesize_soul_relationship_view(self) -> None:
+        with db.transaction() as conn:
+            event_id = mes.record_chat_mutation(
+                conn,
+                message_id=1,
+                soul_name="luna",
+                role="user",
+                op="create",
+                content="难过时先陪我一会儿",
+                occurred_at=1.0,
+            ).id
+        mus.add_unit(
+            owner_scope="soul:luna",
+            visibility_scope="private:soul:luna",
+            source_channel="chat",
+            type="relationship",
+            content="用户难过时希望 luna 先陪伴，不急着讲道理",
+            confidence=0.9,
+            tier="core",
+            importance=0.9,
+            evidence_event_ids=[event_id],
+        )
+        client = self._client()
+        resp = client.post(
+            "/memory/views/resynthesize",
+            json={
+                "owner_scope": "soul:luna",
+                "visibility_scope": "relationship",
+                "view_type": "soul_relationship_memory",
+            },
+        )
+        self.assertEqual(200, resp.status_code)
+        self.assertEqual("soul_relationship_memory", resp.json()["view_type"])
 
 
 if __name__ == "__main__":

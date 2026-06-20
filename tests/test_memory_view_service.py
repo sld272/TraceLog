@@ -225,6 +225,25 @@ class MemoryViewServiceTest(unittest.TestCase):
         mus.confirm_unit(unit_id, evidence_event_ids=[self._event()])
         self.assertFalse(mvs.mark_stale_if_changed("global", "public", mvs.VIEW_USER_MD))
 
+    def test_non_core_add_does_not_stale_fresh_portrait(self) -> None:
+        self._confirmed_core_unit("我是研究生")
+        mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        mus.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="post",
+            type="insight",
+            content="普通上下文记忆",
+            confidence=0.7,
+            tier="contextual",
+            importance=0.5,
+            evidence_event_ids=[self._event()],
+        )
+        self.assertEqual(
+            "fresh",
+            mvs.get_view("global", "public", mvs.VIEW_USER_MD)["status"],
+        )
+
     def test_content_change_marks_stale(self) -> None:
         unit_id = self._confirmed_core_unit("旧表述")
         mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)

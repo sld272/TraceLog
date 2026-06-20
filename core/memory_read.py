@@ -23,7 +23,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from core import db, goal_service, memory_events_service as mes, memory_scope_policy as policy, memory_unit_service as mus, memory_view_service as mvs
+from core import db, goal_service, memory_events_service as mes, memory_scope_policy as policy, memory_unit_service as mus, memory_view_service as mvs, soul_relationship_memory as srm
 
 # read-mode flag (design §7.2). legacy = pre-v2 behavior, no unit reading.
 READ_MODE_ENV = "MEMORY_V2_READ_MODE"
@@ -61,6 +61,16 @@ def memory_section_for(channel: str, reply_soul: str | None, query: str) -> str:
     if not memory_reading_enabled():
         return ""
     return build_memory_section(channel, reply_soul, query).text
+
+
+def relationship_memory_for(reply_soul: str | None) -> str:
+    """Current SOUL's complete relationship narrative for its system prompt."""
+    if not memory_reading_enabled() or reply_soul is None:
+        return ""
+    body = srm.read_relationship_memory(reply_soul).strip()
+    if not body:
+        return ""
+    return f"{body}\n\n[相处记忆使用规则]\n{srm.PUBLIC_USE_RULE}"
 
 # current-state block
 STATE_BLOCK_LIMIT = 5
@@ -564,13 +574,6 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
     portrait = _portrait_text("global", "public", mvs.VIEW_USER_MD)
     if portrait:
         sections.append(f"[基线认知]\n{portrait}")
-    if reply_soul is not None and channel in policy.PRIVATE_CHANNELS:
-        soul_portrait = _portrait_text(
-            f"soul:{reply_soul}", f"private:soul:{reply_soul}", mvs.VIEW_SOUL_PRIVATE
-        )
-        if soul_portrait:
-            sections.append(f"[{reply_soul}·私聊画像]\n{soul_portrait}")
-
     # 2. current-state block (always-on)
     state_items = recent_state_block(channel, reply_soul)
     if state_items:

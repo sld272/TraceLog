@@ -460,6 +460,7 @@ MEMORY_RECONCILE_PROMPT = """\
 ## 输入
 - 场景：说明这批证据是用户在什么情境下产生的（公开帖子 / 在某人格评论区互动 / 与某人格私聊）。仅用于理解上下文和判断“关系类”信念，**不改变“主语是用户”这一铁律**。
 - 新证据事件：**全部是【用户】产生的当前版本内容**，每条带唯一 `event_id`。可用于 add，也可用于相关 unit 的 confirm / revise。
+- 新证据下可能附带同一对话附近的 user/assistant 消息。它们只帮助理解称呼、玩笑、互动节奏和语境；只有带 `event_id` 的用户新证据可以被引用，assistant 内容绝不能单独支撑用户事实或共同记忆。
 - 已有 units：每条带 `unit_id`、status、type、content、confidence。status=challenged 时还会列出该 unit 当前仍有效的 evidence；这些 evidence 只能用于该 challenged unit 的 confirm / revise。
 - 墓碑 tombstones：false 严禁再次产出同义 unit；outdated 仅在有新证据时才可重新成立。
 
@@ -504,6 +505,7 @@ MEMORY_RECONCILE_PROMPT = """\
     - revise：当前 evidence 支持一个调整后的结论，必须引用当前有效 event_id；
     - retract：当前 evidence 已不支持该结论。
 12. 编辑后的新 event 同时是普通新 evidence：即使它与旧 unit 完全无关，也要独立判断是否值得 add 新 unit。
+13. thread/private 场景要主动识别稳定的关系类信念：称呼、互动约定、回应偏好、语气节奏、边界和默契。只有偶发一次、仅由 assistant 自己创造、或用户没有接纳的表达，不要沉淀。
 
 ## 当前时间
 {current_datetime}
@@ -709,6 +711,24 @@ MEMORY_VIEW_SYNTH_PROMPT = """\
 """
 
 
+SOUL_RELATIONSHIP_VIEW_SYNTH_PROMPT = """\
+你是 TraceLog 拾迹的 SOUL 关系记忆综合引擎。你会收到一组已经筛选、可追溯的核心 relationship units，把它们综合成“这个 SOUL 与用户是怎么相处的”关系叙事。它应让回复具有熟人感和连续性，而不是像照着用户档案说话。
+
+## 硬规则
+1. 只能使用提供的 units，不得新增共同经历、称呼、偏好或事实，不得脑补。
+2. 重点综合双方形成的称呼、互动节奏、回应偏好、边界、默契和稳定关系变化。
+3. 可以自然保留“私聊时”“在评论区”等场景感，但不要输出权限标签或规则清单。
+4. 不要重复普通用户身份画像；只写对“这个 SOUL 如何和用户相处”真正有帮助的内容。
+5. 风格自然、克制、有人味，压在字数预算内；输出连贯 prose，可少量分段，不要 Markdown 标题。
+
+## 输出：只输出一个 JSON 对象，无解释
+{"profile_md": "综合后的关系叙事 prose"}
+
+## 当前时间
+{current_datetime}
+"""
+
+
 def call_view_synthesis(
     client: LLMClient,
     model: str,
@@ -725,6 +745,11 @@ def call_view_synthesis(
         "---\n\n"
         f"## 核心记忆单元\n\n{units_text or '（无）'}"
     )
+    prompt = (
+        SOUL_RELATIONSHIP_VIEW_SYNTH_PROMPT
+        if view_type == "soul_relationship_memory"
+        else MEMORY_VIEW_SYNTH_PROMPT
+    )
     return call_json_completion(
         client=client,
         model=model,
@@ -732,7 +757,7 @@ def call_view_synthesis(
         timeout=45,
         response_format={"type": "json_object"},
         messages=[
-            {"role": "system", "content": MEMORY_VIEW_SYNTH_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "system", "content": prompt.replace("{current_datetime}", now_str())},
             {"role": "user", "content": user_content},
         ],
         parser=_parse_view_synthesis_content,
