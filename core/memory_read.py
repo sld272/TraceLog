@@ -671,6 +671,8 @@ class UnitDetail:
     owner_scope: str
     visibility_scope: str
     in_md_slice: bool
+    prompt_policy: str
+    profile_policy: str
     evidence: list[EvidenceRef]
 
 
@@ -714,5 +716,7 @@ def unit_detail(unit_id: str) -> UnitDetail | None:
         owner_scope=row["owner_scope"],
         visibility_scope=row["visibility_scope"],
         in_md_slice=bool(row["in_md_slice"]),
+        prompt_policy=row["prompt_policy"],
+        profile_policy=row["profile_policy"],
         evidence=evidence,
     )

@@ -13,7 +13,7 @@ a "show me what units you'd extract from my data" preview need.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from core import (
     logging_service,
@@ -99,6 +99,7 @@ class ReconcileRunResult:
     summaries: list[recon.ReconcileSummary]
     failures: list[ReconcileBucketFailure]
     has_pending_after_run: bool
+    relink_failures: list[RelinkFailure] = field(default_factory=list)
 
 
 def reflection_type_for_visibility(visibility_scope: str) -> str:
@@ -166,17 +167,30 @@ def run_pending_reconcile(
         if summary is not None:
             summaries.append(summary)
     # Post-edit re-link runs in the same background pass (separate from the
-    # bucket loop). Skipped in dry-run. Per-unit failures are handled inside.
+    # bucket loop). Skipped in dry-run. Per-unit judge failures are reported so
+    # the caller can fail/retry the job, and any still-pending re-link counts as
+    # backlog so a continuation job is enqueued — a relink failure must never be
+    # silently swallowed (the API promises this pass will run).
+    relink_failures: list[RelinkFailure] = []
     if not dry_run:
         try:
-            run_pending_relinks(
-                client, model, judge=relink_judge, trace_context=trace_context
+            relink_failures = list(
+                run_pending_relinks(
+                    client, model, judge=relink_judge, trace_context=trace_context
+                ).failures
             )
         except Exception as exc:
             logging_service.log_event("memory_relink_pass_failed", error=str(exc))
-    has_pending = False if dry_run else bool(mes.buckets_with_pending_events(limit_buckets=1))
+            relink_failures = [RelinkFailure(unit_id="*", error=str(exc))]
+    pending_relinks = bool(mus.list_pending_relinks()) if not dry_run else False
+    has_pending = (
+        False
+        if dry_run
+        else bool(mes.buckets_with_pending_events(limit_buckets=1)) or pending_relinks
+    )
     return ReconcileRunResult(
         summaries=summaries,
         failures=failures,
         has_pending_after_run=has_pending,
+        relink_failures=relink_failures,
     )

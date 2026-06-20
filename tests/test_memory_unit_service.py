@@ -159,6 +159,24 @@ class MemoryUnitServiceTest(unittest.TestCase):
         self.assertEqual(len(mus.list_pending_relinks()), 1)
         self.assertIn("user_edit", [o["op"] for o in mus.list_unit_ops(unit_id=unit_id)])
 
+    def test_user_retract_rejects_superseded(self) -> None:
+        e1 = self._public_event("p1")
+        old = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="state", content="单身", evidence_event_ids=[e1],
+        )
+        e2 = self._public_event("p2")
+        new = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="state", content="恋爱中", evidence_event_ids=[e2],
+        )
+        mus.supersede_unit(old, new)
+        with self.assertRaises(ValueError):
+            mus.retract_unit(old, by="user", reason="false")
+        # superseded history stays intact
+        self.assertEqual(mus.get_unit(old)["status"], "superseded")
+        self.assertEqual(mus.get_unit(old)["superseded_by"], new)
+
     def test_update_unit_rejects_terminal_state(self) -> None:
         e1 = self._public_event()
         unit_id = mus.add_unit(

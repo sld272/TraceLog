@@ -354,6 +354,12 @@ def retract_unit(
         row = _get_unit_row(c, unit_id)
         if row is None:
             raise ValueError(f"unit 不存在：{unit_id}")
+        if by == "user" and row["status"] not in {"active", "challenged"}:
+            # the workbench deletes a live belief, not a historical/dead version;
+            # retracting a superseded unit would orphan its superseded_by link.
+            raise ValueError(
+                f"只能删除 active/challenged 的记忆（当前 status={row['status']}）"
+            )
         before = _row_to_dict(row)
         # a retracted belief must leave the portrait immediately, not linger in a
         # stale-view template fallback until the next recompute.
@@ -710,6 +716,7 @@ def list_units(
     visibility_scope: str | None = None,
     *,
     status: str | None = "active",
+    type: str | None = None,
     tier: str | None = None,
     prompt_policy: str | None = None,
     in_md_slice: int | None = None,
@@ -726,6 +733,9 @@ def list_units(
     if status is not None:
         clauses.append("status = ?")
         params.append(status)
+    if type is not None:
+        clauses.append("type = ?")
+        params.append(type)
     if tier is not None:
         clauses.append("tier = ?")
         params.append(tier)

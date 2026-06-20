@@ -65,15 +65,13 @@ async def list_units(
         owner_scope,
         visibility_scope,
         status=status_filter,
+        type=type,
         tier=None,
         prompt_policy=None,
         in_md_slice=None,
         limit=limit,
     )
-    units = [dict(row) for row in rows]
-    if type is not None:
-        units = [u for u in units if u.get("type") == type]
-    return {"units": units}
+    return {"units": [dict(row) for row in rows]}
 
 
 @router.get("/units/{unit_id}")
@@ -154,12 +152,27 @@ async def resynthesize_view(request: ResynthesizeViewRequest):
     """Deterministically re-render a portrait view from its current core units
     (no LLM) and mark it fresh — the workbench's manual 'refresh portrait'."""
     try:
-        view = await run_sync(
-            mvs.synthesize_view,
-            request.owner_scope,
-            request.visibility_scope,
-            request.view_type,
-        )
-    except Exception as exc:  # boundary / unknown scope
+        mus.validate_boundary(request.owner_scope, request.visibility_scope)
+    except mus.BoundaryError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    expected = mvs.view_type_for_bucket(request.owner_scope, request.visibility_scope)
+    if expected is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"该 bucket 没有画像视图：{request.owner_scope}/{request.visibility_scope}",
+        )
+    if request.view_type != expected:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"view_type 与 bucket 不匹配：{request.owner_scope}/"
+                f"{request.visibility_scope} 应为 {expected}，收到 {request.view_type}"
+            ),
+        )
+    view = await run_sync(
+        mvs.synthesize_view,
+        request.owner_scope,
+        request.visibility_scope,
+        request.view_type,
+    )
     return asdict(view)

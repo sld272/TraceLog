@@ -99,6 +99,26 @@ class MemoryRelinkTest(unittest.TestCase):
         self.assertEqual([e["id"] for e in mus.get_unit_evidence(unit_id)], [e1])
         self.assertEqual(mus.current_effective_evidence_for_unit(unit_id), [])
 
+    def test_reconcile_pass_reports_relink_failure_and_keeps_backlog(self) -> None:
+        # a re-link judge failure must surface in the run result (so the job is
+        # retried, not reported done) and leave the review pending as backlog.
+        e1 = self._event("p1")
+        unit_id = self._unit([e1])
+        mus.update_unit(unit_id, content="新内容")
+
+        def noop_producer(**kwargs):
+            return {"ops": [], "summary": ""}
+
+        def boom(*, content, evidence):
+            raise RuntimeError("LLM down")
+
+        result = runner.run_pending_reconcile(
+            None, "m", op_producer=noop_producer, relink_judge=boom
+        )
+        self.assertTrue(result.relink_failures)
+        self.assertTrue(result.has_pending_after_run)
+        self.assertEqual(len(mus.list_pending_relinks()), 1)
+
     def test_stale_result_cannot_overwrite_newer_edit(self) -> None:
         e1 = self._event("p1")
         unit_id = self._unit([e1])

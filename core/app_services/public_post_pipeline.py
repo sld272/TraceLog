@@ -26,15 +26,28 @@ class PublicPostReplyContext:
 
 
 class MemoryReconcileRunError(RuntimeError):
-    """One or more memory buckets failed during a bounded reconcile pass."""
+    """One or more memory buckets — or post-edit re-link reviews — failed during
+    a bounded reconcile pass, so the job is retried instead of reported done."""
 
-    def __init__(self, failures: list[memory_reconcile_runner.ReconcileBucketFailure]) -> None:
+    def __init__(
+        self,
+        failures: list[memory_reconcile_runner.ReconcileBucketFailure],
+        relink_failures: list[memory_reconcile_runner.RelinkFailure] | None = None,
+    ) -> None:
         self.failures = list(failures)
+        self.relink_failures = list(relink_failures or [])
         details = "; ".join(
             f"{failure.owner_scope}/{failure.visibility_scope}: {failure.error}"
             for failure in self.failures
         )
-        super().__init__(f"memory reconcile failed for {len(self.failures)} bucket(s): {details}")
+        relink_details = "; ".join(
+            f"unit {failure.unit_id}: {failure.error}" for failure in self.relink_failures
+        )
+        super().__init__(
+            f"memory reconcile failed for {len(self.failures)} bucket(s) "
+            f"and {len(self.relink_failures)} re-link(s): "
+            f"{'; '.join(part for part in (details, relink_details) if part)}"
+        )
 
 
 def create_post(content: str, attachment_ids: list[str] | None = None) -> CreatedPost:
@@ -396,8 +409,8 @@ def _run_memory_reconcile(job_id: int, client: LLMClient, model: str) -> None:
     # Keep the unit vector docs in sync with the new/retracted units so semantic
     # retrieval sees them (hash-gated; unchanged docs are skipped).
     vector_index_service.rebuild_expected_docs()
-    if result.failures:
-        raise MemoryReconcileRunError(result.failures)
+    if result.failures or result.relink_failures:
+        raise MemoryReconcileRunError(result.failures, result.relink_failures)
     if result.has_pending_after_run:
         job_service.enqueue_memory_reconcile_once(
             {"trigger": "continuation", "previous_job_id": job_id}

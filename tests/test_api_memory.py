@@ -89,12 +89,14 @@ class ApiMemoryTest(unittest.TestCase):
         r1 = client.post(f"/memory/units/{unit_id}/prompt-policy", json={"prompt_policy": "no_prompt"})
         self.assertEqual(200, r1.status_code)
         self.assertEqual(mus.get_unit(unit_id)["prompt_policy"], "no_prompt")
+        self.assertEqual(r1.json()["prompt_policy"], "no_prompt")  # response reflects change
 
         r2 = client.post(
             f"/memory/units/{unit_id}/profile-policy", json={"profile_policy": "force_exclude"}
         )
         self.assertEqual(200, r2.status_code)
         self.assertEqual(mus.get_unit(unit_id)["profile_policy"], "force_exclude")
+        self.assertEqual(r2.json()["profile_policy"], "force_exclude")
 
         bad = client.post(f"/memory/units/{unit_id}/prompt-policy", json={"prompt_policy": "bogus"})
         self.assertEqual(422, bad.status_code)
@@ -107,6 +109,43 @@ class ApiMemoryTest(unittest.TestCase):
         unit = mus.get_unit(unit_id)
         self.assertEqual(unit["status"], "retracted_by_user")
         self.assertEqual(unit["retraction_reason"], "false")
+
+    def test_type_filter_pushed_down_before_limit(self) -> None:
+        # an identity unit (older) and a state unit (newer): type filter must run
+        # in SQL, not after LIMIT, or ?type=identity&limit=1 wrongly returns empty.
+        e1 = self._seed_unit()[1]
+        identity_id = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="identity", content="用户是研究生", evidence_event_ids=[e1], confidence=0.8,
+        )
+        client = self._client()
+        resp = client.get("/memory/units", params={"type": "identity", "limit": 1})
+        self.assertEqual(200, resp.status_code)
+        ids = [u["id"] for u in resp.json()["units"]]
+        self.assertEqual(ids, [identity_id])
+
+    def test_resynthesize_rejects_invalid_combo(self) -> None:
+        client = self._client()
+        # mismatched soul (boundary) + wrong view_type
+        resp = client.post(
+            "/memory/views/resynthesize",
+            json={
+                "owner_scope": "soul:luna",
+                "visibility_scope": "private:soul:nova",
+                "view_type": "user_md",
+            },
+        )
+        self.assertEqual(422, resp.status_code)
+        # valid bucket but wrong view_type for it
+        resp2 = client.post(
+            "/memory/views/resynthesize",
+            json={
+                "owner_scope": "global",
+                "visibility_scope": "public",
+                "view_type": "soul_private_memory",
+            },
+        )
+        self.assertEqual(422, resp2.status_code)
 
     def test_views_list_and_resynthesize(self) -> None:
         self._seed_unit()
