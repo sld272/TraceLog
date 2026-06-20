@@ -15,8 +15,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import logging_service, memory_events_service as mes, memory_reconciler as recon
-from core.memory_reconcile_producer import make_llm_op_producer
+from core import (
+    logging_service,
+    memory_events_service as mes,
+    memory_reconciler as recon,
+    memory_unit_service as mus,
+)
+from core.memory_reconcile_producer import make_llm_op_producer, make_relink_judge
 from core.llm.types import LLMClient
 
 
@@ -25,6 +30,68 @@ class ReconcileBucketFailure:
     owner_scope: str
     visibility_scope: str
     error: str
+
+
+@dataclass(frozen=True)
+class RelinkFailure:
+    unit_id: str
+    error: str
+
+
+@dataclass(frozen=True)
+class RelinkRunResult:
+    applied: int
+    failures: list[RelinkFailure]
+
+
+def run_pending_relinks(
+    client: LLMClient,
+    model: str,
+    *,
+    judge=None,
+    trace_context: dict | None = None,
+) -> RelinkRunResult:
+    """Process pending post-edit re-link reviews.
+
+    For each user-edited unit, ask the narrow judge which of its review_pending
+    links still support the new content, then apply keep/drop atomically. A judge
+    failure leaves that review pending (no data lost); a unit changed mid-judge
+    discards the stale result (see ``apply_relink``). Anything the judge does not
+    explicitly keep is dropped, so every candidate link is resolved."""
+    judge = judge or make_relink_judge(client, model, trace_context=trace_context)
+    applied = 0
+    failures: list[RelinkFailure] = []
+    for review in mus.list_pending_relinks():
+        relink_id = int(review["relink_id"])
+        unit_id = str(review["unit_id"])
+        version = float(review["updated_at"])
+        candidates = mus.pending_review_evidence_for_unit(unit_id)
+        candidate_ids = {int(c["event_id"]) for c in candidates}
+        if not candidate_ids:
+            mus.apply_relink(
+                relink_id, unit_id, expected_version=version,
+                keep_event_ids=[], drop_event_ids=[],
+            )
+            continue
+        try:
+            result = judge(
+                content=str(review["content"]),
+                evidence=[dict(c) for c in candidates],
+            )
+        except Exception as exc:
+            logging_service.log_event(
+                "memory_relink_failed", unit_id=unit_id, error=str(exc)
+            )
+            failures.append(RelinkFailure(unit_id=unit_id, error=str(exc)))
+            continue
+        keep = {int(x) for x in (result.get("keep_event_ids") or [])} & candidate_ids
+        drop = candidate_ids - keep
+        if mus.apply_relink(
+            relink_id, unit_id, expected_version=version,
+            keep_event_ids=sorted(keep), drop_event_ids=sorted(drop),
+        ):
+            applied += 1
+    return RelinkRunResult(applied=applied, failures=failures)
 
 
 @dataclass(frozen=True)
@@ -52,6 +119,7 @@ def run_pending_reconcile(
     trigger: str = "manual",
     limit_per_bucket: int = 200,
     op_producer=None,
+    relink_judge=None,
     trace_context: dict | None = None,
 ) -> ReconcileRunResult:
     """Reconcile every bucket with pending events. ``op_producer`` may be
@@ -97,6 +165,15 @@ def run_pending_reconcile(
             continue
         if summary is not None:
             summaries.append(summary)
+    # Post-edit re-link runs in the same background pass (separate from the
+    # bucket loop). Skipped in dry-run. Per-unit failures are handled inside.
+    if not dry_run:
+        try:
+            run_pending_relinks(
+                client, model, judge=relink_judge, trace_context=trace_context
+            )
+        except Exception as exc:
+            logging_service.log_event("memory_relink_pass_failed", error=str(exc))
     has_pending = False if dry_run else bool(mes.buckets_with_pending_events(limit_buckets=1))
     return ReconcileRunResult(
         summaries=summaries,

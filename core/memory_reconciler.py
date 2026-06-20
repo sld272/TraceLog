@@ -539,15 +539,27 @@ def reconcile_bucket(
                 )
                 summary.reflection_id = reflection_id
             for unit_id in sorted(deterministic_retracts):
-                mus.retract_unit(
-                    unit_id,
-                    by="model",
-                    reason="outdated",
-                    reflection_id=reflection_id,
-                    conn=conn,
-                )
-                summary.applied += 1
-                summary._count("retract")
+                du = conn.execute(
+                    "SELECT source FROM memory_units WHERE id = ?", (unit_id,)
+                ).fetchone()
+                if du is not None and du["source"] == "user_authored":
+                    # A user-authored belief stands on the user's own assertion,
+                    # not on the deleted source — keep it instead of auto-retracting.
+                    # It can still be overturned later by *new* contradicting
+                    # evidence through normal reconcile.
+                    mus.retain_unit(unit_id, reflection_id=reflection_id, conn=conn)
+                    summary.applied += 1
+                    summary._count("retain")
+                else:
+                    mus.retract_unit(
+                        unit_id,
+                        by="model",
+                        reason="outdated",
+                        reflection_id=reflection_id,
+                        conn=conn,
+                    )
+                    summary.applied += 1
+                    summary._count("retract")
             apply_ops(
                 conn,
                 owner_scope=owner_scope,

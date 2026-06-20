@@ -76,6 +76,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    _ensure_column(
+        conn, "memory_unit_evidence", "review_pending", "INTEGER NOT NULL DEFAULT 0"
+    )
     _ensure_column(conn, "memory_ingest_events", "author", "TEXT")
     _backfill_memory_event_authors(conn)
     _migrate_comment_event_ownership(conn)

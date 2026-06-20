@@ -290,7 +290,10 @@ def revise_unit(
     reflection_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """In-place content update (branch D1). History is preserved in the op log."""
+    """In-place content update by the reconciler (branch D1). History is preserved
+    in the op log. A model revise rewrites the claim from evidence, so the unit's
+    source becomes ``reflected`` even if a user had authored the previous wording —
+    it is no longer the user's words."""
     body = content.strip()
     if not body:
         raise ValueError("revise content 不能为空")
@@ -302,14 +305,13 @@ def revise_unit(
         row = _get_unit_row(c, unit_id)
         if row is None:
             raise ValueError(f"unit 不存在：{unit_id}")
-        if row["source"] == "user_authored":
-            raise BoundaryError("user_authored unit 不可被对账 revise（硬免疫）")
         before = _row_to_dict(row)
         _assert_events_in_boundary(c, row["owner_scope"], row["visibility_scope"], event_ids)
         c.execute(
             """
             UPDATE memory_units
             SET content = ?,
+                source = 'reflected',
                 confidence = COALESCE(?, confidence),
                 type = COALESCE(?, type),
                 tier = COALESCE(?, tier),
@@ -352,11 +354,12 @@ def retract_unit(
         row = _get_unit_row(c, unit_id)
         if row is None:
             raise ValueError(f"unit 不存在：{unit_id}")
-        if by == "model" and row["source"] == "user_authored":
-            raise BoundaryError("user_authored unit 不可被模型 retract（硬免疫）")
         before = _row_to_dict(row)
+        # a retracted belief must leave the portrait immediately, not linger in a
+        # stale-view template fallback until the next recompute.
         c.execute(
-            "UPDATE memory_units SET status = ?, retraction_reason = ?, updated_at = ? WHERE id = ?",
+            "UPDATE memory_units SET status = ?, retraction_reason = ?, "
+            "in_md_slice = 0, updated_at = ? WHERE id = ?",
             (status, reason, now, unit_id),
         )
         after = _row_to_dict(_get_unit_row(c, unit_id))
@@ -412,8 +415,6 @@ def retain_unit(
         row = _get_unit_row(c, unit_id)
         if row is None:
             raise ValueError(f"unit 不存在：{unit_id}")
-        if row["source"] == "user_authored":
-            raise BoundaryError("user_authored unit 不参与自动重判")
         if row["status"] != "challenged":
             raise ValueError("retain 只能恢复 challenged unit")
         before = _row_to_dict(row)
@@ -431,6 +432,187 @@ def retain_unit(
             before=before,
             after=after,
             reflection_id=reflection_id,
+        )
+
+
+# --- user-facing workbench primitives --------------------------------------
+
+def update_unit(
+    unit_id: str,
+    *,
+    content: str,
+    confidence: float | None = None,
+    type: str | None = None,
+    tier: str | None = None,
+    importance: float | None = None,
+    actor: str = "user",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """User edits a unit in place from the workbench.
+
+    A user edit differs from a model (reconcile) edit in exactly two ways: its
+    confidence is raised (a user assertion is a strong signal), and its content
+    comes from the user's own view rather than from evidence. Otherwise the unit
+    stays an ordinary unit — fully reconcilable: new contradicting evidence can
+    still revise/retract/supersede it via normal reconcile.
+
+    The unit goes live immediately (stays ``active``). The existing evidence
+    links may no longer correspond to the user's new wording, so they are marked
+    ``review_pending`` (not counted as current support, do not trigger challenge)
+    and a re-link review is enqueued; a narrow AI pass later keeps the ones that
+    still support the new content and drops the rest — not a blunt drop. Only
+    ``active``/``challenged`` units may be edited (the workbench edits the live
+    belief, not a dead one)."""
+    body = content.strip()
+    if not body:
+        raise ValueError("update content 不能为空")
+    if type is not None and type not in VALID_TYPES:
+        raise ValueError(f"非法 unit type：{type}")
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        if row["status"] not in {"active", "challenged"}:
+            raise ValueError(
+                f"只能编辑 active/challenged 的记忆（当前 status={row['status']}）"
+            )
+        pre_edit_event_ids = [
+            int(e["event_id"])
+            for e in c.execute(
+                "SELECT event_id FROM memory_unit_evidence WHERE unit_id = ?",
+                (unit_id,),
+            ).fetchall()
+        ]
+        before = dict(_row_to_dict(row) or {})
+        before["evidence_event_ids"] = pre_edit_event_ids
+        new_conf = (
+            float(confidence)
+            if confidence is not None
+            else max(float(row["confidence"]), 0.9)
+        )
+        c.execute(
+            """
+            UPDATE memory_units
+            SET content = ?,
+                source = 'user_authored',
+                confidence = ?,
+                type = COALESCE(?, type),
+                tier = COALESCE(?, tier),
+                importance = COALESCE(?, importance),
+                status = 'active',
+                superseded_by = NULL,
+                retraction_reason = NULL,
+                last_confirmed = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (body, new_conf, type, tier, importance, now, now, unit_id),
+        )
+        # existing links backed the previous wording -> await AI re-link
+        c.execute(
+            "UPDATE memory_unit_evidence SET review_pending = 1 WHERE unit_id = ?",
+            (unit_id,),
+        )
+        # user taking control resolves any pending challenge on this unit
+        c.execute(
+            "UPDATE memory_unit_reconcile_queue SET status = 'resolved', resolved_at = ? "
+            "WHERE unit_id = ? AND status = 'pending'",
+            (now, unit_id),
+        )
+        # enqueue a re-link review (dedupe: keep only the latest per unit). Only
+        # needed when there were links to re-judge. unit_version = this edit's
+        # timestamp so a stale judge result cannot overwrite a newer edit.
+        if pre_edit_event_ids:
+            c.execute(
+                "UPDATE memory_unit_relink_queue SET status = 'resolved', resolved_at = ? "
+                "WHERE unit_id = ? AND status = 'pending'",
+                (now, unit_id),
+            )
+            c.execute(
+                "INSERT INTO memory_unit_relink_queue(unit_id, unit_version, status, created_at) "
+                "VALUES (?, ?, 'pending', ?)",
+                (unit_id, now, now),
+            )
+        # the edited belief's portrait eligibility may have changed (new
+        # confidence/source/content); recompute the slice now so it takes effect
+        # immediately rather than waiting for the next reconcile.
+        from core import memory_view_service as _mvs  # local import avoids cycle
+        _mvs.recompute_slice(row["owner_scope"], row["visibility_scope"], conn=c)
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="user_edit", actor=actor,
+            before=before, after=after,
+        )
+
+
+def set_prompt_policy(
+    unit_id: str,
+    *,
+    prompt_policy: str,
+    actor: str = "user",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Set whether a unit may be used in any reply prompt ('不要提到该记忆').
+
+    ``no_prompt`` keeps the unit active and reconcilable but removes it from both
+    retrieval and the portrait; it is orthogonal to ``profile_policy``."""
+    if prompt_policy not in {"allow", "no_prompt"}:
+        raise ValueError(f"非法 prompt_policy：{prompt_policy}")
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        before = _row_to_dict(row)
+        c.execute(
+            "UPDATE memory_units SET prompt_policy = ?, "
+            "in_md_slice = CASE WHEN ? = 'no_prompt' THEN 0 ELSE in_md_slice END, "
+            "updated_at = ? WHERE id = ?",
+            (prompt_policy, prompt_policy, now, unit_id),
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="user_edit", actor=actor,
+            before=before, after=after,
+        )
+
+
+def set_profile_policy(
+    unit_id: str,
+    *,
+    profile_policy: str,
+    actor: str = "user",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Set whether a unit is forced in/out of the portrait ('不进画像').
+
+    ``force_exclude`` only keeps the unit out of the md portrait; it can still be
+    retrieved. Orthogonal to ``prompt_policy``."""
+    if profile_policy not in {"auto", "force_include", "force_exclude"}:
+        raise ValueError(f"非法 profile_policy：{profile_policy}")
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        before = _row_to_dict(row)
+        # force_exclude must take effect immediately: drop it from the slice now,
+        # so a stale-view template fallback can no longer render it into a prompt
+        # before the next recompute_slice runs.
+        c.execute(
+            "UPDATE memory_units SET profile_policy = ?, "
+            "in_md_slice = CASE WHEN ? = 'force_exclude' THEN 0 ELSE in_md_slice END, "
+            "updated_at = ? WHERE id = ?",
+            (profile_policy, profile_policy, now, unit_id),
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="user_edit", actor=actor,
+            before=before, after=after,
         )
 
 
@@ -456,7 +638,8 @@ def challenge_units_for_source(
         JOIN memory_unit_evidence ue ON ue.unit_id = u.id
         JOIN memory_ingest_events e ON e.id = ue.event_id
         WHERE e.source_type = ? AND e.source_id = ?
-          AND u.source IN ('reflected','migrated')
+          AND ue.review_pending = 0
+          AND u.source IN ('reflected','migrated','user_authored')
           AND u.status IN ('active','challenged')
         ORDER BY u.id
         """,
@@ -606,6 +789,95 @@ def list_pending_reviews(
     )
 
 
+# --- AI re-link pass (after a user edit) -----------------------------------
+
+def list_pending_relinks() -> list[sqlite3.Row]:
+    """Pending re-link reviews (one per recently user-edited unit), joined with
+    the unit's current content + version for the narrow judge."""
+    return db.query_all(
+        """
+        SELECT q.id AS relink_id, q.unit_id, q.unit_version,
+               u.content, u.updated_at
+        FROM memory_unit_relink_queue q
+        JOIN memory_units u ON u.id = q.unit_id
+        WHERE q.status = 'pending'
+        ORDER BY q.id ASC
+        """
+    )
+
+
+def pending_review_evidence_for_unit(unit_id: str) -> list[sqlite3.Row]:
+    """Candidate links awaiting re-link judgment, with each event's snapshot."""
+    return db.query_all(
+        """
+        SELECT ue.event_id, e.source_type, e.source_id, e.op,
+               e.content_snapshot AS content
+        FROM memory_unit_evidence ue
+        JOIN memory_ingest_events e ON e.id = ue.event_id
+        WHERE ue.unit_id = ? AND ue.review_pending = 1
+        ORDER BY ue.event_id ASC
+        """,
+        (unit_id,),
+    )
+
+
+def apply_relink(
+    relink_id: int,
+    unit_id: str,
+    *,
+    expected_version: float,
+    keep_event_ids: list[int],
+    drop_event_ids: list[int],
+    conn: sqlite3.Connection | None = None,
+) -> bool:
+    """Atomically apply an AI re-link result. Returns False without changes when
+    the result is stale — the queue row is no longer pending, or the unit changed
+    since the judge started (a newer edit) — so a stale judgment can never
+    overwrite newer content. ``keep`` clears the review flag (counts as support
+    again); ``drop`` removes the link."""
+    keep = {int(e) for e in keep_event_ids}
+    drop = {int(e) for e in drop_event_ids}
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        qrow = c.execute(
+            "SELECT status FROM memory_unit_relink_queue WHERE id = ?",
+            (int(relink_id),),
+        ).fetchone()
+        if qrow is None or qrow["status"] != "pending":
+            return False
+        urow = _get_unit_row(c, unit_id)
+        if urow is None or float(urow["updated_at"]) != float(expected_version):
+            # unit changed since the judge started -> discard; the row stays
+            # pending and is re-judged against current content next pass.
+            return False
+        before = _row_to_dict(urow)
+        if keep:
+            placeholders = ",".join("?" for _ in keep)
+            c.execute(
+                f"UPDATE memory_unit_evidence SET review_pending = 0 "
+                f"WHERE unit_id = ? AND review_pending = 1 AND event_id IN ({placeholders})",
+                (unit_id, *sorted(keep)),
+            )
+        if drop:
+            placeholders = ",".join("?" for _ in drop)
+            c.execute(
+                f"DELETE FROM memory_unit_evidence "
+                f"WHERE unit_id = ? AND review_pending = 1 AND event_id IN ({placeholders})",
+                (unit_id, *sorted(drop)),
+            )
+        c.execute(
+            "UPDATE memory_unit_relink_queue SET status = 'resolved', resolved_at = ? "
+            "WHERE id = ?",
+            (now, int(relink_id)),
+        )
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="relink", actor="reconciler",
+            before=before, after=after,
+        )
+        return True
+
+
 def current_effective_evidence_for_unit(
     unit_id: str,
     *,
@@ -617,6 +889,7 @@ def current_effective_evidence_for_unit(
             FROM memory_unit_evidence ue
             JOIN memory_ingest_events linked ON linked.id = ue.event_id
             WHERE ue.unit_id = ?
+              AND ue.review_pending = 0
         )
         SELECT latest.*, 'supports' AS relation
         FROM linked_sources source

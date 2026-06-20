@@ -550,6 +550,9 @@ CREATE TABLE IF NOT EXISTS memory_unit_evidence (
     event_id    INTEGER NOT NULL REFERENCES memory_ingest_events(id) ON DELETE RESTRICT,
     relation    TEXT NOT NULL DEFAULT 'supports'
                   CHECK(relation IN ('supports','contradicts','revises','source')),
+    -- 1 while awaiting AI re-link after a user edit: the link is NOT counted as
+    -- current support and does NOT trigger challenge until the judge keeps/drops it.
+    review_pending INTEGER NOT NULL DEFAULT 0,
     created_at  REAL NOT NULL,
     PRIMARY KEY (unit_id, event_id, relation)
 );
@@ -570,6 +573,23 @@ CREATE INDEX IF NOT EXISTS idx_unit_reconcile_queue_pending
     ON memory_unit_reconcile_queue(status, unit_id, id);
 CREATE INDEX IF NOT EXISTS idx_unit_reconcile_queue_trigger
     ON memory_unit_reconcile_queue(trigger_event_id, status);
+
+-- Dedicated queue for the AI re-link pass after a user edits a unit. Separate
+-- from memory_unit_reconcile_queue because re-link is a different task (narrow
+-- "does this evidence still support the new content" judgment, no trigger event,
+-- no challenge decision). unit_version records unit.updated_at at enqueue time so
+-- a stale judge result from before a newer edit cannot overwrite the new content.
+CREATE TABLE IF NOT EXISTS memory_unit_relink_queue (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    unit_id      TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
+    unit_version REAL NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending'
+                   CHECK(status IN ('pending','resolved')),
+    created_at   REAL NOT NULL,
+    resolved_at  REAL
+);
+CREATE INDEX IF NOT EXISTS idx_unit_relink_queue_pending
+    ON memory_unit_relink_queue(status, unit_id, id);
 
 CREATE TABLE IF NOT EXISTS memory_unit_ops (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

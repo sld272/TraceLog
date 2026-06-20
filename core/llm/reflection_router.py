@@ -631,6 +631,64 @@ def _parse_memory_reconcile_content(content: str | None) -> dict | None:
     return {"ops": ops, "summary": summary.strip() if isinstance(summary, str) else ""}
 
 
+MEMORY_RELINK_PROMPT = """\
+用户刚刚亲手修改了一条关于自己的记忆。你的任务很窄：判断每一条"旧证据"是否仍然支持这条记忆的新内容。
+
+规则：
+- 只判断"是否仍然支持"。不要修改记忆文字、状态或置信度。
+- 仍能支持新内容 → 放进 keep_event_ids。
+- 与新内容已无关、或不再支持 → 放进 drop_event_ids。
+- 给出的每一条证据都必须恰好出现在 keep 或 drop 其中之一。
+
+只输出 JSON，不要任何多余文字：
+{"keep_event_ids": [整数...], "drop_event_ids": [整数...]}
+"""
+
+
+def call_memory_relink(
+    client: LLMClient,
+    model: str,
+    *,
+    content: str,
+    evidence_text: str,
+    trace_context: dict | None = None,
+) -> dict | None:
+    """Narrow judgment after a user edit: which existing evidence still supports
+    the unit's new content."""
+    user_content = (
+        f"## 记忆的新内容\n\n{content}\n\n"
+        "---\n\n"
+        f"## 旧证据（逐条判断是否仍支持上面的新内容）\n\n{evidence_text or '（无）'}"
+    )
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="memory_relink",
+        timeout=45,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": MEMORY_RELINK_PROMPT.replace("{current_datetime}", now_str())},
+            {"role": "user", "content": user_content},
+        ],
+        parser=_parse_memory_relink_content,
+        trace_context=trace_context,
+    )
+
+
+def _parse_memory_relink_content(content: str | None) -> dict | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {
+        "keep_event_ids": _coerce_event_ids(data.get("keep_event_ids")),
+        "drop_event_ids": _coerce_event_ids(data.get("drop_event_ids")),
+    }
+
+
 # 引擎：Memory View Synthesis（core units -> 身份画像 prose，memory v2）
 
 MEMORY_VIEW_SYNTH_PROMPT = """\

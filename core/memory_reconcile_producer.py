@@ -103,6 +103,40 @@ def _format_tombstones(tombstones: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _format_relink_evidence(evidence: list[dict]) -> str:
+    if not evidence:
+        return ""
+    parts = []
+    for item in evidence:
+        snapshot = str(item.get("content") or "").strip() or "（无内容/删除）"
+        parts.append(
+            f"- event_id={item.get('event_id')} | "
+            f"{item.get('source_type')}/{item.get('source_id')} {item.get('op')}\n  {snapshot}"
+        )
+    return "\n".join(parts)
+
+
+def make_relink_judge(client: LLMClient, model: str, *, trace_context: dict | None = None):
+    """Return a narrow judge for the post-edit re-link pass: given a unit's new
+    content and its candidate evidence, decide which links still support it."""
+
+    def judge(*, content: str, evidence: list[dict]) -> dict:
+        result = reflection_router.call_memory_relink(
+            client,
+            model,
+            content=content,
+            evidence_text=_format_relink_evidence(evidence),
+            trace_context=dict(trace_context or {}),
+        )
+        if result is None:
+            raise ReconcileProducerError(
+                "memory_relink LLM call failed or returned unparseable JSON"
+            )
+        return result
+
+    return judge
+
+
 def make_llm_op_producer(client: LLMClient, model: str, *, trace_context: dict | None = None):
     """Return an op_producer closure suitable for reconcile_bucket."""
 

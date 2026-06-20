@@ -103,6 +103,31 @@ class MemoryRechallengeTest(unittest.TestCase):
             "resolved",
         )
 
+    def test_single_evidence_delete_keeps_user_authored_unit(self) -> None:
+        # A user-authored belief stands on the user's own word: deleting the
+        # source it once came from must NOT auto-retract it.
+        create_id = self._post_event("p1", "create", "我在准备考研", 1.0)
+        unit_id = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="user",
+            type="insight", content="用户亲述：在准备考研", source="user_authored",
+            confidence=0.95, tier="core", importance=0.8, evidence_event_ids=[create_id],
+        )
+        self._settle(create_id)
+        self._mutate_and_challenge("p1", "delete", None, 2.0)
+
+        def must_not_call(**kwargs):
+            raise AssertionError("zero-evidence delete should be deterministic")
+
+        summary = recon.reconcile_bucket(
+            "global",
+            "public",
+            op_producer=must_not_call,
+            reflection_type=recon.RECONCILE_GLOBAL,
+        )
+
+        self.assertEqual(summary.by_op, {"retain": 1})
+        self.assertEqual(mus.get_unit(unit_id)["status"], "active")
+
     def test_delete_one_of_two_sources_requires_llm_decision(self) -> None:
         first = self._post_event("p1", "create", "我在准备考研", 1.0)
         second = self._post_event("p2", "create", "我一直在复习", 2.0)
