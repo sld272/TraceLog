@@ -932,7 +932,7 @@ def resolve_review_rows(
 def get_unit_evidence(unit_id: str) -> list[sqlite3.Row]:
     return db.query_all(
         """
-        SELECT e.*, ue.relation
+        SELECT e.*, ue.relation, ue.review_pending
         FROM memory_unit_evidence ue
         JOIN memory_ingest_events e ON e.id = ue.event_id
         WHERE ue.unit_id = ?

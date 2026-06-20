@@ -656,6 +656,7 @@ class EvidenceRef:
     occurred_at: float
     author: str | None
     state: str
+    review_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -699,6 +700,7 @@ def unit_detail(unit_id: str) -> UnitDetail | None:
                 occurred_at=float(e["occurred_at"]),
                 author=e["author"],
                 state=state,
+                review_pending=bool(e["review_pending"]),
             )
         )
     return UnitDetail(

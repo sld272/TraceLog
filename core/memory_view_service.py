@@ -301,6 +301,14 @@ def get_view(owner_scope: str, visibility_scope: str, view_type: str) -> sqlite3
     )
 
 
+def list_views() -> list[sqlite3.Row]:
+    """All materialized portrait views with their fresh/stale status — the top
+    layer of the workbench's portrait -> unit -> evidence drill-down."""
+    return db.query_all(
+        "SELECT * FROM memory_views ORDER BY view_type ASC, owner_scope ASC, visibility_scope ASC"
+    )
+
+
 def mark_stale_if_changed(owner_scope: str, visibility_scope: str, view_type: str) -> bool:
     """Recompute the slice + hash; if it differs from the stored view, mark it
     stale and return True. Pure confirms / non-core churn leave the hash
