@@ -5,6 +5,30 @@
   gap: var(--space-5);
 }
 
+.navLogo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-2) var(--space-2);
+}
+
+.navLogo .logoMark {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #fff;
+  padding: 3px;
+  box-shadow: var(--shadow-sm);
+}
+
+.navLogo .logoWordmark {
+  height: 22px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+
 .section {
   display: flex;
   flex-direction: column;

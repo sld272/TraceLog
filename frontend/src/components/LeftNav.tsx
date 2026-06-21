@@ -27,6 +27,10 @@ export function LeftNav({
 
   return (
     <div className={styles.nav}>
+      <div className={styles.navLogo}>
+        <img className={styles.logoMark} src="/brand/tracelog-icon-transparent-256.png" alt="" aria-hidden="true" />
+        <img className={styles.logoWordmark} src="/brand/shiji-wordmark-transparent.png" alt="拾迹" />
+      </div>
       <section className={styles.section}>
         <NavItem
           icon={<HomeIcon />}

@@ -43,25 +43,16 @@ export function AppShell({ nav, main, panel }: AppShellProps) {
 
   return (
     <div className={styles.shell}>
-      <header className={styles.topbar}>
-        <div className={styles.topbarLeft}>
-          <button
-            type="button"
-            className={styles.menuButton}
-            onClick={() => setMobileNavOpen((open) => !open)}
-            aria-expanded={mobileNavOpen}
-            aria-controls="app-shell-nav"
-            aria-label={mobileNavOpen ? '关闭导航' : '打开导航'}
-          >
-            <MenuIcon />
-          </button>
-          <div className={styles.logo}>
-            <img className={styles.logoMark} src="/brand/tracelog-icon-transparent-256.png" alt="" aria-hidden="true" />
-            <img className={styles.logoWordmark} src="/brand/shiji-wordmark-transparent.png" alt="拾迹" />
-          </div>
-        </div>
-        <div className={styles.topbarHint}>TraceLog</div>
-      </header>
+      <button
+        type="button"
+        className={styles.menuButton}
+        onClick={() => setMobileNavOpen((open) => !open)}
+        aria-expanded={mobileNavOpen}
+        aria-controls="app-shell-nav"
+        aria-label={mobileNavOpen ? '关闭导航' : '打开导航'}
+      >
+        <MenuIcon />
+      </button>
       <div className={styles.body}>
         <nav
           id="app-shell-nav"
