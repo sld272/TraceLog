@@ -150,7 +150,7 @@ function TodayTodosCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader title="待办速览" />
+      <PanelHeader title="待办速览" onMore={onOpenTodos} />
       <div className={styles.itemList}>
         {displayTodos.length > 0 ? (
           displayTodos.map((todo) => {
@@ -193,10 +193,6 @@ function TodayTodosCard({
         ) : (
           <p className={styles.empty}>今天没有待办。记录里提到的事会自动出现在这里。</p>
         )}
-        <button type="button" className={styles.queueAction} onClick={onOpenTodos}>
-          查看更多
-          <ChevronRightIcon width={13} height={13} />
-        </button>
         {error && <p className={styles.inlineError}>{error}</p>}
       </div>
     </section>
@@ -221,7 +217,7 @@ function ReflectionQueueCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader title="待整理" />
+      <PanelHeader title="待整理" onMore={onOpenReflections} />
       <div className={styles.itemList}>
         {hasQueue ? (
           <div className={styles.queueRows}>
@@ -236,10 +232,6 @@ function ReflectionQueueCard({
           <p className={styles.empty}>没有待整理内容</p>
         )}
         <p className={styles.queueHint}>让 AI 阅读新增记录，更新对你的长期理解。</p>
-        <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
-          查看更多
-          <ChevronRightIcon width={13} height={13} />
-        </button>
       </div>
     </section>
   )
@@ -254,10 +246,16 @@ function SearchIcon() {
   )
 }
 
-function PanelHeader({ title }: { title: string }) {
+function PanelHeader({ title, onMore }: { title: string; onMore?: () => void }) {
   return (
     <div className={styles.cardHeader}>
       <h3 className={styles.cardTitle}>{title}</h3>
+      {onMore && (
+        <button className={styles.cardMore} type="button" onClick={onMore}>
+          查看更多
+          <ChevronRightIcon width={13} height={13} />
+        </button>
+      )}
     </div>
   )
 }
