@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import {
   type Attachment,
   type Comment,
@@ -43,6 +43,8 @@ interface TimelineProps {
   modelConfigured?: boolean | null
   onOpenSettings?: () => void
   postMutationSignal?: PostMutationSignal | null
+  /** Search is driven by the right panel input; query is lifted to App. */
+  searchQuery: string
 }
 
 export function Timeline({
@@ -51,6 +53,7 @@ export function Timeline({
   modelConfigured,
   onOpenSettings,
   postMutationSignal,
+  searchQuery,
 }: TimelineProps) {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
@@ -62,7 +65,6 @@ export function Timeline({
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null)
   const [expandingPostIds, setExpandingPostIds] = useState<Record<string, boolean>>({})
   const [expandErrors, setExpandErrors] = useState<Record<string, string | null>>({})
-  const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([])
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [semanticAvailable, setSemanticAvailable] = useState<boolean | null>(null)
@@ -144,6 +146,7 @@ export function Timeline({
   }, [])
 
   useEffect(() => {
+    lastHybridQueryRef.current = null
     searchTimerRef.current = window.setTimeout(() => {
       searchTimerRef.current = null
       void runSearch(searchQuery, 'keyword')
@@ -159,23 +162,6 @@ export function Timeline({
     }
   }, [])
 
-  const clearSearch = () => {
-    searchTokenRef.current += 1
-    lastHybridQueryRef.current = null
-    setSearchQuery('')
-    setSearchResults([])
-    setSearchMode('keyword')
-    setSemanticAvailable(null)
-    setSearchError(null)
-    setSearchLoading(false)
-  }
-
-  const handleSearchChange = (value: string) => {
-    setSearchQuery(value)
-    setSearchMode('keyword')
-    lastHybridQueryRef.current = null
-  }
-
   const runDeepSearch = () => {
     const clean = searchQuery.trim()
     if (!clean) return
@@ -183,18 +169,6 @@ export function Timeline({
     clearSearchTimer()
     lastHybridQueryRef.current = clean
     void runSearch(clean, 'hybrid')
-  }
-
-  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing) return
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      runDeepSearch()
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      clearSearch()
-    }
   }
 
   const handleSubmit = async (content: string, attachments: Attachment[]) => {
@@ -625,22 +599,6 @@ export function Timeline({
   return (
     <div className={styles.timeline}>
       <TimelineHeader />
-      <div className={styles.searchBox}>
-        <SearchIcon />
-        <input
-          value={searchQuery}
-          onChange={(event) => handleSearchChange(event.target.value)}
-          onKeyDown={handleSearchKeyDown}
-          placeholder="搜索记录"
-          aria-label="搜索记录"
-        />
-        {searchLoading && <span className={styles.searchLoading}>搜索中...</span>}
-        {searching && (
-          <button className={styles.searchClear} onClick={clearSearch} aria-label="清空搜索" title="清空搜索">
-            ×
-          </button>
-        )}
-      </div>
       <Composer
         onSubmit={handleSubmit}
         disabled={modelUnavailable}
@@ -947,15 +905,6 @@ function CalendarIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
-    </svg>
-  )
-}
-
-function SearchIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.35-4.35" />
     </svg>
   )
 }

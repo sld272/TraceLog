@@ -40,6 +40,7 @@ export function App() {
   const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
   const [soulReflections, setSoulReflections] = useState<SoulReflectionScope[]>([])
   const [postMutationSignal, setPostMutationSignal] = useState<PostMutationSignal | null>(null)
+  const [homeSearch, setHomeSearch] = useState('')
   const homeScrollTopRef = useRef(0)
   const previousRouteKindRef = useRef(route.kind)
   const showRightPanel = route.kind === 'home'
@@ -237,6 +238,7 @@ export function App() {
             onActivitySettled={refreshHomeContext}
             onTodosChanged={refreshTodos}
             postMutationSignal={postMutationSignal}
+            searchQuery={homeSearch}
           />
         </div>
         {route.kind === 'post' && (
@@ -291,6 +293,8 @@ export function App() {
           todos={todos}
           globalReflection={globalReflection}
           soulReflections={soulReflections}
+          searchQuery={homeSearch}
+          onSearchQueryChange={setHomeSearch}
           onTodoToggle={handleTodoToggle}
           onOpenTodos={openTodos}
           onOpenReflections={openReflections}

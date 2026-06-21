@@ -4,6 +4,54 @@
   gap: var(--space-4);
 }
 
+.panelSearch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px 15px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text-tertiary);
+}
+
+.panelSearch:focus-within {
+  border-color: var(--color-accent-border);
+  box-shadow: 0 0 0 3px var(--color-accent-subtle);
+}
+
+.panelSearch input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+}
+
+.panelSearch input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.panelSearchClear {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  display: grid;
+  place-items: center;
+  color: var(--color-text-tertiary);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.panelSearchClear:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
 .card {
   background: rgba(255, 255, 255, 0.68);
   border: 1px solid var(--color-border);

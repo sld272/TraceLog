@@ -18,6 +18,8 @@ interface RightPanelProps {
   todos: Todo[]
   globalReflection: ReflectionScope | null
   soulReflections: SoulReflectionScope[]
+  searchQuery: string
+  onSearchQueryChange: (value: string) => void
   onTodoToggle: (todo: Todo) => Promise<void> | void
   onOpenTodos: () => void
   onOpenReflections: () => void
@@ -27,12 +29,31 @@ export function RightPanel({
   todos,
   globalReflection,
   soulReflections,
+  searchQuery,
+  onSearchQueryChange,
   onTodoToggle,
   onOpenTodos,
   onOpenReflections,
 }: RightPanelProps) {
   return (
     <div className={styles.panel}>
+      <div className={styles.panelSearch}>
+        <SearchIcon />
+        <input
+          value={searchQuery}
+          onChange={(event) => onSearchQueryChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') onSearchQueryChange('')
+          }}
+          placeholder="搜索动态…"
+          aria-label="搜索动态"
+        />
+        {searchQuery && (
+          <button className={styles.panelSearchClear} onClick={() => onSearchQueryChange('')} aria-label="清空搜索" title="清空搜索">
+            ×
+          </button>
+        )}
+      </div>
       <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} onOpenTodos={onOpenTodos} />
       <ReflectionQueueCard
         globalReflection={globalReflection}
@@ -221,6 +242,15 @@ function ReflectionQueueCard({
         </button>
       </div>
     </section>
+  )
+}
+
+function SearchIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.35-4.35" />
+    </svg>
   )
 }
 
