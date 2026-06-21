@@ -56,8 +56,8 @@ export function AppShell({ nav, main, panel }: AppShellProps) {
             <MenuIcon />
           </button>
           <div className={styles.logo}>
-            <span className={styles.logoMark} aria-hidden="true">T</span>
-            <span className={styles.logoText}>拾迹</span>
+            <img className={styles.logoMark} src="/brand/tracelog-icon-transparent-256.png" alt="" aria-hidden="true" />
+            <img className={styles.logoWordmark} src="/brand/shiji-wordmark-transparent.png" alt="拾迹" />
           </div>
         </div>
         <div className={styles.topbarHint}>TraceLog</div>

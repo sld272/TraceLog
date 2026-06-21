@@ -253,7 +253,7 @@ export function App() {
           />
         )}
         {route.kind === 'todos' && <TodosPage onTodosChanged={handleTodosChanged} />}
-        {route.kind === 'goals' && <GoalsPage onTodosChanged={refreshTodos} />}
+        {route.kind === 'goals' && <GoalsPage />}
         {route.kind === 'memory' && <MemoryWorkbench />}
         {route.kind === 'reflections' && <ReflectionsPage onReflectionSettled={refreshHomeContext} />}
         {route.kind === 'settings' && (

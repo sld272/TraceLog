@@ -11,7 +11,6 @@ import {
 } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Notice } from '@/components/Notice'
-import { SuggestionTray } from '@/components/SuggestionTray'
 import { PlusIcon } from '@/components/icons'
 import { formatAbsoluteTime } from '@/utils/date'
 import styles from './WorkspacePages.module.css'
@@ -24,10 +23,6 @@ interface GoalForm {
   focus: boolean
 }
 
-interface GoalsPageProps {
-  onTodosChanged?: () => void
-}
-
 const EMPTY_FORM: GoalForm = {
   title: '',
   detail: '',
@@ -36,7 +31,7 @@ const EMPTY_FORM: GoalForm = {
   focus: true,
 }
 
-export function GoalsPage({ onTodosChanged }: GoalsPageProps) {
+export function GoalsPage() {
   const [goals, setGoals] = useState<Goal[]>([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -180,13 +175,6 @@ export function GoalsPage({ onTodosChanged }: GoalsPageProps) {
       </header>
 
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
-
-      <SuggestionTray
-        onAccepted={(kind) => {
-          if (kind === 'goal') void refresh()
-          if (kind === 'todo') onTodosChanged?.()
-        }}
-      />
 
       {loading ? (
         <div className={styles.empty}>加载中...</div>
