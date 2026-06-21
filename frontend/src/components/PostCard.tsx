@@ -287,11 +287,11 @@ function CommentPreview({
 
   return (
     <div id={`comment-${comment.id}`} className={styles.commentThread}>
-      <div className={styles.comment} style={{ backgroundColor: colors.tint }}>
+      <div className={styles.comment}>
         <SoulAvatar name={soulName} className={styles.soulBadge} />
         <div className={styles.commentBody}>
           <div className={styles.commentHeader}>
-            <span className={styles.soulName}>{soulName}</span>
+            <span className={styles.soulName} style={{ color: colors.badgeText }}>{soulName}</span>
             <time
               className={styles.commentTime}
               dateTime={formatDateTimeAttribute(comment.created_at)}
