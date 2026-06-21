@@ -75,7 +75,7 @@ export const PostCard = memo(function PostCard({
         <div className={styles.author}>
           <span className={styles.userAvatar}>我</span>
           <div>
-            <span className={styles.userName}>你</span>
+            <span className={styles.userName}>我</span>
             {detailHref ? (
               <a className={styles.timeLink} href={detailHref}>
                 <time className={styles.time} dateTime={formatDateTimeAttribute(post.ts)} title={formatAbsoluteTime(post.ts)}>

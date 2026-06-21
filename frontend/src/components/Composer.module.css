@@ -88,14 +88,17 @@
 }
 
 .submitBtn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  gap: 6px;
+  height: 38px;
+  padding: 0 18px;
   border-radius: var(--radius-full);
   background: var(--color-accent);
   color: var(--color-text-inverse);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   box-shadow: 0 4px 12px rgba(47, 139, 125, 0.15);
   transition: background var(--transition-fast), transform var(--transition-fast), opacity var(--transition-fast);
 }

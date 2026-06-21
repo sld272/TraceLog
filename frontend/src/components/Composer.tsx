@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { type Attachment } from '@/api/client'
 import { ImageUploader } from './ImageUploader'
-import { LoadingDots, SendIcon } from '@/components/icons'
+import { LoadingDots } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import styles from './Composer.module.css'
 
@@ -100,11 +100,7 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
               disabled={(!content.trim() && attachments.length === 0) || submitting || disabled}
               aria-label="发布"
             >
-              {submitting ? (
-                <LoadingDots />
-              ) : (
-                <SendIcon />
-              )}
+              {submitting ? <LoadingDots /> : '发布'}
             </button>
             <span className="kbdTipBubble" role="tooltip">
               发送 <span className="kbdTipKey">Enter</span>
