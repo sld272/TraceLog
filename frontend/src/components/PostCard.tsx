@@ -122,7 +122,7 @@ export const PostCard = memo(function PostCard({
         <>
           <button className={styles.expandBtn} onClick={onExpand} disabled={expandLoading}>
             {expandLoading ? <LoadingDots /> : <ChatIcon />}
-            <span>{expandLoading ? '加载回应中...' : `查看 ${post.comment_count} 条回应`}</span>
+            <span>{expandLoading ? '加载回应中...' : `评论 ${post.comment_count}`}</span>
           </button>
           {expandError && (
             <p className={styles.expandError}>
