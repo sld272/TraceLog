@@ -21,7 +21,7 @@ import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
-type SettingsTab = 'model' | 'souls' | 'memory' | 'data'
+type SettingsTab = 'model' | 'souls' | 'memory' | 'data' | 'about'
 type CreateSoulMode = 'ai' | 'markdown'
 type WebSearchProvider = ModelSettings['web_search']['provider']
 
@@ -120,6 +120,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       { id: 'souls' as const, label: '人格' },
       { id: 'memory' as const, label: '记忆' },
       { id: 'data' as const, label: '数据' },
+      { id: 'about' as const, label: '关于' },
     ],
     [],
   )
@@ -360,8 +361,41 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
               onVectorAction={handleVectorAction}
             />
           )}
+          {activeTab === 'about' && <AboutSettingsPanel />}
         </div>
       )}
+    </div>
+  )
+}
+
+function AboutSettingsPanel() {
+  return (
+    <div className={styles.aboutPage}>
+      <img className={styles.apIcon} src="/brand/tracelog-icon-transparent-512.png" alt="拾迹" />
+      <div className={styles.apWords}>
+        <img className={styles.apShiji} src="/brand/shiji-wordmark-transparent.png" alt="拾迹" />
+        <img className={styles.apWord} src="/brand/tracelog-wordmark-transparent.png" alt="TraceLog" />
+      </div>
+      <div className={styles.apCn}>向内运行的 AI 社交媒体，也是一台陪你成长的记忆引擎。</div>
+      <p className={styles.apLead}>
+        在这里，你和 AI 好友的每段对话都不会白费——它们会沉淀成记忆，看见你的成长轨迹。
+      </p>
+      <p className={styles.apDesc}>
+        拾迹把「社交媒体的表达」和「AI 的长期记忆」缝在一起。你发帖、和不同性格的 AI 好友聊天，系统会在背后整理、提炼出关于你的画像与记忆条目，并保留每一条记忆的证据来源。记忆不是黑盒——画像、记忆条目、证据追溯、编辑与删除，都在记忆工作台里一目了然。
+      </p>
+      <div className={styles.aboutFeats}>
+        <span className={styles.ft}>成长记忆引擎</span>
+        <span className={styles.ft}>多重 AI 人格</span>
+        <span className={styles.ft}>证据可追溯</span>
+        <span className={styles.ft}>目标与待办</span>
+        <span className={styles.ft}>本地优先</span>
+      </div>
+      <div className={styles.aboutMeta}>
+        <span>版本 v2.0</span>
+        <a href="https://github.com/sld272/TraceLog" target="_blank" rel="noreferrer">
+          GitHub 仓库
+        </a>
+      </div>
     </div>
   )
 }
