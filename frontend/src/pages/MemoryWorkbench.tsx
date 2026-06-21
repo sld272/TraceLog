@@ -154,6 +154,11 @@ export function MemoryWorkbench() {
 
   return (
     <div className={styles.workbench}>
+      <header className={styles.pageHeader}>
+        <h1>记忆</h1>
+        <p>拾迹记住的关于你的一切都在这里。每条记忆都能看到它从哪来，也可以随时修改或删除。</p>
+      </header>
+
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
 
       <div className={styles.layout}>

@@ -2,6 +2,25 @@
   width: 100%;
 }
 
+.pageHeader {
+  margin-bottom: var(--space-4);
+  padding: 0 var(--space-1);
+}
+
+.pageHeader h1 {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  color: var(--color-text-primary);
+}
+
+.pageHeader p {
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--color-text-tertiary);
+  line-height: var(--leading-normal);
+}
+
 .layout {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);

@@ -15,13 +15,12 @@ import {
   saveModelSettings,
   updateSoul,
 } from '@/api/client'
-import { MemoryWorkbench } from './MemoryWorkbench'
 import { Notice } from '@/components/Notice'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
-type SettingsTab = 'model' | 'souls' | 'memory' | 'data' | 'about'
+type SettingsTab = 'model' | 'souls' | 'data' | 'about'
 type CreateSoulMode = 'ai' | 'markdown'
 type WebSearchProvider = ModelSettings['web_search']['provider']
 
@@ -118,7 +117,6 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
     () => [
       { id: 'model' as const, label: '模型' },
       { id: 'souls' as const, label: '人格' },
-      { id: 'memory' as const, label: '记忆' },
       { id: 'data' as const, label: '数据' },
       { id: 'about' as const, label: '关于' },
     ],
@@ -350,7 +348,6 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
               onMoveSoul={handleMoveSoul}
             />
           )}
-          {activeTab === 'memory' && <MemoryWorkbench />}
           {activeTab === 'data' && (
             <DataSettingsPanel
               status={workspaceStatus}

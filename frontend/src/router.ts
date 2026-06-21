@@ -2,6 +2,7 @@ export type Route =
   | { kind: 'home' }
   | { kind: 'todos' }
   | { kind: 'goals' }
+  | { kind: 'memory' }
   | { kind: 'reflections' }
   | { kind: 'settings' }
   | { kind: 'chat'; soulName: string }
@@ -13,6 +14,7 @@ export function parseRoute(hash: string): Route {
   if (!path || path === 'home') return { kind: 'home' }
   if (path === 'todos') return { kind: 'todos' }
   if (path === 'goals') return { kind: 'goals' }
+  if (path === 'memory') return { kind: 'memory' }
   if (path === 'reflections') return { kind: 'reflections' }
   if (path === 'settings') return { kind: 'settings' }
   if (path.startsWith('chat/')) {
@@ -36,6 +38,8 @@ export function formatRoute(route: Route): string {
       return '#/todos'
     case 'goals':
       return '#/goals'
+    case 'memory':
+      return '#/memory'
     case 'reflections':
       return '#/reflections'
     case 'settings':

@@ -35,23 +35,23 @@ export function LeftNav({
           onClick={() => navigate('home')}
         />
         <NavItem
-          icon={<TodoIcon />}
-          label="待办"
-          active={activePage === 'todos'}
-          onClick={() => navigate('todos')}
-        />
-        <NavItem
           icon={<GoalIcon />}
           label="目标"
           active={activePage === 'goals'}
           onClick={() => navigate('goals')}
         />
         <NavItem
-          icon={<ReflectIcon />}
-          label="整理"
+          icon={<TodoIcon />}
+          label="待办"
+          active={activePage === 'todos'}
+          onClick={() => navigate('todos')}
+        />
+        <NavItem
+          icon={<MemoryIcon />}
+          label="记忆"
           badge={reflectionQueueCount > 0 ? reflectionQueueCount : undefined}
-          active={activePage === 'reflections'}
-          onClick={() => navigate('reflections')}
+          active={activePage === 'memory' || activePage === 'reflections'}
+          onClick={() => navigate('memory')}
         />
       </section>
 
@@ -144,12 +144,10 @@ function GoalIcon() {
   )
 }
 
-function ReflectIcon() {
+function MemoryIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <path d="M12 16v-4" />
-      <path d="M12 8h.01" />
+      <path d="M12 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7.9V18a3 3 0 0 0 6 0M12 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7.9V18a3 3 0 0 1-6 0M12 3v15" />
     </svg>
   )
 }
