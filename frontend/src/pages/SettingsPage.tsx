@@ -15,7 +15,7 @@ import {
   saveModelSettings,
   updateSoul,
 } from '@/api/client'
-import { MemorySettingsPanel } from './MemorySettingsPanel'
+import { MemoryWorkbench } from './MemoryWorkbench'
 import { Notice } from '@/components/Notice'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
@@ -350,9 +350,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
               onMoveSoul={handleMoveSoul}
             />
           )}
-          {activeTab === 'memory' && (
-            <MemorySettingsPanel souls={souls} workspaceStatus={workspaceStatus} />
-          )}
+          {activeTab === 'memory' && <MemoryWorkbench />}
           {activeTab === 'data' && (
             <DataSettingsPanel
               status={workspaceStatus}
