@@ -408,15 +408,21 @@ function groupGoals(goals: Goal[]) {
     },
     {
       key: 'paused',
-      title: '暂停',
+      title: '已暂停',
       description: '暂时不推进，但保留目标',
       goals: goals.filter((goal) => goal.status === 'paused'),
     },
     {
-      key: 'archive',
-      title: '归档',
-      description: '已完成或已放弃',
-      goals: goals.filter((goal) => goal.status === 'done' || goal.status === 'abandoned'),
+      key: 'done',
+      title: '已完成',
+      description: '达成的目标',
+      goals: goals.filter((goal) => goal.status === 'done'),
+    },
+    {
+      key: 'abandoned',
+      title: '已放弃',
+      description: '不再追求的目标',
+      goals: goals.filter((goal) => goal.status === 'abandoned'),
     },
   ]
 }
