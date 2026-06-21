@@ -976,3 +976,148 @@ export function reconcileVectorIndex() {
     body: JSON.stringify({}),
   })
 }
+
+/* ===== Memory workbench (v2 unit/view control surface) ===== */
+export type MemoryProfilePolicy = 'auto' | 'force_include' | 'force_exclude'
+export type MemoryPromptPolicy = 'allow' | 'no_prompt'
+export type MemoryTier = 'core' | 'contextual' | 'episodic'
+export type MemoryViewType = 'user_md' | 'soul_relationship_memory'
+export type MemoryViewStatus = 'fresh' | 'stale'
+
+/** A row from GET /memory/units (memory_units table). */
+export interface MemoryUnit {
+  id: string
+  owner_scope: string
+  visibility_scope: string
+  type: string
+  content: string
+  confidence: number
+  importance: number
+  tier: MemoryTier
+  status: string
+  source: string
+  source_channel: string
+  prompt_policy: MemoryPromptPolicy
+  profile_policy: MemoryProfilePolicy
+  in_md_slice: number
+}
+
+/** One piece of raw evidence backing a unit. */
+export interface MemoryEvidenceRef {
+  event_id: number
+  source_channel: string
+  source_type: string
+  source_id: string
+  content: string
+  occurred_at: number
+  author: string | null
+  state: string
+  review_pending: boolean
+}
+
+/** GET /memory/units/{id} — unit plus its evidence trail. */
+export interface MemoryUnitDetail {
+  unit_id: string
+  type: string
+  content: string
+  confidence: number
+  importance: number
+  tier: MemoryTier
+  status: string
+  owner_scope: string
+  visibility_scope: string
+  in_md_slice: boolean
+  prompt_policy: MemoryPromptPolicy
+  profile_policy: MemoryProfilePolicy
+  evidence: MemoryEvidenceRef[]
+}
+
+/** A materialized portrait view (top layer of the workbench drill-down). */
+export interface MemoryView {
+  id: string
+  owner_scope: string
+  visibility_scope: string
+  view_type: MemoryViewType
+  content_md: string
+  status: MemoryViewStatus
+  generated_at?: number | null
+  updated_at: number
+}
+
+export interface ListMemoryUnitsParams {
+  owner_scope?: string
+  visibility_scope?: string
+  /** 'active' (default) or 'all'. */
+  status?: string
+  type?: string
+  limit?: number
+}
+
+export async function listMemoryUnits(params: ListMemoryUnitsParams = {}): Promise<MemoryUnit[]> {
+  const query = new URLSearchParams()
+  if (params.owner_scope) query.set('owner_scope', params.owner_scope)
+  if (params.visibility_scope) query.set('visibility_scope', params.visibility_scope)
+  if (params.status) query.set('status', params.status)
+  if (params.type) query.set('type', params.type)
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  const data = await request<{ units: MemoryUnit[] }>(`/memory/units${suffix}`)
+  return data.units
+}
+
+export function getMemoryUnit(unitId: string): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}`)
+}
+
+export interface UpdateMemoryUnitInput {
+  content: string
+  confidence?: number
+  type?: string
+  tier?: MemoryTier
+  importance?: number
+}
+
+export function updateMemoryUnit(unitId: string, input: UpdateMemoryUnitInput): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+/** Delete a belief as wrong ('false') or outdated ('outdated'). To merely
+ *  stop mentioning a still-true memory, use setMemoryPromptPolicy('no_prompt'). */
+export function retractMemoryUnit(unitId: string, reason: 'false' | 'outdated' = 'false'): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/memory/units/${encodeURIComponent(unitId)}?reason=${reason}`, {
+    method: 'DELETE',
+  })
+}
+
+export function setMemoryPromptPolicy(unitId: string, promptPolicy: MemoryPromptPolicy): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}/prompt-policy`, {
+    method: 'POST',
+    body: JSON.stringify({ prompt_policy: promptPolicy }),
+  })
+}
+
+export function setMemoryProfilePolicy(unitId: string, profilePolicy: MemoryProfilePolicy): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}/profile-policy`, {
+    method: 'POST',
+    body: JSON.stringify({ profile_policy: profilePolicy }),
+  })
+}
+
+export async function listMemoryViews(): Promise<MemoryView[]> {
+  const data = await request<{ views: MemoryView[] }>('/memory/views')
+  return data.views
+}
+
+export function resynthesizeMemoryView(input: {
+  owner_scope: string
+  visibility_scope: string
+  view_type: MemoryViewType
+}): Promise<MemoryView> {
+  return request<MemoryView>('/memory/views/resynthesize', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
