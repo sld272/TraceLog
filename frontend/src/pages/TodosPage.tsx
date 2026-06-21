@@ -52,9 +52,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
   const groups = useMemo(() => groupTodos(todos), [todos])
   const selectedTodo = selectedTodoId ? todos.find((todo) => todo.id === selectedTodoId) ?? null : null
   const activeCount = todos.filter((todo) => !isTodoDone(todo)).length
-  const todayCount = groups.find((group) => group.key === 'today')?.todos.length ?? 0
-  const undatedCount = groups.find((group) => group.key === 'undated')?.todos.length ?? 0
-  const completedCount = groups.find((group) => group.key === 'completed')?.todos.length ?? 0
   const drawerOpen = drawerMode !== null
 
   const fetchTodos = useCallback(async () => {
@@ -184,14 +181,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
       ) : (
         <div className={`${styles.todoWorkspace} ${drawerOpen ? styles.drawerOpen : ''}`}>
           <section className={styles.todoListPanel}>
-            <div className={styles.todoSummaryBar}>
-              <div>
-                <h2>{activeCount} 个待完成</h2>
-                <p>今天 {todayCount} · 无日期 {undatedCount}</p>
-              </div>
-              <span className={styles.meta}>{completedCount} 个已完成</span>
-            </div>
-
             <div className={styles.todoGroups}>
               {groups.map((group) => (
                 <TodoGroupSection
@@ -464,24 +453,16 @@ function TodoDrawer({
 }
 
 function groupEmptyText(key: string): string {
-  if (key === 'today') return '今天没有待办'
-  if (key === 'upcoming') return '之后暂无安排'
-  if (key === 'undated') return '没有未排期的待办'
+  if (key === 'open') return '没有未完成的待办'
   return '还没有已完成的待办'
 }
 
 function groupTodos(todos: Todo[]): TodoGroup[] {
-  const todayKey = getTodayKey()
-  const active = todos.filter((todo) => !isTodoDone(todo))
-  const today = sortTodos(active.filter((todo) => todo.date === todayKey))
-  const upcoming = sortTodos(active.filter((todo) => todo.date && todo.date !== todayKey), true)
-  const undated = sortTodos(active.filter((todo) => !todo.date))
+  const active = sortTodos(todos.filter((todo) => !isTodoDone(todo)))
   const completed = sortTodos(todos.filter(isTodoDone), true)
 
   return [
-    { key: 'today', title: '今天', todos: today },
-    { key: 'upcoming', title: '接下来', todos: upcoming },
-    { key: 'undated', title: '无日期', todos: undated },
+    { key: 'open', title: '未完成', todos: active },
     { key: 'completed', title: '已完成', countLabel: `${completed.length} 个`, todos: completed },
   ]
 }
