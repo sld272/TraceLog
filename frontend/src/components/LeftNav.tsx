@@ -61,15 +61,23 @@ export function LeftNav({
 
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>私聊</h3>
-        {souls.map((soul) => (
-          <NavItem
-            key={soul.name}
-            icon={<SoulAvatar name={soul.name} className={styles.soulIcon} />}
-            label={soul.name}
-            active={activePage === `chat:${soul.name}`}
-            onClick={() => navigate(`chat:${soul.name}`)}
-          />
-        ))}
+        {souls.map((soul) => {
+          const active = activePage === `chat:${soul.name}`
+          return (
+            <button
+              key={soul.name}
+              className={`${styles.dmItem} ${active ? styles.dmItemActive : ''}`}
+              onClick={() => navigate(`chat:${soul.name}`)}
+              aria-current={active ? 'page' : undefined}
+            >
+              <SoulAvatar name={soul.name} className={styles.dmAvatar} />
+              <span className={styles.dmBody}>
+                <span className={styles.dmName}>{soul.name}</span>
+                {soul.description && <span className={styles.dmPreview}>{soul.description}</span>}
+              </span>
+            </button>
+          )
+        })}
         {souls.length === 0 && soulsLoadState === 'loading' && (
           <p className={styles.emptySoul}>加载中...</p>
         )}

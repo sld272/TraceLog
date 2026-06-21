@@ -121,6 +121,64 @@
   font-size: var(--text-xs);
 }
 
+/* 私聊 entries — avatar + name + one-line persona preview */
+.dmItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  transition: background var(--transition-fast);
+}
+
+.dmItem:hover {
+  background: var(--color-bg-hover);
+}
+
+.dmItemActive {
+  background: var(--color-accent-subtle);
+}
+
+.dmAvatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+}
+
+.dmBody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dmName {
+  font-size: 13.5px;
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.dmItemActive .dmName {
+  color: var(--color-accent);
+}
+
+.dmPreview {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .bottomSection {
   margin-top: auto;
   padding-top: var(--space-4);
