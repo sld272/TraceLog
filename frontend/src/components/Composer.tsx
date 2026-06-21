@@ -59,7 +59,7 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
         value={content}
         onChange={(e) => setContent(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="写下你的想法..."
+        placeholder="此刻发生了什么？"
         rows={2}
         disabled={submitting || disabled}
         aria-label="发帖内容"

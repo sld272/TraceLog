@@ -6,6 +6,7 @@ import {
 } from '@/api/client'
 import { isTodoDone, getTodayKey } from '@/utils/todo'
 import { formatDateLabel, formatDateScope, formatUnixScope } from '@/utils/date'
+import { ChevronRightIcon } from '@/components/icons'
 import styles from './RightPanel.module.css'
 
 interface PendingCompletedTodo {
@@ -172,7 +173,8 @@ function TodayTodosCard({
           <p className={styles.empty}>今天没有待办。记录里提到的事会自动出现在这里。</p>
         )}
         <button type="button" className={styles.queueAction} onClick={onOpenTodos}>
-          查看
+          查看更多
+          <ChevronRightIcon width={13} height={13} />
         </button>
         {error && <p className={styles.inlineError}>{error}</p>}
       </div>
@@ -214,7 +216,8 @@ function ReflectionQueueCard({
         )}
         <p className={styles.queueHint}>让 AI 阅读新增记录，更新对你的长期理解。</p>
         <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
-          去整理
+          查看更多
+          <ChevronRightIcon width={13} height={13} />
         </button>
       </div>
     </section>

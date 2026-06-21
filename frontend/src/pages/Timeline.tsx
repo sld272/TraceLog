@@ -924,13 +924,30 @@ function searchSummaryText(
 }
 
 function TimelineHeader() {
+  const now = new Date()
+  const hour = now.getHours()
+  const greeting =
+    hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
+  const today = now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })
   return (
     <header className={styles.header}>
       <div>
-        <h1>首页</h1>
-        <p>记录、回应、整理都流回这里</p>
+        <h1>{greeting}</h1>
+        <p>记录日常、想法与情绪，和拾迹一起回看自己。</p>
+      </div>
+      <div className={styles.headerDate}>
+        <CalendarIcon />
+        {today}
       </div>
     </header>
+  )
+}
+
+function CalendarIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
+    </svg>
   )
 }
 
