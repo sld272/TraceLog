@@ -350,7 +350,16 @@ function CommentPreview({
       )}
 
       <div className={styles.replyBox}>
-        <div className={styles.replyInputGroup}>
+        {attachments.length > 0 && (
+          <ImageUploader
+            attachments={attachments}
+            compact
+            disabled={replyInputDisabled}
+            onChange={setAttachments}
+            showControls={false}
+          />
+        )}
+        <div className={styles.replyRow}>
           <textarea
             ref={replyInputRef}
             className={styles.replyInput}
@@ -367,37 +376,21 @@ function CommentPreview({
             compact
             disabled={replyInputDisabled}
             onChange={setAttachments}
-            showControls={false}
+            showPreview={false}
           />
-        </div>
-        <div className={styles.replyFooter}>
-          {(reply.length > 0 || attachments.length > 0) && (
-            <span className={styles.replyHint}>
-              {reply.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
+          <span className={`${styles.replyButtonWrap} kbdTip`}>
+            <button
+              className={styles.replyButton}
+              onClick={handleSubmit}
+              disabled={(!trimmed && attachments.length === 0) || replySubmitDisabled}
+              aria-label={`发送给 ${soulName}`}
+            >
+              {replyBusy ? <LoadingDots /> : <SendIcon width={14} height={14} />}
+            </button>
+            <span className="kbdTipBubble" role="tooltip">
+              发送 <span className="kbdTipKey">Enter</span>
             </span>
-          )}
-          <div className={styles.replyActions}>
-            <ImageUploader
-              attachments={attachments}
-              compact
-              disabled={replyInputDisabled}
-              onChange={setAttachments}
-              showPreview={false}
-            />
-            <span className={`${styles.replyButtonWrap} kbdTip`}>
-              <button
-                className={styles.replyButton}
-                onClick={handleSubmit}
-                disabled={(!trimmed && attachments.length === 0) || replySubmitDisabled}
-                aria-label={`发送给 ${soulName}`}
-              >
-                {replyBusy ? <LoadingDots /> : <SendIcon width={14} height={14} />}
-              </button>
-              <span className="kbdTipBubble" role="tooltip">
-                发送 <span className="kbdTipKey">Enter</span>
-              </span>
-            </span>
-          </div>
+          </span>
         </div>
       </div>
       {conversation?.error && (
