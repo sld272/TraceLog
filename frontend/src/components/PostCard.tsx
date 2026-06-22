@@ -68,7 +68,8 @@ export const PostCard = memo(function PostCard({
   onRetryFailedJobs,
 }: PostCardProps) {
   const timeAgo = formatSmartTime(post.ts)
-  const [showComments, setShowComments] = useState(false)
+  // detail page opens with comments expanded; the feed stays collapsed
+  const [showComments, setShowComments] = useState(variant === 'detail')
   const toggleComments = () => {
     const next = !showComments
     setShowComments(next)
