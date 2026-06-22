@@ -37,6 +37,19 @@ const UNIT_FILTERS: { value: UnitFilter; label: string }[] = [
   { value: 'all', label: '全部' },
 ]
 
+const RETRACTED_STATUSES = new Set(['retracted_by_model', 'retracted_by_user'])
+const PENDING_STATUSES = new Set(['challenged', 'pending'])
+
+/** Retracted units are kept only as reconciler tombstones, never shown. */
+function isRetractedStatus(status: string): boolean {
+  return RETRACTED_STATUSES.has(status)
+}
+
+/** Challenged/pending units still await a confirm-or-drop decision. */
+function isPendingStatus(status: string): boolean {
+  return PENDING_STATUSES.has(status)
+}
+
 /** Wrap 「…」 spans in an accent highlight, matching the prototype portrait prose. */
 function highlightQuotes(text: string): ReactNode[] {
   const parts = text.split(/(「[^」]*」)/g)
@@ -158,9 +171,12 @@ export function MemoryWorkbench() {
   )
 
   const filteredUnits = useMemo(() => {
-    if (filter === 'all') return units
-    if (filter === 'active') return units.filter((unit) => unit.status === 'active')
-    return units.filter((unit) => unit.status !== 'active')
+    // retracted units live on only as anti-duplication tombstones for the
+    // reconciler; they are never surfaced in the workbench
+    const visible = units.filter((unit) => !isRetractedStatus(unit.status))
+    if (filter === 'active') return visible.filter((unit) => unit.status === 'active')
+    if (filter === 'pending') return visible.filter((unit) => isPendingStatus(unit.status))
+    return visible
   }, [units, filter])
 
   const fetchOverview = useCallback(async () => {
@@ -598,6 +614,7 @@ function UnitCard({
       <div className={styles.unitMeta}>
         <span className={styles.chip}>{typeLabel(unit.type)}</span>
         <span className={styles.chipGhost}>{unit.source === 'user_authored' ? '用户编辑' : 'AI 整理'}</span>
+        {isPendingStatus(unit.status) && <span className={styles.chipPending}>待确认</span>}
       </div>
       <div className={styles.bars}>
         <Bar label="置信度" value={unit.confidence} />
