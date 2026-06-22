@@ -333,17 +333,6 @@ function CommentPreview({
               <ImageGrid attachments={comment.attachments ?? []} />
               <InlineSuggestions suggestions={parseMessageSuggestions(comment.metadata)} />
               <div className={styles.commentFooter}>
-                {onReply && (
-                  <button
-                    type="button"
-                    className={`${styles.quietAction} ${styles.quietPrimary} ${replyOpen ? styles.quietOn : ''}`}
-                    onClick={() => setReplyOpen((open) => !open)}
-                    disabled={replyInputDisabled}
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5M4 12h11a4 4 0 0 1 4 4v1" /></svg>
-                    回复
-                  </button>
-                )}
                 <EvidencePanel
                   metadata={comment.metadata}
                   channel="public_post"
@@ -390,7 +379,18 @@ function CommentPreview({
         </div>
       )}
 
-      {onReply && replyOpen && (
+      {onReply && (
+      <div className={styles.replyArea}>
+        <button
+          type="button"
+          className={`${styles.quietAction} ${styles.quietPrimary} ${styles.replyTrigger} ${replyOpen ? styles.quietOn : ''}`}
+          onClick={() => setReplyOpen((open) => !open)}
+          disabled={replyInputDisabled}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5M4 12h11a4 4 0 0 1 4 4v1" /></svg>
+          回复
+        </button>
+        {replyOpen && (
         <div className={styles.replyBox}>
           {attachments.length > 0 && (
             <ImageUploader
@@ -435,6 +435,8 @@ function CommentPreview({
           </span>
           </div>
         </div>
+        )}
+      </div>
       )}
       {conversation?.error && (
         <ReplyFailureInline

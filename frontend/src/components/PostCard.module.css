@@ -436,16 +436,18 @@
   height: 20px;
 }
 
-/* quiet, borderless comment actions (回复 / 引用 / 重跑) on one row */
+/* quiet, borderless comment actions (引用 / 重跑) on one row */
 .commentFooter {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-4);
+  margin-top: var(--space-2);
 }
 
-.commentFooter > * {
-  margin-top: var(--space-2);
+/* neutralize EvidencePanel's own top margin so it lines up with the buttons */
+.commentFooter > details {
+  margin-top: 0;
 }
 
 .quietAction {
@@ -456,6 +458,7 @@
   color: var(--color-text-tertiary);
   font-size: 12.5px;
   font-weight: var(--weight-medium);
+  line-height: 20px;
   transition: color var(--transition-fast), opacity var(--transition-fast);
 }
 
@@ -498,6 +501,15 @@
 .threadRow:focus-within .actHover,
 .actHover:focus-visible {
   opacity: 1;
+}
+
+/* reply trigger + box live at the bottom of the whole thread */
+.replyArea {
+  margin-top: var(--space-2);
+}
+
+.replyTrigger {
+  margin-left: 42px;
 }
 
 .replyBox {
