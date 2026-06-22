@@ -75,10 +75,10 @@
   --shadow-md: 0 10px 30px rgba(39, 55, 50, 0.07);
   --shadow-lg: 0 18px 54px rgba(39, 55, 50, 0.12);
 
-  /* Layout */
-  --nav-width: 236px;
-  --panel-width: 296px;
-  --content-max-width: 760px;
+  /* Layout — sidebars scale with viewport width, capped on very wide screens */
+  --nav-width: clamp(236px, 16vw, 340px);
+  --panel-width: clamp(296px, 20vw, 430px);
+  --content-max-width: clamp(760px, 46vw, 980px);
   --topbar-height: 58px;
 
   /* Transitions */
