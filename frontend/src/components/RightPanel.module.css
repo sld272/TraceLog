@@ -147,16 +147,14 @@
   min-width: 0;
 }
 
-.todoBody p,
-.queueRow p {
+.todoBody p {
   color: var(--color-text-primary);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
   word-break: break-word;
 }
 
-.todoBody span,
-.queueRow span {
+.todoBody span {
   display: block;
   margin-top: var(--space-1);
   color: var(--color-text-tertiary);

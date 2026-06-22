@@ -693,34 +693,12 @@ export function reorderSouls(order: string[]) {
 }
 
 /* Profile */
-export function getProfile() {
-  return request<{ content: string }>('/profile')
-}
-
-export function updateProfile(content: string) {
-  return request<{ ok: boolean; content: string }>('/profile', {
-    method: 'PUT',
-    body: JSON.stringify({ content }),
-  })
-}
-
 export function listProfileRevisions(limit = 10) {
   return request<MemoryRevisionSummary[]>(`/profile/revisions?limit=${limit}`)
 }
 
 export function getProfileRevision(revisionId: number) {
   return request<MemoryRevisionDetail>(`/profile/revisions/${revisionId}`)
-}
-
-export function getSoulMemory(name: string) {
-  return request<{ soul_name: string; content: string }>(`/souls/${encodeURIComponent(name)}/memory`)
-}
-
-export function updateSoulMemory(name: string, content: string) {
-  return request<{ soul_name: string; content: string }>(`/souls/${encodeURIComponent(name)}/memory`, {
-    method: 'PUT',
-    body: JSON.stringify({ content }),
-  })
 }
 
 export function listSoulMemoryRevisions(name: string, limit = 5) {
@@ -799,11 +777,6 @@ export function deleteGoal(goalId: string) {
 }
 
 /* Suggestions */
-export function listSuggestions(kind?: Suggestion['kind']) {
-  const suffix = kind ? `?kind=${kind}` : ''
-  return request<Suggestion[]>(`/suggestions${suffix}`)
-}
-
 export function acceptSuggestion(suggestionId: string) {
   return request<{ suggestion: Suggestion; created: Goal | Todo }>(
     `/suggestions/${suggestionId}/accept`,

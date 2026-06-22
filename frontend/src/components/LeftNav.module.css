@@ -102,19 +102,6 @@
   font-weight: var(--weight-semibold);
 }
 
-.soulIcon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-full);
-  border: 2px solid rgba(255, 255, 255, 0.8);
-  font-size: 12px;
-  font-weight: var(--weight-semibold);
-  flex-shrink: 0;
-}
-
 .emptySoul {
   padding: var(--space-2) var(--space-3);
   color: var(--color-text-tertiary);
