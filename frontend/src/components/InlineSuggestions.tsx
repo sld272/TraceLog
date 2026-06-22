@@ -4,6 +4,7 @@ import {
   acceptSuggestion,
   dismissSuggestion,
 } from '@/api/client'
+import { CheckIcon, StarIcon } from '@/components/icons'
 import styles from './InlineSuggestions.module.css'
 
 interface InlineSuggestionsProps {
@@ -41,32 +42,39 @@ export function InlineSuggestions({ suggestions }: InlineSuggestionsProps) {
   }
 
   return (
-    <div className={styles.panel}>
-      {pending.map((suggestion) => (
-        <div key={suggestion.id} className={styles.item}>
-          <span className={styles.label}>{suggestion.kind === 'goal' ? '目标建议' : '待办建议'}</span>
-          <p className={styles.title}>{suggestionTitle(suggestion)}</p>
-          <p className={styles.question}>
-            {suggestionQuestion(suggestion)}
-          </p>
-          <div className={styles.actions}>
-            <button
-              className={styles.accept}
-              disabled={busyId === suggestion.id}
-              onClick={() => void decide(suggestion, 'accept')}
-            >
-              采纳
-            </button>
-            <button
-              className={styles.dismiss}
-              disabled={busyId === suggestion.id}
-              onClick={() => void decide(suggestion, 'dismiss')}
-            >
-              忽略
-            </button>
+    <div className={styles.stack}>
+      {pending.map((suggestion) => {
+        const busy = busyId === suggestion.id
+        return (
+          <div key={suggestion.id} className={styles.card}>
+            <span className={styles.icon} aria-hidden>
+              {suggestion.kind === 'goal'
+                ? <StarIcon width={15} height={15} />
+                : <CheckIcon width={15} height={15} />}
+            </span>
+            <div className={styles.body}>
+              <span className={styles.kicker}>{suggestionQuestion(suggestion)}</span>
+              <p className={styles.title}>{suggestionTitle(suggestion)}</p>
+            </div>
+            <div className={styles.actions}>
+              <button
+                className={styles.accept}
+                disabled={busy}
+                onClick={() => void decide(suggestion, 'accept')}
+              >
+                采纳
+              </button>
+              <button
+                className={styles.dismiss}
+                disabled={busy}
+                onClick={() => void decide(suggestion, 'dismiss')}
+              >
+                忽略
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
       {error && <p className={styles.error}>{error}</p>}
     </div>
   )
@@ -78,8 +86,8 @@ function suggestionTitle(suggestion: Suggestion): string {
 }
 
 function suggestionQuestion(suggestion: Suggestion): string {
-  if (suggestion.kind === 'goal') return '要正式记进目标吗？'
-  if (suggestion.payload.action === 'update') return '要更新这条待办吗？'
-  if (suggestion.payload.action === 'delete') return '要删除这条待办吗？'
-  return '要记进待办吗？'
+  if (suggestion.kind === 'goal') return '记进目标？'
+  if (suggestion.payload.action === 'update') return '更新这条待办？'
+  if (suggestion.payload.action === 'delete') return '删除这条待办？'
+  return '记进待办？'
 }

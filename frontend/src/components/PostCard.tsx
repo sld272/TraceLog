@@ -6,6 +6,7 @@ import {
   type CommentMessage,
   type PipelineJobSummary,
   type Post,
+  type Suggestion,
   parseMessageSuggestions,
 } from '@/api/client'
 import { EvidencePanel } from './EvidencePanel'
@@ -68,6 +69,9 @@ export const PostCard = memo(function PostCard({
   onRetryFailedJobs,
 }: PostCardProps) {
   const timeAgo = formatSmartTime(post.ts)
+  // suggestions are extracted from the user's post, so surface them right
+  // under the post (not under an AI reply) once the comments carry them
+  const postSuggestions = collectPostSuggestions(comments)
   // detail page opens with comments expanded; the feed stays collapsed
   const [showComments, setShowComments] = useState(variant === 'detail')
   const toggleComments = () => {
@@ -105,6 +109,8 @@ export const PostCard = memo(function PostCard({
 
       {post.content && <div id={`post-content-${post.post_id}`} className={styles.content}>{post.content}</div>}
       <ImageGrid attachments={post.attachments ?? []} />
+
+      <InlineSuggestions suggestions={postSuggestions} />
 
       {post.comment_count > 0 && (
         <div className={styles.commentBar}>
@@ -233,6 +239,21 @@ function formatPipelineError(error: PipelineJobSummary['error']): string {
   const text = (error ?? '').trim()
   return text || '未知错误'
 }
+
+/* Pending suggestions ride along on the souls' root comments; gather them
+   (deduped) so they can be shown once under the post itself. */
+function collectPostSuggestions(comments: Comment[]): Suggestion[] {
+  const seen = new Set<string>()
+  const result: Suggestion[] = []
+  for (const comment of comments) {
+    for (const suggestion of parseMessageSuggestions(comment.metadata)) {
+      if (seen.has(suggestion.id)) continue
+      seen.add(suggestion.id)
+      result.push(suggestion)
+    }
+  }
+  return result
+}
 function CommentPreview({
   comment,
   conversation,
@@ -332,7 +353,6 @@ function CommentPreview({
             <div className={styles.commentMain}>
               {comment.content && <p className={styles.commentText}>{comment.content}</p>}
               <ImageGrid attachments={comment.attachments ?? []} />
-              <InlineSuggestions suggestions={parseMessageSuggestions(comment.metadata)} />
               <div className={styles.commentFooter}>
                 <EvidencePanel
                   metadata={comment.metadata}
