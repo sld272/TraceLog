@@ -318,7 +318,9 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  max-width: min(100%, 540px);
+  /* match the root comment: bubbles may grow to the full column width so
+     long follow-ups don't wrap earlier than the first reply */
+  max-width: 100%;
 }
 
 .threadRowUser .threadCol {
