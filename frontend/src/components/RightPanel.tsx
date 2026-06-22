@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  type ReflectionScope,
-  type SoulReflectionScope,
+  type MemoryRevisionSummary,
   type Todo,
+  listProfileRevisions,
 } from '@/api/client'
 import { isTodoDone, getTodayKey } from '@/utils/todo'
-import { formatDateLabel, formatDateScope, formatUnixScope } from '@/utils/date'
+import { formatDateLabel, formatSmartTime } from '@/utils/date'
 import { ChevronRightIcon } from '@/components/icons'
 import styles from './RightPanel.module.css'
 
@@ -16,24 +16,20 @@ interface PendingCompletedTodo {
 
 interface RightPanelProps {
   todos: Todo[]
-  globalReflection: ReflectionScope | null
-  soulReflections: SoulReflectionScope[]
   searchQuery: string
   onSearchQueryChange: (value: string) => void
   onTodoToggle: (todo: Todo) => Promise<void> | void
   onOpenTodos: () => void
-  onOpenReflections: () => void
+  onOpenMemory: () => void
 }
 
 export function RightPanel({
   todos,
-  globalReflection,
-  soulReflections,
   searchQuery,
   onSearchQueryChange,
   onTodoToggle,
   onOpenTodos,
-  onOpenReflections,
+  onOpenMemory,
 }: RightPanelProps) {
   return (
     <div className={styles.panel}>
@@ -55,11 +51,7 @@ export function RightPanel({
         )}
       </div>
       <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} onOpenTodos={onOpenTodos} />
-      <ReflectionQueueCard
-        globalReflection={globalReflection}
-        soulReflections={soulReflections}
-        onOpenReflections={onOpenReflections}
-      />
+      <MemoryPulseCard onOpenMemory={onOpenMemory} />
     </div>
   )
 }
@@ -199,42 +191,59 @@ function TodayTodosCard({
   )
 }
 
-function ReflectionQueueCard({
-  globalReflection,
-  soulReflections,
-  onOpenReflections,
-}: {
-  globalReflection: ReflectionScope | null
-  soulReflections: SoulReflectionScope[]
-  onOpenReflections: () => void
-}) {
-  const globalCount = globalReflection?.post_ids.length ?? 0
-  const soulCount = soulReflections.reduce(
-    (total, scope) => total + Math.max(scope.interaction_count, 0),
-    0,
-  )
-  const hasQueue = globalCount > 0 || soulCount > 0
+function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
+  const [revisions, setRevisions] = useState<MemoryRevisionSummary[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    void listProfileRevisions(6)
+      .then((data) => {
+        if (!cancelled) setRevisions(data)
+      })
+      .catch(() => {
+        /* 右栏保持安静：拿不到记忆变化时不打扰用户 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <section className={styles.card}>
-      <PanelHeader title="待整理" onMore={onOpenReflections} />
+      <PanelHeader title="最近记忆变化" onMore={onOpenMemory} />
       <div className={styles.itemList}>
-        {hasQueue ? (
-          <div className={styles.queueRows}>
-            <QueueRow
-              label="公开记录"
-              count={globalCount}
-              detail={formatDateScope(globalReflection?.scope_start, globalReflection?.scope_end)}
-            />
-            <QueueRow label="人格回应" count={soulCount} detail={formatSoulScope(soulReflections)} />
+        {revisions.length > 0 ? (
+          <div className={styles.pulseList}>
+            {revisions.map((revision) => (
+              <button key={revision.id} type="button" className={styles.pulse} onClick={onOpenMemory}>
+                <span className={styles.pulseTitle}>{pulseTitle(revision)}</span>
+                <span className={styles.pulseMeta}>{pulseMeta(revision)}</span>
+              </button>
+            ))}
           </div>
         ) : (
-          <p className={styles.empty}>没有待整理内容</p>
+          <p className={styles.empty}>还没有记忆变化。和 AI 好友多聊聊，TA 会慢慢记住你。</p>
         )}
-        <p className={styles.queueHint}>让 AI 阅读新增记录，更新对你的长期理解。</p>
       </div>
     </section>
   )
+}
+
+function pulseTitle(revision: MemoryRevisionSummary): string {
+  if (revision.target_type === 'soul') {
+    return revision.target_name ? `与 ${revision.target_name} 的相处记忆已更新` : '相处记忆已更新'
+  }
+  return '核心画像已更新'
+}
+
+function pulseMeta(revision: MemoryRevisionSummary): string {
+  return `${revisionSourceLabel(revision.source)} · ${formatSmartTime(revision.created_at)}`
+}
+
+function revisionSourceLabel(source: string): string {
+  if (source.includes('user') || source.includes('编辑')) return '手动编辑'
+  if (source.includes('migrat') || source.includes('迁移')) return '迁移'
+  return 'AI 整理'
 }
 
 function SearchIcon() {
@@ -260,18 +269,6 @@ function PanelHeader({ title, onMore }: { title: string; onMore?: () => void }) 
   )
 }
 
-function QueueRow({ label, count, detail }: { label: string; count: number; detail: string }) {
-  return (
-    <div className={styles.queueRow}>
-      <div>
-        <p>{label}</p>
-        <span>{detail}</span>
-      </div>
-      <strong>{count} 条</strong>
-    </div>
-  )
-}
-
 function selectTodayTodos(todos: Todo[]): Todo[] {
   const active = todos.filter((todo) => !isTodoDone(todo))
   const today = active.filter((todo) => todo.date === getTodayKey())
@@ -286,10 +283,3 @@ function todoMeta(todo: Todo): string {
   return time ? `${dateLabel} ${time}` : dateLabel
 }
 
-function formatSoulScope(soulReflections: SoulReflectionScope[]): string {
-  const activeScopes = soulReflections.filter((scope) => scope.interaction_count > 0)
-  if (activeScopes.length === 0) return '等待整理'
-  const start = Math.min(...activeScopes.map((scope) => scope.scope_start))
-  const end = Math.max(...activeScopes.map((scope) => scope.scope_end))
-  return formatUnixScope(start, end)
-}

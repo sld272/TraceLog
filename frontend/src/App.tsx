@@ -5,6 +5,7 @@ import {
   type SoulReflectionScope,
   type Todo,
   getModelSettings,
+  listGoals,
   listSouls,
   listTodos,
   previewGlobalReflection,
@@ -37,6 +38,7 @@ export function App() {
   const [souls, setSouls] = useState<Soul[]>([])
   const [soulsLoadState, setSoulsLoadState] = useState<SoulsLoadState>('loading')
   const [todos, setTodos] = useState<Todo[]>([])
+  const [activeGoalCount, setActiveGoalCount] = useState(0)
   const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
   const [soulReflections, setSoulReflections] = useState<SoulReflectionScope[]>([])
   const [postMutationSignal, setPostMutationSignal] = useState<PostMutationSignal | null>(null)
@@ -47,6 +49,7 @@ export function App() {
   const navKey = navKeyFromRoute(route)
   const reflectionQueueCount = (globalReflection?.post_ids.length ?? 0)
     + soulReflections.reduce((total, scope) => total + Math.max(scope.interaction_count, 0), 0)
+  const openTodoCount = todos.filter((todo) => !isTodoDone(todo)).length
 
   const loadSouls = useCallback(async () => {
     const data = await listSouls(true)
@@ -64,14 +67,16 @@ export function App() {
 
   const refreshHomeContext = useCallback(async () => {
     try {
-      const [todoData, globalData, soulData] = await Promise.all([
+      const [todoData, globalData, soulData, goalData] = await Promise.all([
         listTodos(),
         previewGlobalReflection(),
         previewSoulReflections(),
+        listGoals({ status: 'active' }),
       ])
       setTodos(todoData)
       setGlobalReflection(globalData)
       setSoulReflections(soulData)
+      setActiveGoalCount(goalData.length)
     } catch {
       /* Keep the right rail calm when optional context is unavailable. */
     }
@@ -111,8 +116,8 @@ export function App() {
     await refreshTodos()
   }, [refreshTodos])
 
-  const openReflections = useCallback(() => {
-    navigateToPage('reflections')
+  const openMemory = useCallback(() => {
+    navigateToPage('memory')
   }, [navigateToPage])
 
   const openTodos = useCallback(() => {
@@ -282,6 +287,8 @@ export function App() {
           souls={souls}
           soulsLoadState={soulsLoadState}
           reflectionQueueCount={reflectionQueueCount}
+          goalCount={activeGoalCount}
+          todoCount={openTodoCount}
           activePage={navKey}
           onNavigate={navigateToPage}
           onAfterNavigate={closeMobileNav}
@@ -291,13 +298,11 @@ export function App() {
       panel={showRightPanel ? (
         <RightPanel
           todos={todos}
-          globalReflection={globalReflection}
-          soulReflections={soulReflections}
           searchQuery={homeSearch}
           onSearchQueryChange={setHomeSearch}
           onTodoToggle={handleTodoToggle}
           onOpenTodos={openTodos}
-          onOpenReflections={openReflections}
+          onOpenMemory={openMemory}
         />
       ) : undefined}
     />

@@ -1,31 +1,41 @@
-.tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  margin-bottom: var(--space-5);
-  padding: 3px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.72);
+.settingsGrid {
+  display: flex;
+  gap: var(--space-6);
+  align-items: flex-start;
 }
 
-.tab {
-  min-height: 34px;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-full);
+.settingsSide {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 200px;
+  flex-shrink: 0;
+}
+
+.sideItem {
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   font-weight: var(--weight-medium);
+  text-align: left;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.tab:hover {
+.sideItem:hover {
   background: var(--color-bg-hover);
 }
 
-.tabActive {
-  background: var(--color-accent);
-  color: var(--color-text-inverse);
+.sideItemActive,
+.sideItemActive:hover {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+  font-weight: var(--weight-semibold);
+}
+
+.settingsMain {
+  flex: 1;
+  min-width: 0;
 }
 
 .content {
@@ -192,9 +202,46 @@
 
 .toggleRow input,
 .switch input {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--color-accent);
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 42px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+  cursor: pointer;
+  transition: background var(--transition-normal);
+}
+
+.toggleRow input::after,
+.switch input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform var(--transition-normal);
+}
+
+.toggleRow input:checked,
+.switch input:checked {
+  background: var(--color-accent);
+}
+
+.toggleRow input:checked::after,
+.switch input:checked::after {
+  transform: translateX(18px);
+}
+
+.toggleRow input:disabled,
+.switch input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .statusPill,
@@ -734,12 +781,14 @@
 }
 
 @media (max-width: 767px) {
-  .tabs {
-    width: 100%;
+  .settingsGrid {
+    flex-direction: column;
   }
 
-  .tab {
-    flex: 1;
+  .settingsSide {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
   }
 
   .sectionHeader,

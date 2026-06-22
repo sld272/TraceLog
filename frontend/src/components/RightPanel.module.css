@@ -184,62 +184,64 @@
   opacity: 0.6;
 }
 
-.queueRows {
+.pulseList {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
 }
 
-.queueRow {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--space-3);
-  align-items: center;
-  padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--color-border);
+.pulse {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  padding: 10px 12px 10px 26px;
+  border-radius: var(--radius-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition-fast);
 }
 
-.queueRow:last-child {
-  border-bottom: 0;
+.pulse:hover {
+  background: var(--color-bg-card);
 }
 
-.queueRow strong {
-  color: var(--color-accent);
+.pulse::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 16px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-subtle);
+}
+
+.pulse::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 26px;
+  bottom: -8px;
+  width: 1px;
+  background: var(--color-border);
+}
+
+.pulse:last-child::after {
+  display: none;
+}
+
+.pulseTitle {
+  color: var(--color-text-primary);
   font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  white-space: nowrap;
+  line-height: 1.5;
 }
 
-.queueHint {
+.pulseMeta {
+  margin-top: 3px;
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
-  line-height: var(--leading-normal);
-}
-
-.queueAction {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  width: 100%;
-  min-height: 32px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-}
-
-.queueAction svg {
-  margin-right: -2px;
-}
-
-.queueAction:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
-  background: var(--color-accent-subtle);
 }
 
 .empty {

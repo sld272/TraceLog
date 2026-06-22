@@ -81,11 +81,9 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
         showControls={false}
       />
       <div className={styles.footer}>
-        {(content.length > 0 || attachments.length > 0) && (
-          <span className={styles.hint}>
-            {content.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
-          </span>
-        )}
+        <span className={styles.hint}>
+          {content.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
+        </span>
         <div className={styles.actions}>
           <ImageUploader
             attachments={attachments}

@@ -96,6 +96,13 @@ const DEFAULT_MODEL_FORM: ModelForm = {
 
 const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语气、相处方式、边界、适合的场景，或任何灵感。系统会把它整理成完整的人格 Markdown 文件。'
 
+const TAB_SUBTITLES: Record<SettingsTab, string> = {
+  model: '模型、图片识别、网页搜索与 Embedding 配置',
+  souls: '排序决定首页并发回应顺序，禁用后不进入回应队列',
+  data: '本地 workspace 状态、数据概览与记忆检索索引',
+  about: '关于拾迹这个项目',
+}
+
 export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSoulsChanged }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('model')
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null)
@@ -115,7 +122,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
 
   const tabs = useMemo(
     () => [
-      { id: 'model' as const, label: '模型' },
+      { id: 'model' as const, label: '基本' },
       { id: 'souls' as const, label: '人格' },
       { id: 'data' as const, label: '数据' },
       { id: 'about' as const, label: '关于' },
@@ -292,11 +299,8 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       <header className={workspaceStyles.header}>
         <div className={workspaceStyles.titleGroup}>
           <h1 className={workspaceStyles.title}>设置</h1>
-          <p className={workspaceStyles.subtitle}>模型、人格、记忆与本地数据</p>
+          <p className={workspaceStyles.subtitle}>{TAB_SUBTITLES[activeTab]}</p>
         </div>
-        <button className={workspaceStyles.ghostButton} onClick={refreshSettings} disabled={loading}>
-          刷新
-        </button>
       </header>
 
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
@@ -305,60 +309,64 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       )}
       {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
 
-      <div className={styles.tabs} role="tablist" aria-label="设置分类">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`${styles.tab} ${activeTab === tab.id ? styles.tabActive : ''}`}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <div className={styles.settingsGrid}>
+        <nav className={styles.settingsSide} role="tablist" aria-label="设置分类">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`${styles.sideItem} ${activeTab === tab.id ? styles.sideItemActive : ''}`}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
 
-      {loading ? (
-        <div className={workspaceStyles.empty}>加载设置中...</div>
-      ) : (
-        <div className={styles.content}>
-          {activeTab === 'model' && (
-            <ModelSettingsPanel
-              form={modelForm}
-              settings={modelSettings}
-              saving={savingModel}
-              onChange={setModelForm}
-              onSubmit={handleSaveModel}
-            />
+        <div className={styles.settingsMain}>
+          {loading ? (
+            <div className={workspaceStyles.empty}>加载设置中...</div>
+          ) : (
+            <>
+              {activeTab === 'model' && (
+                <ModelSettingsPanel
+                  form={modelForm}
+                  settings={modelSettings}
+                  saving={savingModel}
+                  onChange={setModelForm}
+                  onSubmit={handleSaveModel}
+                />
+              )}
+              {activeTab === 'souls' && (
+                <SoulSettingsPanel
+                  souls={souls}
+                  savingSoul={savingSoul}
+                  createSoulMode={createSoulMode}
+                  newSoulName={createSoulMode === 'ai' ? aiSoulDraft.name : markdownSoulDraft.name}
+                  newSoulContent={createSoulMode === 'ai' ? aiSoulDraft.inspiration : markdownSoulDraft.content}
+                  onCreateSoulModeChange={handleCreateSoulModeChange}
+                  onNewSoulNameChange={handleNewSoulNameChange}
+                  onNewSoulContentChange={handleNewSoulContentChange}
+                  onCreateSoul={handleCreateSoul}
+                  onToggleSoul={handleToggleSoul}
+                  onMoveSoul={handleMoveSoul}
+                />
+              )}
+              {activeTab === 'data' && (
+                <DataSettingsPanel
+                  status={workspaceStatus}
+                  vectorAction={vectorAction}
+                  vectorError={vectorError}
+                  onVectorAction={handleVectorAction}
+                />
+              )}
+              {activeTab === 'about' && <AboutSettingsPanel />}
+            </>
           )}
-          {activeTab === 'souls' && (
-            <SoulSettingsPanel
-              souls={souls}
-              savingSoul={savingSoul}
-              createSoulMode={createSoulMode}
-              newSoulName={createSoulMode === 'ai' ? aiSoulDraft.name : markdownSoulDraft.name}
-              newSoulContent={createSoulMode === 'ai' ? aiSoulDraft.inspiration : markdownSoulDraft.content}
-              onCreateSoulModeChange={handleCreateSoulModeChange}
-              onNewSoulNameChange={handleNewSoulNameChange}
-              onNewSoulContentChange={handleNewSoulContentChange}
-              onCreateSoul={handleCreateSoul}
-              onToggleSoul={handleToggleSoul}
-              onMoveSoul={handleMoveSoul}
-            />
-          )}
-          {activeTab === 'data' && (
-            <DataSettingsPanel
-              status={workspaceStatus}
-              vectorAction={vectorAction}
-              vectorError={vectorError}
-              onVectorAction={handleVectorAction}
-            />
-          )}
-          {activeTab === 'about' && <AboutSettingsPanel />}
         </div>
-      )}
+      </div>
     </div>
   )
 }

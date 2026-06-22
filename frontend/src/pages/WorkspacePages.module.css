@@ -168,7 +168,6 @@
   grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
 }
 
-.todoListPanel,
 .todoDrawer {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -177,7 +176,6 @@
 
 .todoListPanel {
   min-width: 0;
-  padding: var(--space-6);
 }
 
 .todoSummaryBar {
@@ -206,94 +204,86 @@
 .todoGroups {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
 }
 
-.todoGroup {
-  min-width: 0;
-  position: relative;
-  isolation: isolate;
-  padding: var(--space-4) 0 var(--space-5);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
+/* ---- collapsible group (goals + todos) ---- */
+.group {
+  margin-bottom: var(--space-6);
 }
 
-.todayGroup {
-  /* 今天组无额外样式，保持与其他组一致 */
-}
-
-.todoGroupHeader {
+.groupHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--space-2);
   margin-bottom: var(--space-3);
+  cursor: pointer;
+  user-select: none;
 }
 
-.todoGroupHeader h2 {
-  color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.todayGroup .todoGroupHeader h2 {
-  color: var(--color-accent);
-}
-
-.todoGroupHeader span,
-.groupCount {
+.groupChevron {
+  display: inline-flex;
   color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
+  transform: rotate(90deg);
+  transition: transform var(--transition-normal);
 }
 
-.todayGroup .groupCount {
-  color: var(--color-accent);
+.groupHeader.collapsed .groupChevron {
+  transform: rotate(0deg);
+}
+
+.groupHeader h2 {
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
   font-weight: var(--weight-semibold);
 }
 
-.todoRows {
+.groupCount {
+  min-height: 18px;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+}
+
+.todayGroup .groupHeader h2,
+.todayGroup .groupChevron {
+  color: var(--color-accent);
+}
+
+.col {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
 }
 
 .groupEmpty {
-  padding: var(--space-4) 0 var(--space-1);
+  padding: 2px var(--space-1);
   color: var(--color-text-tertiary);
   font-size: var(--text-sm);
 }
 
-.todoItem {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
-  align-items: flex-start;
-  gap: var(--space-4);
-  min-height: 68px;
-  padding: var(--space-4) 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.todoItem:last-child {
-  border-bottom: 0;
-}
-
 .todoCheckbox {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
+  display: grid;
+  place-items: center;
+  width: 21px;
+  height: 21px;
   flex-shrink: 0;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-full);
+  border: 2px solid var(--color-border-strong);
+  border-radius: 7px;
   color: transparent;
   margin-top: 1px;
   transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
+.todoCheckbox:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
 .todoCheckbox.done {
-  border-color: var(--color-success);
-  background: var(--color-success);
+  border-color: var(--color-accent);
+  background: var(--color-accent);
   color: var(--color-text-inverse);
 }
 
@@ -309,8 +299,9 @@
 
 .todoTask {
   color: var(--color-text-primary);
-  font-size: var(--text-md);
-  line-height: var(--leading-normal);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  line-height: 1.4;
   word-break: break-word;
 }
 
@@ -322,14 +313,83 @@
 .todoMeta {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-  color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
+  gap: var(--space-2);
+  margin-top: var(--space-3);
 }
 
-.overdueMeta {
+/* ---- item card (goals + todos) ---- */
+.itemCard {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-normal), border-color var(--transition-normal);
+}
+
+.itemCard:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--color-border-strong);
+}
+
+.itemRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.itemDetail {
+  margin-top: 5px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.chipOverdue {
+  background: rgba(196, 64, 64, 0.1);
   color: var(--color-error);
+  font-weight: var(--weight-semibold);
+}
+
+.rowActs {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.rowActs button {
+  padding: 5px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.rowActs button:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.rowActs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .todoSourceLink,
@@ -576,44 +636,11 @@
 
 .goalListPanel {
   min-width: 0;
-  padding: var(--space-6);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-bg-card);
-}
-
-.goalGroup + .goalGroup {
-  margin-top: var(--space-7);
-  padding-top: var(--space-6);
-  border-top: 1px solid var(--color-border);
-}
-
-.goalGroupHeader > span {
-  color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
-}
-
-.goalRows {
-  display: flex;
-  flex-direction: column;
-  margin-top: var(--space-3);
-}
-
-.goalItem {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-4) 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.goalItem:last-child {
-  border-bottom: 0;
 }
 
 .goalBody {
   min-width: 0;
+  flex: 1;
 }
 
 .goalTitleLine {
@@ -955,6 +982,43 @@
   /* topbar + .main vertical padding (24px top + 48px bottom) */
   height: calc(100vh - var(--topbar-height) - 72px);
   height: calc(100dvh - var(--topbar-height) - 72px);
+}
+
+.chatHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.chatHeadAvatar {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.chatHeadInfo {
+  min-width: 0;
+}
+
+.chatHeadName {
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: var(--weight-semibold);
+  line-height: 1.3;
+}
+
+.chatHeadStatus {
+  margin-top: 2px;
+  color: var(--color-accent);
+  font-size: var(--text-xs);
 }
 
 .messages {
@@ -1314,7 +1378,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  margin-top: var(--space-4);
+  margin-top: var(--space-2);
 }
 
 .chatHint {
@@ -1337,14 +1401,14 @@
 }
 
 .chatInput {
-  min-height: 68px;
+  min-height: 26px;
   max-height: 200px;
   width: 100%;
-  padding: 10px var(--space-3);
+  padding: 2px var(--space-3);
   resize: none;
   color: var(--color-text-primary);
   font-size: var(--text-base);
-  line-height: var(--leading-relaxed);
+  line-height: var(--leading-normal);
   overflow-y: auto;
 }
 

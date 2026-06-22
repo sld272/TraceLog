@@ -7,6 +7,10 @@ interface LeftNavProps {
   soulsLoadState?: 'loading' | 'ready' | 'error'
   /** 待整理条目数，>0 时在「整理」项上显示 badge（右栏隐藏的窄屏也能看到队列） */
   reflectionQueueCount?: number
+  /** 进行中的目标数，>0 时在「目标」项上显示 badge */
+  goalCount?: number
+  /** 未完成的待办数，>0 时在「待办」项上显示 badge */
+  todoCount?: number
   activePage: string
   onNavigate: (page: string) => void
   onAfterNavigate?: () => void
@@ -16,6 +20,8 @@ export function LeftNav({
   souls,
   soulsLoadState = 'ready',
   reflectionQueueCount = 0,
+  goalCount = 0,
+  todoCount = 0,
   activePage,
   onNavigate,
   onAfterNavigate,
@@ -41,12 +47,14 @@ export function LeftNav({
         <NavItem
           icon={<GoalIcon />}
           label="目标"
+          badge={goalCount > 0 ? goalCount : undefined}
           active={activePage === 'goals'}
           onClick={() => navigate('goals')}
         />
         <NavItem
           icon={<TodoIcon />}
           label="待办"
+          badge={todoCount > 0 ? todoCount : undefined}
           active={activePage === 'todos'}
           onClick={() => navigate('todos')}
         />
