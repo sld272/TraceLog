@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, memory_events_service, memory_unit_service, record_service
+from core import db, memory_events_service, memory_unit_service, record_service, suggestion_service
 from core.app_services import job_service
 
 
@@ -67,6 +67,7 @@ def delete_post(post_id: str) -> DeletePostResult | None:
     )
     comment_ids = [int(item["id"]) for item in comment_rows]
     cancelled_jobs = job_service.cancel_pending_jobs_for_post(post_id)
+    suggestion_service.delete_pending_for_evidence(f"post:{post_id}")
 
     with db.transaction() as conn:
         post_event = memory_events_service.record_post_mutation(

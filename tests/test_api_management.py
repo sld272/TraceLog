@@ -434,6 +434,11 @@ class ApiManagementTest(unittest.TestCase):
             (post_id, "拾迹者", "要一起删除的评论", 2.0),
         )
         job_id = job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id})
+        pending_suggestion = suggestion_service.create_suggestion(
+            "goal",
+            {"title": "考到 80 分", "horizon": "short"},
+            f"post:{post_id}",
+        )
 
         with self._client() as client:
             delete_response = client.delete(f"/posts/{post_id}")
@@ -447,6 +452,9 @@ class ApiManagementTest(unittest.TestCase):
         job = job_service.get_job(job_id)
         self.assertIsNotNone(job)
         self.assertEqual(job_service.STATUS_CANCELLED, job["status"])
+        self.assertIsNone(
+            db.query_one("SELECT id FROM suggestions WHERE id = ?", (pending_suggestion["id"],))
+        )
 
     def test_manual_memory_reconcile_route_enqueues_job(self) -> None:
         with self._client() as client:

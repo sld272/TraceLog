@@ -154,6 +154,24 @@ def dismiss(suggestion_id: str) -> dict[str, Any]:
     return _row_to_dict(updated)
 
 
+def delete_pending_for_evidence(evidence_ref: str) -> int:
+    """Delete pending suggestions tied to one source (e.g. a deleted post).
+
+    Pending rows are removed outright rather than tombstoned, so re-creating
+    the same source (e.g. reposting) can surface the suggestions again.
+    Accepted/dismissed rows are left untouched.
+    """
+    normalized_ref = _normalize_optional_text(evidence_ref)
+    if not normalized_ref:
+        return 0
+    with db.immediate_transaction() as conn:
+        cursor = conn.execute(
+            "DELETE FROM suggestions WHERE evidence_ref = ? AND status = 'pending'",
+            (normalized_ref,),
+        )
+        return cursor.rowcount
+
+
 def normalized_key_for(kind: str, payload: dict[str, Any], evidence_ref: str | None) -> str:
     _validate_kind(kind)
     source_kind = _evidence_source_kind(evidence_ref)
