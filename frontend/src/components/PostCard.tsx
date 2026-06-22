@@ -328,7 +328,7 @@ function CommentPreview({
               <LoadingDots />
             </div>
           ) : (
-            <>
+            <div className={styles.commentMain}>
               {comment.content && <p className={styles.commentText}>{comment.content}</p>}
               <ImageGrid attachments={comment.attachments ?? []} />
               <InlineSuggestions suggestions={parseMessageSuggestions(comment.metadata)} />
@@ -352,8 +352,19 @@ function CommentPreview({
                     重跑
                   </button>
                 )}
+                {onReply && (
+                  <button
+                    type="button"
+                    className={`${styles.quietAction} ${styles.quietPrimary} ${styles.replyTrigger} ${replyOpen ? styles.quietOn : ''}`}
+                    onClick={() => setReplyOpen((open) => !open)}
+                    disabled={replyInputDisabled}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5M4 12h11a4 4 0 0 1 4 4v1" /></svg>
+                    回复
+                  </button>
+                )}
               </div>
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -379,18 +390,8 @@ function CommentPreview({
         </div>
       )}
 
-      {onReply && (
+      {onReply && replyOpen && (
       <div className={styles.replyArea}>
-        <button
-          type="button"
-          className={`${styles.quietAction} ${styles.quietPrimary} ${styles.replyTrigger} ${replyOpen ? styles.quietOn : ''}`}
-          onClick={() => setReplyOpen((open) => !open)}
-          disabled={replyInputDisabled}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5M4 12h11a4 4 0 0 1 4 4v1" /></svg>
-          回复
-        </button>
-        {replyOpen && (
         <div className={styles.replyBox}>
           {attachments.length > 0 && (
             <ImageUploader
@@ -435,7 +436,6 @@ function CommentPreview({
           </span>
           </div>
         </div>
-        )}
       </div>
       )}
       {conversation?.error && (

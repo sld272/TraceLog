@@ -229,10 +229,22 @@
   white-space: nowrap;
 }
 
-.commentText {
-  display: inline-block;
+/* bubble + actions share one fit-content column so the footer's right
+   edge (and the 回复 button) lines up with the bubble's right edge */
+.commentMain {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   width: fit-content;
   max-width: min(620px, 100%);
+  /* keep the bubble wide enough to fit 引用记忆 / 重跑 / 回复 on one row */
+  min-width: min(248px, 100%);
+}
+
+.commentText {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   margin-top: 2px;
   padding: 10px 14px;
   border-radius: 4px 16px 16px 16px;
@@ -400,6 +412,7 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-4);
+  width: 100%;
   margin-top: var(--space-2);
 }
 
@@ -466,8 +479,9 @@
   margin-top: var(--space-2);
 }
 
+/* push 回复 to the far right of the footer, level with the bubble's edge */
 .replyTrigger {
-  margin-left: 42px;
+  margin-left: auto;
 }
 
 .replyBox {
