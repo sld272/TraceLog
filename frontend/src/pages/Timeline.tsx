@@ -6,13 +6,16 @@ import {
   type PostDetail,
   type SearchMode,
   type SearchResultItem,
+  type Suggestion,
   createPost,
   deleteCommentMessage,
   deletePost,
   getCommentConversation,
   getPost,
   listCommentConversations,
+  listPendingSuggestions,
   listPosts,
+  postIdFromEvidenceRef,
   retryJob,
   searchPosts,
   sendCommentMessage,
@@ -57,6 +60,7 @@ export function Timeline({
 }: TimelineProps) {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
+  const [postSuggestions, setPostSuggestions] = useState<Record<string, Suggestion[]>>({})
   const [postCommentConversations, setPostCommentConversations] = useState<Record<string, Record<string, CommentConversationState>>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -88,12 +92,31 @@ export function Timeline({
   const trimmedSearchQuery = searchQuery.trim()
   const searching = trimmedSearchQuery.length > 0
 
+  /* Pending suggestions belong to the post (not its comments), so they are
+     fetched independently and keyed by post id — this keeps the prompt under
+     the post visible regardless of whether comments are loaded/expanded. */
+  const refreshSuggestions = useCallback(async () => {
+    try {
+      const all = await listPendingSuggestions()
+      const grouped: Record<string, Suggestion[]> = {}
+      for (const suggestion of all) {
+        const postId = postIdFromEvidenceRef(suggestion.evidence_ref)
+        if (!postId) continue
+        ;(grouped[postId] ??= []).push(suggestion)
+      }
+      setPostSuggestions(grouped)
+    } catch {
+      /* keep the previous suggestions on a transient failure */
+    }
+  }, [])
+
   const fetchPosts = useCallback(async () => {
     try {
       const data = await listPosts(API_LIMITS.POSTS_DEFAULT, 0)
       setPosts(data)
       setHasMorePosts(data.length >= API_LIMITS.POSTS_DEFAULT)
       setError(null)
+      void refreshSuggestions()
       data.forEach((post) => {
         if (isActivePipeline(post)) void restorePostStream(post.post_id)
       })
@@ -102,7 +125,7 @@ export function Timeline({
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [refreshSuggestions])
 
   useEffect(() => {
     fetchPosts()
@@ -264,6 +287,7 @@ export function Timeline({
 
         if (shouldRefreshPostDetail(event)) {
           void refreshPostDetail(postId, event.event_type)
+          void refreshSuggestions()
         }
 
         if (event.event_type === 'todo_succeeded') {
@@ -280,6 +304,7 @@ export function Timeline({
         )
         stopPostStream(postId)
         void refreshPostDetail(postId)
+        void refreshSuggestions()
         onActivitySettled?.()
       },
       afterEventId === undefined ? {} : { afterEventId },
@@ -651,6 +676,7 @@ export function Timeline({
                   key={post.post_id}
                   post={post}
                   comments={postComments[post.post_id]}
+                  suggestions={postSuggestions[post.post_id]}
                   commentConversations={postCommentConversations[post.post_id]}
                   busyCommentId={busyCommentId}
                   deletingPost={deletingPostId === post.post_id}
@@ -789,6 +815,7 @@ function SearchResults({
 const TimelinePostCard = memo(function TimelinePostCard({
   post,
   comments,
+  suggestions,
   commentConversations,
   busyCommentId,
   deletingPost,
@@ -805,6 +832,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
 }: {
   post: Post
   comments?: Comment[]
+  suggestions?: Suggestion[]
   commentConversations?: Record<string, CommentConversationState>
   busyCommentId: number | null
   deletingPost: boolean
@@ -849,6 +877,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
       <PostCard
         post={post}
         comments={comments}
+        suggestions={suggestions}
         commentConversations={commentConversations}
         busyCommentId={busyCommentId}
         deletingPost={deletingPost}

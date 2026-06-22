@@ -718,6 +718,18 @@ export function deleteGoal(goalId: string) {
 }
 
 /* Suggestions */
+export function listPendingSuggestions(kind?: 'goal' | 'todo'): Promise<Suggestion[]> {
+  const suffix = kind ? `?kind=${kind}` : ''
+  return request<Suggestion[]>(`/suggestions${suffix}`)
+}
+
+/** Extract the post id from a suggestion's evidence_ref (e.g. "post:20260622-003"). */
+export function postIdFromEvidenceRef(ref: string | null | undefined): string | null {
+  if (!ref) return null
+  const match = /^post:(.+)$/.exec(ref)
+  return match?.[1] ?? null
+}
+
 export function acceptSuggestion(suggestionId: string) {
   return request<{ suggestion: Suggestion; created: Goal | Todo }>(
     `/suggestions/${suggestionId}/accept`,
