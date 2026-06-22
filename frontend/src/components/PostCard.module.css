@@ -218,7 +218,7 @@
 .commentText {
   display: inline-block;
   width: fit-content;
-  max-width: min(480px, 100%);
+  max-width: min(620px, 100%);
   margin-top: 2px;
   padding: 10px 14px;
   border-radius: 4px 16px 16px 16px;
@@ -348,7 +348,7 @@
   min-width: 0;
   /* cap bubble width (matches the root comment) so long replies don't
      stretch edge-to-edge on wide screens */
-  max-width: min(480px, 100%);
+  max-width: min(620px, 100%);
 }
 
 .threadRowUser .threadCol {
