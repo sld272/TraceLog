@@ -208,17 +208,19 @@ def record_comment_mutation(
     occurred_at: float,
     created_at: float | None = None,
 ) -> IngestEvent:
-    """Comment -> owned by the SOUL whose thread it is (both roles), visibility
-    thread:<post_id>. A comment conversation is the user interacting with that
-    soul, so the memory it yields is that soul's relationship memory; the user's
-    own comments (author='user') are what reconcile mines, the soul's replies are
-    provenance only. Thread membership never auto-promotes to a durable soul
-    portrait / public; that requires an explicit promote op in a later phase."""
-    owner = soul_scope(soul_name)
+    """Comment on a public post -> global + public (same bucket as the post).
+
+    The public feed is not private to any one soul, and the facts a user reveals
+    while replying to a soul are facts about the *user*, not the user↔soul
+    relationship. Routing them to the global/public bucket lets them merge and
+    dedupe with post-derived facts into a single user portrait, instead of being
+    siloed (and duplicated) per soul. The user's own comments (author='user') are
+    what reconcile mines; the soul's replies are provenance only. Genuinely
+    private, soul-scoped memory comes from 1:1 chat (record_chat_mutation)."""
     return append_event(
         conn,
-        owner_scope=owner,
-        visibility_scope=thread_visibility(str(post_id)),
+        owner_scope=GLOBAL_SCOPE,
+        visibility_scope=PUBLIC_VISIBILITY,
         source_channel="comment",
         source_type="comment_message",
         source_id=str(comment_id),

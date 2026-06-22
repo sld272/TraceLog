@@ -81,13 +81,13 @@ class MemoryEventsServiceTest(unittest.TestCase):
         self.assertEqual(post["source_revision"], 1)
 
         user_comment = by_source[("comment_message", "1")]
-        self.assertEqual(user_comment["owner_scope"], "soul:luna")  # owned by the thread's soul
-        self.assertEqual(user_comment["visibility_scope"], "thread:20260101-001")
+        self.assertEqual(user_comment["owner_scope"], "global")  # public comments join the global portrait
+        self.assertEqual(user_comment["visibility_scope"], "public")
         self.assertEqual(user_comment["author"], "user")
 
         soul_comment = by_source[("comment_message", "2")]
-        self.assertEqual(soul_comment["owner_scope"], "soul:luna")
-        self.assertEqual(soul_comment["visibility_scope"], "thread:20260101-001")
+        self.assertEqual(soul_comment["owner_scope"], "global")
+        self.assertEqual(soul_comment["visibility_scope"], "public")
 
         chat = by_source[("chat_message", "1")]
         self.assertEqual(chat["owner_scope"], "soul:luna")

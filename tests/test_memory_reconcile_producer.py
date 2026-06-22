@@ -237,10 +237,10 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
             return {"summary": "no-op", "ops": []}
 
         recon.reconcile_bucket(
-            "soul:luna",
-            "thread:p1",
+            "global",
+            "public",
             op_producer=producer,
-            run_type=recon.RECONCILE_THREAD,
+            run_type=recon.RECONCILE_GLOBAL,
         )
         self.assertEqual(len(captured["events"]), 1)
         context = captured["events"][0]["conversation_context"]

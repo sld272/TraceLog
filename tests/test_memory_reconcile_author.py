@@ -40,22 +40,22 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
             return {"ops": ops, "summary": ""}
         return producer
 
-    def test_assistant_only_thread_bucket_produces_nothing(self) -> None:
-        # a SOUL's own comment in a thread -> owner soul, author assistant
+    def test_assistant_only_comment_produces_nothing(self) -> None:
+        # a SOUL's own comment -> global/public, author assistant
         with db.transaction() as conn:
             mes.record_comment_mutation(
                 conn, comment_id=1, post_id="20260616-001", soul_name="gotoh",
                 role="assistant", op="create", content="后藤独有社交恐惧症", occurred_at=1.0,
             )
         summary = recon.reconcile_bucket(
-            "soul:gotoh", "thread:20260616-001",
+            mes.GLOBAL_SCOPE, mes.PUBLIC_VISIBILITY,
             op_producer=self._producer_adds_from_each_event(),
-            run_type=recon.RECONCILE_THREAD,
+            run_type=recon.RECONCILE_GLOBAL,
         )
         # no user evidence -> nothing produced, but cursor still advances
         self.assertIsNone(summary)
-        self.assertEqual(len(mus.list_units("soul:gotoh", "thread:20260616-001")), 0)
-        self.assertGreater(mes.get_cursor("soul:gotoh", "thread:20260616-001"), 0)
+        self.assertEqual(len(mus.list_units(mes.GLOBAL_SCOPE, mes.PUBLIC_VISIBILITY)), 0)
+        self.assertGreater(mes.get_cursor(mes.GLOBAL_SCOPE, mes.PUBLIC_VISIBILITY), 0)
 
     def test_private_bucket_uses_only_user_messages(self) -> None:
         with db.transaction() as conn:
@@ -95,8 +95,8 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
         self.assertEqual(summary.skipped, 1)
         self.assertEqual(len(mus.list_units("soul:luna", "private:soul:luna")), 0)
 
-    def test_user_comment_builds_that_souls_thread_memory(self) -> None:
-        # user commenting in gotoh's thread -> owned by soul:gotoh, author user
+    def test_user_comment_builds_global_memory(self) -> None:
+        # user commenting on a public post -> global/public, author user
         with db.transaction() as conn:
             mes.record_comment_mutation(
                 conn, comment_id=1, post_id="20260616-001", soul_name="gotoh",
@@ -107,11 +107,11 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
                 role="assistant", op="create", content="（后藤独的回复）一起加油！", occurred_at=2.0,
             )
         summary = recon.reconcile_bucket(
-            "soul:gotoh", "thread:20260616-001",
+            mes.GLOBAL_SCOPE, mes.PUBLIC_VISIBILITY,
             op_producer=self._producer_adds_from_each_event(),
-            run_type=recon.RECONCILE_THREAD,
+            run_type=recon.RECONCILE_GLOBAL,
         )
-        units = mus.list_units("soul:gotoh", "thread:20260616-001")
+        units = mus.list_units(mes.GLOBAL_SCOPE, mes.PUBLIC_VISIBILITY)
         self.assertEqual(len(units), 1)  # only the user comment becomes a belief
         self.assertEqual(units[0]["content"], "belief::我也想学吉他，但怕坚持不下来")
 

@@ -35,19 +35,9 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def _event(self, soul: str, visibility: str, content: str) -> int:
+        # relationship memory is now sourced only from private 1:1 chat
         self.seq += 1
         with db.transaction() as conn:
-            if visibility.startswith("thread:"):
-                return mes.record_comment_mutation(
-                    conn,
-                    comment_id=self.seq,
-                    post_id=visibility[len("thread:"):],
-                    soul_name=soul,
-                    role="user",
-                    op="create",
-                    content=content,
-                    occurred_at=float(self.seq),
-                ).id
             return mes.record_chat_mutation(
                 conn,
                 message_id=self.seq,
@@ -73,7 +63,7 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         return mus.add_unit(
             owner_scope=f"soul:{soul}",
             visibility_scope=visibility,
-            source_channel="comment" if visibility.startswith("thread:") else "chat",
+            source_channel="chat",
             type=type,
             content=content,
             confidence=confidence,
@@ -82,17 +72,16 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
             evidence_event_ids=[event_id],
         )
 
-    def test_selects_relationship_units_across_own_thread_and_private_only(self) -> None:
-        thread = self._unit("luna", "thread:p1", "用户希望 luna 先共情再建议")
-        private = self._unit("luna", "private:soul:luna", "双方习惯称呼彼此为老友")
-        self._unit("luna", "thread:p2", "用户喜欢爵士乐", type="preference")
+    def test_selects_relationship_units_from_private_bucket(self) -> None:
+        rel = self._unit("luna", "private:soul:luna", "双方习惯称呼彼此为老友")
+        self._unit("luna", "private:soul:luna", "用户喜欢爵士乐", type="preference")
         self._unit("nova", "private:soul:nova", "nova 的私聊关系")
 
         selected = srm.relationship_units_for_soul("luna")
-        self.assertEqual({row["id"] for row in selected}, {thread, private})
+        self.assertEqual({row["id"] for row in selected}, {rel})
 
-    def test_refresh_persists_one_cross_bucket_view_and_reads_body(self) -> None:
-        self._unit("luna", "thread:p1", "评论区里双方习惯轻微互损")
+    def test_refresh_persists_relationship_view_and_reads_body(self) -> None:
+        self._unit("luna", "private:soul:luna", "平时可以轻微互损")
         self._unit("luna", "private:soul:luna", "用户低落时希望先安静陪伴")
 
         view = srm.refresh_relationship_memory(
@@ -107,7 +96,7 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         )
 
     def test_relation_unit_edit_and_retract_mark_view_stale(self) -> None:
-        unit_id = self._unit("luna", "thread:p1", "用户喜欢直球提醒")
+        unit_id = self._unit("luna", "private:soul:luna", "用户喜欢直球提醒")
         srm.refresh_relationship_memory("luna")
         ref = srm.view_ref("luna")
         self.assertEqual(

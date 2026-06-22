@@ -105,14 +105,14 @@ class MemoryReadTest(unittest.TestCase):
         self.assertEqual(hits[0].content, "喜欢安静的咖啡馆看书")
 
     def test_retrieve_public_sees_other_souls_public_memory(self) -> None:
-        # user's comment-conversation belief with kita (owner soul:kita, thread visibility)
+        # user's public comment-conversation belief lands in global/public, shared across souls
         with db.transaction() as conn:
             ev = mes.record_comment_mutation(
                 conn, comment_id=901, post_id="20260616-001", soul_name="kita",
                 role="user", op="create", content="我自学吉他", occurred_at=1.0,
             ).id
         uid = mus.add_unit(
-            owner_scope="soul:kita", visibility_scope="thread:20260616-001", source_channel="comment",
+            owner_scope=mes.GLOBAL_SCOPE, visibility_scope=mes.PUBLIC_VISIBILITY, source_channel="comment",
             type="preference", content="用户喜欢弹吉他自学", importance=0.5, evidence_event_ids=[ev],
         )
         hits = memory_read.retrieve_units("弹吉他", "public_post", "gotoh")

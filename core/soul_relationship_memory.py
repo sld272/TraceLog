@@ -40,11 +40,12 @@ def view_ref(soul_name: str) -> ViewRef:
 
 
 def soul_for_bucket(owner_scope: str, visibility_scope: str) -> str | None:
+    # Public-post comments now land in global/public; the only soul-scoped
+    # interaction left is private 1:1 chat, so relationship memory is sourced
+    # exclusively from a soul's private bucket.
     if not owner_scope.startswith("soul:"):
         return None
     soul_name = owner_scope[len("soul:"):]
-    if visibility_scope.startswith("thread:"):
-        return soul_name
     if visibility_scope == f"private:soul:{soul_name}":
         return soul_name
     return None
@@ -80,7 +81,7 @@ def relationship_units_for_soul(
     *,
     conn: sqlite3.Connection | None = None,
 ) -> list[sqlite3.Row]:
-    """Select stable relationship units across this SOUL's thread/private buckets."""
+    """Select stable relationship units from this SOUL's private bucket."""
     ref = view_ref(soul_name)
     view = _fetchone(
         conn,
@@ -106,10 +107,7 @@ def relationship_units_for_soul(
         FROM memory_units
         WHERE owner_scope = ?
           AND type = 'relationship'
-          AND (
-                visibility_scope LIKE 'thread:%'
-                OR visibility_scope = ?
-          )
+          AND visibility_scope = ?
         """,
         (ref.owner_scope, f"private:soul:{soul_name}"),
     )

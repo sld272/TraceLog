@@ -44,12 +44,13 @@ class BoundaryTest(unittest.TestCase):
         self._add(mes.GLOBAL_SCOPE, mes.PUBLIC_VISIBILITY, "post", ev, content)
 
     def _comment_unit(self, soul: str, content: str) -> None:
+        # public-post comments now land in global/public (shared across souls)
         with db.transaction() as conn:
             ev = mes.record_comment_mutation(
                 conn, comment_id=1, post_id="p1", soul_name=soul, role="user",
                 op="create", content=content, occurred_at=1.0,
             ).id
-        self._add(mes.soul_scope(soul), mes.thread_visibility("p1"), "comment", ev, content)
+        self._add(mes.GLOBAL_SCOPE, mes.PUBLIC_VISIBILITY, "comment", ev, content)
 
     def _chat_unit(self, soul: str, content: str) -> None:
         with db.transaction() as conn:
