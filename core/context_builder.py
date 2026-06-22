@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, goal_service, logging_service, memory_view_service, record_service, reply_context, todo_service, tool_config_service
+from core import db, goal_service, logging_service, memory_read, memory_view_service, record_service, reply_context, todo_service, tool_config_service
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext, list_enabled_souls
 
@@ -28,11 +28,20 @@ def build_context(
     enabled_souls = list_enabled_souls()
     sections: list[str] = []
 
-    portrait = memory_view_service.read_portrait_body(
-        "global", "public", memory_view_service.VIEW_USER_PORTRAIT
-    )
-    if portrait:
-        sections.append(f"# 用户档案\n\n{portrait}")
+    # Parity with chat/comment replies: pull the always-on portrait/state PLUS
+    # query-relevant memory units (retrieve_units), not just the static portrait
+    # blob. Without this, non-core beliefs (in_portrait=0) that are highly
+    # relevant to the post never reach the reply.
+    if query:
+        memory_section = memory_read.memory_section_for("public_post", None, query)
+        if memory_section:
+            sections.append(f"# 记忆\n\n{memory_section}")
+    else:
+        portrait = memory_view_service.read_portrait_body(
+            "global", "public", memory_view_service.VIEW_USER_PORTRAIT
+        )
+        if portrait:
+            sections.append(f"# 用户档案\n\n{portrait}")
 
     sections.extend(goal_service.prompt_sections())
 
