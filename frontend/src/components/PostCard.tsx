@@ -337,12 +337,24 @@ function CommentPreview({
               {comment.content && <p className={styles.commentText}>{comment.content}</p>}
               <ImageGrid attachments={comment.attachments ?? []} />
               <InlineSuggestions suggestions={parseMessageSuggestions(comment.metadata)} />
-              <EvidencePanel
-                metadata={comment.metadata}
-                channel="public_post"
-                messageId={comment.id}
-                compact
-              />
+              <div className={styles.commentFooter}>
+                <EvidencePanel
+                  metadata={comment.metadata}
+                  channel="public_post"
+                  messageId={comment.id}
+                  compact
+                />
+                {onReply && (
+                  <button
+                    type="button"
+                    className={`${styles.replyTrigger} ${replyOpen ? styles.replyTriggerOn : ''}`}
+                    onClick={() => setReplyOpen((open) => !open)}
+                    disabled={replyInputDisabled}
+                  >
+                    回复
+                  </button>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -369,18 +381,7 @@ function CommentPreview({
         </div>
       )}
 
-      {onReply && (
-      <div className={styles.replyArea}>
-        <button
-          type="button"
-          className={`${styles.replyTrigger} ${replyOpen ? styles.replyTriggerOn : ''}`}
-          onClick={() => setReplyOpen((open) => !open)}
-          disabled={replyInputDisabled}
-        >
-          <ChatIcon />
-          <span>回复 {soulName}</span>
-        </button>
-        {replyOpen && (
+      {onReply && replyOpen && (
         <div className={styles.replyBox}>
           {attachments.length > 0 && (
             <ImageUploader
@@ -425,8 +426,6 @@ function CommentPreview({
           </span>
           </div>
         </div>
-        )}
-      </div>
       )}
       {conversation?.error && (
         <ReplyFailureInline

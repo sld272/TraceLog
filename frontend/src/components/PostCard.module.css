@@ -425,24 +425,27 @@
   height: 20px;
 }
 
-.replyArea {
+/* 引用记忆 + 回复 share one row; the 回复 pill matches the evidence pill */
+.commentFooter {
   display: flex;
-  flex-direction: column;
-  margin-top: var(--space-2);
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .replyTrigger {
-  align-self: flex-end;
-  margin-right: 42px;
+  margin-top: var(--space-2);
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 5px 13px;
+  min-height: 26px;
+  padding: 0 var(--space-2);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--color-text-tertiary);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
+  line-height: 26px;
   transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
 }
 

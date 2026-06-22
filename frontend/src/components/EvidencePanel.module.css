@@ -1,12 +1,13 @@
 .panel {
-  width: min(100%, 520px);
+  width: fit-content;
+  max-width: min(100%, 520px);
   margin-top: var(--space-2);
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
 }
 
 .compact {
-  width: min(100%, 460px);
+  max-width: min(100%, 460px);
 }
 
 .summary {
