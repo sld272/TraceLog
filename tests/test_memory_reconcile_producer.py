@@ -13,7 +13,7 @@ from core import (
     memory_reconciler as recon,
     memory_unit_service as mus,
 )
-from core.llm import reflection_router
+from core.llm import memory_router
 
 
 class ReconcileParserTest(unittest.TestCase):
@@ -31,7 +31,7 @@ class ReconcileParserTest(unittest.TestCase):
                 "not a dict",
             ],
         })
-        parsed = reflection_router._parse_memory_reconcile_content(raw)
+        parsed = memory_router._parse_memory_reconcile_content(raw)
         ops = parsed["ops"]
         self.assertEqual(parsed["summary"], "本轮发现一个目标")
         self.assertEqual(len(ops), 5)  # bogus + non-dict dropped
@@ -53,14 +53,14 @@ class ReconcileParserTest(unittest.TestCase):
         raw = json.dumps({"ops": [
             {"op": "add", "type": "long_term_goal", "content": "x", "evidence_event_ids": [1]}
         ]})
-        parsed = reflection_router._parse_memory_reconcile_content(raw)
+        parsed = memory_router._parse_memory_reconcile_content(raw)
         self.assertEqual(parsed["ops"][0]["type"], "insight")
 
     def test_parser_rejects_non_json(self) -> None:
-        self.assertIsNone(reflection_router._parse_memory_reconcile_content("not json"))
+        self.assertIsNone(memory_router._parse_memory_reconcile_content("not json"))
 
     def test_parser_handles_missing_ops(self) -> None:
-        parsed = reflection_router._parse_memory_reconcile_content(json.dumps({"summary": "无"}))
+        parsed = memory_router._parse_memory_reconcile_content(json.dumps({"summary": "无"}))
         self.assertEqual(parsed["ops"], [])
 
 class ReconcileProducerTest(unittest.TestCase):
@@ -74,7 +74,7 @@ class ReconcileProducerTest(unittest.TestCase):
             captured["tombstones_text"] = tombstones_text
             return {"ops": [{"op": "add"}], "summary": "s"}
 
-        with patch.object(reflection_router, "call_memory_reconcile", fake_call):
+        with patch.object(memory_router, "call_memory_reconcile", fake_call):
             producer = producer_mod.make_llm_op_producer(client=object(), model="m")
             result = producer(
                 boundary={"owner_scope": "global", "visibility_scope": "public"},
@@ -117,7 +117,7 @@ class ReconcileProducerTest(unittest.TestCase):
         # A failed LLM call (None) must surface as an error, not a silent empty
         # batch — collapsing it to {"ops": []} would advance the cursor and drop
         # this evidence forever.
-        with patch.object(reflection_router, "call_memory_reconcile", lambda *a, **k: None):
+        with patch.object(memory_router, "call_memory_reconcile", lambda *a, **k: None):
             producer = producer_mod.make_llm_op_producer(client=object(), model="m")
             with self.assertRaises(producer_mod.ReconcileProducerError):
                 producer(boundary={"owner_scope": "global", "visibility_scope": "public"},
@@ -153,12 +153,12 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
                 "ops": [{"op": "add", "type": "goal", "content": "用户在准备考研，焦虑但坚持",
                          "confidence": 0.75, "tier": "core", "importance": 0.85, "evidence_event_ids": ids}],
             })
-            return reflection_router._parse_memory_reconcile_content(raw)
+            return memory_router._parse_memory_reconcile_content(raw)
 
-        with patch.object(reflection_router, "call_memory_reconcile", fake_call):
+        with patch.object(memory_router, "call_memory_reconcile", fake_call):
             producer = producer_mod.make_llm_op_producer(client=object(), model="m")
             summary = recon.reconcile_bucket(
-                "global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL
+                "global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL
             )
 
         self.assertEqual(summary.applied, 1)
@@ -180,7 +180,7 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
 
         with self.assertRaises(producer_mod.ReconcileProducerError):
             recon.reconcile_bucket(
-                "global", "public", op_producer=failing_producer, reflection_type=recon.RECONCILE_GLOBAL
+                "global", "public", op_producer=failing_producer, run_type=recon.RECONCILE_GLOBAL
             )
 
         self.assertEqual(mes.get_cursor("global", "public"), cursor_before)
@@ -240,7 +240,7 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
             "soul:luna",
             "thread:p1",
             op_producer=producer,
-            reflection_type=recon.RECONCILE_THREAD,
+            run_type=recon.RECONCILE_THREAD,
         )
         self.assertEqual(len(captured["events"]), 1)
         context = captured["events"][0]["conversation_context"]
@@ -263,7 +263,7 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
             }]}
 
         summary = recon.reconcile_bucket(
-            "global", "public", op_producer=racing_producer, reflection_type=recon.RECONCILE_GLOBAL
+            "global", "public", op_producer=racing_producer, run_type=recon.RECONCILE_GLOBAL
         )
         self.assertIsNone(summary)
         self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 0)

@@ -164,84 +164,6 @@ CREATE TABLE IF NOT EXISTS chat_message_attachments (
 CREATE INDEX IF NOT EXISTS idx_chat_message_attachments_message
     ON chat_message_attachments(message_id, sort_order);
 
-CREATE TABLE IF NOT EXISTS entities (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    type          TEXT NOT NULL,
-    name          TEXT NOT NULL,
-    aliases       TEXT,
-    first_seen    TEXT,
-    last_seen     TEXT,
-    mention_count INTEGER DEFAULT 0,
-    metadata      TEXT,
-    UNIQUE(type, name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
-CREATE INDEX IF NOT EXISTS idx_entities_last_seen ON entities(last_seen DESC);
-
-CREATE TABLE IF NOT EXISTS post_entities (
-    post_id   TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    entity_id INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    role      TEXT,
-    PRIMARY KEY (post_id, entity_id, role)
-);
-
-CREATE INDEX IF NOT EXISTS idx_pe_entity ON post_entities(entity_id);
-
-CREATE TABLE IF NOT EXISTS emotions (
-    post_id   TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    label     TEXT NOT NULL,
-    intensity REAL NOT NULL,
-    PRIMARY KEY (post_id, label)
-);
-
-CREATE INDEX IF NOT EXISTS idx_emotions_label ON emotions(label, intensity DESC);
-
-CREATE TABLE IF NOT EXISTS events (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    post_id   TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    ts        TEXT NOT NULL,
-    summary   TEXT NOT NULL,
-    category  TEXT,
-    metadata  TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_events_category ON events(category);
-
-CREATE TABLE IF NOT EXISTS relations (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_a    INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    entity_b    INTEGER NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    rel_type    TEXT NOT NULL,
-    strength    REAL DEFAULT 0.5,
-    last_seen   TEXT,
-    metadata    TEXT,
-    UNIQUE(entity_a, entity_b, rel_type)
-);
-
-CREATE TABLE IF NOT EXISTS relations_log (
-    post_id     TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-    relation_id INTEGER NOT NULL REFERENCES relations(id) ON DELETE CASCADE,
-    delta       REAL NOT NULL,
-    created_at  REAL NOT NULL,
-    PRIMARY KEY (post_id, relation_id)
-);
-
-CREATE TABLE IF NOT EXISTS reflections (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts            TEXT NOT NULL,
-    type          TEXT NOT NULL,
-    scope_start   TEXT,
-    scope_end     TEXT,
-    content       TEXT NOT NULL,
-    related_posts TEXT,
-    metadata      TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_reflections_ts ON reflections(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_reflections_type ON reflections(type);
-
 CREATE TABLE IF NOT EXISTS chat_threads (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     soul_name       TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
@@ -317,28 +239,6 @@ CREATE INDEX IF NOT EXISTS idx_suggestions_kind_status
     ON suggestions(kind, status, id);
 CREATE INDEX IF NOT EXISTS idx_suggestions_normkey
     ON suggestions(normalized_key);
-
-CREATE TABLE IF NOT EXISTS user_md_revisions (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    snapshot   TEXT NOT NULL,
-    patch      TEXT NOT NULL,
-    source     TEXT NOT NULL,
-    created_at REAL NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_md_rev_ts ON user_md_revisions(created_at DESC);
-
-CREATE TABLE IF NOT EXISTS soul_memory_revisions (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    soul_name  TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
-    snapshot   TEXT NOT NULL,
-    patch      TEXT NOT NULL,
-    source     TEXT NOT NULL,
-    created_at REAL NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_soul_memory_rev_soul_ts
-    ON soul_memory_revisions(soul_name, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -465,7 +365,7 @@ CREATE TABLE IF NOT EXISTS memory_ingest_events (
     source_channel   TEXT NOT NULL
                        CHECK(source_channel IN ('post','comment','chat')),
     source_type      TEXT NOT NULL
-                       CHECK(source_type IN ('post','comment_message','chat_message')),
+                       CHECK(source_type IN ('post','post_vision','comment_message','chat_message')),
     source_id        TEXT NOT NULL,
     source_revision  INTEGER NOT NULL,           -- monotonic from 1 per source_id
     op               TEXT NOT NULL
@@ -504,7 +404,7 @@ CREATE TABLE IF NOT EXISTS memory_units (
     owner_scope      TEXT NOT NULL,              -- 'global' | 'soul:<name>'
     visibility_scope TEXT NOT NULL,              -- 'public' | 'thread:<post_id>' | 'private:soul:<name>'
     source_channel   TEXT NOT NULL
-                       CHECK(source_channel IN ('post','comment','chat','user','migration')),
+                       CHECK(source_channel IN ('post','comment','chat','user')),
     prompt_policy    TEXT NOT NULL DEFAULT 'allow'
                        CHECK(prompt_policy IN ('allow','no_prompt')),
     type             TEXT NOT NULL,              -- identity/preference/goal/state/relationship/insight/freeform
@@ -512,7 +412,7 @@ CREATE TABLE IF NOT EXISTS memory_units (
     confidence       REAL NOT NULL DEFAULT 0.6,
 
     source           TEXT NOT NULL DEFAULT 'reflected'
-                       CHECK(source IN ('reflected','user_authored','migrated')),
+                       CHECK(source IN ('reflected','user_authored')),
     status           TEXT NOT NULL DEFAULT 'active'
                        CHECK(status IN ('active','pending','dormant',
                                         'retracted_by_model','retracted_by_user',
@@ -523,13 +423,13 @@ CREATE TABLE IF NOT EXISTS memory_units (
 
     tier             TEXT NOT NULL DEFAULT 'contextual'
                        CHECK(tier IN ('core','contextual','episodic')),
-    profile_policy   TEXT NOT NULL DEFAULT 'auto'
-                       CHECK(profile_policy IN ('auto','force_include','force_exclude')),
+    portrait_policy  TEXT NOT NULL DEFAULT 'auto'
+                       CHECK(portrait_policy IN ('auto','force_include','force_exclude')),
     importance       REAL NOT NULL DEFAULT 0.5,
     sensitivity      TEXT NOT NULL DEFAULT 'normal'
                        CHECK(sensitivity IN ('high','normal','low')),
 
-    in_md_slice      INTEGER NOT NULL DEFAULT 0, -- selector result cache (not intent/budget/privacy)
+    in_portrait      INTEGER NOT NULL DEFAULT 0, -- selector result cache
     normalized_claim TEXT,                        -- reserved: tombstone dedup, MVP may be null
     superseded_by    TEXT REFERENCES memory_units(id) ON DELETE SET NULL,
 
@@ -542,8 +442,8 @@ CREATE TABLE IF NOT EXISTS memory_units (
 );
 CREATE INDEX IF NOT EXISTS idx_units_boundary_status
     ON memory_units(owner_scope, visibility_scope, status, prompt_policy);
-CREATE INDEX IF NOT EXISTS idx_units_slice
-    ON memory_units(owner_scope, visibility_scope, in_md_slice, status);
+CREATE INDEX IF NOT EXISTS idx_units_portrait
+    ON memory_units(owner_scope, visibility_scope, in_portrait, status);
 
 CREATE TABLE IF NOT EXISTS memory_unit_evidence (
     unit_id     TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
@@ -591,26 +491,44 @@ CREATE TABLE IF NOT EXISTS memory_unit_relink_queue (
 CREATE INDEX IF NOT EXISTS idx_unit_relink_queue_pending
     ON memory_unit_relink_queue(status, unit_id, id);
 
+CREATE TABLE IF NOT EXISTS memory_reconcile_runs (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_type         TEXT NOT NULL,
+    owner_scope      TEXT NOT NULL,
+    visibility_scope TEXT NOT NULL,
+    trigger          TEXT NOT NULL,
+    event_id_start   INTEGER,
+    event_id_end     INTEGER,
+    event_count      INTEGER NOT NULL DEFAULT 0,
+    summary          TEXT NOT NULL DEFAULT '',
+    metadata_json    TEXT,
+    created_at       REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_reconcile_runs_boundary
+    ON memory_reconcile_runs(owner_scope, visibility_scope, id DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_reconcile_runs_created
+    ON memory_reconcile_runs(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS memory_unit_ops (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     unit_id         TEXT NOT NULL,
     related_unit_id TEXT,
     op              TEXT NOT NULL,   -- add/challenge/retain/confirm/revise/retract/supersede/
-                                     -- user_create/user_edit/user_delete/migrate
-    actor           TEXT NOT NULL,   -- 'reconciler' | 'user' | 'migration'
+                                     -- user_create/user_edit/user_delete
+    actor           TEXT NOT NULL,   -- 'reconciler' | 'user'
     before_json     TEXT,
     after_json      TEXT,
-    reflection_id   INTEGER REFERENCES reflections(id) ON DELETE SET NULL,
+    reconcile_run_id INTEGER REFERENCES memory_reconcile_runs(id) ON DELETE SET NULL,
     created_at      REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_unit_ops_unit ON memory_unit_ops(unit_id, id);
-CREATE INDEX IF NOT EXISTS idx_unit_ops_reflection ON memory_unit_ops(reflection_id);
+CREATE INDEX IF NOT EXISTS idx_unit_ops_reconcile_run ON memory_unit_ops(reconcile_run_id);
 
 CREATE TABLE IF NOT EXISTS memory_views (
     id                   TEXT PRIMARY KEY,       -- mv_<ulid>
     owner_scope          TEXT NOT NULL,
     visibility_scope     TEXT NOT NULL,
-    view_type            TEXT NOT NULL,          -- 'user_md' | 'soul_relationship_memory'
+    view_type            TEXT NOT NULL,          -- 'user_portrait' | 'soul_relationship_memory'
     content_md           TEXT NOT NULL,
     source_unit_set_hash TEXT NOT NULL,
     renderer_version     TEXT NOT NULL,

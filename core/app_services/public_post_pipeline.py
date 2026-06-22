@@ -5,12 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import attachment_service, context_builder, db, memory_read, memory_reconcile_runner, memory_view_producer, query_rewriter, record_service, reflector, reply_service, retrieval, suggestion_pipeline, todo_service, tool_config_service, vector_index_service, vision_service
+from core import attachment_service, context_builder, db, memory_events_service, memory_reconcile_runner, memory_view_producer, query_rewriter, record_service, reply_service, retrieval, suggestion_pipeline, todo_service, tool_config_service, vector_index_service, vision_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
-
-DEEP_REFLECTION_POST_THRESHOLD = 5
-
 
 @dataclass(frozen=True)
 class CreatedPost:
@@ -70,20 +67,11 @@ def create_post(content: str, attachment_ids: list[str] | None = None) -> Create
     if body and tool_config_service.is_tool_enabled("todo"):
         job_ids.append(job_service.enqueue(job_service.TYPE_RUN_TODO_TOOL, {"post_id": post_id}))
     if body or attachment_ids:
-        if memory_read.reconcile_write_enabled():
-            # v2 write path: a single global reconcile pass replaces the legacy
-            # light + deep markdown reflections. Deduped + no post_id so it stays
-            # a global job and does not gate this post's pipeline_done.
-            reconcile_id = job_service.enqueue_memory_reconcile_once({"trigger": "post"})
-            if reconcile_id is not None:
-                job_ids.append(reconcile_id)
-        else:
-            job_ids.extend(
-                [
-                    job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id}),
-                    job_service.enqueue(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, {"post_id": post_id}),
-                ]
-            )
+        reconcile_id = job_service.enqueue_memory_reconcile_once(
+            {"trigger": "post", "post_id": post_id}
+        )
+        if reconcile_id is not None:
+            job_ids.append(reconcile_id)
     return CreatedPost(post_id=post_id, job_ids=job_ids)
 
 
@@ -98,14 +86,6 @@ def execute_job(job: dict[str, Any], client: LLMClient, model: str) -> None:
         _run_generate_post_replies(job_id, payload, client, model)
     elif job_type == job_service.TYPE_RUN_TODO_TOOL:
         _run_todo_tool(job_id, payload, client, model)
-    elif job_type == job_service.TYPE_RUN_LIGHT_REFLECTION:
-        _run_light_reflection(job_id, payload, client, model)
-    elif job_type == job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION:
-        _run_maybe_global_deep_reflection(job_id, payload, client, model)
-    elif job_type == job_service.TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION:
-        _run_trigger_global_deep_reflection(payload, client, model)
-    elif job_type == job_service.TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS:
-        _run_trigger_soul_deep_reflections(payload, client, model)
     elif job_type == job_service.TYPE_RUN_MEMORY_RECONCILE:
         _run_memory_reconcile(job_id, client, model)
     else:
@@ -136,6 +116,22 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
             vision_context,
             [attachment.id for attachment in attachments],
         )
+        with db.transaction() as conn:
+            existing = conn.execute(
+                """
+                SELECT 1 FROM memory_ingest_events
+                WHERE source_type = 'post_vision' AND source_id = ?
+                LIMIT 1
+                """,
+                (post_id,),
+            ).fetchone()
+            if existing is None:
+                memory_events_service.record_post_vision(
+                    conn,
+                    post_id=post_id,
+                    content=vision_context,
+                    occurred_at=db.now_ts(),
+                )
     public_context = build_public_post_reply_context(
         post_id,
         llm_content,
@@ -249,68 +245,6 @@ def _run_todo_tool(job_id: int, payload: dict[str, Any], client: LLMClient, mode
     )
 
 
-def _run_light_reflection(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    post_id = _required_post_id(payload)
-    event_service.append_post_event(post_id, "light_reflection_started", {"post_id": post_id}, job_id=job_id)
-    result = reflector.run_light_reflection_safely(post_id, client, model)
-    if result is None:
-        event_service.append_post_event(post_id, "light_reflection_failed", {"pending_retry": True}, job_id=job_id)
-        raise RuntimeError("light reflection failed")
-    event_service.append_post_event(
-        post_id,
-        "light_reflection_succeeded",
-        {
-            "entities": len(result.entities),
-            "emotions": len(result.emotions),
-            "events": len(result.events),
-            "relations": len(result.relations),
-            "importance": result.importance,
-        },
-        job_id=job_id,
-    )
-
-
-def _run_maybe_global_deep_reflection(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    post_id = _required_post_id(payload)
-    scope = reflector.preview_global_deep_reflection_scope(limit=DEEP_REFLECTION_POST_THRESHOLD)
-    if len(scope.post_ids) < DEEP_REFLECTION_POST_THRESHOLD:
-        event_service.append_post_event(
-            post_id,
-            "deep_reflection_succeeded",
-            {"skipped": True, "pending_post_count": len(scope.post_ids)},
-            job_id=job_id,
-        )
-        return
-
-    event_service.append_post_event(
-        post_id,
-        "deep_reflection_queued",
-        {"pending_post_count": len(scope.post_ids)},
-        job_id=job_id,
-    )
-    try:
-        result = reflector.trigger_global_deep_reflection(
-            client,
-            model,
-            trigger="api_threshold",
-            limit=100,
-        )
-    except Exception as exc:
-        event_service.append_post_event(post_id, "deep_reflection_failed", {"error": str(exc)}, job_id=job_id)
-        raise
-    event_service.append_post_event(
-        post_id,
-        "deep_reflection_succeeded",
-        {
-            "skipped": result is None,
-            "reflection_id": result.id if result is not None else None,
-            "related_post_ids": result.related_post_ids if result is not None else [],
-            "patch_summary": result.patch_summary if result is not None else None,
-        },
-        job_id=job_id,
-    )
-
-
 def maybe_emit_pipeline_done_for_job(job: dict[str, Any]) -> None:
     """Check if a completed job was the last one for its post; emit pipeline_done if so."""
     payload = job.get("payload") or {}
@@ -390,17 +324,6 @@ def _job_summary(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    limit = _payload_int(payload, "limit", 100)
-    trigger = str(payload.get("trigger") or "api_manual")
-    reflector.trigger_global_deep_reflection(
-        client,
-        model,
-        trigger=trigger,
-        limit=limit,
-    )
-
-
 def _run_memory_reconcile(job_id: int, client: LLMClient, model: str) -> None:
     """v2 write path: reconcile every bucket with unconsumed evidence into units,
     then refresh any stale or missing identity views from the updated units."""
@@ -409,6 +332,7 @@ def _run_memory_reconcile(job_id: int, client: LLMClient, model: str) -> None:
     # Keep the unit vector docs in sync with the new/retracted units so semantic
     # retrieval sees them (hash-gated; unchanged docs are skipped).
     vector_index_service.rebuild_expected_docs()
+    vector_index_service.process_outbox()
     if result.failures or result.relink_failures:
         raise MemoryReconcileRunError(
             result.failures,
@@ -418,17 +342,6 @@ def _run_memory_reconcile(job_id: int, client: LLMClient, model: str) -> None:
         job_service.enqueue_memory_reconcile_once(
             {"trigger": "continuation", "previous_job_id": job_id}
         )
-
-
-def _run_trigger_soul_deep_reflections(payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    limit_per_soul = _payload_int(payload, "limit_per_soul", 100)
-    trigger = str(payload.get("trigger") or "api_manual")
-    reflector.trigger_soul_deep_reflections(
-        client,
-        model,
-        trigger=trigger,
-        limit_per_soul=limit_per_soul,
-    )
 
 
 def _required_post_id(payload: dict[str, Any]) -> str:
@@ -443,11 +356,3 @@ def _post_content(post_id: str) -> str:
     if row is None:
         raise ValueError(f"post 不存在：{post_id}")
     return str(row["content"])
-
-
-def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
-    try:
-        value = int(payload.get(key, default))
-    except (TypeError, ValueError):
-        return default
-    return max(1, min(value, 500))

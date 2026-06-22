@@ -50,7 +50,7 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
         summary = recon.reconcile_bucket(
             "soul:gotoh", "thread:20260616-001",
             op_producer=self._producer_adds_from_each_event(),
-            reflection_type=recon.RECONCILE_THREAD,
+            run_type=recon.RECONCILE_THREAD,
         )
         # no user evidence -> nothing produced, but cursor still advances
         self.assertIsNone(summary)
@@ -66,7 +66,7 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
         summary = recon.reconcile_bucket(
             "soul:luna", "private:soul:luna",
             op_producer=self._producer_adds_from_each_event(),
-            reflection_type=recon.RECONCILE_SOUL_PRIVATE,
+            run_type=recon.RECONCILE_SOUL_PRIVATE,
         )
         units = mus.list_units("soul:luna", "private:soul:luna")
         self.assertEqual(len(units), 1)
@@ -88,7 +88,7 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
 
         summary = recon.reconcile_bucket(
             "soul:luna", "private:soul:luna", op_producer=producer,
-            reflection_type=recon.RECONCILE_SOUL_PRIVATE,
+            run_type=recon.RECONCILE_SOUL_PRIVATE,
         )
         # assistant event id is not in the allowed (user) set -> op skipped
         self.assertEqual(summary.applied, 0)
@@ -109,7 +109,7 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
         summary = recon.reconcile_bucket(
             "soul:gotoh", "thread:20260616-001",
             op_producer=self._producer_adds_from_each_event(),
-            reflection_type=recon.RECONCILE_THREAD,
+            run_type=recon.RECONCILE_THREAD,
         )
         units = mus.list_units("soul:gotoh", "thread:20260616-001")
         self.assertEqual(len(units), 1)  # only the user comment becomes a belief

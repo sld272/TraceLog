@@ -86,7 +86,7 @@ class LoggingServiceTest(unittest.TestCase):
     def test_default_logging_config_no_longer_contains_llm_payload(self) -> None:
         self.assertNotIn("llm_payload", logging_service.default_config())
 
-    def test_legacy_llm_payload_config_is_ignored(self) -> None:
+    def test_removed_llm_payload_config_is_ignored(self) -> None:
         normalized = logging_service.normalize_config(
             {"enabled": True, "llm_payload": "off", "preview_chars": 12}
         )

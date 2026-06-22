@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, profile_service, query_rewriter, retrieval, soul_memory_service, soul_service, suggestion_pipeline, tool_config_service, web_search_gate, web_search_service
+from core import chat_service, db, logging_service, memory_unit_service, memory_view_service, query_rewriter, retrieval, soul_relationship_memory, soul_service, suggestion_pipeline, tool_config_service, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
 from tests.helpers import require_not_none
@@ -36,20 +36,14 @@ class ChatServiceTest(unittest.TestCase):
 
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_user_md_path = profile_service.USER_MD_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
-        self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
         self.old_hybrid_search = retrieval.hybrid_search
         self.old_hybrid_docs = retrieval.hybrid_search_documents
         self.old_web_search_config = web_search_service.CONFIG_FILE
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
-        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
         soul_service.SOULS_DIR = self.workspace / "souls"
-        soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
-        soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         retrieval.hybrid_search = lambda query, k=3, **kwargs: []
         retrieval.hybrid_search_documents = lambda *args, **kwargs: []
         web_search_service.CONFIG_FILE = str(Path(self.tmp.name) / "config.json")
@@ -57,17 +51,28 @@ class ChatServiceTest(unittest.TestCase):
         db.init_db()
         logging_service.init_logging({"enabled": True, "llm_payload": "off"})
         self.workspace.mkdir(parents=True, exist_ok=True)
-        (self.workspace / "user.md").write_text("# 用户档案\n\n## 基本信息\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
+        memory_unit_service.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="user",
+            type="identity",
+            content="测试用户",
+            confidence=1.0,
+            tier="core",
+            importance=1.0,
+            source="user_authored",
+            actor="user",
+        )
+        memory_view_service.synthesize_view(
+            "global", "public", memory_view_service.VIEW_USER_PORTRAIT
+        )
 
     def tearDown(self) -> None:
         logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        profile_service.USER_MD_PATH = self.old_user_md_path
         soul_service.SOULS_DIR = self.old_souls_dir
-        soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
-        soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         retrieval.hybrid_search = self.old_hybrid_search
         retrieval.hybrid_search_documents = self.old_hybrid_docs
         web_search_service.CONFIG_FILE = self.old_web_search_config
@@ -160,7 +165,6 @@ class ChatServiceTest(unittest.TestCase):
         context = chat_service.build_chat_context(thread.id, "考试怎么办")
 
         self.assertIn("你是「拾迹者」", context.soul.soul)
-        self.assertIn("# 拾迹者的相处记忆", context.soul.soul_memory)
         self.assertIn("测试用户", context.context)
         self.assertIn("考试压力很大", context.context)
         self.assertIn("你之前也提到过考试压力", context.context)
@@ -235,16 +239,34 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual("没有落库的当前消息", context.retrieval_query)
         self.assertEqual("没有落库的当前消息", captured["query"])
 
-    def test_build_chat_context_loads_current_soul_memory_only(self) -> None:
+    def test_build_chat_context_loads_current_soul_relationship_view_only(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
         soul_service.create_soul("测试好友", description="测试描述")
-        soul_memory_service.write_soul_memory("拾迹者", "# 拾迹者的相处记忆\n\n## 对用户的理解\n拾迹者短回复记忆\n", source="user")
-        soul_memory_service.write_soul_memory("测试好友", "# 测试好友的相处记忆\n\n## 对用户的理解\n其他 SOUL 私聊记忆\n", source="user")
+        for soul_name, content in (
+            ("拾迹者", "拾迹者短回复记忆"),
+            ("测试好友", "其他 SOUL 私聊记忆"),
+        ):
+            memory_unit_service.add_unit(
+                owner_scope=f"soul:{soul_name}",
+                visibility_scope=f"private:soul:{soul_name}",
+                source_channel="user",
+                type="relationship",
+                content=content,
+                confidence=1.0,
+                tier="core",
+                importance=1.0,
+                source="user_authored",
+                actor="user",
+            )
+            soul_relationship_memory.refresh_relationship_memory(soul_name)
 
         context = chat_service.build_chat_context(thread.id, "私聊context词")
 
-        self.assertIn("拾迹者短回复记忆", context.soul.soul_memory)
-        self.assertNotIn("其他 SOUL 私聊记忆", context.soul.soul_memory)
+        relationship = reply_router._relationship_memory(
+            context.soul, channel="chat", query="私聊context词"
+        )
+        self.assertIn("拾迹者短回复记忆", relationship)
+        self.assertNotIn("其他 SOUL 私聊记忆", relationship)
         self.assertNotIn("# 相关记忆", context.context)
 
     def test_build_chat_context_uses_query_rewrite_for_related_posts(self) -> None:
@@ -661,7 +683,7 @@ class ChatServiceTest(unittest.TestCase):
                 SimpleNamespace(role="user", content="正常消息"),
             ],
         )
-        soul = SoulContext("测试", None, 0, "测试人格", "")
+        soul = SoulContext("测试", None, 0, "测试人格")
 
         reply_router.call_soul_chat_reply(client, "fake-model", context, soul)
         messages = client.calls[-1]["messages"]
@@ -708,18 +730,32 @@ class ChatServiceTest(unittest.TestCase):
         row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM posts"))
         self.assertEqual(0, row["count"])
 
-    def test_private_chat_reply_does_not_write_reflection_or_profile_revisions(self) -> None:
+    def test_private_chat_reply_only_records_evidence_until_reconcile_runs(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
 
         chat_service.call_chat_reply(thread.id, "这是一条私聊回复", FakeClient(), "fake-model")
 
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM entities"))["count"])
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM emotions"))["count"])
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM events"))["count"])
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM relations"))["count"])
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions"))["count"])
-        rows = db.query_all("SELECT source FROM soul_memory_revisions WHERE source != 'system'")
-        self.assertEqual([], rows)
+        self.assertGreater(
+            require_not_none(
+                db.query_one("SELECT COUNT(*) AS count FROM memory_ingest_events")
+            )["count"],
+            0,
+        )
+        self.assertEqual(
+            0,
+            require_not_none(
+                db.query_one(
+                    "SELECT COUNT(*) AS count FROM memory_units "
+                    "WHERE owner_scope = 'soul:拾迹者'"
+                )
+            )["count"],
+        )
+        self.assertEqual(
+            0,
+            require_not_none(
+                db.query_one("SELECT COUNT(*) AS count FROM memory_reconcile_runs")
+            )["count"],
+        )
 
     def test_private_chat_reply_ignores_todo_fields(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  type MemoryRevisionSummary,
+  type MemoryOperation,
   type Todo,
-  listProfileRevisions,
+  listMemoryOperations,
 } from '@/api/client'
 import { isTodoDone, getTodayKey } from '@/utils/todo'
 import { formatDateLabel, formatSmartTime } from '@/utils/date'
@@ -192,13 +192,13 @@ function TodayTodosCard({
 }
 
 function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
-  const [revisions, setRevisions] = useState<MemoryRevisionSummary[]>([])
+  const [operations, setOperations] = useState<MemoryOperation[]>([])
 
   useEffect(() => {
     let cancelled = false
-    void listProfileRevisions(6)
+    void listMemoryOperations(6)
       .then((data) => {
-        if (!cancelled) setRevisions(data)
+        if (!cancelled) setOperations(data.slice().reverse())
       })
       .catch(() => {
         /* 右栏保持安静：拿不到记忆变化时不打扰用户 */
@@ -212,12 +212,12 @@ function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
     <section className={styles.card}>
       <PanelHeader title="最近记忆变化" onMore={onOpenMemory} />
       <div className={styles.itemList}>
-        {revisions.length > 0 ? (
+        {operations.length > 0 ? (
           <div className={styles.pulseList}>
-            {revisions.map((revision) => (
-              <button key={revision.id} type="button" className={styles.pulse} onClick={onOpenMemory}>
-                <span className={styles.pulseTitle}>{pulseTitle(revision)}</span>
-                <span className={styles.pulseMeta}>{pulseMeta(revision)}</span>
+            {operations.map((operation) => (
+              <button key={operation.id} type="button" className={styles.pulse} onClick={onOpenMemory}>
+                <span className={styles.pulseTitle}>{operationTitle(operation)}</span>
+                <span className={styles.pulseMeta}>{operationMeta(operation)}</span>
               </button>
             ))}
           </div>
@@ -229,21 +229,28 @@ function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
   )
 }
 
-function pulseTitle(revision: MemoryRevisionSummary): string {
-  if (revision.target_type === 'soul') {
-    return revision.target_name ? `与 ${revision.target_name} 的相处记忆已更新` : '相处记忆已更新'
+function operationTitle(operation: MemoryOperation): string {
+  const content = operation.after?.content ?? operation.before?.content
+  if (typeof content === 'string' && content.trim()) return content
+  return `记忆 ${operation.unit_id}`
+}
+
+function operationMeta(operation: MemoryOperation): string {
+  return `${operationLabel(operation.op, operation.actor)} · ${formatSmartTime(operation.created_at)}`
+}
+
+function operationLabel(op: string, actor: string): string {
+  const labels: Record<string, string> = {
+    add: '新增',
+    confirm: '确认',
+    revise: '修订',
+    retract: '撤回',
+    retain: '保留',
+    user_create: '手动新增',
+    user_edit: '手动编辑',
+    user_delete: '手动删除',
   }
-  return '核心画像已更新'
-}
-
-function pulseMeta(revision: MemoryRevisionSummary): string {
-  return `${revisionSourceLabel(revision.source)} · ${formatSmartTime(revision.created_at)}`
-}
-
-function revisionSourceLabel(source: string): string {
-  if (source.includes('user') || source.includes('编辑')) return '手动编辑'
-  if (source.includes('migrat') || source.includes('迁移')) return '迁移'
-  return 'AI 整理'
+  return labels[op] ?? (actor === 'user' ? '手动调整' : 'AI 对账')
 }
 
 function SearchIcon() {
@@ -282,4 +289,3 @@ function todoMeta(todo: Todo): string {
   const dateLabel = formatDateLabel(todo.date, getTodayKey())
   return time ? `${dateLabel} ${time}` : dateLabel
 }
-

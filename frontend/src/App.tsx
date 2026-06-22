@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  type ReflectionScope,
+  type MemoryStatus,
   type Soul,
-  type SoulReflectionScope,
   type Todo,
+  getMemoryStatus,
   getModelSettings,
   listGoals,
   listSouls,
   listTodos,
-  previewGlobalReflection,
-  previewSoulReflections,
   updateTodo,
 } from '@/api/client'
 import { AppShell } from '@/components/AppShell'
@@ -18,7 +16,6 @@ import { RightPanel } from '@/components/RightPanel'
 import { ChatPage } from '@/pages/ChatPage'
 import { GoalsPage } from '@/pages/GoalsPage'
 import { MemoryWorkbench } from '@/pages/MemoryWorkbench'
-import { ReflectionsPage } from '@/pages/ReflectionsPage'
 import { PostDetailPage } from '@/pages/PostDetailPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { Timeline } from '@/pages/Timeline'
@@ -39,16 +36,14 @@ export function App() {
   const [soulsLoadState, setSoulsLoadState] = useState<SoulsLoadState>('loading')
   const [todos, setTodos] = useState<Todo[]>([])
   const [activeGoalCount, setActiveGoalCount] = useState(0)
-  const [globalReflection, setGlobalReflection] = useState<ReflectionScope | null>(null)
-  const [soulReflections, setSoulReflections] = useState<SoulReflectionScope[]>([])
+  const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null)
   const [postMutationSignal, setPostMutationSignal] = useState<PostMutationSignal | null>(null)
   const [homeSearch, setHomeSearch] = useState('')
   const homeScrollTopRef = useRef(0)
   const previousRouteKindRef = useRef(route.kind)
   const showRightPanel = route.kind === 'home'
   const navKey = navKeyFromRoute(route)
-  const reflectionQueueCount = (globalReflection?.post_ids.length ?? 0)
-    + soulReflections.reduce((total, scope) => total + Math.max(scope.interaction_count, 0), 0)
+  const memoryQueueCount = memoryStatus?.pending_event_count ?? 0
   const openTodoCount = todos.filter((todo) => !isTodoDone(todo)).length
 
   const loadSouls = useCallback(async () => {
@@ -67,15 +62,13 @@ export function App() {
 
   const refreshHomeContext = useCallback(async () => {
     try {
-      const [todoData, globalData, soulData, goalData] = await Promise.all([
+      const [todoData, memoryData, goalData] = await Promise.all([
         listTodos(),
-        previewGlobalReflection(),
-        previewSoulReflections(),
+        getMemoryStatus(),
         listGoals({ status: 'active' }),
       ])
       setTodos(todoData)
-      setGlobalReflection(globalData)
-      setSoulReflections(soulData)
+      setMemoryStatus(memoryData)
       setActiveGoalCount(goalData.length)
     } catch {
       /* Keep the right rail calm when optional context is unavailable. */
@@ -260,7 +253,6 @@ export function App() {
         {route.kind === 'todos' && <TodosPage onTodosChanged={handleTodosChanged} />}
         {route.kind === 'goals' && <GoalsPage />}
         {route.kind === 'memory' && <MemoryWorkbench />}
-        {route.kind === 'reflections' && <ReflectionsPage onReflectionSettled={refreshHomeContext} />}
         {route.kind === 'settings' && (
           <SettingsPage
             firstRun={modelConfigured === false}
@@ -286,7 +278,7 @@ export function App() {
         <LeftNav
           souls={souls}
           soulsLoadState={soulsLoadState}
-          reflectionQueueCount={reflectionQueueCount}
+          memoryQueueCount={memoryQueueCount}
           goalCount={activeGoalCount}
           todoCount={openTodoCount}
           activePage={navKey}
@@ -319,7 +311,6 @@ function routeFromNavKey(page: string): Route {
   if (page === 'todos') return { kind: 'todos' }
   if (page === 'goals') return { kind: 'goals' }
   if (page === 'memory') return { kind: 'memory' }
-  if (page === 'reflections') return { kind: 'reflections' }
   if (page === 'settings') return { kind: 'settings' }
   if (page.startsWith('chat:')) return { kind: 'chat', soulName: page.slice('chat:'.length) }
   return { kind: 'home' }

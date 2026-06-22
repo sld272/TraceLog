@@ -2,9 +2,8 @@
 
 This is the production entry point for the memory-v2 write path: it finds each
 (owner, visibility) bucket with unconsumed events and reconciles a bounded pass
-with the real LLM op-producer. The background job invokes it automatically in
-reconcile write mode; the workspace script also exposes it for preview/manual
-operation.
+with the real LLM op-producer. The background job invokes it automatically;
+the workspace script also exposes it for preview/manual operation.
 
 ``dry_run=True`` validates + previews ops without persisting (see
 memory_reconciler.reconcile_bucket), which is exactly what the shadow window and
@@ -106,7 +105,7 @@ class ReconcileRunResult:
     relink_failures: list[RelinkFailure] = field(default_factory=list)
 
 
-def reflection_type_for_visibility(visibility_scope: str) -> str:
+def run_type_for_visibility(visibility_scope: str) -> str:
     if visibility_scope == "public":
         return recon.RECONCILE_GLOBAL
     if visibility_scope.startswith("thread:"):
@@ -145,7 +144,7 @@ def run_pending_reconcile(
                 owner_scope,
                 visibility_scope,
                 op_producer=producer,
-                reflection_type=reflection_type_for_visibility(visibility_scope),
+                run_type=run_type_for_visibility(visibility_scope),
                 trigger=trigger,
                 limit=limit_per_bucket,
                 dry_run=dry_run,

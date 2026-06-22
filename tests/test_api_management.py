@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from PIL import Image
 
-from core import chat_service, db, logging_service, profile_service, retrieval, soul_memory_service, soul_service, suggestion_service
+from core import chat_service, db, logging_service, retrieval, soul_service, suggestion_service
 from core.app_services import job_service
 
 
@@ -25,25 +25,18 @@ class ApiManagementTest(unittest.TestCase):
         self.workspace = Path(self.tmp.name) / "workspace"
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_user_md_path = profile_service.USER_MD_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
-        self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
         self.old_hybrid_search = retrieval.hybrid_search
         self.config_path = Path(self.tmp.name) / "config.json"
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
-        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
         soul_service.SOULS_DIR = self.workspace / "souls"
-        soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
-        soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         retrieval.hybrid_search = lambda *args, **kwargs: []
 
         db.init_db()
         logging_service.init_logging({"enabled": False})
         self.workspace.mkdir(parents=True, exist_ok=True)
-        (self.workspace / "user.md").write_text("# 用户档案\n\n## 基本信息\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
         self.config_path.write_text(
             json.dumps(
@@ -62,10 +55,7 @@ class ApiManagementTest(unittest.TestCase):
         logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        profile_service.USER_MD_PATH = self.old_user_md_path
         soul_service.SOULS_DIR = self.old_souls_dir
-        soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
-        soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         retrieval.hybrid_search = self.old_hybrid_search
         self.tmp.cleanup()
 
@@ -113,25 +103,6 @@ class ApiManagementTest(unittest.TestCase):
         self.addCleanup(self.config_patch.stop)
         return TestClient(create_app())
 
-    def test_profile_routes_read_update_and_list_revisions(self) -> None:
-        new_profile = "# 用户档案\n\n## 基本信息\nAPI 测试用户\n"
-
-        with self._client() as client:
-            get_response = client.get("/profile")
-            put_response = client.put("/profile", json={"content": new_profile})
-            revisions_response = client.get("/profile/revisions")
-            revision_id = revisions_response.json()[0]["id"]
-            revision_response = client.get(f"/profile/revisions/{revision_id}")
-
-        self.assertEqual(200, get_response.status_code)
-        self.assertIn("测试用户", get_response.json()["content"])
-        self.assertEqual(200, put_response.status_code)
-        self.assertIn("API 测试用户", put_response.json()["content"])
-        self.assertEqual(200, revisions_response.status_code)
-        self.assertGreaterEqual(len(revisions_response.json()), 1)
-        self.assertEqual(200, revision_response.status_code)
-        self.assertEqual(new_profile, revision_response.json()["snapshot"])
-
     def test_evidence_feedback_route_is_idempotent(self) -> None:
         payload = {"channel": "chat", "message_id": 12, "doc_id": "post-p-1"}
 
@@ -146,32 +117,18 @@ class ApiManagementTest(unittest.TestCase):
         row = db.query_one("SELECT COUNT(*) AS count FROM evidence_feedback")
         self.assertEqual(1, row["count"])
 
-    def test_soul_routes_create_patch_and_edit_memory(self) -> None:
+    def test_soul_routes_create_patch_and_list(self) -> None:
         name = quote("测试好友")
-        memory = "# 测试好友的相处记忆\n\n## 对用户的理解\nAPI 里写入的记忆\n"
 
         with self._client() as client:
             create_response = client.post("/souls", json={"name": "测试好友", "description": "测试描述"})
             patch_response = client.patch(f"/souls/{name}", json={"enabled": False})
-            get_memory_response = client.get(f"/souls/{name}/memory")
-            memory_response = client.put(f"/souls/{name}/memory", json={"content": memory})
-            revisions_response = client.get(f"/souls/{name}/memory/revisions")
-            revision_id = revisions_response.json()[0]["id"]
-            revision_response = client.get(f"/souls/{name}/memory/revisions/{revision_id}")
             list_response = client.get("/souls")
 
         self.assertEqual(200, create_response.status_code)
         self.assertEqual("测试好友", create_response.json()["name"])
         self.assertEqual(200, patch_response.status_code)
         self.assertFalse(patch_response.json()["enabled"])
-        self.assertEqual(200, get_memory_response.status_code)
-        self.assertIn("# 测试好友的相处记忆", get_memory_response.json()["content"])
-        self.assertEqual(200, memory_response.status_code)
-        self.assertIn("API 里写入的记忆", memory_response.json()["content"])
-        self.assertEqual(200, revisions_response.status_code)
-        self.assertGreaterEqual(len(revisions_response.json()), 1)
-        self.assertEqual(200, revision_response.status_code)
-        self.assertEqual(memory, revision_response.json()["snapshot"])
         self.assertIn("测试好友", [item["name"] for item in list_response.json()])
 
     def test_upload_attachment_and_create_image_only_post(self) -> None:
@@ -491,22 +448,20 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIsNotNone(job)
         self.assertEqual(job_service.STATUS_CANCELLED, job["status"])
 
-    def test_manual_reflection_routes_enqueue_jobs(self) -> None:
+    def test_manual_memory_reconcile_route_enqueues_job(self) -> None:
         with self._client() as client:
-            global_response = client.post("/reflections/global", json={"limit": 5})
-            souls_response = client.post("/reflections/souls", json={"limit_per_soul": 5})
+            response = client.post("/memory/reconcile")
             jobs_response = client.get("/jobs")
 
-        self.assertEqual(200, global_response.status_code)
-        self.assertEqual(200, souls_response.status_code)
+        self.assertEqual(200, response.status_code)
         self.assertEqual(
-            ["trigger_soul_deep_reflections", "trigger_global_deep_reflection"],
+            ["run_memory_reconcile"],
             [job["type"] for job in jobs_response.json()],
         )
 
     def test_job_routes_cancel_pending_and_retry_failed_jobs(self) -> None:
-        pending_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": "p-1"})
-        failed_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": "p-1"})
+        pending_id = job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": "p-1"})
+        failed_id = job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": "p-1"})
         job_service.mark_failed(failed_id, "boom")
 
         with self._client() as client:
@@ -527,7 +482,7 @@ class ApiManagementTest(unittest.TestCase):
             """,
             (post_id, "2026-06-05T12:00:00+08:00", "会失败的 post", 1.0, 1.0),
         )
-        job_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id})
+        job_id = job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id})
         job_service.mark_failed(job_id, "boom")
 
         with self._client() as client:
@@ -548,7 +503,7 @@ class ApiManagementTest(unittest.TestCase):
             """,
             (post_id, "2026-06-05T12:00:00+08:00", "重试中的 post", 1.0, 1.0),
         )
-        failed_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id})
+        failed_id = job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id})
         job_service.mark_failed(failed_id, "boom")
 
         with self._client() as client:

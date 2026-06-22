@@ -1,15 +1,15 @@
-"""Bridges memory_reconciler's op_producer seam to the reflection_router LLM.
+"""Bridges memory_reconciler's op-producer seam to the memory LLM router.
 
 memory_reconciler.reconcile_bucket calls op_producer(boundary, events,
 active_units, tombstones) outside its write transaction. This module formats
 those structured inputs into prompt text and returns the parsed op batch, so
 the reconcile engine stays LLM-free and the prompt lives with the other
-reflection prompts.
+memory prompts.
 """
 
 from __future__ import annotations
 
-from core.llm import reflection_router
+from core.llm import memory_router
 from core.llm.types import LLMClient
 
 
@@ -132,7 +132,7 @@ def make_relink_judge(client: LLMClient, model: str, *, trace_context: dict | No
     content and its candidate evidence, decide which links still support it."""
 
     def judge(*, content: str, evidence: list[dict]) -> dict:
-        result = reflection_router.call_memory_relink(
+        result = memory_router.call_memory_relink(
             client,
             model,
             content=content,
@@ -156,7 +156,7 @@ def make_llm_op_producer(client: LLMClient, model: str, *, trace_context: dict |
         ctx = dict(trace_context or {})
         ctx.update(boundary)
         ctx["event_count"] = len(events)
-        result = reflection_router.call_memory_reconcile(
+        result = memory_router.call_memory_reconcile(
             client,
             model,
             boundary_text=boundary_text,

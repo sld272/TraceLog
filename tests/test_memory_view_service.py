@@ -49,42 +49,42 @@ class MemoryViewServiceTest(unittest.TestCase):
 
     def test_user_retract_marks_view_stale_and_leaves_portrait(self) -> None:
         unit_id = self._confirmed_core_unit("我在准备考研")
-        view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         self.assertIn("考研", view.content_md)
-        self.assertIn("考研", mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD))
+        self.assertIn("考研", mvs.read_portrait_body("global", "public", mvs.VIEW_USER_PORTRAIT))
         mus.retract_unit(unit_id, by="user", reason="false")
         self.assertEqual(
-            mvs.get_view("global", "public", mvs.VIEW_USER_MD)["status"], "stale"
+            mvs.get_view("global", "public", mvs.VIEW_USER_PORTRAIT)["status"], "stale"
         )
         self.assertNotIn(
-            "考研", mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD)
+            "考研", mvs.read_portrait_body("global", "public", mvs.VIEW_USER_PORTRAIT)
         )
 
     def test_prompt_policy_round_trip_restores_slice(self) -> None:
         unit_id = self._confirmed_core_unit("我喜欢安静的环境")
-        mvs.recompute_slice("global", "public")
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
+        mvs.recompute_portrait_membership("global", "public")
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 1)
         mus.set_prompt_policy(unit_id, prompt_policy="no_prompt")
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 0)
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 0)
         mus.set_prompt_policy(unit_id, prompt_policy="allow")
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 1)
 
-    def test_profile_policy_round_trip_restores_slice(self) -> None:
+    def test_portrait_policy_round_trip_restores_slice(self) -> None:
         unit_id = self._confirmed_core_unit("我是研究生")
-        mvs.recompute_slice("global", "public")
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
-        mus.set_profile_policy(unit_id, profile_policy="force_exclude")
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 0)
-        mus.set_profile_policy(unit_id, profile_policy="force_include")
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
+        mvs.recompute_portrait_membership("global", "public")
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 1)
+        mus.set_portrait_policy(unit_id, portrait_policy="force_exclude")
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 0)
+        mus.set_portrait_policy(unit_id, portrait_policy="force_include")
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 1)
 
     # --- selector ----------------------------------------------------------
 
     def test_confirmed_core_unit_enters_slice(self) -> None:
         unit_id = self._confirmed_core_unit("我是一名考研学生")
-        core = mvs.recompute_slice("global", "public")
+        core = mvs.recompute_portrait_membership("global", "public")
         self.assertIn(unit_id, core)
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 1)
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 1)
 
     def test_freshly_added_confident_core_unit_enters_immediately(self) -> None:
         # a clearly-stated, high-confidence, important identity must enter the
@@ -94,7 +94,7 @@ class MemoryViewServiceTest(unittest.TestCase):
             type="identity", content="南大大一法语生，自学计算机", confidence=0.9, tier="core",
             importance=0.9, evidence_event_ids=[self._event()],
         )
-        self.assertIn(unit_id, mvs.recompute_slice("global", "public"))
+        self.assertIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
 
     def test_low_confidence_and_low_importance_excluded(self) -> None:
         low_conf = mus.add_unit(
@@ -104,7 +104,7 @@ class MemoryViewServiceTest(unittest.TestCase):
         )
         mus.confirm_unit(low_conf, evidence_event_ids=[self._event()], confidence=0.5)
         low_imp = self._confirmed_core_unit("低价值核心", importance=0.3)
-        core = mvs.recompute_slice("global", "public")
+        core = mvs.recompute_portrait_membership("global", "public")
         self.assertNotIn(low_conf, core)
         self.assertNotIn(low_imp, core)
 
@@ -116,11 +116,11 @@ class MemoryViewServiceTest(unittest.TestCase):
             importance=0.65, evidence_event_ids=[self._event()],
         )
         mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=0.9)
-        self.assertNotIn(unit_id, mvs.recompute_slice("global", "public"))
+        self.assertNotIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
         # bump to 0.70 -> now admitted
         with db.transaction() as conn:
             conn.execute("UPDATE memory_units SET importance=0.70 WHERE id=?", (unit_id,))
-        self.assertIn(unit_id, mvs.recompute_slice("global", "public"))
+        self.assertIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
 
     def test_contextual_tier_excluded(self) -> None:
         unit_id = mus.add_unit(
@@ -129,18 +129,18 @@ class MemoryViewServiceTest(unittest.TestCase):
             importance=0.9, evidence_event_ids=[self._event()],
         )
         mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=0.95)
-        self.assertNotIn(unit_id, mvs.recompute_slice("global", "public"))
+        self.assertNotIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
 
     def test_force_include_and_exclude(self) -> None:
         forced_in = mus.add_unit(
             owner_scope="global", visibility_scope="public", source_channel="post",
             type="preference", content="强制进画像", confidence=0.3, tier="contextual",
-            importance=0.1, profile_policy="force_include", evidence_event_ids=[self._event()],
+            importance=0.1, portrait_policy="force_include", evidence_event_ids=[self._event()],
         )
         forced_out = self._confirmed_core_unit("强制出画像")
         with db.transaction() as conn:
-            conn.execute("UPDATE memory_units SET profile_policy='force_exclude' WHERE id=?", (forced_out,))
-        core = mvs.recompute_slice("global", "public")
+            conn.execute("UPDATE memory_units SET portrait_policy='force_exclude' WHERE id=?", (forced_out,))
+        core = mvs.recompute_portrait_membership("global", "public")
         self.assertIn(forced_in, core)
         self.assertNotIn(forced_out, core)
 
@@ -148,7 +148,7 @@ class MemoryViewServiceTest(unittest.TestCase):
         unit_id = self._confirmed_core_unit("不可进 prompt")
         with db.transaction() as conn:
             conn.execute("UPDATE memory_units SET prompt_policy='no_prompt' WHERE id=?", (unit_id,))
-        self.assertNotIn(unit_id, mvs.recompute_slice("global", "public"))
+        self.assertNotIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
 
     def test_user_authored_enters_without_dwell(self) -> None:
         unit_id = mus.add_unit(
@@ -156,26 +156,26 @@ class MemoryViewServiceTest(unittest.TestCase):
             type="identity", content="用户亲述身份", source="user_authored", confidence=1.0,
             tier="core", importance=0.9,
         )
-        self.assertIn(unit_id, mvs.recompute_slice("global", "public"))
+        self.assertIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
 
     def test_hysteresis_keeps_until_exit(self) -> None:
         unit_id = self._confirmed_core_unit("滞回测试", confidence=0.85)
-        self.assertIn(unit_id, mvs.recompute_slice("global", "public"))  # in slice now
+        self.assertIn(unit_id, mvs.recompute_portrait_membership("global", "public"))  # in slice now
         # drop confidence to between EXIT and ENTER -> stays (hysteresis)
         with db.transaction() as conn:
             conn.execute("UPDATE memory_units SET confidence=0.7 WHERE id=?", (unit_id,))
-        self.assertIn(unit_id, mvs.recompute_slice("global", "public"))
+        self.assertIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
         # drop below EXIT -> leaves
         with db.transaction() as conn:
             conn.execute("UPDATE memory_units SET confidence=0.5 WHERE id=?", (unit_id,))
-        self.assertNotIn(unit_id, mvs.recompute_slice("global", "public"))
+        self.assertNotIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
 
     # --- rendering & view persistence -------------------------------------
 
     def test_template_render_groups_by_type(self) -> None:
         self._confirmed_core_unit("我是研究生", type="identity")
         self._confirmed_core_unit("偏好安静学习", type="preference")
-        view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         self.assertTrue(view.used_fallback)
         self.assertIn("## 身份", view.content_md)
         self.assertIn("## 偏好", view.content_md)
@@ -183,35 +183,35 @@ class MemoryViewServiceTest(unittest.TestCase):
 
     def test_goal_units_never_enter_portrait_slice(self) -> None:
         goal = self._confirmed_core_unit("想考上理想院校", type="goal")
-        self.assertNotIn(goal, mvs.recompute_slice("global", "public"))
+        self.assertNotIn(goal, mvs.recompute_portrait_membership("global", "public"))
 
     def test_synthesize_persists_view_and_members(self) -> None:
         u1 = self._confirmed_core_unit("信念一")
-        view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
-        row = mvs.get_view("global", "public", mvs.VIEW_USER_MD)
+        view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
+        row = mvs.get_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         self.assertEqual(row["status"], "fresh")
         members = db.query_all("SELECT unit_id FROM memory_view_units WHERE view_id=?", (view.view_id,))
         self.assertEqual([m["unit_id"] for m in members], [u1])
 
     def test_synthesize_resynthesize_replaces_members(self) -> None:
         self._confirmed_core_unit("第一批")
-        v1 = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        v1 = mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         self._confirmed_core_unit("第二批")
-        v2 = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        v2 = mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         self.assertEqual(v1.view_id, v2.view_id)  # same view row
         self.assertEqual(len(v2.unit_ids), 2)
 
     def test_injected_synthesizer_used_and_fallback_on_error(self) -> None:
         self._confirmed_core_unit("信念")
         ok = mvs.synthesize_view(
-            "global", "public", mvs.VIEW_USER_MD,
+            "global", "public", mvs.VIEW_USER_PORTRAIT,
             synthesizer=lambda units, budget: "这是 LLM 综合出的连贯画像。",
         )
         self.assertFalse(ok.used_fallback)
         self.assertIn("LLM 综合", ok.content_md)
 
         boom = mvs.synthesize_view(
-            "global", "public", mvs.VIEW_USER_MD,
+            "global", "public", mvs.VIEW_USER_PORTRAIT,
             synthesizer=lambda units, budget: (_ for _ in ()).throw(RuntimeError("llm down")),
         )
         self.assertTrue(boom.used_fallback)  # template fallback
@@ -220,14 +220,14 @@ class MemoryViewServiceTest(unittest.TestCase):
 
     def test_pure_confirm_does_not_change_hash(self) -> None:
         unit_id = self._confirmed_core_unit("稳定信念")
-        mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         # a pure confirm bumps confidence/last_confirmed but content/type/etc unchanged
         mus.confirm_unit(unit_id, evidence_event_ids=[self._event()])
-        self.assertFalse(mvs.mark_stale_if_changed("global", "public", mvs.VIEW_USER_MD))
+        self.assertFalse(mvs.mark_stale_if_changed("global", "public", mvs.VIEW_USER_PORTRAIT))
 
     def test_non_core_add_does_not_stale_fresh_portrait(self) -> None:
         self._confirmed_core_unit("我是研究生")
-        mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         mus.add_unit(
             owner_scope="global",
             visibility_scope="public",
@@ -241,15 +241,15 @@ class MemoryViewServiceTest(unittest.TestCase):
         )
         self.assertEqual(
             "fresh",
-            mvs.get_view("global", "public", mvs.VIEW_USER_MD)["status"],
+            mvs.get_view("global", "public", mvs.VIEW_USER_PORTRAIT)["status"],
         )
 
     def test_content_change_marks_stale(self) -> None:
         unit_id = self._confirmed_core_unit("旧表述")
-        mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         mus.revise_unit(unit_id, content="新表述，含更多细节")
-        self.assertTrue(mvs.mark_stale_if_changed("global", "public", mvs.VIEW_USER_MD))
-        self.assertEqual(mvs.get_view("global", "public", mvs.VIEW_USER_MD)["status"], "stale")
+        self.assertTrue(mvs.mark_stale_if_changed("global", "public", mvs.VIEW_USER_PORTRAIT))
+        self.assertEqual(mvs.get_view("global", "public", mvs.VIEW_USER_PORTRAIT)["status"], "stale")
 
 
 if __name__ == "__main__":

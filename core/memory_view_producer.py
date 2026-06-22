@@ -1,4 +1,4 @@
-"""Bridges memory_view_service's synthesizer seam to the reflection_router LLM.
+"""Bridges memory_view_service's synthesizer seam to the memory LLM router.
 
 memory_view_service.synthesize_view accepts a ``synthesizer(units, char_budget)``
 callable and falls back to its deterministic template on None/error. This module
@@ -11,7 +11,7 @@ from __future__ import annotations
 import sqlite3
 
 from core import memory_view_service as mvs, soul_relationship_memory as srm
-from core.llm import reflection_router
+from core.llm import memory_router
 from core.llm.types import LLMClient
 
 
@@ -42,7 +42,7 @@ def make_llm_synthesizer(
     """Return a synthesizer(units, char_budget) -> str|None for synthesize_view."""
 
     def synthesizer(units: list[sqlite3.Row], char_budget: int):
-        return reflection_router.call_view_synthesis(
+        return memory_router.call_view_synthesis(
             client,
             model,
             units_text=_format_units(units, view_type),

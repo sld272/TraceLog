@@ -7,9 +7,7 @@ export const API_LIMITS = {
   /** 默认修订历史数量 */
   REVISIONS_DEFAULT: 20,
   /** 反思预览数量 */
-  REFLECTION_PREVIEW: 20,
   /** 反思处理上限 */
-  REFLECTION_LIMIT: 100,
 } as const
 
 /** 图片上传相关常量 */

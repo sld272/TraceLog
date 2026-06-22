@@ -9,9 +9,7 @@ to mutable source rows, so editing a post or rerunning a reply never silently
 rewrites the historical basis of a belief. The auto-increment ``id`` doubles as
 the monotonic consumption cursor for per-bucket reconcile.
 
-This module deliberately has *no consumer* yet — Phase 1 only establishes the
-ledger and backfills history. Live write-path wiring and unit reconcile arrive
-in later phases.
+The reconcile worker is the sole consumer and advances one cursor per boundary.
 """
 
 from __future__ import annotations
@@ -28,7 +26,7 @@ GLOBAL_SCOPE = "global"
 PUBLIC_VISIBILITY = "public"
 
 SOURCE_CHANNELS = frozenset({"post", "comment", "chat"})
-SOURCE_TYPES = frozenset({"post", "comment_message", "chat_message"})
+SOURCE_TYPES = frozenset({"post", "post_vision", "comment_message", "chat_message"})
 EVENT_OPS = frozenset({"create", "edit", "rerun", "delete"})
 
 
@@ -163,6 +161,34 @@ def record_post_mutation(
         source_type="post",
         source_id=str(post_id),
         op=op,
+        content_snapshot=content,
+        occurred_at=occurred_at,
+        author="user",
+        created_at=created_at,
+    )
+
+
+def record_post_vision(
+    conn: sqlite3.Connection,
+    *,
+    post_id: str,
+    content: str,
+    occurred_at: float,
+    created_at: float | None = None,
+) -> IngestEvent:
+    """AI-generated image descriptions attached to a user post.
+
+    The description is evidence about user-provided media, so it belongs to the
+    same global/public bucket while remaining distinguishable from typed text.
+    """
+    return append_event(
+        conn,
+        owner_scope=GLOBAL_SCOPE,
+        visibility_scope=PUBLIC_VISIBILITY,
+        source_channel="post",
+        source_type="post_vision",
+        source_id=str(post_id),
+        op="create",
         content_snapshot=content,
         occurred_at=occurred_at,
         author="user",

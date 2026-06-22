@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,13 +8,12 @@ from unittest.mock import patch
 from core import (
     db,
     memory_events_service as mes,
-    memory_read,
     memory_reconcile_runner,
     memory_unit_service as mus,
     memory_view_service as mvs,
 )
 from core.app_services import job_service, public_post_pipeline
-from core.llm import reflection_router
+from core.llm import memory_router
 from api import deps as api_deps
 
 
@@ -54,20 +52,10 @@ class MemoryReconcileJobTest(unittest.TestCase):
         second = job_service.enqueue_memory_reconcile_once()
         self.assertIsNotNone(second)
 
-    def test_v2_write_mode_enqueues_reconcile_not_reflection(self) -> None:
-        with patch.dict(os.environ, {memory_read.WRITE_MODE_ENV: "reconcile"}):
-            public_post_pipeline.create_post("今天在准备考研，压力有点大")
-        types = self._job_types()
-        self.assertIn(job_service.TYPE_RUN_MEMORY_RECONCILE, types)
-        self.assertNotIn(job_service.TYPE_RUN_LIGHT_REFLECTION, types)
-        self.assertNotIn(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, types)
-
-    def test_legacy_write_mode_keeps_reflection(self) -> None:
-        # default (no env set) is legacy: unchanged behaviour
+    def test_create_post_enqueues_reconcile(self) -> None:
         public_post_pipeline.create_post("今天在准备考研，压力有点大")
         types = self._job_types()
-        self.assertIn(job_service.TYPE_RUN_LIGHT_REFLECTION, types)
-        self.assertNotIn(job_service.TYPE_RUN_MEMORY_RECONCILE, types)
+        self.assertIn(job_service.TYPE_RUN_MEMORY_RECONCILE, types)
 
     def test_execute_job_dispatches_reconcile_to_runner(self) -> None:
         job_id = job_service.enqueue_memory_reconcile_once()
@@ -129,7 +117,7 @@ class MemoryReconcileJobTest(unittest.TestCase):
 
         with (
             patch.object(
-                reflection_router,
+                memory_router,
                 "call_memory_reconcile",
                 return_value={"summary": "", "ops": []},
             ),
@@ -152,7 +140,7 @@ class MemoryReconcileJobTest(unittest.TestCase):
         second = job_service.claim_next_pending()
         with (
             patch.object(
-                reflection_router,
+                memory_router,
                 "call_memory_reconcile",
                 return_value={"summary": "", "ops": []},
             ),
@@ -211,14 +199,14 @@ class MemoryReconcileJobTest(unittest.TestCase):
                 }],
             }
 
-        with patch.object(reflection_router, "call_memory_reconcile", fake_reconcile), \
-                patch.object(reflection_router, "call_view_synthesis", lambda *a, **k: "你正在备考考研。"):
+        with patch.object(memory_router, "call_memory_reconcile", fake_reconcile), \
+                patch.object(memory_router, "call_view_synthesis", lambda *a, **k: "你正在备考考研。"):
             public_post_pipeline.execute_job(job, client=object(), model="m")
 
         units = mus.list_active_units_in_bucket("global", "public")
         self.assertEqual(len(units), 1)
         self.assertEqual(units[0]["content"], "用户在准备考研")
-        view = mvs.get_view("global", "public", mvs.VIEW_USER_MD)
+        view = mvs.get_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         self.assertIsNotNone(view)
         self.assertEqual(view["status"], "fresh")
         self.assertIn("备考考研", view["content_md"])

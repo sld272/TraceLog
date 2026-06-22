@@ -463,36 +463,6 @@ def expected_docs_from_sqlite() -> list[VectorDoc]:
     return docs
 
 
-def migrate_legacy_pending_vector_docs() -> int:
-    rows = db.query_all(
-        """
-        SELECT key, value
-        FROM meta
-        WHERE key LIKE 'pending_vector_doc:%'
-        ORDER BY key
-        """
-    )
-    migrated = 0
-    with db.transaction() as conn:
-        for row in rows:
-            try:
-                payload = json.loads(row["value"])
-            except (TypeError, json.JSONDecodeError):
-                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-                continue
-            if not isinstance(payload, dict):
-                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-                continue
-            doc = _doc_from_payload(payload)
-            if doc is not None:
-                revision = _next_revision_conn(conn)
-                _upsert_doc_at_revision(conn, doc, revision)
-                _enqueue_doc_for_collections(conn, doc, revision)
-                migrated += 1
-            conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-    return migrated
-
-
 def _process_outbox_row(vectorstore, row) -> None:
     outbox_id = int(row["id"])
     collection_name = str(row["collection_name"])

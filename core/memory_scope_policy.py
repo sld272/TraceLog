@@ -11,10 +11,8 @@ write-side owner/visibility labels):
     memory, but must judge whether it is appropriate to reveal publicly (a soft
     discretion gate, like a real person — NOT a hard wall).
 
-Note: this intentionally diverges from the original design doc's "private never
-enters public" hard wall, per an explicit product decision. The read path
-(Phase 5) uses this module to filter and annotate candidate units; nothing here
-touches the hot path yet.
+The read path uses this module to filter and annotate every candidate before it
+can reach a prompt.
 """
 
 from __future__ import annotations

@@ -89,7 +89,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             "global",
             "public",
             op_producer=must_not_call,
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertEqual(summary.by_op, {"retract": 1})
@@ -122,7 +122,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             "global",
             "public",
             op_producer=must_not_call,
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertEqual(summary.by_op, {"retain": 1})
@@ -144,7 +144,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             "global",
             "public",
             op_producer=producer,
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertEqual(mus.get_unit(unit_id)["status"], "active")
@@ -182,7 +182,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             "global",
             "public",
             op_producer=producer,
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertEqual(mus.get_unit(old_unit)["status"], "retracted_by_model")
@@ -208,7 +208,7 @@ class MemoryRechallengeTest(unittest.TestCase):
                     }
                 ]
             },
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertEqual(mus.get_unit(unit_id)["status"], "active")
@@ -233,7 +233,7 @@ class MemoryRechallengeTest(unittest.TestCase):
                     }
                 ]
             },
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertEqual(mus.get_unit(unit_id)["status"], "active")
@@ -250,7 +250,7 @@ class MemoryRechallengeTest(unittest.TestCase):
                 "global",
                 "public",
                 op_producer=lambda **kwargs: {"ops": []},
-                reflection_type=recon.RECONCILE_GLOBAL,
+                run_type=recon.RECONCILE_GLOBAL,
             )
 
         self.assertEqual(mes.get_cursor("global", "public"), create_id)
@@ -279,7 +279,7 @@ class MemoryRechallengeTest(unittest.TestCase):
                         {"op": "retract", "target_id": unit_id, "reason": "outdated"},
                     ]
                 },
-                reflection_type=recon.RECONCILE_GLOBAL,
+                run_type=recon.RECONCILE_GLOBAL,
             )
 
     def test_source_revision_change_during_llm_aborts_old_result(self) -> None:
@@ -296,7 +296,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             "global",
             "public",
             op_producer=racing_producer,
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertIsNone(result)
@@ -331,7 +331,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             "global",
             "public",
             op_producer=racing_producer,
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertIsNone(result)
@@ -368,7 +368,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             op_producer=lambda **kwargs: {
                 "ops": [{"op": "retain", "target_id": unit_id}]
             },
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
         items, _ = memory_read.freshness_seam(
             "public_post",
@@ -417,7 +417,7 @@ class MemoryRechallengeTest(unittest.TestCase):
                 captured.extend(int(event["id"]) for event in kwargs["events"])
                 or {"ops": []}
             ),
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertEqual(captured, [edit_id])
@@ -433,7 +433,7 @@ class MemoryRechallengeTest(unittest.TestCase):
             op_producer=lambda **kwargs: (_ for _ in ()).throw(
                 AssertionError("deleted source must not reach LLM")
             ),
-            reflection_type=recon.RECONCILE_GLOBAL,
+            run_type=recon.RECONCILE_GLOBAL,
         )
 
         self.assertIsNone(summary)
@@ -445,22 +445,22 @@ class MemoryRechallengeTest(unittest.TestCase):
         create_id = self._post_event("p1", "create", "我在准备考研", 1.0)
         unit_id = self._unit([create_id])
         mus.confirm_unit(unit_id, evidence_event_ids=[create_id], confidence=0.9)
-        mvs.recompute_slice("global", "public")
-        mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        mvs.recompute_portrait_membership("global", "public")
+        mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         self.assertIn(
             "用户在准备考研",
-            mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD),
+            mvs.read_portrait_body("global", "public", mvs.VIEW_USER_PORTRAIT),
         )
 
         self._mutate_and_challenge("p1", "edit", "我开始学习吉他", 2.0)
 
         self.assertEqual(
-            mvs.get_view("global", "public", mvs.VIEW_USER_MD)["status"],
+            mvs.get_view("global", "public", mvs.VIEW_USER_PORTRAIT)["status"],
             "stale",
         )
         self.assertNotIn(
             "用户在准备考研",
-            mvs.read_portrait_body("global", "public", mvs.VIEW_USER_MD),
+            mvs.read_portrait_body("global", "public", mvs.VIEW_USER_PORTRAIT),
         )
 
 
@@ -496,10 +496,7 @@ class PostMutationRechallengeTest(unittest.TestCase):
             content="用户在准备考研",
             evidence_event_ids=[int(event["id"])],
         )
-        with (
-            patch.dict(os.environ, {memory_read.WRITE_MODE_ENV: "reconcile"}),
-            patch("core.record_service.index_post_embedding"),
-        ):
+        with patch("core.record_service.index_post_embedding"):
             result = post_mutation.edit_post(post_id, "我开始学习吉他")
 
         self.assertEqual(result.content, "我开始学习吉他")

@@ -5,8 +5,8 @@ import styles from './LeftNav.module.css'
 interface LeftNavProps {
   souls: Soul[]
   soulsLoadState?: 'loading' | 'ready' | 'error'
-  /** 待整理条目数，>0 时在「整理」项上显示 badge（右栏隐藏的窄屏也能看到队列） */
-  reflectionQueueCount?: number
+  /** 待对账 evidence 数，>0 时在「记忆」项上显示 badge。 */
+  memoryQueueCount?: number
   /** 进行中的目标数，>0 时在「目标」项上显示 badge */
   goalCount?: number
   /** 未完成的待办数，>0 时在「待办」项上显示 badge */
@@ -19,7 +19,7 @@ interface LeftNavProps {
 export function LeftNav({
   souls,
   soulsLoadState = 'ready',
-  reflectionQueueCount = 0,
+  memoryQueueCount = 0,
   goalCount = 0,
   todoCount = 0,
   activePage,
@@ -61,8 +61,8 @@ export function LeftNav({
         <NavItem
           icon={<MemoryIcon />}
           label="记忆"
-          badge={reflectionQueueCount > 0 ? reflectionQueueCount : undefined}
-          active={activePage === 'memory' || activePage === 'reflections'}
+          badge={memoryQueueCount > 0 ? memoryQueueCount : undefined}
+          active={activePage === 'memory'}
           onClick={() => navigate('memory')}
         />
       </section>

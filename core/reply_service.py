@@ -88,7 +88,13 @@ def _call_one_soul(
     model: str,
     shared_context: str,
 ) -> SoulReplyResult:
-    soul_context = _with_memory_section(shared_context, "public_post", soul.name, user_input)
+    soul_context = _with_memory_section(
+        shared_context,
+        "public_post",
+        soul.name,
+        user_input,
+        excluded_sources={("post", post_id), ("post_vision", post_id)},
+    )
     data = reply_router.call_soul_post_reply(
         user_input,
         client,
@@ -131,10 +137,21 @@ def _call_one_soul(
     )
 
 
-def _with_memory_section(base_context: str, channel: str, soul_name: str, query: str) -> str:
-    """Append the per-soul v2 memory block (scope-filtered) when read mode is on;
-    no-op in legacy mode."""
-    section = memory_read.memory_section_for(channel, soul_name, query)
+def _with_memory_section(
+    base_context: str,
+    channel: str,
+    soul_name: str,
+    query: str,
+    *,
+    excluded_sources: set[tuple[str, str]] | None = None,
+) -> str:
+    """Append the per-soul scope-filtered memory-v2 block."""
+    section = memory_read.memory_section_for(
+        channel,
+        soul_name,
+        query,
+        excluded_sources=excluded_sources,
+    )
     if not section:
         return base_context
     return f"{base_context}\n\n---\n\n# 记忆\n\n{section}" if base_context else f"# 记忆\n\n{section}"

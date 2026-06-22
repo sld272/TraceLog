@@ -765,9 +765,7 @@ function DataSettingsPanel({
         </div>
         <div className={styles.pathGrid}>
           <PathRow label="SQLite" value={status.db_path} />
-          <PathRow label="用户画像" value={status.user_memory_path} />
           <PathRow label="人格" value={status.souls_dir} />
-          <PathRow label="人格记忆" value={status.soul_memories_dir} />
         </div>
       </section>
 

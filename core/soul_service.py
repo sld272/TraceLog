@@ -10,7 +10,6 @@ from pathlib import Path
 from core import db
 
 SOULS_DIR = db.WORKSPACE_DIR / "souls"
-SOUL_MEMORIES_DIR = db.WORKSPACE_DIR / "soul_memories"
 
 DEFAULT_SOULS = {
     "拾迹者": {
@@ -119,7 +118,6 @@ class SoulContext:
     description: str | None
     sort_order: int
     soul: str
-    soul_memory: str
 
 
 @dataclass(frozen=True)
@@ -132,15 +130,11 @@ class SoulRecord:
     created_at: float
     updated_at: float
     soul_exists: bool
-    memory_exists: bool
 
 
 def sync_souls() -> None:
-    """Sync soul files, memory files, and the souls registry."""
-    from core import soul_memory_service
-
+    """Sync soul personality files and the souls registry."""
     SOULS_DIR.mkdir(parents=True, exist_ok=True)
-    SOUL_MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
 
     for name, spec in DEFAULT_SOULS.items():
         path = _soul_path(name)
@@ -184,17 +178,6 @@ def sync_souls() -> None:
             [(now, name) for name in missing_names],
         )
 
-    for row in rows:
-        name = row[0]
-        memory_path = soul_memory_service.soul_memory_path(name)
-        if not memory_path.exists():
-            content = soul_memory_service.default_soul_memory(name)
-            soul_memory_service.write_soul_memory(
-                name,
-                content,
-                source="system",
-                patch={"op": "init"},
-            )
 
 
 def list_souls(enabled_only: bool = False) -> list[SoulRecord]:
@@ -228,7 +211,7 @@ def get_soul(name: str) -> SoulRecord:
 
 
 def list_enabled_souls() -> list[SoulContext]:
-    """Load enabled SOUL files and memory files in display order."""
+    """Load enabled SOUL personality files in display order."""
     rows = db.query_all(
         """
         SELECT name, file_path, sort_order, description
@@ -245,14 +228,12 @@ def list_enabled_souls() -> list[SoulContext]:
         if soul is None:
             continue
 
-        soul_memory = _read_optional_text(SOUL_MEMORIES_DIR / f"{row['name']}.md")
         souls.append(
             SoulContext(
                 name=row["name"],
                 description=row["description"],
                 sort_order=row["sort_order"],
                 soul=soul,
-                soul_memory=soul_memory or "",
             )
         )
     return souls
@@ -264,9 +245,7 @@ def create_soul(
     description: str | None = None,
     enabled: bool = True,
 ) -> SoulRecord:
-    """Create a new SOUL file, registry row, and memory file."""
-    from core import soul_memory_service
-
+    """Create a new SOUL personality file and registry row."""
     validate_soul_name(name)
     if db.query_one("SELECT 1 FROM souls WHERE name = ?", (name,)) is not None:
         raise ValueError(f"SOUL 已存在：{name}")
@@ -276,7 +255,6 @@ def create_soul(
         raise ValueError(f"SOUL 文件已存在：{path.name}")
 
     SOULS_DIR.mkdir(parents=True, exist_ok=True)
-    SOUL_MEMORIES_DIR.mkdir(parents=True, exist_ok=True)
     body = soul if soul is not None else _new_soul(name, description)
     _write_text_atomic(path, body)
 
@@ -299,13 +277,6 @@ def create_soul(
         ),
     )
 
-    if not soul_memory_service.soul_memory_path(name).exists():
-        soul_memory_service.write_soul_memory(
-            name,
-            soul_memory_service.default_soul_memory(name),
-            source="system",
-            patch={"op": "init"},
-        )
     return get_soul(name)
 
 
@@ -408,7 +379,6 @@ def _row_to_record(row) -> SoulRecord:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         soul_exists=(db.WORKSPACE_DIR / row["file_path"]).exists(),
-        memory_exists=(SOUL_MEMORIES_DIR / f"{row['name']}.md").exists(),
     )
 
 

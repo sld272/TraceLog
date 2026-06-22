@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import db, memory_events_service, memory_read, memory_unit_service, record_service
+from core import db, memory_events_service, memory_unit_service, record_service
 from core.app_services import job_service
 
 
@@ -52,8 +52,7 @@ def edit_post(post_id: str, content: str) -> EditPostResult | None:
         record_service.index_post_embedding(post_id)
     else:
         record_service.delete_post_embedding(post_id)
-    if memory_read.reconcile_write_enabled():
-        job_service.enqueue_memory_reconcile_once({"trigger": "post_edit", "post_id": post_id})
+    job_service.enqueue_memory_reconcile_once({"trigger": "post_edit", "post_id": post_id})
     return EditPostResult(post_id=post_id, content=body, updated_at=now)
 
 
@@ -93,8 +92,7 @@ def delete_post(post_id: str) -> DeletePostResult | None:
     record_service.delete_post_vision_embedding(post_id)
     for comment_id in comment_ids:
         record_service.delete_comment_embedding(comment_id)
-    if memory_read.reconcile_write_enabled():
-        job_service.enqueue_memory_reconcile_once({"trigger": "post_delete", "post_id": post_id})
+    job_service.enqueue_memory_reconcile_once({"trigger": "post_delete", "post_id": post_id})
 
     return DeletePostResult(
         post_id=post_id,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from core import attachment_service, db, evidence_service, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, evidence_service, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, record_service, reply_context, retrieval, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -174,7 +174,7 @@ def append_user_message(thread_id: int, content: str, attachment_ids: list[str] 
     thread = get_thread(thread_id)
     _assert_soul_writable(thread.soul_name)
     message = _append_message(thread_id, "user", content, attachment_ids=attachment_ids)
-    if message.content.strip() and memory_read.reconcile_write_enabled():
+    if message.content.strip():
         job_service.enqueue_memory_reconcile_once({"trigger": "chat", "soul_name": thread.soul_name})
     return message
 
@@ -194,11 +194,6 @@ def build_chat_context(
     llm_messages = [_message_for_llm(message) for message in messages]
     retrieval_query = _build_retrieval_query(user_message, llm_messages)
     sections: list[str] = []
-
-    if not memory_read.memory_reading_enabled():
-        profile = profile_service.read_profile().strip()
-        if profile:
-            sections.append(f"# 用户档案\n\n{profile}")
 
     sections.extend(goal_service.prompt_sections())
 
@@ -236,7 +231,16 @@ def build_chat_context(
     if web_section:
         sections.append(web_section)
 
-    memory_section = memory_read.memory_section_for("chat", thread.soul_name, user_message)
+    memory_section = memory_read.memory_section_for(
+        "chat",
+        thread.soul_name,
+        user_message,
+        excluded_sources={
+            ("chat_message", str(message.id))
+            for message in llm_messages
+            if message.id > 0
+        },
+    )
     if memory_section:
         sections.append(f"# 记忆\n\n{memory_section}")
 
@@ -482,10 +486,9 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
     updated = get_message(message.id)
     thread = get_thread(message.thread_id)
     record_service.index_chat_message_embedding(updated.id, updated.thread_id, thread.soul_name, updated.role, updated.content)
-    if memory_read.reconcile_write_enabled():
-        job_service.enqueue_memory_reconcile_once(
-            {"trigger": "chat_edit", "soul_name": soul_name}
-        )
+    job_service.enqueue_memory_reconcile_once(
+        {"trigger": "chat_edit", "soul_name": soul_name}
+    )
     return {
         "thread": thread,
         "message": updated,
@@ -583,7 +586,7 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
     updated = get_message(message.id)
     thread = get_thread(thread.id)
     record_service.index_chat_message_embedding(updated.id, updated.thread_id, thread.soul_name, updated.role, updated.content)
-    if any(str(row["role"]) == "user" for row in deleted_rows) and memory_read.reconcile_write_enabled():
+    if any(str(row["role"]) == "user" for row in deleted_rows):
         job_service.enqueue_memory_reconcile_once(
             {"trigger": "chat_rerun_delete", "soul_name": thread.soul_name}
         )
@@ -605,13 +608,11 @@ def _assert_soul_writable(soul_name: str) -> None:
 def _load_soul_context(soul_name: str) -> SoulContext:
     record = soul_service.get_soul(soul_name)
     soul = (db.WORKSPACE_DIR / record.file_path).read_text(encoding="utf-8")
-    soul_memory = soul_memory_service.read_soul_memory(soul_name)
     return SoulContext(
         name=record.name,
         description=record.description,
         sort_order=record.sort_order,
         soul=soul,
-        soul_memory=soul_memory,
     )
 
 

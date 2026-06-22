@@ -14,11 +14,9 @@ from core import (
     memory_events_service,
     memory_read,
     memory_unit_service,
-    profile_service,
     record_service,
     reply_context,
     retrieval,
-    soul_memory_service,
     soul_service,
     suggestion_pipeline,
     todo_service,
@@ -223,7 +221,7 @@ def append_comment(
     message = get_message(comment_id)
     if message.content.strip():
         record_service.index_comment_embedding(message.id, message.post_id, message.soul_name, message.role, message.seq, message.content)
-    if role == "user" and body and memory_read.reconcile_write_enabled():
+    if role == "user" and body:
         # Only the user's own comments are belief-generating evidence.
         job_service.enqueue_memory_reconcile_once({"trigger": "comment", "post_id": post_id})
     return message
@@ -270,11 +268,6 @@ def build_comment_context(
         llm_messages.append(user_msg)
 
     sections: list[str] = []
-
-    if not memory_read.memory_reading_enabled():
-        profile = profile_service.read_profile().strip()
-        if profile:
-            sections.append(f"# 用户档案\n\n{profile}")
 
     sections.extend(goal_service.prompt_sections())
 
@@ -336,7 +329,16 @@ def build_comment_context(
     if web_section:
         sections.append(web_section)
 
-    memory_section = memory_read.memory_section_for("comment", soul_name, user_message)
+    memory_section = memory_read.memory_section_for(
+        "comment",
+        soul_name,
+        user_message,
+        excluded_sources={
+            ("comment_message", str(message.id))
+            for message in llm_messages
+            if message.id > 0
+        },
+    )
     if memory_section:
         sections.append(f"# 记忆\n\n{memory_section}")
 
@@ -525,7 +527,7 @@ def delete_message(message_id: int) -> dict:
 
     for deleted_id in deleted_ids:
         record_service.delete_comment_embedding(deleted_id)
-    if any(role == "user" for _, role in deleted_rows) and memory_read.reconcile_write_enabled():
+    if any(role == "user" for _, role in deleted_rows):
         job_service.enqueue_memory_reconcile_once(
             {"trigger": "comment_delete", "post_id": message.post_id}
         )
@@ -799,13 +801,11 @@ def _failed_result(post_id: str, soul_name: str, user_message_id: int, error: st
 def _load_soul_context(soul_name: str) -> SoulContext:
     record = soul_service.get_soul(soul_name)
     soul = (db.WORKSPACE_DIR / record.file_path).read_text(encoding="utf-8")
-    soul_memory = soul_memory_service.read_soul_memory(soul_name)
     return SoulContext(
         name=record.name,
         description=record.description,
         sort_order=record.sort_order,
         soul=soul,
-        soul_memory=soul_memory,
     )
 
 

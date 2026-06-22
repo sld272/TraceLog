@@ -29,7 +29,7 @@ class DbTest(unittest.TestCase):
             INSERT INTO posts(id, ts, content, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            ("__fts5_probe__", "1970-01-01T00:00:00+00:00", "legacy probe", 0.0, 0.0),
+            ("__fts5_probe__", "1970-01-01T00:00:00+00:00", "fts probe", 0.0, 0.0),
         )
 
         conn = db.connect()
@@ -40,9 +40,9 @@ class DbTest(unittest.TestCase):
         finally:
             conn.close()
 
-        legacy = db.query_one("SELECT id FROM posts WHERE id = ?", ("__fts5_probe__",))
+        probe = db.query_one("SELECT id FROM posts WHERE id = ?", ("__fts5_probe__",))
         generated = db.query_all("SELECT id FROM posts WHERE id LIKE ?", ("__fts5_probe__:%",))
-        self.assertIsNotNone(legacy)
+        self.assertIsNotNone(probe)
         self.assertEqual([], generated)
 
     def test_schema_version_is_current_and_observation_tables_are_absent(self) -> None:

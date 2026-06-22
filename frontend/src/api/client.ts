@@ -200,12 +200,6 @@ export type PostEventType =
   | 'todo_started'
   | 'todo_succeeded'
   | 'todo_failed'
-  | 'light_reflection_started'
-  | 'light_reflection_succeeded'
-  | 'light_reflection_failed'
-  | 'deep_reflection_queued'
-  | 'deep_reflection_succeeded'
-  | 'deep_reflection_failed'
   | 'pipeline_done'
 
 export interface PostEvent {
@@ -263,34 +257,8 @@ export interface EvidenceFeedbackResult {
   created: boolean
 }
 
-export interface ReflectionScope {
-  post_ids: string[]
-  scope_start: string | null
-  scope_end: string | null
-}
-
-export interface SoulReflectionScope {
-  soul_name: string
-  interaction_count: number
-  scope_start: number
-  scope_end: number
-}
-
-export interface MemoryRevisionSummary {
-  id: number
-  target_type: 'user' | 'soul'
-  target_name: string | null
-  source: string
-  patch: unknown
-  created_at: number
-}
-
-export interface MemoryRevisionDetail extends MemoryRevisionSummary {
-  snapshot: string
-}
-
 export interface JobQueued {
-  job_id: number
+  job_id: number | null
   status: string
 }
 
@@ -410,8 +378,6 @@ export interface WorkspaceStatus {
   db_exists: boolean
   db_size_bytes: number
   souls_dir: string
-  soul_memories_dir: string
-  user_memory_path: string
   counts: {
     posts: number
     comments: number
@@ -420,6 +386,8 @@ export interface WorkspaceStatus {
     todos: number
     jobs: number
     vision_cache: number
+    memory_units: number
+    memory_views: number
   }
   web_search: ModelSettings['web_search']
   vector_index: {
@@ -599,12 +567,6 @@ const POST_EVENT_TYPES: PostEventType[] = [
   'todo_started',
   'todo_succeeded',
   'todo_failed',
-  'light_reflection_started',
-  'light_reflection_succeeded',
-  'light_reflection_failed',
-  'deep_reflection_queued',
-  'deep_reflection_succeeded',
-  'deep_reflection_failed',
   'pipeline_done',
 ]
 
@@ -690,27 +652,6 @@ export function reorderSouls(order: string[]) {
     method: 'PATCH',
     body: JSON.stringify({ order }),
   })
-}
-
-/* Profile */
-export function listProfileRevisions(limit = 10) {
-  return request<MemoryRevisionSummary[]>(`/profile/revisions?limit=${limit}`)
-}
-
-export function getProfileRevision(revisionId: number) {
-  return request<MemoryRevisionDetail>(`/profile/revisions/${revisionId}`)
-}
-
-export function listSoulMemoryRevisions(name: string, limit = 5) {
-  return request<MemoryRevisionSummary[]>(
-    `/souls/${encodeURIComponent(name)}/memory/revisions?limit=${limit}`,
-  )
-}
-
-export function getSoulMemoryRevision(name: string, revisionId: number) {
-  return request<MemoryRevisionDetail>(
-    `/souls/${encodeURIComponent(name)}/memory/revisions/${revisionId}`,
-  )
 }
 
 /* Todos */
@@ -826,33 +767,6 @@ export function rerunChatMessage(messageId: number) {
   )
 }
 
-/* Reflections */
-const DEFAULT_REFLECTION_LIMIT = 100
-
-export function previewGlobalReflection(limit = DEFAULT_REFLECTION_LIMIT) {
-  return request<ReflectionScope>(`/reflections/global/preview?limit=${limit}`)
-}
-
-export function triggerGlobalReflection(limit = DEFAULT_REFLECTION_LIMIT) {
-  return request<JobQueued>('/reflections/global', {
-    method: 'POST',
-    body: JSON.stringify({ limit }),
-  })
-}
-
-export function previewSoulReflections(limitPerSoul = DEFAULT_REFLECTION_LIMIT) {
-  return request<SoulReflectionScope[]>(
-    `/reflections/souls/preview?limit_per_soul=${limitPerSoul}`,
-  )
-}
-
-export function triggerSoulReflections(limitPerSoul = DEFAULT_REFLECTION_LIMIT) {
-  return request<JobQueued>('/reflections/souls', {
-    method: 'POST',
-    body: JSON.stringify({ limit_per_soul: limitPerSoul }),
-  })
-}
-
 /* Jobs */
 export function listJobs(params: { status?: JobStatus; job_type?: string; limit?: number; offset?: number } = {}) {
   const search = new URLSearchParams()
@@ -951,10 +865,10 @@ export function reconcileVectorIndex() {
 }
 
 /* ===== Memory workbench (v2 unit/view control surface) ===== */
-export type MemoryProfilePolicy = 'auto' | 'force_include' | 'force_exclude'
+export type MemoryPortraitPolicy = 'auto' | 'force_include' | 'force_exclude'
 export type MemoryPromptPolicy = 'allow' | 'no_prompt'
 export type MemoryTier = 'core' | 'contextual' | 'episodic'
-export type MemoryViewType = 'user_md' | 'soul_relationship_memory'
+export type MemoryViewType = 'user_portrait' | 'soul_relationship_memory'
 export type MemoryViewStatus = 'fresh' | 'stale'
 
 /** A row from GET /memory/units (memory_units table). */
@@ -971,8 +885,8 @@ export interface MemoryUnit {
   source: string
   source_channel: string
   prompt_policy: MemoryPromptPolicy
-  profile_policy: MemoryProfilePolicy
-  in_md_slice: number
+  portrait_policy: MemoryPortraitPolicy
+  in_portrait: number
 }
 
 /** One piece of raw evidence backing a unit. */
@@ -999,9 +913,11 @@ export interface MemoryUnitDetail {
   status: string
   owner_scope: string
   visibility_scope: string
-  in_md_slice: boolean
+  source: string
+  source_channel: string
+  in_portrait: boolean
   prompt_policy: MemoryPromptPolicy
-  profile_policy: MemoryProfilePolicy
+  portrait_policy: MemoryPortraitPolicy
   evidence: MemoryEvidenceRef[]
 }
 
@@ -1015,6 +931,27 @@ export interface MemoryView {
   status: MemoryViewStatus
   generated_at?: number | null
   updated_at: number
+}
+
+export interface MemoryStatus {
+  pending_event_count: number
+  pending_buckets: Array<{ owner_scope: string; visibility_scope: string }>
+  pending_review_count: number
+  pending_relink_count: number
+  stale_view_count: number
+  active_jobs: Job[]
+}
+
+export interface MemoryOperation {
+  id: number
+  unit_id: string
+  related_unit_id: string | null
+  op: string
+  actor: string
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+  reconcile_run_id: number | null
+  created_at: number
 }
 
 export interface ListMemoryUnitsParams {
@@ -1040,6 +977,21 @@ export async function listMemoryUnits(params: ListMemoryUnitsParams = {}): Promi
 
 export function getMemoryUnit(unitId: string): Promise<MemoryUnitDetail> {
   return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}`)
+}
+
+export function createMemoryUnit(input: {
+  owner_scope?: string
+  visibility_scope?: string
+  type: string
+  content: string
+  confidence?: number
+  tier?: MemoryTier
+  importance?: number
+}): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>('/memory/units', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 export interface UpdateMemoryUnitInput {
@@ -1072,10 +1024,10 @@ export function setMemoryPromptPolicy(unitId: string, promptPolicy: MemoryPrompt
   })
 }
 
-export function setMemoryProfilePolicy(unitId: string, profilePolicy: MemoryProfilePolicy): Promise<MemoryUnitDetail> {
-  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}/profile-policy`, {
+export function setMemoryPortraitPolicy(unitId: string, portraitPolicy: MemoryPortraitPolicy): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}/portrait-policy`, {
     method: 'POST',
-    body: JSON.stringify({ profile_policy: profilePolicy }),
+    body: JSON.stringify({ portrait_policy: portraitPolicy }),
   })
 }
 
@@ -1093,4 +1045,22 @@ export function resynthesizeMemoryView(input: {
     method: 'POST',
     body: JSON.stringify(input),
   })
+}
+
+export function getMemoryStatus(): Promise<MemoryStatus> {
+  return request<MemoryStatus>('/memory/status')
+}
+
+export function triggerMemoryReconcile(): Promise<JobQueued> {
+  return request<JobQueued>('/memory/reconcile', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export async function listMemoryOperations(limit = 20): Promise<MemoryOperation[]> {
+  const data = await request<{ operations: MemoryOperation[] }>(
+    `/memory/operations?limit=${limit}`,
+  )
+  return data.operations
 }

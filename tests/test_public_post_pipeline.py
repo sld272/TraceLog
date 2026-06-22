@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from core import attachment_service, db, query_rewriter, reply_service, retrieval, tool_config_service, vector_index_service
+from core import attachment_service, db, query_rewriter, reply_service, retrieval, tool_config_service, vector_index_service, vision_service
 from core.app_services import event_service, job_service, public_post_pipeline
 from tests.helpers import require_not_none
 
@@ -73,8 +73,7 @@ class PublicPostPipelineTest(unittest.TestCase):
                 "index_post_embedding",
                 "generate_post_replies",
                 "run_todo_tool",
-                "run_light_reflection",
-                "maybe_trigger_global_deep_reflection",
+                "run_memory_reconcile",
             ],
             [row["type"] for row in jobs],
         )
@@ -96,10 +95,57 @@ class PublicPostPipelineTest(unittest.TestCase):
         jobs = job_service.list_jobs_for_post(created.post_id)
 
         self.assertEqual(
-            ["generate_post_replies", "run_light_reflection", "maybe_trigger_global_deep_reflection"],
+            ["generate_post_replies", "run_memory_reconcile"],
             [job["type"] for job in jobs],
         )
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_vector_doc:post-{created.post_id}",)))
+
+    def test_image_summary_becomes_post_vision_evidence(self) -> None:
+        attachment = attachment_service.upload_image(
+            _image_bytes(), content_type="image/png"
+        )
+        created = public_post_pipeline.create_post("", [attachment.id])
+        summary = vision_service.VisionSummary(
+            attachment_id=attachment.id,
+            status="ok",
+            description="图片里是一块学习计划看板。",
+            visible_text=["考研计划"],
+            uncertainties=[],
+        )
+        public_context = public_post_pipeline.PublicPostReplyContext(
+            llm_content="图片里是一块学习计划看板。",
+            relevant_post_ids=[],
+            built_context=SimpleNamespace(enabled_souls=[]),
+        )
+        with (
+            patch(
+                "core.app_services.public_post_pipeline.vision_service.describe_attachments",
+                return_value=[summary],
+            ),
+            patch(
+                "core.app_services.public_post_pipeline.record_service.index_post_vision_embedding"
+            ),
+            patch(
+                "core.app_services.public_post_pipeline.build_public_post_reply_context",
+                return_value=public_context,
+            ),
+        ):
+            public_post_pipeline._run_generate_post_replies(
+                1,
+                {"post_id": created.post_id},
+                client=object(),
+                model="m",
+            )
+
+        event = require_not_none(
+            db.query_one(
+                """
+                SELECT * FROM memory_ingest_events
+                WHERE source_type = 'post_vision' AND source_id = ?
+                """,
+                (created.post_id,),
+            )
+        )
+        self.assertIn("学习计划看板", event["content_snapshot"])
 
     def test_index_post_embedding_job_indexes_and_emits_events(self) -> None:
         fake_vectorstore = FakeVectorStore()

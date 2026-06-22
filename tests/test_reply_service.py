@@ -50,8 +50,8 @@ class ReplyServiceTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_fanout_passes_shared_context_to_each_soul_without_extra_llm_calls(self) -> None:
-        soul_a = SoulContext("拾迹者", None, 1, "拾迹者人格", "")
-        soul_b = SoulContext("毒舌好友", None, 2, "毒舌人格", "")
+        soul_a = SoulContext("拾迹者", None, 1, "拾迹者人格")
+        soul_b = SoulContext("毒舌好友", None, 2, "毒舌人格")
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul_a, soul_b],
@@ -75,7 +75,7 @@ class ReplyServiceTest(unittest.TestCase):
         self.assertEqual([("拾迹者", "拾迹者 回复"), ("毒舌好友", "毒舌好友 回复")], [(row["soul_name"], row["content"]) for row in rows])
 
     def test_fanout_skips_existing_root_comment_on_retry(self) -> None:
-        soul = SoulContext("拾迹者", None, 1, "拾迹者人格", "")
+        soul = SoulContext("拾迹者", None, 1, "拾迹者人格")
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul],
@@ -107,8 +107,8 @@ class ReplyServiceTest(unittest.TestCase):
         index_comment.assert_not_called()
 
     def test_fanout_retries_only_souls_without_existing_root_comments(self) -> None:
-        soul_a = SoulContext("拾迹者", None, 1, "拾迹者人格", "")
-        soul_b = SoulContext("毒舌好友", None, 2, "毒舌人格", "")
+        soul_a = SoulContext("拾迹者", None, 1, "拾迹者人格")
+        soul_b = SoulContext("毒舌好友", None, 2, "毒舌人格")
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul_a, soul_b],
@@ -147,7 +147,7 @@ class ReplyServiceTest(unittest.TestCase):
         self.assertEqual("毒舌好友 补上", require_not_none(row_b)["content"])
 
     def test_failed_reply_does_not_create_placeholder_root_comment(self) -> None:
-        soul = SoulContext("拾迹者", None, 1, "拾迹者人格", "")
+        soul = SoulContext("拾迹者", None, 1, "拾迹者人格")
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul],
@@ -166,7 +166,7 @@ class ReplyServiceTest(unittest.TestCase):
 
     def test_successful_root_comment_metadata_includes_evidence_from_built_context(self) -> None:
         self._insert_post("p-related")
-        soul = SoulContext("拾迹者", None, 1, "拾迹者人格", "")
+        soul = SoulContext("拾迹者", None, 1, "拾迹者人格")
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul],
@@ -244,7 +244,7 @@ class ReplyServiceTest(unittest.TestCase):
         index_comment.assert_called_once()
 
     def test_soul_post_reply_prompt_includes_virtual_friend_boundaries(self) -> None:
-        soul = SoulContext("拾迹者", None, 0, "拾迹者人格", "")
+        soul = SoulContext("拾迹者", None, 0, "拾迹者人格")
         client = FakeClient()
 
         reply_router.call_soul_post_reply("今天好累", client, "fake-model", "共享上下文", soul)

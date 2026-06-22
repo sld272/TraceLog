@@ -128,7 +128,7 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         )
         self.assertEqual(srm.read_relationship_memory("luna"), "")
 
-    def test_v2_reply_uses_relationship_view_in_public_and_private(self) -> None:
+    def test_reply_uses_relationship_view_in_public_and_private(self) -> None:
         self._unit("luna", "private:soul:luna", "用户允许 luna 用老友称呼")
         srm.refresh_relationship_memory(
             "luna",
@@ -139,19 +139,16 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
             description=None,
             sort_order=0,
             soul="你是 luna。",
-            soul_memory="LEGACY SHOULD NOT APPEAR",
         )
-        with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "units"}):
-            public = reply_router._relationship_memory(
-                soul, channel="public_post", query="你好"
-            )
-            private = reply_router._relationship_memory(
-                soul, channel="chat", query="你好"
-            )
+        public = reply_router._relationship_memory(
+            soul, channel="public_post", query="你好"
+        )
+        private = reply_router._relationship_memory(
+            soul, channel="chat", query="你好"
+        )
         self.assertIn("老友", public)
         self.assertIn("拿不准时不要主动公开", public)
         self.assertEqual(public, private)
-        self.assertNotIn("LEGACY", public)
 
 
 if __name__ == "__main__":

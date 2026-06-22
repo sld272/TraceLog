@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from core import attachment_service, db, record_service, soul_memory_service, soul_service
+from core import attachment_service, db, record_service, soul_service
 
 
 class AttachmentServiceTest(unittest.TestCase):
@@ -20,14 +20,10 @@ class AttachmentServiceTest(unittest.TestCase):
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
-        self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         soul_service.SOULS_DIR = self.workspace / "souls"
-        soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
-        soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
 
         db.init_db()
         soul_service.sync_souls()
@@ -36,8 +32,6 @@ class AttachmentServiceTest(unittest.TestCase):
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         soul_service.SOULS_DIR = self.old_souls_dir
-        soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
-        soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         self.tmp.cleanup()
 
     def test_upload_image_stores_clean_metadata_and_file(self) -> None:

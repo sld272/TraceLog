@@ -11,14 +11,10 @@ from core.soul_service import SoulContext
 
 
 def _relationship_memory(soul: SoulContext, *, channel: str, query: str) -> str:
-    """The "SOUL 相处记忆" block. In v2 read mode this is the layered unit/view
-    relationship narrative derived from this SOUL's thread/private relationship
-    units. Other memory layers remain in the normal context block. Legacy mode
-    continues to use the whole-file soul_memory."""
-    if memory_read.memory_reading_enabled():
-        section = memory_read.relationship_memory_for(soul.name).strip()
-        return section or "（暂无）"
-    return soul.soul_memory.strip() or "（暂无）"
+    """Return the relationship view derived from this SOUL's memory units."""
+    del channel, query
+    section = memory_read.relationship_memory_for(soul.name).strip()
+    return section or "（暂无）"
 
 
 def _last_user_text(messages) -> str:

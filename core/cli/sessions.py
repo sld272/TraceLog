@@ -1,96 +1,59 @@
-"""Interactive CLI sessions and post-processing display helpers."""
+"""Interactive CLI sessions and memory-v2 post-processing helpers."""
 
 from __future__ import annotations
 
-from core import chat_service, comment_service, logging_service, reflector, todo_service, tool_config_service
+from core import (
+    chat_service,
+    comment_service,
+    logging_service,
+    memory_reconcile_runner,
+    memory_view_producer,
+    todo_service,
+    tool_config_service,
+    vector_index_service,
+)
 from core.cli_input import read_cli_input
 from core.llm.types import LLMClient
 
 
-def run_deep_reflection_on_exit(client: LLMClient, model: str) -> None:
-    print("\n\n[反思] 正在整理本次记录与 SOUL 互动，请稍候（请勿再次终止）...")
+def run_memory_reconcile(client: LLMClient, model: str, *, trigger: str) -> None:
+    print("\n[记忆] 正在对账新增证据...")
     try:
-        try:
-            scope = reflector.preview_global_deep_reflection_scope()
-        except Exception:
-            scope = None
-        if scope is not None and scope.post_ids:
-            print(f"[反思] 检测到 {len(scope.post_ids)} 条尚未深反思的公开记录，正在反思。")
-        result = reflector.trigger_global_deep_reflection(client, model, trigger="cli_exit")
-        if result is None:
-            print("[反思] 没有新的公开记录，已跳过本次深反思。")
-        else:
-            logging_service.log_event(
-                "deep_reflection_saved",
-                reflection_id=result.id,
-                related_post_ids=result.related_post_ids,
-                patch_summary=result.patch_summary,
-            )
-            print(
-                f"[反思] 深反思已保存（id={result.id}，覆盖 {len(result.related_post_ids)} 条记录，"
-                f"画像更新 applied={result.patch_summary.get('applied', 0)} "
-                f"skipped={result.patch_summary.get('skipped', 0)}）。"
-            )
-    except KeyboardInterrupt:
-        logging_service.log_event("deep_reflection_interrupted", level="WARNING", type="global")
-        print("\n[警告] 深反思被强制中断，已有数据保持不变。")
-    except Exception as e:
-        logging_service.log_event("deep_reflection_failed", level="ERROR", type="global", error=str(e))
-        print(f"[反思] 深反思失败：{e}，已有数据保持不变。")
-    try:
-        try:
-            soul_scopes = reflector.preview_soul_deep_reflection_scopes()
-        except Exception:
-            soul_scopes = []
-        soul_interaction_count = sum(scope.interaction_count for scope in soul_scopes)
-        if soul_interaction_count:
-            print(f"[反思] 检测到 {soul_interaction_count} 条尚未沉淀的 SOUL 互动，正在反思。")
-        soul_results = reflector.trigger_soul_deep_reflections(client, model, trigger="cli_exit")
-        if soul_results:
-            applied = sum(item.patch_summary.get("applied", 0) for item in soul_results)
-            skipped = sum(item.patch_summary.get("skipped", 0) for item in soul_results)
-            logging_service.log_event(
-                "deep_reflection_saved",
-                type="soul",
-                count=len(soul_results),
-                applied=applied,
-                skipped=skipped,
-            )
-            print(
-                f"[反思] SOUL 深反思已保存 {len(soul_results)} 份，"
-                f"独立画像更新 applied={applied} skipped={skipped}。"
-            )
-        elif soul_interaction_count:
-            logging_service.log_event(
-                "deep_reflection_failed",
-                level="WARNING",
-                type="soul",
-                reason="no_saved_results",
-                pending_interaction_count=soul_interaction_count,
-            )
-            print("[反思] SOUL 深反思未保存：检测到互动，但本次没有生成有效结果，已保留待下次重试。")
-        else:
-            print("[反思] 没有新的 SOUL 互动，已跳过 SOUL 深反思。")
-    except KeyboardInterrupt:
-        logging_service.log_event("deep_reflection_interrupted", level="WARNING", type="soul")
-        print("\n[警告] SOUL 深反思被强制中断，已有数据保持不变。")
-    except Exception as e:
-        logging_service.log_event("deep_reflection_failed", level="ERROR", type="soul", error=str(e))
-        print(f"[反思] SOUL 深反思失败：{e}，已有数据保持不变。")
-    print("再见！\n")
-
-
-def run_light_reflection_for_post(post_id: str, client: LLMClient, model: str) -> None:
-    light_result = reflector.run_light_reflection_safely(post_id, client, model)
-    if light_result is None:
-        print("[反思] 轻反思暂时失败，已加入待重试队列。\n")
-    else:
-        print(
-            "[反思] 轻反思已完成："
-            f"{len(light_result.entities)} 个实体，"
-            f"{len(light_result.emotions)} 个情绪，"
-            f"{len(light_result.events)} 个事件。\n"
+        result = memory_reconcile_runner.run_pending_reconcile(
+            client,
+            model,
+            trigger=trigger,
         )
+        views = memory_view_producer.refresh_views_after_reconcile(client, model)
+        vector_index_service.rebuild_expected_docs()
+        vector_index_service.process_outbox()
+        if result.failures or result.relink_failures:
+            errors = [failure.error for failure in result.failures]
+            errors.extend(failure.error for failure in result.relink_failures)
+            raise RuntimeError("; ".join(errors))
+        applied = sum(summary.applied for summary in result.summaries)
+        logging_service.log_event(
+            "memory_reconcile_completed",
+            trigger=trigger,
+            bucket_count=len(result.summaries),
+            applied=applied,
+            refreshed_view_count=len(views),
+        )
+        if result.summaries or views:
+            print(
+                f"[记忆] 已完成 {len(result.summaries)} 个 bucket 的对账，"
+                f"应用 {applied} 个操作，刷新 {len(views)} 个视图。"
+            )
+        else:
+            print("[记忆] 没有待处理证据。")
+    except KeyboardInterrupt:
+        logging_service.log_event("memory_reconcile_interrupted", level="WARNING", trigger=trigger)
+        print("\n[警告] 记忆对账被中断，未消费的证据会保留。")
+    except Exception as e:
+        logging_service.log_event(
+            "memory_reconcile_failed", level="ERROR", trigger=trigger, error=str(e)
+        )
+        print(f"[记忆] 对账失败：{e}；未消费的证据会保留。")
 
 
 def run_todo_tool_for_post(post_id: str, client: LLMClient, model: str) -> None:

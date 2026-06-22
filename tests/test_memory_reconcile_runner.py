@@ -45,7 +45,7 @@ class DryRunTest(unittest.TestCase):
             {"op": "add", "type": "goal", "content": "预览不落库", "evidence_event_ids": ids},
         ])
         summary = recon.reconcile_bucket(
-            "global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL, dry_run=True
+            "global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL, dry_run=True
         )
         # summary reflects what WOULD happen
         self.assertEqual(summary.applied, 1)
@@ -53,8 +53,8 @@ class DryRunTest(unittest.TestCase):
         # but nothing persisted, cursor not advanced
         self.assertEqual(len(mus.list_units("global", "public")), 0)
         self.assertEqual(mes.get_cursor("global", "public"), 0)
-        self.assertEqual(len(db.query_all("SELECT * FROM reflections")), 0)
-        self.assertIsNone(summary.reflection_id)
+        self.assertEqual(len(db.query_all("SELECT * FROM memory_reconcile_runs")), 0)
+        self.assertIsNone(summary.reconcile_run_id)
         # preview shows the unit contents that WOULD result
         self.assertEqual(len(summary.preview_units), 1)
         self.assertEqual(summary.preview_units[0]["content"], "预览不落库")
@@ -64,8 +64,8 @@ class DryRunTest(unittest.TestCase):
         producer = self._producer([
             {"op": "add", "type": "goal", "content": "正式落库", "evidence_event_ids": ids},
         ])
-        recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL, dry_run=True)
-        recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL, dry_run=False)
+        recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL, dry_run=True)
+        recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL, dry_run=False)
         self.assertEqual(len(mus.list_units("global", "public")), 1)
         self.assertEqual(mes.get_cursor("global", "public"), ids[-1])
 
@@ -225,10 +225,10 @@ class BucketDiscoveryTest(unittest.TestCase):
         self.assertTrue(result.has_pending_after_run)
         self.assertEqual(len(mes.buckets_with_pending_events()), 1)
 
-    def test_reflection_type_mapping(self) -> None:
-        self.assertEqual(runner.reflection_type_for_visibility("public"), recon.RECONCILE_GLOBAL)
-        self.assertEqual(runner.reflection_type_for_visibility("thread:20260101-001"), recon.RECONCILE_THREAD)
-        self.assertEqual(runner.reflection_type_for_visibility("private:soul:luna"), recon.RECONCILE_SOUL_PRIVATE)
+    def test_run_type_mapping(self) -> None:
+        self.assertEqual(runner.run_type_for_visibility("public"), recon.RECONCILE_GLOBAL)
+        self.assertEqual(runner.run_type_for_visibility("thread:20260101-001"), recon.RECONCILE_THREAD)
+        self.assertEqual(runner.run_type_for_visibility("private:soul:luna"), recon.RECONCILE_SOUL_PRIVATE)
 
 
 if __name__ == "__main__":

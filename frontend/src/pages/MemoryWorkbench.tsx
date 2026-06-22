@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   type MemoryEvidenceRef,
-  type MemoryProfilePolicy,
+  type MemoryPortraitPolicy,
   type MemoryUnit,
   type MemoryUnitDetail,
   type MemoryView,
   type MemoryViewType,
-  type ReflectionScope,
+  type MemoryStatus,
   type Soul,
-  type SoulReflectionScope,
+  createMemoryUnit,
+  getJob,
+  getMemoryStatus,
   getMemoryUnit,
   listMemoryUnits,
   listMemoryViews,
   listSouls,
-  previewGlobalReflection,
-  previewSoulReflections,
   resynthesizeMemoryView,
   retractMemoryUnit,
   setMemoryPromptPolicy,
-  setMemoryProfilePolicy,
-  triggerGlobalReflection,
-  triggerSoulReflections,
+  setMemoryPortraitPolicy,
+  triggerMemoryReconcile,
   updateMemoryUnit,
 } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -34,7 +33,7 @@ type UnitFilter = 'active' | 'pending' | 'all'
 
 const UNIT_FILTERS: { value: UnitFilter; label: string }[] = [
   { value: 'active', label: '进行中' },
-  { value: 'pending', label: '待确认 · 迁移' },
+  { value: 'pending', label: '待确认' },
   { value: 'all', label: '全部' },
 ]
 
@@ -57,7 +56,7 @@ const TYPE_LABELS: Record<string, string> = {
   freeform: '其他',
 }
 
-const PROFILE_OPTIONS: { value: MemoryProfilePolicy; label: string }[] = [
+const PORTRAIT_OPTIONS: { value: MemoryPortraitPolicy; label: string }[] = [
   { value: 'auto', label: '自动判断' },
   { value: 'force_include', label: '强制进入核心画像' },
   { value: 'force_exclude', label: '强制不进入核心画像' },
@@ -102,8 +101,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(r
 export function MemoryWorkbench() {
   const [views, setViews] = useState<MemoryView[]>([])
   const [souls, setSouls] = useState<Soul[]>([])
-  const [globalPreview, setGlobalPreview] = useState<ReflectionScope | null>(null)
-  const [soulPreviews, setSoulPreviews] = useState<SoulReflectionScope[]>([])
+  const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null)
   const [selectedKey, setSelectedKey] = useState<string>('user')
   const [units, setUnits] = useState<MemoryUnit[]>([])
   const [loadingViews, setLoadingViews] = useState(true)
@@ -111,10 +109,14 @@ export function MemoryWorkbench() {
   const [integratingKey, setIntegratingKey] = useState<string | null>(null)
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null)
   const [filter, setFilter] = useState<UnitFilter>('active')
+  const [creating, setCreating] = useState(false)
+  const [newContent, setNewContent] = useState('')
+  const [newType, setNewType] = useState('insight')
   const [error, setError] = useState<string | null>(null)
 
   const entries = useMemo<PortraitEntry[]>(() => {
-    const userView = views.find((view) => view.view_type === 'user_md') ?? null
+    const userView = views.find((view) => view.view_type === 'user_portrait') ?? null
+    const pendingBuckets = memoryStatus?.pending_buckets ?? []
     const userEntry: PortraitEntry = {
       key: 'user',
       kind: 'user',
@@ -122,15 +124,16 @@ export function MemoryWorkbench() {
       view: userView,
       ownerScope: userView?.owner_scope ?? 'global',
       visibilityScope: userView?.visibility_scope ?? 'public',
-      viewType: 'user_md',
-      pending: globalPreview?.post_ids.length ?? 0,
+      viewType: 'user_portrait',
+      pending: pendingBuckets.filter(
+        (bucket) => bucket.owner_scope === 'global' && bucket.visibility_scope === 'public',
+      ).length,
       stale: userView?.status === 'stale',
     }
     const soulEntries: PortraitEntry[] = souls.map((soul) => {
       const view = views.find(
         (v) => v.view_type === 'soul_relationship_memory' && soulNameFromScope(v.owner_scope) === soul.name,
       ) ?? null
-      const preview = soulPreviews.find((scope) => scope.soul_name === soul.name)
       return {
         key: `soul:${soul.name}`,
         kind: 'soul',
@@ -140,12 +143,14 @@ export function MemoryWorkbench() {
         ownerScope: view?.owner_scope ?? `soul:${soul.name}`,
         visibilityScope: view?.visibility_scope ?? 'relationship',
         viewType: 'soul_relationship_memory',
-        pending: Math.max(preview?.interaction_count ?? 0, 0),
+        pending: pendingBuckets.filter(
+          (bucket) => bucket.owner_scope === `soul:${soul.name}`,
+        ).length,
         stale: view?.status === 'stale',
       }
     })
     return [userEntry, ...soulEntries]
-  }, [views, souls, globalPreview, soulPreviews])
+  }, [views, souls, memoryStatus])
 
   const selectedEntry = useMemo(
     () => entries.find((entry) => entry.key === selectedKey) ?? entries[0] ?? null,
@@ -159,20 +164,18 @@ export function MemoryWorkbench() {
   }, [units, filter])
 
   const fetchOverview = useCallback(async () => {
-    const [viewData, soulData, globalData, soulPreviewData] = await Promise.all([
+    const [viewData, soulData, statusData] = await Promise.all([
       listMemoryViews(),
       listSouls(true),
-      previewGlobalReflection().catch(() => null),
-      previewSoulReflections().catch(() => [] as SoulReflectionScope[]),
+      getMemoryStatus(),
     ])
-    return { viewData, soulData, globalData, soulPreviewData }
+    return { viewData, soulData, statusData }
   }, [])
 
   const applyOverview = useCallback((overview: Awaited<ReturnType<typeof fetchOverview>>) => {
     setViews(overview.viewData)
     setSouls(overview.soulData)
-    setGlobalPreview(overview.globalData)
-    setSoulPreviews(overview.soulPreviewData)
+    setMemoryStatus(overview.statusData)
   }, [])
 
   const loadOverview = useCallback(async () => {
@@ -196,7 +199,7 @@ export function MemoryWorkbench() {
     try {
       const data = await listMemoryUnits({
         owner_scope: entry.ownerScope,
-        visibility_scope: entry.visibilityScope,
+        visibility_scope: entry.kind === 'user' ? entry.visibilityScope : undefined,
         status: 'all',
       })
       setUnits(data)
@@ -230,21 +233,23 @@ export function MemoryWorkbench() {
     setIntegratingKey(entry.key)
     setError(null)
     try {
-      if (entry.pending > 0) {
-        if (entry.kind === 'user') {
-          await triggerGlobalReflection()
-        } else {
-          await triggerSoulReflections()
-        }
-        // 整理在后台异步执行，轮询直到该范围不再有待整理互动
+      if ((memoryStatus?.pending_event_count ?? 0) > 0
+        || (memoryStatus?.pending_review_count ?? 0) > 0
+        || (memoryStatus?.pending_relink_count ?? 0) > 0) {
+        const queued = await triggerMemoryReconcile()
         const deadline = Date.now() + 90_000
         while (Date.now() < deadline) {
           await sleep(3_000)
+          if (queued.job_id !== null) {
+            const job = await getJob(queued.job_id)
+            if (job.status === 'failed') throw new Error(job.error || '记忆对账失败')
+          }
           const overview = await fetchOverview()
           applyOverview(overview)
-          const stillPending = entry.kind === 'user'
-            ? (overview.globalData?.post_ids.length ?? 0) > 0
-            : (overview.soulPreviewData.find((s) => s.soul_name === entry.soulName)?.interaction_count ?? 0) > 0
+          const stillPending = overview.statusData.pending_event_count > 0
+            || overview.statusData.pending_review_count > 0
+            || overview.statusData.pending_relink_count > 0
+            || overview.statusData.active_jobs.length > 0
           if (!stillPending) break
         }
       } else if (entry.stale) {
@@ -260,6 +265,26 @@ export function MemoryWorkbench() {
       setError(err instanceof Error ? err.message : '整理失败')
     } finally {
       setIntegratingKey(null)
+    }
+  }
+
+  const handleCreate = async () => {
+    if (!selectedEntry || !newContent.trim()) return
+    setError(null)
+    try {
+      await createMemoryUnit({
+        owner_scope: selectedEntry.ownerScope,
+        visibility_scope: selectedEntry.kind === 'user'
+          ? selectedEntry.visibilityScope
+          : `private:soul:${selectedEntry.soulName}`,
+        type: newType,
+        content: newContent.trim(),
+      })
+      setNewContent('')
+      setCreating(false)
+      await refreshAfterMutation()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '新增记忆失败')
     }
   }
 
@@ -372,14 +397,41 @@ export function MemoryWorkbench() {
                 </button>
               ))}
             </div>
-            <span className={styles.muted}>{filteredUnits.length} 个记忆条目</span>
+            <div>
+              <span className={styles.muted}>{filteredUnits.length} 个记忆条目</span>
+              <button className={styles.ghostButton} onClick={() => setCreating((value) => !value)}>
+                {creating ? '取消新增' : '新增记忆'}
+              </button>
+            </div>
           </div>
+
+          {creating && (
+            <div className={`${styles.unit} ${styles.unitEditing}`}>
+              <label className={styles.field}>
+                <span>记忆内容</span>
+                <textarea value={newContent} onChange={(event) => setNewContent(event.target.value)} rows={3} />
+              </label>
+              <label className={styles.field}>
+                <span>类型</span>
+                <select value={newType} onChange={(event) => setNewType(event.target.value)}>
+                  {Object.entries(TYPE_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </label>
+              <div className={styles.editActionsRight}>
+                <button className={styles.primaryButton} onClick={() => void handleCreate()}>
+                  保存
+                </button>
+              </div>
+            </div>
+          )}
 
           {loadingUnits ? (
             <p className={styles.muted}>加载记忆条目...</p>
           ) : filteredUnits.length === 0 ? (
             <p className={styles.muted}>
-              {filter === 'pending' ? '没有待确认或待迁移的记忆条目。' : '这里还没有记忆条目。'}
+              {filter === 'pending' ? '没有待确认的记忆条目。' : '这里还没有记忆条目。'}
             </p>
           ) : (
             filteredUnits.map((unit) => (
@@ -423,26 +475,26 @@ function UnitCard({
   const [editing, setEditing] = useState(false)
   const [draftContent, setDraftContent] = useState(unit.content)
   const [draftType, setDraftType] = useState(unit.type)
-  const [draftProfile, setDraftProfile] = useState<MemoryProfilePolicy>(unit.profile_policy)
+  const [draftPortrait, setDraftPortrait] = useState<MemoryPortraitPolicy>(unit.portrait_policy)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const muted = unit.prompt_policy === 'no_prompt'
-  const inPortrait = unit.in_md_slice === 1
+  const inPortrait = unit.in_portrait === 1
   const statusText = inPortrait
-    ? unit.profile_policy === 'force_include'
+    ? unit.portrait_policy === 'force_include'
       ? '正在塑造你的核心画像 · 已强制纳入'
       : '正在塑造你的核心画像'
     : muted
       ? '未纳入核心画像 · 已设为不要提起'
-      : unit.profile_policy === 'force_exclude'
+      : unit.portrait_policy === 'force_exclude'
         ? '未纳入核心画像 · 已强制排除'
         : '未纳入核心画像 · 未达到自动纳入标准'
 
   const openEdit = () => {
     setDraftContent(unit.content)
     setDraftType(unit.type)
-    setDraftProfile(unit.profile_policy)
+    setDraftPortrait(unit.portrait_policy)
     setEditing(true)
   }
 
@@ -454,8 +506,8 @@ function UnitCard({
       if (content !== unit.content || draftType !== unit.type) {
         await updateMemoryUnit(unit.id, { content, type: draftType })
       }
-      if (draftProfile !== unit.profile_policy) {
-        await setMemoryProfilePolicy(unit.id, draftProfile)
+      if (draftPortrait !== unit.portrait_policy) {
+        await setMemoryPortraitPolicy(unit.id, draftPortrait)
       }
       setEditing(false)
       await onChanged()
@@ -509,8 +561,8 @@ function UnitCard({
           </label>
           <label className={styles.field}>
             <span>是否进入核心画像</span>
-            <select value={draftProfile} onChange={(e) => setDraftProfile(e.target.value as MemoryProfilePolicy)}>
-              {PROFILE_OPTIONS.map((option) => (
+            <select value={draftPortrait} onChange={(e) => setDraftPortrait(e.target.value as MemoryPortraitPolicy)}>
+              {PORTRAIT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
             </select>
