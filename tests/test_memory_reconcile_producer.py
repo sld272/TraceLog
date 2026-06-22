@@ -63,29 +63,6 @@ class ReconcileParserTest(unittest.TestCase):
         parsed = reflection_router._parse_memory_reconcile_content(json.dumps({"summary": "无"}))
         self.assertEqual(parsed["ops"], [])
 
-    def test_legacy_relationship_migration_parser(self) -> None:
-        parsed = reflection_router._parse_legacy_relationship_migration_content(
-            json.dumps(
-                {
-                    "decision": "revise",
-                    "content": " 用户难过时希望先陪伴 ",
-                    "evidence_event_ids": [1, "2", "bad"],
-                    "confidence": 1.2,
-                    "importance": 0.8,
-                }
-            )
-        )
-        self.assertEqual("revise", parsed["decision"])
-        self.assertEqual("用户难过时希望先陪伴", parsed["content"])
-        self.assertEqual([1, 2], parsed["evidence_event_ids"])
-        self.assertEqual(1.0, parsed["confidence"])
-        self.assertIsNone(
-            reflection_router._parse_legacy_relationship_migration_content(
-                json.dumps({"decision": "revise", "content": ""})
-            )
-        )
-
-
 class ReconcileProducerTest(unittest.TestCase):
     def test_producer_formats_inputs_and_passes_through(self) -> None:
         captured = {}
@@ -145,53 +122,6 @@ class ReconcileProducerTest(unittest.TestCase):
             with self.assertRaises(producer_mod.ReconcileProducerError):
                 producer(boundary={"owner_scope": "global", "visibility_scope": "public"},
                          events=[], active_units=[], tombstones=[])
-
-    def test_legacy_migration_judge_formats_candidate_and_evidence(self) -> None:
-        captured = {}
-
-        def fake_call(
-            client,
-            model,
-            *,
-            candidate_text,
-            evidence_text,
-            trace_context=None,
-        ):
-            captured["candidate"] = candidate_text
-            captured["evidence"] = evidence_text
-            return {
-                "decision": "confirm",
-                "content": "",
-                "evidence_event_ids": [7],
-                "confidence": 0.9,
-                "importance": 0.8,
-            }
-
-        with patch.object(
-            reflection_router,
-            "call_legacy_relationship_migration",
-            fake_call,
-        ):
-            judge = producer_mod.make_legacy_relationship_judge(object(), "m")
-            result = judge(
-                candidate={"id": "mu_old", "owner_scope": "soul:luna", "content": "老友称呼"},
-                evidence=[
-                    {
-                        "id": 7,
-                        "visibility_scope": "private:soul:luna",
-                        "source_channel": "chat",
-                        "content_snapshot": "以后叫我老友吧",
-                        "conversation_context": [
-                            {"role": "assistant", "content": "好，老友。"}
-                        ],
-                    }
-                ],
-            )
-        self.assertEqual("老友称呼", captured["candidate"])
-        self.assertIn("event_id=7", captured["evidence"])
-        self.assertIn("仅帮助理解", captured["evidence"])
-        self.assertEqual("confirm", result["decision"])
-
 
 class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
     """LLM-shaped JSON -> parser -> producer -> reconcile -> a real unit."""

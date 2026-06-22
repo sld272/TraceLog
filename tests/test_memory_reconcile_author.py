@@ -95,47 +95,6 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
         self.assertEqual(summary.skipped, 1)
         self.assertEqual(len(mus.list_units("soul:luna", "private:soul:luna")), 0)
 
-    def test_migration_backfills_author_on_legacy_events(self) -> None:
-        # Simulate legacy events written before the `author` column existed.
-        now = db.now_ts()
-        with db.transaction() as conn:
-            conn.execute(
-                "INSERT INTO souls(name, file_path, enabled, created_at, updated_at) VALUES ('luna','souls/luna.md',1,?,?)",
-                (now, now),
-            )
-            conn.execute("INSERT INTO chat_threads(id, soul_name, created_at, updated_at) VALUES (1,'luna',?,?)", (now, now))
-            conn.execute("INSERT INTO chat_messages(id, thread_id, role, content, created_at) VALUES (1,1,'user','嗨',?)", (now,))
-            conn.execute("INSERT INTO chat_messages(id, thread_id, role, content, created_at) VALUES (2,1,'assistant','你好',?)", (now,))
-            # legacy events with author NULL
-            for source_type, source_id, owner, vis in [
-                ("post", "p1", "global", "public"),
-                ("comment_message", "10", "global", "thread:p1"),       # user comment
-                ("comment_message", "11", "soul:luna", "thread:p1"),    # soul comment
-                ("chat_message", "1", "soul:luna", "private:soul:luna"),  # user chat
-                ("chat_message", "2", "soul:luna", "private:soul:luna"),  # assistant chat
-            ]:
-                conn.execute(
-                    """
-                    INSERT INTO memory_ingest_events(
-                        owner_scope, visibility_scope, source_channel, source_type,
-                        source_id, source_revision, op, author, content_snapshot,
-                        content_hash, occurred_at, created_at
-                    ) VALUES (?, ?, ?, ?, ?, 1, 'create', NULL, 'x', NULL, ?, ?)
-                    """,
-                    (owner, vis, source_type.split("_")[0] if source_type != "comment_message" else "comment",
-                     source_type, source_id, now, now),
-                )
-
-        db.init_db()  # triggers _backfill_memory_event_authors
-
-        rows = {(r["source_type"], r["source_id"]): r["author"]
-                for r in db.query_all("SELECT source_type, source_id, author FROM memory_ingest_events")}
-        self.assertEqual(rows[("post", "p1")], "user")
-        self.assertEqual(rows[("comment_message", "10")], "user")
-        self.assertEqual(rows[("comment_message", "11")], "assistant")
-        self.assertEqual(rows[("chat_message", "1")], "user")
-        self.assertEqual(rows[("chat_message", "2")], "assistant")
-
     def test_user_comment_builds_that_souls_thread_memory(self) -> None:
         # user commenting in gotoh's thread -> owned by soul:gotoh, author user
         with db.transaction() as conn:
@@ -155,40 +114,6 @@ class ReconcileAuthorFilterTest(unittest.TestCase):
         units = mus.list_units("soul:gotoh", "thread:20260616-001")
         self.assertEqual(len(units), 1)  # only the user comment becomes a belief
         self.assertEqual(units[0]["content"], "belief::我也想学吉他，但怕坚持不下来")
-
-    def test_migration_reowns_legacy_global_user_comment_to_soul(self) -> None:
-        now = db.now_ts()
-        with db.transaction() as conn:
-            conn.execute(
-                "INSERT INTO souls(name, file_path, enabled, created_at, updated_at) VALUES ('gotoh','souls/gotoh.md',1,?,?)",
-                (now, now),
-            )
-            conn.execute(
-                "INSERT INTO posts(id, ts, content, created_at, updated_at) VALUES ('20260616-001','t','p',?,?)",
-                (now, now),
-            )
-            conn.execute(
-                "INSERT INTO comments(id, post_id, soul_name, role, content, seq, created_at) "
-                "VALUES (50,'20260616-001','gotoh','user','旧的用户评论',1,?)",
-                (now,),
-            )
-            # legacy event written under the OLD mapping: user comment owner=global
-            conn.execute(
-                """
-                INSERT INTO memory_ingest_events(
-                    owner_scope, visibility_scope, source_channel, source_type,
-                    source_id, source_revision, op, author, content_snapshot,
-                    content_hash, occurred_at, created_at
-                ) VALUES ('global','thread:20260616-001','comment','comment_message','50',1,'create',NULL,'旧的用户评论',NULL,?,?)
-                """,
-                (now, now),
-            )
-        db.init_db()  # author backfill (global->user) then owner re-migration
-        row = db.query_one(
-            "SELECT owner_scope, author FROM memory_ingest_events WHERE source_type='comment_message' AND source_id='50'"
-        )
-        self.assertEqual(row["author"], "user")
-        self.assertEqual(row["owner_scope"], "soul:gotoh")
 
     def test_event_author_recorded(self) -> None:
         with db.transaction() as conn:

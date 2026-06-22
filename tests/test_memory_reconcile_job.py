@@ -62,36 +62,6 @@ class MemoryReconcileJobTest(unittest.TestCase):
         self.assertNotIn(job_service.TYPE_RUN_LIGHT_REFLECTION, types)
         self.assertNotIn(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, types)
 
-    def test_v2_read_mode_enqueues_due_legacy_migration_on_startup(self) -> None:
-        unit_id = mus.new_unit_id()
-        now = db.now_ts()
-        db.execute(
-            """
-            INSERT INTO memory_units(
-                id, owner_scope, visibility_scope, source_channel, prompt_policy,
-                type, content, confidence, source, status, tier, profile_policy,
-                importance, sensitivity, metadata, first_seen, last_confirmed,
-                created_at, updated_at
-            ) VALUES (?, 'soul:luna', 'private:soul:luna', 'migration', 'no_prompt',
-                      'relationship', '旧关系候选', 0.4, 'migrated', 'pending',
-                      'contextual', 'auto', 0.5, 'normal',
-                      '{"migration":"legacy_soul_memory"}', ?, ?, ?, ?)
-            """,
-            (unit_id, now, now, now, now),
-        )
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    memory_read.READ_MODE_ENV: "units",
-                    memory_read.WRITE_MODE_ENV: "legacy",
-                },
-            ),
-            patch.object(api_deps.record_service, "retry_pending_vector_docs"),
-        ):
-            api_deps._enqueue_startup_retries()
-        self.assertIn(job_service.TYPE_RUN_MEMORY_RECONCILE, self._job_types())
-
     def test_legacy_write_mode_keeps_reflection(self) -> None:
         # default (no env set) is legacy: unchanged behaviour
         public_post_pipeline.create_post("今天在准备考研，压力有点大")
@@ -141,30 +111,6 @@ class MemoryReconcileJobTest(unittest.TestCase):
             )[0]["id"],
             job_id,
         )
-
-    def test_execute_job_raises_legacy_migration_failure(self) -> None:
-        job_id = job_service.enqueue_memory_reconcile_once()
-        job = job_service.get_job(int(job_id))
-        failure = memory_reconcile_runner.LegacyMigrationFailure(
-            "mu_legacy",
-            "invalid evidence",
-        )
-        result = memory_reconcile_runner.ReconcileRunResult(
-            [],
-            [],
-            False,
-            migration_failures=[failure],
-        )
-        with (
-            patch("core.memory_reconcile_runner.run_pending_reconcile", return_value=result),
-            patch("core.memory_view_producer.refresh_views_after_reconcile"),
-            patch("core.vector_index_service.rebuild_expected_docs"),
-        ):
-            with self.assertRaisesRegex(
-                public_post_pipeline.MemoryReconcileRunError,
-                r"legacy unit mu_legacy: invalid evidence",
-            ):
-                public_post_pipeline.execute_job(job, client=object(), model="m")
 
     def test_bounded_backlog_enqueues_one_continuation_and_next_job_drains_it(self) -> None:
         with db.transaction() as conn:

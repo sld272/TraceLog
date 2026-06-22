@@ -26,20 +26,16 @@ class PublicPostReplyContext:
 
 
 class MemoryReconcileRunError(RuntimeError):
-    """A bucket, post-edit re-link, or legacy migration review failed, so the
-    reconcile job is retried instead of reported done."""
+    """A bucket or post-edit re-link review failed, so the reconcile job is
+    retried instead of reported done."""
 
     def __init__(
         self,
         failures: list[memory_reconcile_runner.ReconcileBucketFailure],
         relink_failures: list[memory_reconcile_runner.RelinkFailure] | None = None,
-        migration_failures: list[
-            memory_reconcile_runner.LegacyMigrationFailure
-        ] | None = None,
     ) -> None:
         self.failures = list(failures)
         self.relink_failures = list(relink_failures or [])
-        self.migration_failures = list(migration_failures or [])
         details = "; ".join(
             f"{failure.owner_scope}/{failure.visibility_scope}: {failure.error}"
             for failure in self.failures
@@ -47,15 +43,10 @@ class MemoryReconcileRunError(RuntimeError):
         relink_details = "; ".join(
             f"unit {failure.unit_id}: {failure.error}" for failure in self.relink_failures
         )
-        migration_details = "; ".join(
-            f"legacy unit {failure.unit_id}: {failure.error}"
-            for failure in self.migration_failures
-        )
         super().__init__(
             f"memory reconcile failed for {len(self.failures)} bucket(s) "
-            f"{len(self.relink_failures)} re-link(s), and "
-            f"{len(self.migration_failures)} legacy migration(s): "
-            f"{'; '.join(part for part in (details, relink_details, migration_details) if part)}"
+            f"and {len(self.relink_failures)} re-link(s): "
+            f"{'; '.join(part for part in (details, relink_details) if part)}"
         )
 
 
@@ -418,11 +409,10 @@ def _run_memory_reconcile(job_id: int, client: LLMClient, model: str) -> None:
     # Keep the unit vector docs in sync with the new/retracted units so semantic
     # retrieval sees them (hash-gated; unchanged docs are skipped).
     vector_index_service.rebuild_expected_docs()
-    if result.failures or result.relink_failures or result.migration_failures:
+    if result.failures or result.relink_failures:
         raise MemoryReconcileRunError(
             result.failures,
             result.relink_failures,
-            result.migration_failures,
         )
     if result.has_pending_after_run:
         job_service.enqueue_memory_reconcile_once(

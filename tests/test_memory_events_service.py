@@ -103,12 +103,6 @@ class MemoryEventsServiceTest(unittest.TestCase):
         self.assertEqual(second, 0)
         self.assertEqual(len(self._all_events()), 4)
 
-    def test_init_db_autoruns_backfill(self) -> None:
-        # init_db already ran in setUp; seed then re-init to trigger migration backfill.
-        self._seed_business_rows()
-        db.init_db()
-        self.assertEqual(len(self._all_events()), 4)
-
     def test_content_hash_recorded(self) -> None:
         self._seed_business_rows()
         with db.transaction() as conn:

@@ -439,25 +439,6 @@ class MemoryRechallengeTest(unittest.TestCase):
         self.assertIsNone(summary)
         self.assertEqual(mes.get_cursor("global", "public"), delete_id)
 
-    def test_historical_repair_is_idempotent(self) -> None:
-        create_id = self._post_event("p1", "create", "旧内容", 1.0)
-        unit_id = self._unit([create_id])
-        edit_id = self._post_event("p1", "edit", "新内容", 2.0)
-        self._settle(edit_id)
-        db.execute("DELETE FROM meta WHERE key = 'memory_v2_rechallenge_v1'")
-
-        db.init_db()
-        db.init_db()
-
-        self.assertEqual(mus.get_unit(unit_id)["status"], "challenged")
-        self.assertEqual(
-            db.query_one(
-                "SELECT COUNT(*) AS n FROM memory_unit_reconcile_queue WHERE unit_id = ?",
-                (unit_id,),
-            )["n"],
-            1,
-        )
-
     def test_stale_portrait_does_not_expose_challenged_claim(self) -> None:
         from core import memory_view_service as mvs
 
