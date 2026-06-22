@@ -13,7 +13,7 @@ import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
 import { InlineSuggestions } from './InlineSuggestions'
 import { SoulAvatar } from './SoulAvatar'
-import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
+import { ChatIcon, ChevronRightIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
 import { soulColors } from '@/utils/soulColor'
@@ -115,6 +115,9 @@ export const PostCard = memo(function PostCard({
           >
             {expandLoading ? <LoadingDots /> : <ChatIcon />}
             <span>评论 {post.comment_count}</span>
+            <span className={`${styles.commentToggleChevron} ${showComments ? styles.commentToggleChevronOpen : ''}`}>
+              <ChevronRightIcon width={14} height={14} />
+            </span>
           </button>
         </div>
       )}
@@ -374,7 +377,8 @@ function CommentPreview({
           onClick={() => setReplyOpen((open) => !open)}
           disabled={replyInputDisabled}
         >
-          回复
+          <ChatIcon />
+          <span>回复 {soulName}</span>
         </button>
         {replyOpen && (
         <div className={styles.replyBox}>

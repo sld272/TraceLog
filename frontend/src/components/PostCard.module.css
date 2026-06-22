@@ -133,6 +133,16 @@
   color: var(--color-accent);
 }
 
+.commentToggleChevron {
+  display: inline-flex;
+  color: inherit;
+  transition: transform var(--transition-normal);
+}
+
+.commentToggleChevronOpen {
+  transform: rotate(90deg);
+}
+
 .comments {
   display: flex;
   flex-direction: column;
@@ -416,20 +426,30 @@
 }
 
 .replyArea {
+  display: flex;
+  flex-direction: column;
   margin-top: var(--space-2);
 }
 
 .replyTrigger {
-  margin-left: 42px;
-  padding: 2px 0;
-  color: var(--color-text-tertiary);
+  align-self: flex-end;
+  margin-right: 42px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 13px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
-  transition: color var(--transition-fast);
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
 }
 
 .replyTrigger:hover:not(:disabled),
 .replyTriggerOn {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-subtle);
   color: var(--color-accent);
 }
 
@@ -472,6 +492,11 @@
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
   overflow-y: auto;
+}
+
+.replyInput:focus,
+.replyInput:focus-visible {
+  outline: none;
 }
 
 .replyInput::placeholder {
