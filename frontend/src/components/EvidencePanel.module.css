@@ -13,17 +13,12 @@
 .summary {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  min-height: 26px;
-  padding: 0 var(--space-2);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.68);
+  gap: 5px;
   color: var(--color-text-tertiary);
   cursor: pointer;
-  line-height: 26px;
+  line-height: 20px;
   list-style: none;
-  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  transition: color var(--transition-fast);
 }
 
 .summary::-webkit-details-marker {
@@ -31,12 +26,11 @@
 }
 
 .summary:hover {
-  border-color: var(--color-accent-border);
-  background: var(--color-accent-subtle);
   color: var(--color-accent);
 }
 
 .summaryText {
+  font-size: 12.5px;
   font-weight: var(--weight-medium);
 }
 

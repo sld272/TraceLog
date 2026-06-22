@@ -319,14 +319,9 @@ function CommentPreview({
             >
               {formatSmartTime(comment.created_at)}
             </time>
-            <div className={styles.messageActions}>
-              {!rootPending && <RerunMarker at={comment.rerun_at} className={styles.messageMarker} />}
-              {canRerunRoot && onRerun && (
-                <button className={styles.inlineAction} onClick={() => onRerun(comment.id)} disabled={rootBusy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
-                  <RefreshCwIcon />
-                </button>
-              )}
-            </div>
+            {!rootPending && comment.rerun_at && (
+              <RerunMarker at={comment.rerun_at} className={styles.messageMarker} />
+            )}
           </div>
           {rootPending ? (
             <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
@@ -338,20 +333,34 @@ function CommentPreview({
               <ImageGrid attachments={comment.attachments ?? []} />
               <InlineSuggestions suggestions={parseMessageSuggestions(comment.metadata)} />
               <div className={styles.commentFooter}>
+                {onReply && (
+                  <button
+                    type="button"
+                    className={`${styles.quietAction} ${styles.quietPrimary} ${replyOpen ? styles.quietOn : ''}`}
+                    onClick={() => setReplyOpen((open) => !open)}
+                    disabled={replyInputDisabled}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5M4 12h11a4 4 0 0 1 4 4v1" /></svg>
+                    回复
+                  </button>
+                )}
                 <EvidencePanel
                   metadata={comment.metadata}
                   channel="public_post"
                   messageId={comment.id}
                   compact
                 />
-                {onReply && (
+                {canRerunRoot && onRerun && (
                   <button
                     type="button"
-                    className={`${styles.replyTrigger} ${replyOpen ? styles.replyTriggerOn : ''}`}
-                    onClick={() => setReplyOpen((open) => !open)}
-                    disabled={replyInputDisabled}
+                    className={`${styles.quietAction} ${styles.actHover}`}
+                    onClick={() => onRerun(comment.id)}
+                    disabled={rootBusy}
+                    title="重跑"
+                    aria-label={`重跑 ${soulName} 的回复`}
                   >
-                    回复
+                    <RefreshCwIcon />
+                    重跑
                   </button>
                 )}
               </div>
@@ -521,12 +530,12 @@ function ThreadMessage({
           <div className={styles.threadActionRow}>
             {!isPendingAssistant && <RerunMarker at={message.rerun_at} className={styles.threadMarker} />}
             {isPersisted && isLatest && message.role === 'assistant' && !isFailedAssistant && onRerun && (
-              <button className={styles.threadAction} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
+              <button className={`${styles.quietAction} ${styles.iconOnly} ${styles.actHover}`} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
                 <RefreshCwIcon />
               </button>
             )}
             {isPersisted && isUser && onDelete && (
-              <button className={styles.threadDanger} onClick={() => onDelete(message.id)} disabled={busy} title="删除追问" aria-label="删除追问">
+              <button className={`${styles.quietAction} ${styles.quietDanger} ${styles.iconOnly} ${styles.actHover}`} onClick={() => onDelete(message.id)} disabled={busy} title="删除追问" aria-label="删除追问">
                 <TrashIcon />
               </button>
             )}
