@@ -68,6 +68,12 @@ export const PostCard = memo(function PostCard({
   onRetryFailedJobs,
 }: PostCardProps) {
   const timeAgo = formatSmartTime(post.ts)
+  const [showComments, setShowComments] = useState(true)
+  const toggleComments = () => {
+    const next = !showComments
+    setShowComments(next)
+    if (next && comments.length === 0 && onExpand) onExpand()
+  }
 
   return (
     <article id={`post-${post.post_id}`} className={styles.card}>
@@ -99,7 +105,21 @@ export const PostCard = memo(function PostCard({
       {post.content && <div id={`post-content-${post.post_id}`} className={styles.content}>{post.content}</div>}
       <ImageGrid attachments={post.attachments ?? []} />
 
-      {comments.length > 0 && (
+      {post.comment_count > 0 && (
+        <div className={styles.commentBar}>
+          <button
+            className={`${styles.commentToggle} ${showComments ? styles.commentToggleOn : ''}`}
+            onClick={toggleComments}
+            disabled={expandLoading}
+            aria-expanded={showComments}
+          >
+            {expandLoading ? <LoadingDots /> : <ChatIcon />}
+            <span>评论 {post.comment_count}</span>
+          </button>
+        </div>
+      )}
+
+      {showComments && comments.length > 0 && (
         <div className={styles.comments}>
           {comments.map((comment) => (
             <CommentPreview
@@ -118,18 +138,10 @@ export const PostCard = memo(function PostCard({
         </div>
       )}
 
-      {post.comment_count > 0 && comments.length === 0 && onExpand && (
-        <>
-          <button className={styles.expandBtn} onClick={onExpand} disabled={expandLoading}>
-            {expandLoading ? <LoadingDots /> : <ChatIcon />}
-            <span>{expandLoading ? '加载回应中...' : `评论 ${post.comment_count}`}</span>
-          </button>
-          {expandError && (
-            <p className={styles.expandError}>
-              加载失败，点击重试：{expandError}
-            </p>
-          )}
-        </>
+      {showComments && expandError && (
+        <p className={styles.expandError}>
+          加载失败，点击重试：{expandError}
+        </p>
       )}
 
       <PipelineNotice
@@ -240,6 +252,7 @@ function CommentPreview({
 }) {
   const [reply, setReply] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [replyOpen, setReplyOpen] = useState(false)
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const soulName = comment.soul_name
   const colors = soulColors(soulName)
@@ -263,6 +276,10 @@ function CommentPreview({
       el.style.height = `${Math.min(el.scrollHeight, LAYOUT.REPLY_TEXTAREA_MAX_HEIGHT)}px`
     }
   }, [reply])
+
+  useEffect(() => {
+    if (replyOpen) replyInputRef.current?.focus()
+  }, [replyOpen])
 
   const handleSubmit = async () => {
     if ((!trimmed && attachments.length === 0) || replySubmitDisabled) return
@@ -349,17 +366,28 @@ function CommentPreview({
         </div>
       )}
 
-      <div className={styles.replyBox}>
-        {attachments.length > 0 && (
-          <ImageUploader
-            attachments={attachments}
-            compact
-            disabled={replyInputDisabled}
-            onChange={setAttachments}
-            showControls={false}
-          />
-        )}
-        <div className={styles.replyRow}>
+      {onReply && (
+      <div className={styles.replyArea}>
+        <button
+          type="button"
+          className={`${styles.replyTrigger} ${replyOpen ? styles.replyTriggerOn : ''}`}
+          onClick={() => setReplyOpen((open) => !open)}
+          disabled={replyInputDisabled}
+        >
+          回复
+        </button>
+        {replyOpen && (
+        <div className={styles.replyBox}>
+          {attachments.length > 0 && (
+            <ImageUploader
+              attachments={attachments}
+              compact
+              disabled={replyInputDisabled}
+              onChange={setAttachments}
+              showControls={false}
+            />
+          )}
+          <div className={styles.replyRow}>
           <textarea
             ref={replyInputRef}
             className={styles.replyInput}
@@ -391,8 +419,11 @@ function CommentPreview({
               发送 <span className="kbdTipKey">Enter</span>
             </span>
           </span>
+          </div>
         </div>
+        )}
       </div>
+      )}
       {conversation?.error && (
         <ReplyFailureInline
           error={conversation.error}
