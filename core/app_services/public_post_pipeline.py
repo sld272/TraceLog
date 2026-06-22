@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import attachment_service, context_builder, db, memory_events_service, memory_reconcile_runner, memory_view_producer, query_rewriter, record_service, reply_service, retrieval, suggestion_pipeline, todo_service, tool_config_service, vector_index_service, vision_service
+from core import attachment_service, context_builder, db, memory_events_service, memory_reconcile_runner, memory_view_producer, query_rewriter, record_service, reply_service, retrieval, suggestion_pipeline, vector_index_service, vision_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
@@ -64,8 +64,6 @@ def create_post(content: str, attachment_ids: list[str] | None = None) -> Create
     if body:
         job_ids.append(job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": post_id}))
     job_ids.append(job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id, "content": body}))
-    if body and tool_config_service.is_tool_enabled("todo"):
-        job_ids.append(job_service.enqueue(job_service.TYPE_RUN_TODO_TOOL, {"post_id": post_id}))
     if body or attachment_ids:
         reconcile_id = job_service.enqueue_memory_reconcile_once(
             {"trigger": "post", "post_id": post_id}
@@ -84,8 +82,6 @@ def execute_job(job: dict[str, Any], client: LLMClient, model: str) -> None:
         _run_index_post_embedding(job_id, payload)
     elif job_type == job_service.TYPE_GENERATE_POST_REPLIES:
         _run_generate_post_replies(job_id, payload, client, model)
-    elif job_type == job_service.TYPE_RUN_TODO_TOOL:
-        _run_todo_tool(job_id, payload, client, model)
     elif job_type == job_service.TYPE_RUN_MEMORY_RECONCILE:
         _run_memory_reconcile(job_id, client, model)
     else:
@@ -221,27 +217,6 @@ def build_public_post_reply_context(
         llm_content=llm_content,
         relevant_post_ids=built_context.relevant_post_ids,
         built_context=built_context,
-    )
-
-
-def _run_todo_tool(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    post_id = _required_post_id(payload)
-    event_service.append_post_event(post_id, "todo_started", {"post_id": post_id}, job_id=job_id)
-    result = todo_service.run_for_post_safely(post_id, client, model)
-    if result.error:
-        event_service.append_post_event(post_id, "todo_failed", {"error": result.error}, job_id=job_id)
-        raise RuntimeError(result.error)
-    event_service.append_post_event(
-        post_id,
-        "todo_succeeded",
-        {
-            "applied": result.applied,
-            "upserted": result.upserted,
-            "deleted": result.deleted,
-            "suggested": result.suggested,
-            "skipped": result.skipped,
-        },
-        job_id=job_id,
     )
 
 

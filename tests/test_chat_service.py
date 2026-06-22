@@ -31,6 +31,18 @@ class FakeClient:
 
 class ChatServiceTest(unittest.TestCase):
     def setUp(self) -> None:
+        # suggestion extraction is on by default; disable it for tests that
+        # aren't about suggestions so it doesn't consume the FakeClient queue
+        suggestions_off = patch.dict(
+            os.environ,
+            {
+                suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
+                suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "0",
+            },
+        )
+        suggestions_off.start()
+        self.addCleanup(suggestions_off.stop)
+
         self.tmp = tempfile.TemporaryDirectory()
         self.workspace = Path(self.tmp.name) / "workspace"
 

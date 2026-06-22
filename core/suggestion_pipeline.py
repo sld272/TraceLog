@@ -14,13 +14,13 @@ TODO_SUGGESTIONS_ENABLED_ENV = "TODO_SUGGESTIONS_ENABLED"
 
 
 def goal_suggestions_enabled() -> bool:
-    value = os.environ.get(GOAL_SUGGESTIONS_ENABLED_ENV, "0").strip().lower()
-    return value in {"1", "true", "yes", "on", "enabled"}
+    value = os.environ.get(GOAL_SUGGESTIONS_ENABLED_ENV, "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "disabled"}
 
 
 def todo_suggestions_enabled() -> bool:
-    value = os.environ.get(TODO_SUGGESTIONS_ENABLED_ENV, "0").strip().lower()
-    return value in {"1", "true", "yes", "on", "enabled"}
+    value = os.environ.get(TODO_SUGGESTIONS_ENABLED_ENV, "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "disabled"}
 
 
 def collect_reply_suggestions(
@@ -113,7 +113,9 @@ def collect_todo_suggestions(
     trace_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Extract todo changes from any reply input and persist them as suggestions."""
-    if not todo_suggestions_enabled():
+    from core import tool_config_service
+
+    if not tool_config_service.is_tool_enabled("todo") or not todo_suggestions_enabled():
         return []
     body = str(user_input or "").strip()
     if not body:

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from core import attachment_service, db, query_rewriter, reply_service, retrieval, tool_config_service, vector_index_service, vision_service
+from core import attachment_service, db, query_rewriter, reply_service, retrieval, vector_index_service, vision_service
 from core.app_services import event_service, job_service, public_post_pipeline
 from tests.helpers import require_not_none
 
@@ -72,21 +72,12 @@ class PublicPostPipelineTest(unittest.TestCase):
             [
                 "index_post_embedding",
                 "generate_post_replies",
-                "run_todo_tool",
                 "run_memory_reconcile",
             ],
             [row["type"] for row in jobs],
         )
         self.assertEqual([job["id"] for job in db.query_all("SELECT id FROM jobs ORDER BY id ASC")], created.job_ids)
         self.assertEqual(["post_created"], [event["event_type"] for event in events])
-
-    def test_create_post_omits_todo_job_when_tool_disabled(self) -> None:
-        tool_config_service.set_tool_enabled("todo", False)
-
-        created = public_post_pipeline.create_post("今天想练歌")
-        jobs = job_service.list_jobs_for_post(created.post_id)
-
-        self.assertNotIn("run_todo_tool", [job["type"] for job in jobs])
 
     def test_image_only_post_enqueues_reply_without_text_indexing_jobs(self) -> None:
         attachment = attachment_service.upload_image(_image_bytes(), content_type="image/png")

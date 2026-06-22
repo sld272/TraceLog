@@ -68,7 +68,11 @@ class TodoServiceTest(unittest.TestCase):
             }
         )
 
-        result = todo_service.run_for_post("20260525-001", client, "fake-model")
+        with patch.dict(
+            os.environ,
+            {suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "0"},
+        ):
+            result = todo_service.run_for_post("20260525-001", client, "fake-model")
         row = require_not_none(db.query_one(
             "SELECT task, date, start_time, source_post FROM todos WHERE task = ?",
             ("交项目 PPT",),
