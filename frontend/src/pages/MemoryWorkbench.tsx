@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   type MemoryEvidenceRef,
   type MemoryProfilePolicy,
@@ -18,7 +18,26 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Notice } from '@/components/Notice'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import { CheckIcon, PencilIcon, TrashIcon } from '@/components/icons'
+import { formatSmartTime } from '@/utils/date'
 import styles from './MemoryWorkbench.module.css'
+
+type UnitFilter = 'active' | 'pending' | 'all'
+
+const UNIT_FILTERS: { value: UnitFilter; label: string }[] = [
+  { value: 'active', label: '进行中' },
+  { value: 'pending', label: '待确认 · 迁移' },
+  { value: 'all', label: '全部' },
+]
+
+/** Wrap 「…」 spans in an accent highlight, matching the prototype portrait prose. */
+function highlightQuotes(text: string): ReactNode[] {
+  const parts = text.split(/(「[^」]*」)/g)
+  return parts.map((part, index) =>
+    part.startsWith('「') && part.endsWith('」')
+      ? <strong key={index} className={styles.portraitHighlight}>{part}</strong>
+      : part,
+  )
+}
 
 const TYPE_LABELS: Record<string, string> = {
   preference: '偏好',
@@ -71,12 +90,19 @@ export function MemoryWorkbench() {
   const [loadingUnits, setLoadingUnits] = useState(false)
   const [resynth, setResynth] = useState(false)
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null)
+  const [filter, setFilter] = useState<UnitFilter>('active')
   const [error, setError] = useState<string | null>(null)
 
   const selectedView = useMemo(
     () => views.find((view) => viewKey(view) === selectedKey) ?? null,
     [views, selectedKey],
   )
+
+  const filteredUnits = useMemo(() => {
+    if (filter === 'all') return units
+    if (filter === 'active') return units.filter((unit) => unit.status === 'active')
+    return units.filter((unit) => unit.status !== 'active')
+  }, [units, filter])
 
   const loadViews = useCallback(async () => {
     setLoadingViews(true)
@@ -102,6 +128,7 @@ export function MemoryWorkbench() {
       const data = await listMemoryUnits({
         owner_scope: view.owner_scope,
         visibility_scope: view.visibility_scope,
+        status: 'all',
       })
       setUnits(data)
       setError(null)
@@ -149,8 +176,6 @@ export function MemoryWorkbench() {
       setResynth(false)
     }
   }
-
-  const isRelationship = selectedView?.view_type === 'soul_relationship_memory'
 
   return (
     <div className={styles.workbench}>
@@ -200,39 +225,56 @@ export function MemoryWorkbench() {
         <div className={styles.main}>
           {selectedView && (
             <section className={styles.portrait}>
-              <div className={styles.portraitRibbon}>
+              <div className={`${styles.portraitStatus} ${selectedView.status === 'stale' ? styles.portraitStatusStale : ''}`}>
                 <span className={`${styles.statusDot} ${selectedView.status === 'stale' ? styles.statusStale : styles.statusFresh}`} />
-                {selectedView.status === 'stale' ? '有新记忆' : '最新'}
-                {selectedView.status === 'stale' && (
-                  <button className={styles.resynthButton} onClick={handleResynthesize} disabled={resynth}>
-                    {resynth ? '整理中...' : '重新整理'}
-                  </button>
-                )}
+                {selectedView.status === 'stale' ? '有新记忆' : '最新'} · 整理于 {formatSmartTime(selectedView.generated_at ?? selectedView.updated_at)}
               </div>
               <h2 className={styles.portraitTitle}>{viewLabel(selectedView)}</h2>
               {portraitProse(selectedView.content_md) ? (
                 <div className={styles.portraitProse}>
                   {portraitProse(selectedView.content_md).split(/\n{2,}/).map((para, index) => (
-                    <p key={index}>{para}</p>
+                    <p key={index}>{highlightQuotes(para)}</p>
                   ))}
                 </div>
               ) : (
                 <p className={styles.muted}>这份画像还没有内容。条目积累到一定程度后会自动整理生成。</p>
               )}
+              {selectedView.status === 'stale' && (
+                <div className={styles.portraitActions}>
+                  <button className={styles.resynthButton} onClick={handleResynthesize} disabled={resynth}>
+                    {resynth ? '整理中...' : '重新整理'}
+                  </button>
+                </div>
+              )}
             </section>
           )}
 
-          <div className={styles.unitsHeader}>
-            <span>{isRelationship ? '支撑这段关系的记忆条目' : '支撑这份画像的记忆条目'}</span>
-            <span className={styles.muted}>{units.length} 个记忆条目</span>
+          <div className={styles.unitsBar}>
+            <div className={styles.filterTabs} role="tablist" aria-label="记忆条目筛选">
+              {UNIT_FILTERS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={filter === option.value}
+                  className={`${styles.filterTab} ${filter === option.value ? styles.filterTabActive : ''}`}
+                  onClick={() => setFilter(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <span className={styles.muted}>{filteredUnits.length} 个记忆条目</span>
           </div>
 
           {loadingUnits ? (
             <p className={styles.muted}>加载记忆条目...</p>
-          ) : units.length === 0 ? (
-            <p className={styles.muted}>这里还没有记忆条目。</p>
+          ) : filteredUnits.length === 0 ? (
+            <p className={styles.muted}>
+              {filter === 'pending' ? '没有待确认或待迁移的记忆条目。' : '这里还没有记忆条目。'}
+            </p>
           ) : (
-            units.map((unit) => (
+            filteredUnits.map((unit) => (
               <UnitCard
                 key={unit.id}
                 unit={unit}
