@@ -5,13 +5,22 @@ import {
   type MemoryUnit,
   type MemoryUnitDetail,
   type MemoryView,
+  type MemoryViewType,
+  type ReflectionScope,
+  type Soul,
+  type SoulReflectionScope,
   getMemoryUnit,
   listMemoryUnits,
   listMemoryViews,
+  listSouls,
+  previewGlobalReflection,
+  previewSoulReflections,
   resynthesizeMemoryView,
   retractMemoryUnit,
   setMemoryPromptPolicy,
   setMemoryProfilePolicy,
+  triggerGlobalReflection,
+  triggerSoulReflections,
   updateMemoryUnit,
 } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -60,17 +69,8 @@ function typeLabel(type: string): string {
   return TYPE_LABELS[type] ?? type
 }
 
-function viewKey(view: MemoryView): string {
-  return `${view.view_type}|${view.owner_scope}|${view.visibility_scope}`
-}
-
 function soulNameFromScope(ownerScope: string): string {
   return ownerScope.startsWith(SOUL_PREFIX) ? ownerScope.slice(SOUL_PREFIX.length) : ownerScope
-}
-
-function viewLabel(view: MemoryView): string {
-  if (view.view_type === 'user_md') return '用户核心画像'
-  return `与 ${soulNameFromScope(view.owner_scope)} 的相处记忆`
 }
 
 /** Portrait markdown carries a leading <!-- generated_by ... --> metadata block
@@ -82,20 +82,74 @@ function portraitProse(contentMd: string): string {
     .trim()
 }
 
+interface PortraitEntry {
+  key: string
+  kind: 'user' | 'soul'
+  label: string
+  soulName?: string
+  view: MemoryView | null
+  ownerScope: string
+  visibilityScope: string
+  viewType: MemoryViewType
+  /** 尚未整理的新互动数 */
+  pending: number
+  /** 视图存在但已 stale（条目变化后需重综合） */
+  stale: boolean
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+
 export function MemoryWorkbench() {
   const [views, setViews] = useState<MemoryView[]>([])
-  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [souls, setSouls] = useState<Soul[]>([])
+  const [globalPreview, setGlobalPreview] = useState<ReflectionScope | null>(null)
+  const [soulPreviews, setSoulPreviews] = useState<SoulReflectionScope[]>([])
+  const [selectedKey, setSelectedKey] = useState<string>('user')
   const [units, setUnits] = useState<MemoryUnit[]>([])
   const [loadingViews, setLoadingViews] = useState(true)
   const [loadingUnits, setLoadingUnits] = useState(false)
-  const [resynth, setResynth] = useState(false)
+  const [integratingKey, setIntegratingKey] = useState<string | null>(null)
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null)
   const [filter, setFilter] = useState<UnitFilter>('active')
   const [error, setError] = useState<string | null>(null)
 
-  const selectedView = useMemo(
-    () => views.find((view) => viewKey(view) === selectedKey) ?? null,
-    [views, selectedKey],
+  const entries = useMemo<PortraitEntry[]>(() => {
+    const userView = views.find((view) => view.view_type === 'user_md') ?? null
+    const userEntry: PortraitEntry = {
+      key: 'user',
+      kind: 'user',
+      label: '用户核心画像',
+      view: userView,
+      ownerScope: userView?.owner_scope ?? 'global',
+      visibilityScope: userView?.visibility_scope ?? 'public',
+      viewType: 'user_md',
+      pending: globalPreview?.post_ids.length ?? 0,
+      stale: userView?.status === 'stale',
+    }
+    const soulEntries: PortraitEntry[] = souls.map((soul) => {
+      const view = views.find(
+        (v) => v.view_type === 'soul_relationship_memory' && soulNameFromScope(v.owner_scope) === soul.name,
+      ) ?? null
+      const preview = soulPreviews.find((scope) => scope.soul_name === soul.name)
+      return {
+        key: `soul:${soul.name}`,
+        kind: 'soul',
+        label: `与 ${soul.name} 的相处记忆`,
+        soulName: soul.name,
+        view,
+        ownerScope: view?.owner_scope ?? `soul:${soul.name}`,
+        visibilityScope: view?.visibility_scope ?? 'relationship',
+        viewType: 'soul_relationship_memory',
+        pending: Math.max(preview?.interaction_count ?? 0, 0),
+        stale: view?.status === 'stale',
+      }
+    })
+    return [userEntry, ...soulEntries]
+  }, [views, souls, globalPreview, soulPreviews])
+
+  const selectedEntry = useMemo(
+    () => entries.find((entry) => entry.key === selectedKey) ?? entries[0] ?? null,
+    [entries, selectedKey],
   )
 
   const filteredUnits = useMemo(() => {
@@ -104,30 +158,45 @@ export function MemoryWorkbench() {
     return units.filter((unit) => unit.status !== 'active')
   }, [units, filter])
 
-  const loadViews = useCallback(async () => {
+  const fetchOverview = useCallback(async () => {
+    const [viewData, soulData, globalData, soulPreviewData] = await Promise.all([
+      listMemoryViews(),
+      listSouls(true),
+      previewGlobalReflection().catch(() => null),
+      previewSoulReflections().catch(() => [] as SoulReflectionScope[]),
+    ])
+    return { viewData, soulData, globalData, soulPreviewData }
+  }, [])
+
+  const applyOverview = useCallback((overview: Awaited<ReturnType<typeof fetchOverview>>) => {
+    setViews(overview.viewData)
+    setSouls(overview.soulData)
+    setGlobalPreview(overview.globalData)
+    setSoulPreviews(overview.soulPreviewData)
+  }, [])
+
+  const loadOverview = useCallback(async () => {
     setLoadingViews(true)
     try {
-      const data = await listMemoryViews()
-      setViews(data)
-      setSelectedKey((prev) => (prev && data.some((v) => viewKey(v) === prev) ? prev : data[0] ? viewKey(data[0]) : null))
+      applyOverview(await fetchOverview())
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载画像视图失败')
     } finally {
       setLoadingViews(false)
     }
-  }, [])
+  }, [applyOverview, fetchOverview])
 
-  const loadUnits = useCallback(async (view: MemoryView | null) => {
-    if (!view) {
+  const loadUnits = useCallback(async (entry: PortraitEntry | null) => {
+    if (!entry) {
       setUnits([])
       return
     }
     setLoadingUnits(true)
     try {
       const data = await listMemoryUnits({
-        owner_scope: view.owner_scope,
-        visibility_scope: view.visibility_scope,
+        owner_scope: entry.ownerScope,
+        visibility_scope: entry.visibilityScope,
         status: 'all',
       })
       setUnits(data)
@@ -140,40 +209,57 @@ export function MemoryWorkbench() {
   }, [])
 
   useEffect(() => {
-    void loadViews()
-  }, [loadViews])
+    void loadOverview()
+  }, [loadOverview])
 
   useEffect(() => {
     setSelectedUnitId(null)
-    void loadUnits(selectedView)
-  }, [loadUnits, selectedView])
+    void loadUnits(selectedEntry)
+  }, [loadUnits, selectedEntry])
 
   const refreshAfterMutation = useCallback(async () => {
-    await loadUnits(selectedView)
-    // a unit change can flip the portrait to stale — refresh the view list too.
+    await loadUnits(selectedEntry)
     try {
-      const data = await listMemoryViews()
-      setViews(data)
+      applyOverview(await fetchOverview())
     } catch {
       /* keep current views if the refresh fails */
     }
-  }, [loadUnits, selectedView])
+  }, [applyOverview, fetchOverview, loadUnits, selectedEntry])
 
-  const handleResynthesize = async () => {
-    if (!selectedView) return
-    setResynth(true)
+  const handleIntegrate = async (entry: PortraitEntry) => {
+    setIntegratingKey(entry.key)
     setError(null)
     try {
-      await resynthesizeMemoryView({
-        owner_scope: selectedView.owner_scope,
-        visibility_scope: selectedView.visibility_scope,
-        view_type: selectedView.view_type,
-      })
-      await loadViews()
+      if (entry.pending > 0) {
+        if (entry.kind === 'user') {
+          await triggerGlobalReflection()
+        } else {
+          await triggerSoulReflections()
+        }
+        // 整理在后台异步执行，轮询直到该范围不再有待整理互动
+        const deadline = Date.now() + 90_000
+        while (Date.now() < deadline) {
+          await sleep(3_000)
+          const overview = await fetchOverview()
+          applyOverview(overview)
+          const stillPending = entry.kind === 'user'
+            ? (overview.globalData?.post_ids.length ?? 0) > 0
+            : (overview.soulPreviewData.find((s) => s.soul_name === entry.soulName)?.interaction_count ?? 0) > 0
+          if (!stillPending) break
+        }
+      } else if (entry.stale) {
+        await resynthesizeMemoryView({
+          owner_scope: entry.ownerScope,
+          visibility_scope: entry.visibilityScope,
+          view_type: entry.viewType,
+        })
+        applyOverview(await fetchOverview())
+      }
+      await loadUnits(entry)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '重新整理失败')
+      setError(err instanceof Error ? err.message : '整理失败')
     } finally {
-      setResynth(false)
+      setIntegratingKey(null)
     }
   }
 
@@ -191,30 +277,32 @@ export function MemoryWorkbench() {
           <h3 className={styles.viewListTitle}>画像视图</h3>
           {loadingViews ? (
             <p className={styles.muted}>加载中...</p>
-          ) : views.length === 0 ? (
-            <p className={styles.muted}>还没有生成画像。发布记录、和 AI 好友聊天后，记忆会逐渐积累。</p>
           ) : (
-            views.map((view) => {
-              const key = viewKey(view)
-              const active = key === selectedKey
+            entries.map((entry) => {
+              const active = entry.key === selectedKey
+              const needsIntegration = entry.pending > 0 || entry.stale
               return (
                 <button
-                  key={key}
+                  key={entry.key}
                   type="button"
                   className={`${styles.viewCard} ${active ? styles.viewCardActive : ''}`}
-                  onClick={() => setSelectedKey(key)}
+                  onClick={() => setSelectedKey(entry.key)}
                 >
                   <div className={styles.viewCardTop}>
-                    {view.view_type === 'user_md' ? (
+                    {entry.kind === 'user' ? (
                       <span className={styles.meAvatar}>我</span>
                     ) : (
-                      <SoulAvatar name={soulNameFromScope(view.owner_scope)} className={styles.soulAvatar} />
+                      <SoulAvatar name={entry.soulName ?? ''} className={styles.soulAvatar} />
                     )}
-                    <span className={styles.viewCardName}>{viewLabel(view)}</span>
+                    <span className={styles.viewCardName}>{entry.kind === 'user' ? '我' : `与 ${entry.soulName}`}</span>
                   </div>
                   <div className={styles.viewCardMeta}>
-                    <span className={`${styles.statusDot} ${view.status === 'stale' ? styles.statusStale : styles.statusFresh}`} />
-                    {view.status === 'stale' ? '有新记忆 · 待整理' : '最新'}
+                    <span className={`${styles.statusDot} ${needsIntegration ? styles.statusStale : styles.statusFresh}`} />
+                    {needsIntegration
+                      ? `有新记忆 · 待整理${entry.pending > 0 ? ` (${entry.pending})` : ''}`
+                      : entry.view
+                        ? '最新'
+                        : '暂无相处记忆'}
                   </div>
                 </button>
               )
@@ -223,29 +311,49 @@ export function MemoryWorkbench() {
         </aside>
 
         <div className={styles.main}>
-          {selectedView && (
+          {selectedEntry && (
             <section className={styles.portrait}>
-              <div className={`${styles.portraitStatus} ${selectedView.status === 'stale' ? styles.portraitStatusStale : ''}`}>
-                <span className={`${styles.statusDot} ${selectedView.status === 'stale' ? styles.statusStale : styles.statusFresh}`} />
-                {selectedView.status === 'stale' ? '有新记忆' : '最新'} · 整理于 {formatSmartTime(selectedView.generated_at ?? selectedView.updated_at)}
-              </div>
-              <h2 className={styles.portraitTitle}>{viewLabel(selectedView)}</h2>
-              {portraitProse(selectedView.content_md) ? (
-                <div className={styles.portraitProse}>
-                  {portraitProse(selectedView.content_md).split(/\n{2,}/).map((para, index) => (
-                    <p key={index}>{highlightQuotes(para)}</p>
-                  ))}
-                </div>
-              ) : (
-                <p className={styles.muted}>这份画像还没有内容。条目积累到一定程度后会自动整理生成。</p>
-              )}
-              {selectedView.status === 'stale' && (
-                <div className={styles.portraitActions}>
-                  <button className={styles.resynthButton} onClick={handleResynthesize} disabled={resynth}>
-                    {resynth ? '整理中...' : '重新整理'}
-                  </button>
-                </div>
-              )}
+              {(() => {
+                const needsIntegration = selectedEntry.pending > 0 || selectedEntry.stale
+                const integrating = integratingKey === selectedEntry.key
+                return (
+                  <>
+                    <div className={`${styles.portraitStatus} ${needsIntegration ? styles.portraitStatusStale : ''}`}>
+                      <span className={`${styles.statusDot} ${needsIntegration ? styles.statusStale : styles.statusFresh}`} />
+                      {needsIntegration
+                        ? '有新记忆 · 待整理'
+                        : selectedEntry.view
+                          ? `最新 · 整理于 ${formatSmartTime(selectedEntry.view.generated_at ?? selectedEntry.view.updated_at)}`
+                          : '暂无相处记忆'}
+                    </div>
+                    <h2 className={styles.portraitTitle}>{selectedEntry.label}</h2>
+                    {selectedEntry.view && portraitProse(selectedEntry.view.content_md) ? (
+                      <div className={styles.portraitProse}>
+                        {portraitProse(selectedEntry.view.content_md).split(/\n{2,}/).map((para, index) => (
+                          <p key={index}>{highlightQuotes(para)}</p>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className={styles.muted}>
+                        {selectedEntry.kind === 'user'
+                          ? '这份画像还没有内容。条目积累到一定程度后会自动整理生成。'
+                          : '还没有和 TA 的相处记忆。多聊聊、多互动，拾迹会自动整理出这段关系的记忆。'}
+                      </p>
+                    )}
+                    {needsIntegration && (
+                      <div className={styles.portraitActions}>
+                        <button
+                          className={styles.resynthButton}
+                          onClick={() => void handleIntegrate(selectedEntry)}
+                          disabled={integrating}
+                        >
+                          {integrating ? '整理中...' : '整理'}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )
+              })()}
             </section>
           )}
 
