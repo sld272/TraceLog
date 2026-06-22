@@ -68,13 +68,11 @@ class ContextBuilderTest(unittest.TestCase):
 
         built = context_builder.build_context(
             relevant_post_ids=["p-related", "missing", "p-related-2", "p-related"],
-            query="测试用户最近在做什么",
+            query="这个参数保留兼容，但不再触发 memory retrieval",
             fts_keywords=["不再使用"],
         )
 
-        # with a query, the public-post path assembles the full memory block
-        # (portrait + state + query-relevant units), same as chat/comment
-        self.assertIn("# 记忆", built.shared_context)
+        self.assertIn("# 用户档案", built.shared_context)
         self.assertIn("测试用户", built.shared_context)
         self.assertIn("# 当前用户的历史相关帖子", built.shared_context)
         self.assertEqual(1, built.shared_context.count("raw related content one"))
@@ -96,7 +94,7 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertEqual(["p-related", "p-related-2"], event["relevant_post_ids"])
         self.assertTrue(event["raw_related_posts_present"])
         self.assertEqual(
-            ["# 记忆", "# 长期目标", "# 当前状态", "# 当前用户的历史相关帖子", "# 待办事项"],
+            ["# 用户档案", "# 长期目标", "# 当前状态", "# 当前用户的历史相关帖子", "# 待办事项"],
             [item["title"] for item in event["sections"]],
         )
 
