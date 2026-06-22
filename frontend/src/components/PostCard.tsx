@@ -475,50 +475,61 @@ function ThreadMessage({
   const isFailedAssistant = message.role === 'assistant' && Boolean(failure)
   const isPendingAssistant = message.role === 'assistant' && !failure && !message.content && (message.id < 0 || busy)
   return (
-    <div id={`comment-${message.id}`} className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
-      <div className={styles.threadHeader}>
-        <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
-        <time
-          className={styles.threadTime}
-          dateTime={formatDateTimeAttribute(message.created_at)}
-          title={formatAbsoluteTime(message.created_at)}
-        >
-          {formatSmartTime(message.created_at)}
-        </time>
-        <div className={styles.threadActionRow}>
-          {!isPendingAssistant && <RerunMarker at={message.rerun_at} className={styles.threadMarker} />}
-          {isPersisted && isLatest && message.role === 'assistant' && !isFailedAssistant && onRerun && (
-            <button className={styles.threadAction} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
-              <RefreshCwIcon />
-            </button>
-          )}
-          {isPersisted && isUser && onDelete && (
-            <button className={styles.threadDanger} onClick={() => onDelete(message.id)} disabled={busy} title="删除追问" aria-label="删除追问">
-              <TrashIcon />
-            </button>
-          )}
+    <div id={`comment-${message.id}`} className={`${styles.threadRow} ${isUser ? styles.threadRowUser : ''}`}>
+      {isUser ? (
+        <span className={`${styles.threadAvatar} ${styles.threadAvatarMe}`} aria-hidden="true">我</span>
+      ) : (
+        <SoulAvatar name={soulName} className={styles.threadAvatar} />
+      )}
+      <div className={styles.threadCol}>
+        <div className={styles.threadHeader}>
+          <span className={styles.threadRole}>{isUser ? '我' : soulName}</span>
+          <time
+            className={styles.threadTime}
+            dateTime={formatDateTimeAttribute(message.created_at)}
+            title={formatAbsoluteTime(message.created_at)}
+          >
+            {formatSmartTime(message.created_at)}
+          </time>
+          <div className={styles.threadActionRow}>
+            {!isPendingAssistant && <RerunMarker at={message.rerun_at} className={styles.threadMarker} />}
+            {isPersisted && isLatest && message.role === 'assistant' && !isFailedAssistant && onRerun && (
+              <button className={styles.threadAction} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
+                <RefreshCwIcon />
+              </button>
+            )}
+            {isPersisted && isUser && onDelete && (
+              <button className={styles.threadDanger} onClick={() => onDelete(message.id)} disabled={busy} title="删除追问" aria-label="删除追问">
+                <TrashIcon />
+              </button>
+            )}
+          </div>
         </div>
+        {isPendingAssistant ? (
+          <div className={`${styles.threadBubble} ${styles.threadBubbleSoul}`}>
+            <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
+              <LoadingDots />
+            </div>
+          </div>
+        ) : isFailedAssistant ? (
+          <ReplyFailureBubble
+            error={failure}
+            onRetry={isPersisted && onRerun ? () => onRerun(message.id) : undefined}
+            busy={busy}
+          />
+        ) : message.content ? (
+          <div className={`${styles.threadBubble} ${isUser ? styles.threadBubbleUser : styles.threadBubbleSoul}`}>
+            <p>{message.content}</p>
+          </div>
+        ) : null}
+        <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
+        {!isUser && !isFailedAssistant && !isPendingAssistant && (
+          <>
+            <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
+            <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
+          </>
+        )}
       </div>
-      {message.content && <p>{message.content}</p>}
-      {isFailedAssistant && (
-        <ReplyFailureBubble
-          error={failure}
-          onRetry={isPersisted && onRerun ? () => onRerun(message.id) : undefined}
-          busy={busy}
-        />
-      )}
-      {isPendingAssistant && (
-        <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
-          <LoadingDots />
-        </div>
-      )}
-      <ImageGrid attachments={message.attachments ?? []} />
-      {!isUser && !isFailedAssistant && !isPendingAssistant && (
-        <>
-          <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
-          <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
-        </>
-      )}
     </div>
   )
 }
