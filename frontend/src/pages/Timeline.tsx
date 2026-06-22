@@ -393,22 +393,6 @@ export function Timeline({
     }
   }
 
-  /* Feed shows comment threads inline (prototype design): auto-load每条有回应的记录。 */
-  useEffect(() => {
-    if (searching) return
-    for (const post of posts) {
-      if (
-        post.comment_count > 0 &&
-        postComments[post.post_id] === undefined &&
-        !expandingPostIds[post.post_id] &&
-        !expandErrors[post.post_id]
-      ) {
-        void handleExpand(post.post_id)
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [posts, searching])
-
   const refreshCommentConversations = async (postId: string) => {
     try {
       const conversations = await listCommentConversations(postId)

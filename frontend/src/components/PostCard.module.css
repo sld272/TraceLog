@@ -147,11 +147,14 @@
 .commentToggleChevron {
   display: inline-flex;
   color: inherit;
+  /* ChevronRightIcon points →; rotate 90° so collapsed points down ↓ */
+  transform: rotate(90deg);
   transition: transform var(--transition-normal);
 }
 
 .commentToggleChevronOpen {
-  transform: rotate(90deg);
+  /* expanded points up ↑ */
+  transform: rotate(270deg);
 }
 
 .comments {
