@@ -385,6 +385,15 @@ def retract_unit(
         )
 
 
+def visibility_rank(visibility_scope: str) -> int:
+    """Sensitivity ordering for the iron law: private memory outranks public.
+
+    A belief may be folded only into a survivor at least as private as itself —
+    never the reverse — so consolidation can never expose private memory through
+    a more-public surviving unit."""
+    return 2 if visibility_scope.startswith("private:") else 1
+
+
 def supersede_unit(
     old_unit_id: str,
     new_unit_id_: str,
@@ -393,18 +402,25 @@ def supersede_unit(
     reconcile_run_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Mark old unit superseded by a (contradiction) replacement (bi-temporal)."""
+    """Mark old unit superseded by a survivor (contradiction or merge).
+
+    Cross-visibility within ONE owner is allowed (so deep reflection can merge a
+    persona's public-layer belief into its private-layer one, decision 1A), but
+    the iron law is enforced: the survivor must be at least as private as the
+    unit it absorbs. Evidence is NOT moved (old keeps its own links), so no
+    cross-bucket evidence relinking occurs."""
     now = db.now_ts()
     with _conn_ctx(conn) as c:
         old = _get_unit_row(c, old_unit_id)
         new = _get_unit_row(c, new_unit_id_)
         if old is None or new is None:
             raise ValueError("supersede 的新旧 unit 必须都存在")
-        if not same_bucket(
-            old["owner_scope"], old["visibility_scope"],
-            new["owner_scope"], new["visibility_scope"],
-        ):
-            raise BoundaryError("supersede 只能发生在同一 bucket 内")
+        if old["owner_scope"] != new["owner_scope"]:
+            raise BoundaryError("supersede 只能发生在同一 owner（主体/人格）内")
+        if visibility_rank(new["visibility_scope"]) < visibility_rank(old["visibility_scope"]):
+            raise BoundaryError(
+                "supersede 违反铁律：survivor 不能比被取代的 unit 更不私密"
+            )
         before = _row_to_dict(old)
         c.execute(
             "UPDATE memory_units SET status = 'superseded', superseded_by = ?, "
@@ -912,6 +928,19 @@ def list_active_units_in_bucket(owner_scope: str, visibility_scope: str) -> list
         ORDER BY id ASC
         """,
         (owner_scope, visibility_scope),
+    )
+
+
+def list_active_units_for_owner(owner_scope: str) -> list[sqlite3.Row]:
+    """All active units of one owner across BOTH visibility layers — the
+    comparison set for owner-level deep-reflection consolidation."""
+    return db.query_all(
+        """
+        SELECT * FROM memory_units
+        WHERE owner_scope = ? AND status = 'active'
+        ORDER BY id ASC
+        """,
+        (owner_scope,),
     )
 
 

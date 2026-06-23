@@ -154,6 +154,38 @@ def make_relink_judge(client: LLMClient, model: str, *, trace_context: dict | No
     return judge
 
 
+def _format_consolidation_units(units: list[dict]) -> str:
+    parts = []
+    for unit in units:
+        visibility = str(unit.get("visibility_scope") or "")
+        layer = "private" if visibility.startswith("private:") else "public"
+        parts.append(
+            f"- unit_id={unit.get('id')} | visibility={layer} | type={unit.get('type')}\n"
+            f"  {unit.get('content')}"
+        )
+    return "\n".join(parts)
+
+
+def make_consolidation_producer(client: LLMClient, model: str, *, trace_context: dict | None = None):
+    """Return a consolidation producer for memory_reflection.consolidate_persona:
+    given an owner's active units, propose merge/retract ops."""
+
+    def producer(*, owner_scope: str, units: list[dict]):
+        result = memory_router.call_memory_consolidation(
+            client,
+            model,
+            units_text=_format_consolidation_units(units),
+            trace_context={**(trace_context or {}), "owner_scope": owner_scope},
+        )
+        if result is None:
+            raise ReconcileProducerError(
+                "memory_consolidation LLM call failed or returned unparseable JSON"
+            )
+        return result
+
+    return producer
+
+
 def make_llm_op_producer(client: LLMClient, model: str, *, trace_context: dict | None = None):
     """Return an op_producer closure suitable for reconcile_bucket."""
 

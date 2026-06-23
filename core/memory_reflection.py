@@ -126,6 +126,108 @@ def reflect_persona(owner_scope: str, *, now: float | None = None) -> Reflection
     return summary
 
 
+@dataclass
+class ConsolidationSummary:
+    owner_scope: str
+    merged: list[str] = field(default_factory=list)     # absorbed unit ids superseded
+    retracted: list[str] = field(default_factory=list)
+    skipped: list[dict] = field(default_factory=list)
+
+    @property
+    def changed(self) -> int:
+        return len(self.merged) + len(self.retracted)
+
+
+def _active_status(conn, unit_id: str) -> bool:
+    row = conn.execute(
+        "SELECT status FROM memory_units WHERE id = ?", (unit_id,)
+    ).fetchone()
+    return row is not None and row["status"] == "active"
+
+
+def consolidate_persona(owner_scope: str, *, producer) -> ConsolidationSummary:
+    """LLM-driven consolidation over one owner's active units: merge duplicates,
+    retract contradictions. ``producer(owner_scope, units) -> {ops, summary}`` is
+    injected (the LLM seam), so this stays deterministic + unit-testable.
+
+    Every op is validated against the live state inside the transaction: targets
+    must still be active and belong to this owner; the iron law (a survivor must
+    be at least as private as what it absorbs) is enforced by supersede_unit.
+    Per-op failures are skipped + audited; they never abort the batch."""
+    mus.validate_owner_scope(owner_scope)
+    units = mus.list_active_units_for_owner(owner_scope)
+    summary = ConsolidationSummary(owner_scope=owner_scope)
+    if not units:
+        return summary
+    units_by_id = {str(u["id"]): u for u in units}
+    result = producer(owner_scope=owner_scope, units=[dict(u) for u in units]) or {}
+    ops = result.get("ops") if isinstance(result, dict) else None
+    if not isinstance(ops, list):
+        ops = []
+
+    with db.immediate_transaction() as conn:
+        for op in ops:
+            try:
+                kind = str(op.get("op"))
+                if kind == "merge":
+                    survivor = str(op.get("survivor_id") or "")
+                    absorbed = [str(x) for x in (op.get("absorbed_ids") or [])]
+                    if survivor not in units_by_id or not _active_status(conn, survivor):
+                        raise ValueError(f"merge survivor 不是本主体的 active unit：{survivor}")
+                    targets = []
+                    for absorbed_id in absorbed:
+                        if absorbed_id == survivor:
+                            raise ValueError("merge survivor 不能并入自身")
+                        if absorbed_id not in units_by_id or not _active_status(conn, absorbed_id):
+                            raise ValueError(f"merge absorbed 不是本主体的 active unit：{absorbed_id}")
+                        targets.append(absorbed_id)
+                    # iron law, pre-checked for the whole op so a violating merge
+                    # applies nothing (the survivor must be at least as private as
+                    # every unit it absorbs).
+                    survivor_rank = mus.visibility_rank(units_by_id[survivor]["visibility_scope"])
+                    for absorbed_id in targets:
+                        if mus.visibility_rank(units_by_id[absorbed_id]["visibility_scope"]) > survivor_rank:
+                            raise ValueError(
+                                f"merge 违反铁律：survivor 比 {absorbed_id} 更公开，不能把更私密的信念并入"
+                            )
+                    content = op.get("content")
+                    # only rewrite a reflected survivor's wording; never overwrite
+                    # the user's own words with a model-merged paraphrase
+                    if (
+                        isinstance(content, str)
+                        and content.strip()
+                        and units_by_id[survivor]["source"] == "reflected"
+                    ):
+                        mus.revise_unit(survivor, content=content.strip(), actor="reflection", conn=conn)
+                    for absorbed_id in targets:
+                        mus.supersede_unit(absorbed_id, survivor, actor="reflection", conn=conn)
+                        summary.merged.append(absorbed_id)
+                elif kind == "retract":
+                    target = str(op.get("target_id") or "")
+                    if target not in units_by_id or not _active_status(conn, target):
+                        raise ValueError(f"retract target 不是本主体的 active unit：{target}")
+                    reason = op.get("reason")
+                    mus.retract_unit(
+                        target, by="model",
+                        reason=reason if reason in {"false", "outdated"} else None,
+                        actor="reflection", conn=conn,
+                    )
+                    summary.retracted.append(target)
+                else:
+                    raise ValueError(f"未知 consolidation op：{kind}")
+            except (ValueError, mus.BoundaryError) as exc:
+                summary.skipped.append({"op": op.get("op"), "reason": str(exc)})
+
+    logging_service.log_event(
+        "memory_consolidation",
+        owner_scope=owner_scope,
+        merged=len(summary.merged),
+        retracted=len(summary.retracted),
+        skipped=len(summary.skipped),
+    )
+    return summary
+
+
 def reflect_all_personas(*, now: float | None = None) -> list[ReflectionSummary]:
     """Reflect every owner that currently has any memory units."""
     owners = [

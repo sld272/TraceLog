@@ -110,5 +110,112 @@ class MemoryReflectionTest(unittest.TestCase):
         self.assertEqual(mus.get_unit(u)["tier"], "contextual")
 
 
+    # --- consolidation (P2b, injected producer) ----------------------------
+
+    def _soul_unit(
+        self,
+        soul: str,
+        visibility: str,
+        content: str,
+        *,
+        type: str = "relationship",
+        confidence: float = 0.8,
+        tier: str = "contextual",
+        importance: float = 0.6,
+        source: str = "reflected",
+    ) -> str:
+        self.seq += 1
+        if visibility == "public":
+            with db.transaction() as conn:
+                mes.record_comment_mutation(
+                    conn, comment_id=self.seq, post_id=f"p{self.seq}", soul_name=soul,
+                    role="user", op="create", content=content, occurred_at=float(self.seq),
+                )
+            ev = db.query_one(
+                "SELECT id FROM memory_ingest_events "
+                "WHERE source_type='comment_relationship' AND source_id=?",
+                (str(self.seq),),
+            )["id"]
+            channel = "comment"
+        else:
+            with db.transaction() as conn:
+                ev = mes.record_chat_mutation(
+                    conn, message_id=self.seq, soul_name=soul, role="user",
+                    op="create", content=content, occurred_at=float(self.seq),
+                ).id
+            channel = "chat"
+        return mus.add_unit(
+            owner_scope=f"soul:{soul}", visibility_scope=visibility, source_channel=channel,
+            type=type, content=content, confidence=confidence, tier=tier,
+            importance=importance, source=source, evidence_event_ids=[ev],
+        )
+
+    def test_consolidate_merges_duplicates(self) -> None:
+        keep = self._unit("用户在备考考研")
+        dup = self._unit("用户正在准备考研")
+        summary = refl.consolidate_persona(
+            "global",
+            producer=lambda *, owner_scope, units: {
+                "ops": [{"op": "merge", "survivor_id": keep, "absorbed_ids": [dup]}]
+            },
+        )
+        self.assertEqual(summary.merged, [dup])
+        self.assertEqual(mus.get_unit(dup)["status"], "superseded")
+        self.assertEqual(mus.get_unit(dup)["superseded_by"], keep)
+        self.assertEqual(mus.get_unit(keep)["status"], "active")
+
+    def test_consolidate_iron_law_blocks_public_survivor(self) -> None:
+        pub = self._soul_unit("luna", "public", "公开的相处默契")
+        priv = self._soul_unit("luna", "private:soul:luna", "私聊里的相处默契")
+        summary = refl.consolidate_persona(
+            "soul:luna",
+            producer=lambda *, owner_scope, units: {
+                "ops": [{"op": "merge", "survivor_id": pub, "absorbed_ids": [priv]}]
+            },
+        )
+        self.assertEqual(summary.merged, [])
+        self.assertEqual(len(summary.skipped), 1)
+        self.assertEqual(mus.get_unit(priv)["status"], "active")
+        self.assertEqual(mus.get_unit(pub)["status"], "active")
+
+    def test_consolidate_cross_layer_merges_into_private(self) -> None:
+        # decision 1A: same belief across layers merges into the private survivor
+        pub = self._soul_unit("luna", "public", "评论区叫老地方")
+        priv = self._soul_unit("luna", "private:soul:luna", "私下也叫老地方")
+        summary = refl.consolidate_persona(
+            "soul:luna",
+            producer=lambda *, owner_scope, units: {
+                "ops": [{"op": "merge", "survivor_id": priv, "absorbed_ids": [pub]}]
+            },
+        )
+        self.assertEqual(summary.merged, [pub])
+        self.assertEqual(mus.get_unit(pub)["status"], "superseded")
+        self.assertEqual(mus.get_unit(pub)["superseded_by"], priv)
+        self.assertEqual(mus.get_unit(priv)["status"], "active")
+
+    def test_consolidate_retracts_contradiction(self) -> None:
+        u = self._unit("一条错误信念")
+        summary = refl.consolidate_persona(
+            "global",
+            producer=lambda *, owner_scope, units: {
+                "ops": [{"op": "retract", "target_id": u, "reason": "false"}]
+            },
+        )
+        self.assertEqual(summary.retracted, [u])
+        self.assertEqual(mus.get_unit(u)["status"], "retracted_by_model")
+
+    def test_consolidate_skips_foreign_or_missing_ids(self) -> None:
+        keep = self._unit("本主体的 unit")
+        summary = refl.consolidate_persona(
+            "global",
+            producer=lambda *, owner_scope, units: {
+                "ops": [{"op": "merge", "survivor_id": keep, "absorbed_ids": ["mu_nope"]}]
+            },
+        )
+        self.assertEqual(summary.merged, [])
+        self.assertEqual(len(summary.skipped), 1)
+        self.assertEqual(mus.get_unit(keep)["status"], "active")
+
+
 if __name__ == "__main__":
     unittest.main()

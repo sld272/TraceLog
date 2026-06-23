@@ -254,6 +254,106 @@ def _parse_memory_relink_content(content: str | None) -> dict | None:
     }
 
 
+MEMORY_CONSOLIDATION_PROMPT = """\
+你是 TraceLog 拾迹的记忆深反思引擎。给你某个主体（用户主记忆，或某个 AI 人格）的全部
+active memory units，请做"巩固"：合并重复、处理矛盾。只输出 JSON。
+
+## 输入
+每条 unit：unit_id、visibility（public 公开 / private 私密）、type、content。
+
+## 可做的操作
+- merge：多条说的是同一件事 → 选一条 survivor 保留，其余 absorbed 并入。
+  铁律：survivor 不能比任何被并入的 unit 更公开——合并公开层与私密层的同一信念时，
+  survivor 必须是私密那条。可给 survivor 一段融合后的 content（可省略）。
+- retract：某条明显错误，或已被另一条取代/矛盾 → 撤回，reason=false|outdated。
+
+## 规则
+1. 只用给定的 unit_id，不得编造；survivor 不能出现在自己的 absorbed 列表里。
+2. 没把握不要动——宁缺毋滥。只合并真正同义、只撤回真正错误/矛盾的。
+3. 不要把不同主语、不同时间的不同事实强行合并。
+
+只输出 JSON：
+{
+  "summary": "一句话",
+  "ops": [
+    {"op":"merge","survivor_id":"mu_a","absorbed_ids":["mu_b"],"content":"可选融合内容"},
+    {"op":"retract","target_id":"mu_x","reason":"false|outdated"}
+  ]
+}
+当前时间：{current_datetime}
+"""
+
+
+def call_memory_consolidation(
+    client: LLMClient,
+    model: str,
+    *,
+    units_text: str,
+    trace_context: dict | None = None,
+) -> dict | None:
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="memory_consolidation",
+        timeout=45,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": MEMORY_CONSOLIDATION_PROMPT.replace(
+                    "{current_datetime}", now_str()
+                ),
+            },
+            {"role": "user", "content": f"## 主体的全部 active units\n\n{units_text or '（无）'}"},
+        ],
+        parser=_parse_memory_consolidation_content,
+        trace_context=trace_context,
+    )
+
+
+def _parse_memory_consolidation_content(content: str | None) -> dict | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_ops = data.get("ops")
+    if not isinstance(raw_ops, list):
+        raw_ops = []
+    ops: list[dict] = []
+    for item in raw_ops:
+        if not isinstance(item, dict):
+            continue
+        op = item.get("op")
+        if op == "merge":
+            survivor = str(item.get("survivor_id") or "")
+            absorbed = [str(x) for x in (item.get("absorbed_ids") or []) if str(x)]
+            if not survivor or not absorbed:
+                continue
+            normalized: dict = {"op": "merge", "survivor_id": survivor, "absorbed_ids": absorbed}
+            merged = item.get("content")
+            if isinstance(merged, str) and merged.strip():
+                normalized["content"] = merged.strip()
+            ops.append(normalized)
+        elif op == "retract":
+            target = str(item.get("target_id") or "")
+            if not target:
+                continue
+            reason = item.get("reason")
+            ops.append({
+                "op": "retract",
+                "target_id": target,
+                "reason": reason if reason in {"false", "outdated"} else None,
+            })
+    summary = data.get("summary")
+    return {
+        "ops": ops,
+        "summary": summary.strip() if isinstance(summary, str) else "",
+    }
+
+
 def call_view_synthesis(
     client: LLMClient,
     model: str,
