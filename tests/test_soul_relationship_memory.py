@@ -80,6 +80,41 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         selected = srm.relationship_units_for_soul("luna")
         self.assertEqual({row["id"] for row in selected}, {rel})
 
+    def test_contextual_relationship_units_enter_narrative(self) -> None:
+        # The portrait's triple bar (tier=core ∧ conf>=0.82 ∧ imp>=0.70) would
+        # exclude both; the relationship predicate admits soft texture but still
+        # floors out near-zero confidence.
+        soft = self._unit(
+            "luna", "private:soul:luna", "用户喜欢被轻轻调侃",
+            tier="contextual", confidence=0.6, importance=0.4,
+        )
+        low_conf = self._unit(
+            "luna", "private:soul:luna", "也许用户讨厌早起",
+            tier="contextual", confidence=0.3, importance=0.4,
+        )
+        selected = {row["id"] for row in srm.relationship_units_for_soul("luna")}
+        self.assertIn(soft, selected)
+        self.assertNotIn(low_conf, selected)
+
+    def test_no_prompt_relationship_unit_excluded(self) -> None:
+        muted = self._unit(
+            "luna", "private:soul:luna", "用户的某个小习惯",
+            tier="contextual", confidence=0.7, importance=0.5,
+        )
+        mus.set_prompt_policy(muted, prompt_policy="no_prompt")
+        selected = {row["id"] for row in srm.relationship_units_for_soul("luna")}
+        self.assertNotIn(muted, selected)
+
+    def test_narrative_count_capped(self) -> None:
+        for i in range(srm.REL_MAX_UNITS + 3):
+            self._unit(
+                "luna", "private:soul:luna", f"相处默契 {i}",
+                tier="contextual", confidence=0.7, importance=0.5,
+            )
+        self.assertEqual(
+            len(srm.relationship_units_for_soul("luna")), srm.REL_MAX_UNITS
+        )
+
     def test_refresh_persists_relationship_view_and_reads_body(self) -> None:
         self._unit("luna", "private:soul:luna", "平时可以轻微互损")
         self._unit("luna", "private:soul:luna", "用户低落时希望先安静陪伴")
