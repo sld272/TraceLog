@@ -282,17 +282,28 @@
   margin-top: var(--space-3);
 }
 
+/* A collapsed-gap marker (centered divider) — it sits where the middle of the
+   thread is folded away, NOT a global call-to-action. */
 .threadMoreLink {
-  align-self: flex-start;
-  color: var(--color-accent);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: stretch;
+  color: var(--color-text-tertiary);
   font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
   text-decoration: none;
 }
 
+.threadMoreLink::before,
+.threadMoreLink::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+
 .threadMoreLink:hover {
-  color: var(--color-accent-hover);
-  text-decoration: underline;
+  color: var(--color-accent);
 }
 
 /* follow-up message = chat bubble row with avatar (我 on the right) */

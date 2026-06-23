@@ -378,7 +378,7 @@ function CommentPreview({
         <div className={styles.threadMessages}>
           {isThreadTruncated && detailHref && (
             <a className={styles.threadMoreLink} href={detailHref}>
-              在详情中查看完整对话（共 {threadMessages.length + 1} 条）→
+              中间省略 {threadMessages.length - visibleThreadMessages.length} 条 · 查看完整对话
             </a>
           )}
           {visibleThreadMessages.map((message) => (
