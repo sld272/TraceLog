@@ -54,6 +54,24 @@ class MemoryReadTest(unittest.TestCase):
                 conn.execute(f"UPDATE memory_units SET {', '.join(sets)} WHERE id=?", (*params, uid))
         return uid
 
+    # --- cited units (引用记忆) -------------------------------------------
+
+    def test_cited_units_hydrates_dedupes_and_drops_missing(self) -> None:
+        u1 = self._unit("global", "public", type="preference", content="喜欢安静")
+        u2 = self._unit("global", "public", type="state", content="最近很累")
+        items = memory_read.cited_units([u1, u2, u1, "mu_missing"])
+        self.assertEqual([i["unit_id"] for i in items], [u1, u2])
+        self.assertEqual(items[0]["type"], "preference")
+        self.assertEqual(items[0]["content"], "喜欢安静")
+        self.assertIn("confidence", items[0])
+        meta = memory_read.cited_units_metadata_from(items)
+        self.assertEqual(meta, {"version": 1, "items": items})
+
+    def test_cited_units_drops_inactive(self) -> None:
+        u = self._unit("global", "public", type="preference", content="会被撤回")
+        mus.retract_unit(u, by="user")
+        self.assertEqual(memory_read.cited_units([u]), [])
+
     # --- current-state block ----------------------------------------------
 
     def test_state_block_returns_recent_states_within_window(self) -> None:

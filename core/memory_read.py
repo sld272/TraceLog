@@ -660,6 +660,37 @@ def build_memory_section(
     )
 
 
+def cited_units(unit_ids: list[str]) -> list[dict]:
+    """Hydrate the memory units a reply actually used (current-state + relevant
+    beliefs from build_memory_section.used_unit_ids) into compact citation items
+    for the message metadata / 引用记忆 panel. Deduped, order-preserving; drops
+    units that no longer exist or are no longer active."""
+    seen: set[str] = set()
+    items: list[dict] = []
+    for unit_id in unit_ids:
+        if not unit_id or unit_id in seen:
+            continue
+        seen.add(unit_id)
+        row = mus.get_unit(unit_id)
+        if row is None or row["status"] != "active":
+            continue
+        items.append(
+            {
+                "unit_id": unit_id,
+                "type": str(row["type"]),
+                "content": str(row["content"]),
+                "confidence": float(row["confidence"]),
+            }
+        )
+    return items
+
+
+def cited_units_metadata_from(items: list[dict]) -> dict:
+    """Versioned 引用记忆 metadata object from already-hydrated citation items
+    (see CommentContext.cited_units / ChatContext.cited_units)."""
+    return {"version": 1, "items": list(items or [])}
+
+
 def list_goals() -> list[dict]:
     """Read active goals from GoalTool, the sole truth source."""
     return goal_service.list_goals(status="active")

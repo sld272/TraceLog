@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react'
 import {
   type EvidenceChannel,
   type EvidenceItem,
+  type MemoryUnitCitation,
   parseMessageEvidence,
+  parseMessageMemoryUnits,
   submitEvidenceFeedback,
 } from '@/api/client'
 import { formatRoute } from '@/router'
@@ -16,11 +18,16 @@ interface EvidencePanelProps {
 }
 
 export function EvidencePanel({ metadata, channel, messageId, compact = false }: EvidencePanelProps) {
+  const units = useMemo(() => parseMessageMemoryUnits(metadata), [metadata])
   const evidence = useMemo(() => parseMessageEvidence(metadata), [metadata])
   const [marked, setMarked] = useState<Set<string>>(() => new Set())
   const [pendingDocId, setPendingDocId] = useState<string | null>(null)
 
-  if (messageId <= 0 || evidence.length === 0) return null
+  // The reply's cited memory IS the memory-v2 belief units it used; the raw-doc
+  // evidence is only a fallback for older replies that predate unit citations.
+  const showUnits = units.length > 0
+  const count = showUnits ? units.length : evidence.length
+  if (messageId <= 0 || count === 0) return null
 
   const markIrrelevant = async (docId: string) => {
     if (marked.has(docId) || pendingDocId) return
@@ -37,21 +44,48 @@ export function EvidencePanel({ metadata, channel, messageId, compact = false }:
     <details className={`${styles.panel} ${compact ? styles.compact : ''}`}>
       <summary className={styles.summary}>
         <span className={styles.summaryText}>引用记忆</span>
-        <span className={styles.count}>×{evidence.length}</span>
+        <span className={styles.count}>×{count}</span>
       </summary>
       <div className={styles.items}>
-        {evidence.map((item) => (
-          <EvidenceRow
-            key={item.doc_id}
-            item={item}
-            marked={marked.has(item.doc_id)}
-            pending={pendingDocId === item.doc_id}
-            onMarkIrrelevant={() => markIrrelevant(item.doc_id)}
-          />
-        ))}
+        {showUnits
+          ? units.map((unit) => <UnitRow key={unit.unit_id} unit={unit} />)
+          : evidence.map((item) => (
+              <EvidenceRow
+                key={item.doc_id}
+                item={item}
+                marked={marked.has(item.doc_id)}
+                pending={pendingDocId === item.doc_id}
+                onMarkIrrelevant={() => markIrrelevant(item.doc_id)}
+              />
+            ))}
       </div>
     </details>
   )
+}
+
+function UnitRow({ unit }: { unit: MemoryUnitCitation }) {
+  return (
+    <div className={styles.item}>
+      <div className={styles.unitMain} title={unit.content}>
+        <span className={styles.badge}>{unitTypeLabel(unit.type)}</span>
+        <span className={styles.snippet}>{unit.content}</span>
+        <span className={styles.confidence}>置信 {Math.round(unit.confidence * 100)}%</span>
+      </div>
+    </div>
+  )
+}
+
+function unitTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    identity: '身份',
+    preference: '偏好',
+    state: '近况',
+    relationship: '关系',
+    insight: '感悟',
+    goal: '目标',
+    freeform: '其他',
+  }
+  return labels[type] ?? '记忆'
 }
 
 function EvidenceRow({

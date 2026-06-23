@@ -49,6 +49,7 @@ class ChatContext:
     retrieval_query: str
     relevant_post_ids: list[str]
     retrieval_hits: list
+    cited_units: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -231,7 +232,7 @@ def build_chat_context(
     if web_section:
         sections.append(web_section)
 
-    memory_section = memory_read.memory_section_for(
+    memory_prompt = memory_read.build_memory_section(
         "chat",
         thread.soul_name,
         user_message,
@@ -241,8 +242,9 @@ def build_chat_context(
             if message.id > 0
         },
     )
-    if memory_section:
-        sections.append(f"# 记忆\n\n{memory_section}")
+    if memory_prompt.text:
+        sections.append(f"# 记忆\n\n{memory_prompt.text}")
+    cited_units = memory_read.cited_units(memory_prompt.used_unit_ids)
 
     context_text = "\n\n---\n\n".join(sections)
     logging_service.log_event(
@@ -264,6 +266,7 @@ def build_chat_context(
         retrieval_query=retrieval_query,
         relevant_post_ids=relevant_post_ids,
         retrieval_hits=retrieval_hits,
+        cited_units=cited_units,
     )
 
 
@@ -347,6 +350,7 @@ def _call_assistant_reply_for_user_message(
         metadata={
             "status": "ok",
             "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
+            "memory_units": memory_read.cited_units_metadata_from(chat_context.cited_units),
             "suggestions": suggestions,
         },
     )
@@ -550,6 +554,7 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
         "model": model,
         "rerun": True,
         "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
+        "memory_units": memory_read.cited_units_metadata_from(chat_context.cited_units),
     }
     with db.transaction() as conn:
         conn.execute(

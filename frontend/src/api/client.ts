@@ -473,6 +473,41 @@ export function attachmentUrl(attachment: Attachment): string {
   return `${BASE}${attachment.url}`
 }
 
+export interface MemoryUnitCitation {
+  unit_id: string
+  type: string
+  content: string
+  confidence: number
+}
+
+/** The memory-v2 belief units a reply actually used (current-state + relevant),
+ *  stored under metadata.memory_units — this is the real "引用记忆". */
+export function parseMessageMemoryUnits(metadata: string | null | undefined): MemoryUnitCitation[] {
+  if (!metadata) return []
+  try {
+    const parsed = JSON.parse(metadata) as { memory_units?: { items?: unknown } }
+    const items = parsed.memory_units?.items
+    if (!Array.isArray(items)) return []
+    return items
+      .map((raw): MemoryUnitCitation | null => {
+        if (!raw || typeof raw !== 'object') return null
+        const o = raw as Record<string, unknown>
+        const unitId = typeof o.unit_id === 'string' ? o.unit_id : ''
+        const content = typeof o.content === 'string' ? o.content : ''
+        if (!unitId || !content) return null
+        return {
+          unit_id: unitId,
+          type: typeof o.type === 'string' ? o.type : '',
+          content,
+          confidence: typeof o.confidence === 'number' ? o.confidence : 0,
+        }
+      })
+      .filter((item): item is MemoryUnitCitation => item !== null)
+  } catch {
+    return []
+  }
+}
+
 export function parseMessageEvidence(metadata: string | null | undefined): EvidenceItem[] {
   if (!metadata) return []
   try {

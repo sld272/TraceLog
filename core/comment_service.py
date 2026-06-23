@@ -70,6 +70,7 @@ class CommentContext:
     retrieval_query: str
     relevant_post_ids: list[str]
     retrieval_hits: list
+    cited_units: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -339,14 +340,15 @@ def build_comment_context(
         ("comment_message", str(row["id"]))
         for row in db.query_all("SELECT id FROM comments WHERE post_id = ?", (post_id,))
     }
-    memory_section = memory_read.memory_section_for(
+    memory_prompt = memory_read.build_memory_section(
         "comment",
         soul_name,
         user_message,
         excluded_sources=excluded_comment_sources,
     )
-    if memory_section:
-        sections.append(f"# 记忆\n\n{memory_section}")
+    if memory_prompt.text:
+        sections.append(f"# 记忆\n\n{memory_prompt.text}")
+    cited_units = memory_read.cited_units(memory_prompt.used_unit_ids)
 
     context_text = "\n\n---\n\n".join(sections)
     relevant_post_ids = _post_ids_from_hits(retrieval_hits)
@@ -370,6 +372,7 @@ def build_comment_context(
         retrieval_query=retrieval_query,
         relevant_post_ids=relevant_post_ids,
         retrieval_hits=retrieval_hits,
+        cited_units=cited_units,
     )
 
 
@@ -445,6 +448,7 @@ def call_comment_reply(
         metadata={
             "status": "ok",
             "evidence": evidence_service.evidence_metadata(comment_context.retrieval_hits),
+            "memory_units": memory_read.cited_units_metadata_from(comment_context.cited_units),
             "suggestions": suggestions,
         },
     )
@@ -599,6 +603,7 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
         "model": model,
         "rerun": True,
         "evidence": evidence_service.evidence_metadata(context.retrieval_hits),
+        "memory_units": memory_read.cited_units_metadata_from(context.cited_units),
     }
     with db.transaction() as conn:
         conn.execute(
