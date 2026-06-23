@@ -116,6 +116,19 @@ class MemoryUnitServiceTest(unittest.TestCase):
         self.assertEqual(mus.get_unit(unit_id)["content"], "近期已拿到 offer，状态轻松")
         self.assertEqual([o["op"] for o in mus.list_unit_ops(unit_id=unit_id)], ["add", "revise"])
 
+    def test_list_unit_ops_limit_returns_most_recent(self) -> None:
+        ids = []
+        for i in range(3):
+            ev = self._public_event(f"p{i}")
+            ids.append(mus.add_unit(
+                owner_scope="global", visibility_scope="public", source_channel="post",
+                type="insight", content=f"事实{i}", evidence_event_ids=[ev],
+            ))
+        # the recent-changes feed wants the most recent N (here the last 2 adds),
+        # returned in chronological order — NOT the oldest N
+        recent = mus.list_unit_ops(limit=2)
+        self.assertEqual([o["unit_id"] for o in recent], ids[-2:])
+
     def test_user_authored_is_fully_reconcilable(self) -> None:
         # A user-authored unit is an ordinary unit (only confidence differs):
         # the model may revise/retract it like any other when evidence moves.

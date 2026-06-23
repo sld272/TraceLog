@@ -1147,7 +1147,11 @@ def list_unit_ops(
         params.append(unit_id)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(int(limit))
+    # Take the most RECENT N (id DESC + LIMIT), then hand them back in chronological
+    # (id ASC) order. A plain "ORDER BY id ASC LIMIT N" returns the OLDEST N, which
+    # left the "recent memory changes" card frozen on the earliest ops forever.
     return db.query_all(
-        f"SELECT * FROM memory_unit_ops{where} ORDER BY id ASC LIMIT ?",
+        f"SELECT * FROM (SELECT * FROM memory_unit_ops{where} "
+        f"ORDER BY id DESC LIMIT ?) ORDER BY id ASC",
         tuple(params),
     )
