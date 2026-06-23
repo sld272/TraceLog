@@ -560,6 +560,7 @@ _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 class MemoryPrompt:
     text: str
     used_unit_ids: list[str] = field(default_factory=list)
+    used_freshness: list["FreshnessItem"] = field(default_factory=list)
     has_discretion_items: bool = False
 
 
@@ -656,15 +657,15 @@ def build_memory_section(
     return MemoryPrompt(
         text="\n\n".join(sections),
         used_unit_ids=used,
+        used_freshness=list(fresh_items),
         has_discretion_items=has_discretion,
     )
 
 
 def cited_units(unit_ids: list[str]) -> list[dict]:
     """Hydrate the memory units a reply actually used (current-state + relevant
-    beliefs from build_memory_section.used_unit_ids) into compact citation items
-    for the message metadata / 引用记忆 panel. Deduped, order-preserving; drops
-    units that no longer exist or are no longer active."""
+    beliefs from build_memory_section.used_unit_ids) into compact citation items.
+    Deduped, order-preserving; drops units that no longer exist or are inactive."""
     seen: set[str] = set()
     items: list[dict] = []
     for unit_id in unit_ids:
@@ -676,6 +677,7 @@ def cited_units(unit_ids: list[str]) -> list[dict]:
             continue
         items.append(
             {
+                "kind": "unit",
                 "unit_id": unit_id,
                 "type": str(row["type"]),
                 "content": str(row["content"]),
@@ -685,9 +687,28 @@ def cited_units(unit_ids: list[str]) -> list[dict]:
     return items
 
 
-def cited_units_metadata_from(items: list[dict]) -> dict:
-    """Versioned 引用记忆 metadata object from already-hydrated citation items
-    (see CommentContext.cited_units / ChatContext.cited_units)."""
+def cited_memory(unit_ids: list[str], fresh_items: list) -> list[dict]:
+    """The full memory a reply cited, for the 引用记忆 panel: belief UNITS plus the
+    raw freshness evidence (kind='fresh') — recent facts not yet reconciled into a
+    unit, which a reply can lean on directly via the [尚未稳定沉淀的原始证据] layer."""
+    items = cited_units(unit_ids)
+    for fresh in fresh_items:
+        content = str(getattr(fresh, "content", "") or "").strip()
+        if not content:
+            continue
+        items.append(
+            {
+                "kind": "fresh",
+                "content": content,
+                "channel": str(getattr(fresh, "source_channel", "") or ""),
+            }
+        )
+    return items
+
+
+def cited_memory_metadata_from(items: list[dict]) -> dict:
+    """Versioned 引用记忆 metadata object from already-built citation items
+    (see CommentContext.cited_memory / ChatContext.cited_memory)."""
     return {"version": 1, "items": list(items or [])}
 
 

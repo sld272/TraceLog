@@ -473,36 +473,47 @@ export function attachmentUrl(attachment: Attachment): string {
   return `${BASE}${attachment.url}`
 }
 
-export interface MemoryUnitCitation {
-  unit_id: string
-  type: string
+/** A reply's cited memory: a belief UNIT, or raw FRESH evidence not yet
+ *  reconciled into a unit (the [尚未稳定沉淀的原始证据] layer). */
+export interface MemoryCitation {
+  kind: 'unit' | 'fresh'
   content: string
-  confidence: number
+  // unit-only
+  unit_id?: string
+  type?: string
+  confidence?: number
+  // fresh-only
+  channel?: string
 }
 
-/** The memory-v2 belief units a reply actually used (current-state + relevant),
- *  stored under metadata.memory_units — this is the real "引用记忆". */
-export function parseMessageMemoryUnits(metadata: string | null | undefined): MemoryUnitCitation[] {
+/** The memory a reply actually used — belief units + raw freshness evidence,
+ *  stored under metadata.memory_citations. This is the real "引用记忆". */
+export function parseMessageMemoryCitations(metadata: string | null | undefined): MemoryCitation[] {
   if (!metadata) return []
   try {
-    const parsed = JSON.parse(metadata) as { memory_units?: { items?: unknown } }
-    const items = parsed.memory_units?.items
+    const parsed = JSON.parse(metadata) as { memory_citations?: { items?: unknown } }
+    const items = parsed.memory_citations?.items
     if (!Array.isArray(items)) return []
     return items
-      .map((raw): MemoryUnitCitation | null => {
+      .map((raw): MemoryCitation | null => {
         if (!raw || typeof raw !== 'object') return null
         const o = raw as Record<string, unknown>
-        const unitId = typeof o.unit_id === 'string' ? o.unit_id : ''
         const content = typeof o.content === 'string' ? o.content : ''
-        if (!unitId || !content) return null
+        if (!content) return null
+        if (o.kind === 'fresh') {
+          return { kind: 'fresh', content, channel: typeof o.channel === 'string' ? o.channel : '' }
+        }
+        const unitId = typeof o.unit_id === 'string' ? o.unit_id : ''
+        if (!unitId) return null
         return {
+          kind: 'unit',
+          content,
           unit_id: unitId,
           type: typeof o.type === 'string' ? o.type : '',
-          content,
           confidence: typeof o.confidence === 'number' ? o.confidence : 0,
         }
       })
-      .filter((item): item is MemoryUnitCitation => item !== null)
+      .filter((item): item is MemoryCitation => item !== null)
   } catch {
     return []
   }

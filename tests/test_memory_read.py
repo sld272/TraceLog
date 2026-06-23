@@ -61,16 +61,32 @@ class MemoryReadTest(unittest.TestCase):
         u2 = self._unit("global", "public", type="state", content="最近很累")
         items = memory_read.cited_units([u1, u2, u1, "mu_missing"])
         self.assertEqual([i["unit_id"] for i in items], [u1, u2])
+        self.assertEqual(items[0]["kind"], "unit")
         self.assertEqual(items[0]["type"], "preference")
         self.assertEqual(items[0]["content"], "喜欢安静")
         self.assertIn("confidence", items[0])
-        meta = memory_read.cited_units_metadata_from(items)
-        self.assertEqual(meta, {"version": 1, "items": items})
 
     def test_cited_units_drops_inactive(self) -> None:
         u = self._unit("global", "public", type="preference", content="会被撤回")
         mus.retract_unit(u, by="user")
         self.assertEqual(memory_read.cited_units([u]), [])
+
+    def test_cited_memory_includes_units_and_freshness(self) -> None:
+        # a reply can lean on raw freshness evidence that isn't yet a unit; it must
+        # show up in 引用记忆 alongside the belief units (kind='fresh')
+        u = self._unit("global", "public", type="preference", content="喜欢安静")
+        fresh = memory_read.FreshnessItem(
+            content="刚提到在搬家", source_channel="post", occurred_at=0.0,
+            owner_scope="global", visibility_scope="public", needs_discretion=False,
+        )
+        items = memory_read.cited_memory([u], [fresh])
+        self.assertEqual(items[0]["kind"], "unit")
+        self.assertEqual(items[0]["content"], "喜欢安静")
+        self.assertEqual(
+            items[1], {"kind": "fresh", "content": "刚提到在搬家", "channel": "post"}
+        )
+        meta = memory_read.cited_memory_metadata_from(items)
+        self.assertEqual(meta, {"version": 1, "items": items})
 
     # --- current-state block ----------------------------------------------
 
