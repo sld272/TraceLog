@@ -12,10 +12,12 @@ from core import (
     comment_service,
     db,
     logging_service,
-    profile_service,
+    memory_read,
+    memory_unit_service,
+    memory_view_service,
     query_rewriter,
     retrieval,
-    soul_memory_service,
+    soul_relationship_memory,
     soul_service,
     suggestion_pipeline,
     tool_config_service,
@@ -40,32 +42,52 @@ class FakeClient:
 
 class CommentServiceTest(unittest.TestCase):
     def setUp(self) -> None:
+        # suggestion extraction is on by default; disable it for tests that
+        # aren't about suggestions so it doesn't consume the FakeClient queue
+        suggestions_off = patch.dict(
+            os.environ,
+            {
+                suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
+                suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "0",
+            },
+        )
+        suggestions_off.start()
+        self.addCleanup(suggestions_off.stop)
+
         self.tmp = tempfile.TemporaryDirectory()
         self.workspace = Path(self.tmp.name) / "workspace"
 
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_user_md_path = profile_service.USER_MD_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
-        self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
         self.old_hybrid_docs = retrieval.hybrid_search_documents
         self.old_web_search_config = web_search_service.CONFIG_FILE
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
-        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
         soul_service.SOULS_DIR = self.workspace / "souls"
-        soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
-        soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         retrieval.hybrid_search_documents = lambda *args, **kwargs: []
         web_search_service.CONFIG_FILE = str(Path(self.tmp.name) / "config.json")
 
         db.init_db()
         logging_service.init_logging({"enabled": True, "llm_payload": "off"})
         self.workspace.mkdir(parents=True, exist_ok=True)
-        (self.workspace / "user.md").write_text("# 用户档案\n\n## 基本信息\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
+        memory_unit_service.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="user",
+            type="identity",
+            content="测试用户",
+            confidence=1.0,
+            tier="core",
+            importance=1.0,
+            source="user_authored",
+            actor="user",
+        )
+        memory_view_service.synthesize_view(
+            "global", "public", memory_view_service.VIEW_USER_PORTRAIT
+        )
         self._insert_post_and_comment("20260525-001", "拾迹者", "我陪你继续拆。")
         self._insert_post_and_comment("20260525-001", "毒舌好友", "别装了，继续讲重点。")
 
@@ -73,10 +95,7 @@ class CommentServiceTest(unittest.TestCase):
         logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        profile_service.USER_MD_PATH = self.old_user_md_path
         soul_service.SOULS_DIR = self.old_souls_dir
-        soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
-        soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         retrieval.hybrid_search_documents = self.old_hybrid_docs
         web_search_service.CONFIG_FILE = self.old_web_search_config
         self.tmp.cleanup()
@@ -199,7 +218,8 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIn("## 毒舌好友", context.context)
         self.assertNotIn("只首评，不应进入", context.context)
         self.assertNotIn("别装了，继续讲重点。", context.context)
-        self.assertNotIn("其他追问一", context.context)
+        background = context.context.split("# 记忆", 1)[0]
+        self.assertNotIn("其他追问一", background)
         self.assertIn("其他回复二", context.context)
         self.assertIn("其他追问三", context.context)
         self.assertIn("其他回复四", context.context)
@@ -225,14 +245,30 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(frozenset({"20260525-001"}), exclusion.post_ids)
         self.assertEqual(frozenset({"20260525-001"}), exclusion.comment_post_ids)
 
-    def test_build_comment_context_loads_current_soul_memory_only(self) -> None:
-        soul_memory_service.write_soul_memory("拾迹者", "# 拾迹者的相处记忆\n\n## 对用户的理解\n拾迹者评论记忆\n", source="user")
-        soul_memory_service.write_soul_memory("毒舌好友", "# 毒舌好友的相处记忆\n\n## 对用户的理解\n其他 SOUL 评论记忆\n", source="user")
+    def test_build_comment_context_loads_current_soul_relationship_view_only(self) -> None:
+        for soul_name, content in (
+            ("拾迹者", "拾迹者评论记忆"),
+            ("毒舌好友", "其他 SOUL 评论记忆"),
+        ):
+            memory_unit_service.add_unit(
+                owner_scope=f"soul:{soul_name}",
+                visibility_scope=f"private:soul:{soul_name}",
+                source_channel="user",
+                type="relationship",
+                content=content,
+                confidence=1.0,
+                tier="core",
+                importance=1.0,
+                source="user_authored",
+                actor="user",
+            )
+            soul_relationship_memory.refresh_relationship_memory(soul_name)
 
         context = comment_service.build_comment_context("20260525-001", "拾迹者", "评论context词")
 
-        self.assertIn("拾迹者评论记忆", context.soul.soul_memory)
-        self.assertNotIn("其他 SOUL 评论记忆", context.soul.soul_memory)
+        relationship = memory_read.relationship_memory_for("拾迹者")
+        self.assertIn("拾迹者评论记忆", relationship)
+        self.assertNotIn("其他 SOUL 评论记忆", relationship)
 
     def test_build_comment_context_uses_query_rewrite_for_related_memories(self) -> None:
         comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊图书馆学习效率")
@@ -646,16 +682,21 @@ class CommentServiceTest(unittest.TestCase):
         self.assertNotIn("整理歌单", context.context)
         self.assertNotIn("# 待办事项", context.context)
 
-    def test_comment_reply_does_not_write_light_reflection_tables_or_revisions(self) -> None:
+    def test_comment_reply_only_records_evidence_until_reconcile_runs(self) -> None:
         comment_service.call_comment_reply("20260525-001", "拾迹者", "这是一条评论回复", FakeClient(), "fake-model")
 
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM entities"))["count"])
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM emotions"))["count"])
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM events"))["count"])
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM relations"))["count"])
-        self.assertEqual(0, require_not_none(db.query_one("SELECT COUNT(*) AS count FROM user_md_revisions"))["count"])
-        rows = db.query_all("SELECT source FROM soul_memory_revisions WHERE source != 'system'")
-        self.assertEqual([], rows)
+        self.assertGreater(
+            require_not_none(
+                db.query_one("SELECT COUNT(*) AS count FROM memory_ingest_events")
+            )["count"],
+            0,
+        )
+        self.assertEqual(
+            0,
+            require_not_none(
+                db.query_one("SELECT COUNT(*) AS count FROM memory_reconcile_runs")
+            )["count"],
+        )
 
     def _insert_post_and_comment(self, post_id: str, soul_name: str, comment: str) -> None:
         if db.query_one("SELECT 1 FROM posts WHERE id = ?", (post_id,)) is None:

@@ -225,7 +225,7 @@ class MemoryUnitServiceTest(unittest.TestCase):
         self.assertIn(unit_id, challenged)
         self.assertEqual(mus.get_unit(unit_id)["status"], "challenged")
 
-    def test_set_prompt_and_profile_policy(self) -> None:
+    def test_set_prompt_and_portrait_policy(self) -> None:
         e1 = self._public_event()
         unit_id = mus.add_unit(
             owner_scope="global", visibility_scope="public", source_channel="post",
@@ -233,19 +233,19 @@ class MemoryUnitServiceTest(unittest.TestCase):
         )
         # seed it into the portrait slice to prove force_exclude pulls it out now
         with db.transaction() as conn:
-            conn.execute("UPDATE memory_units SET in_md_slice = 1 WHERE id = ?", (unit_id,))
+            conn.execute("UPDATE memory_units SET in_portrait = 1 WHERE id = ?", (unit_id,))
         mus.set_prompt_policy(unit_id, prompt_policy="no_prompt")
         self.assertEqual(mus.get_unit(unit_id)["prompt_policy"], "no_prompt")
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 0)  # no_prompt drops slice now
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 0)  # no_prompt drops slice now
         with db.transaction() as conn:
-            conn.execute("UPDATE memory_units SET in_md_slice = 1 WHERE id = ?", (unit_id,))
-        mus.set_profile_policy(unit_id, profile_policy="force_exclude")
-        self.assertEqual(mus.get_unit(unit_id)["profile_policy"], "force_exclude")
-        self.assertEqual(mus.get_unit(unit_id)["in_md_slice"], 0)  # force_exclude drops slice now
+            conn.execute("UPDATE memory_units SET in_portrait = 1 WHERE id = ?", (unit_id,))
+        mus.set_portrait_policy(unit_id, portrait_policy="force_exclude")
+        self.assertEqual(mus.get_unit(unit_id)["portrait_policy"], "force_exclude")
+        self.assertEqual(mus.get_unit(unit_id)["in_portrait"], 0)  # force_exclude drops slice now
         with self.assertRaises(ValueError):
             mus.set_prompt_policy(unit_id, prompt_policy="bogus")
         with self.assertRaises(ValueError):
-            mus.set_profile_policy(unit_id, profile_policy="bogus")
+            mus.set_portrait_policy(unit_id, portrait_policy="bogus")
 
     def test_retract_by_model(self) -> None:
         e1 = self._public_event()

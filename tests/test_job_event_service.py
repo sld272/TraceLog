@@ -39,7 +39,7 @@ class JobEventServiceTest(unittest.TestCase):
         self.assertIsNotNone(done["finished_at"])
 
     def test_mark_failed_records_error(self) -> None:
-        job_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": "p-1"})
+        job_id = job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": "p-1"})
         job_service.claim_next_pending()
 
         job_service.mark_failed(job_id, "boom")
@@ -49,7 +49,7 @@ class JobEventServiceTest(unittest.TestCase):
         self.assertEqual("boom", failed["error"])
 
     def test_mark_failed_or_retry_requeues_until_max_attempts(self) -> None:
-        job_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": "p-1"}, max_attempts=2)
+        job_id = job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": "p-1"}, max_attempts=2)
         job_service.claim_next_pending()
 
         job_service.mark_failed_or_retry(job_id, "first boom")
@@ -59,14 +59,14 @@ class JobEventServiceTest(unittest.TestCase):
         self.assertEqual("first boom", pending["error"])
 
     def test_enqueue_defaults_to_three_attempts(self) -> None:
-        job_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": "p-1"})
+        job_id = job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": "p-1"})
 
         job = require_not_none(job_service.get_job(job_id))
 
         self.assertEqual(3, job["max_attempts"])
 
     def test_mark_failed_or_retry_does_not_retry_configuration_errors(self) -> None:
-        job_id = job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": "p-1"})
+        job_id = job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": "p-1"})
         job_service.claim_next_pending()
 
         job_service.mark_failed_or_retry(job_id, "401 invalid api key")

@@ -13,7 +13,7 @@ from core import (
     memory_reconciler as recon,
     memory_unit_service as mus,
 )
-from core.llm import reflection_router
+from core.llm import memory_router
 
 
 class ReconcileParserTest(unittest.TestCase):
@@ -31,7 +31,7 @@ class ReconcileParserTest(unittest.TestCase):
                 "not a dict",
             ],
         })
-        parsed = reflection_router._parse_memory_reconcile_content(raw)
+        parsed = memory_router._parse_memory_reconcile_content(raw)
         ops = parsed["ops"]
         self.assertEqual(parsed["summary"], "本轮发现一个目标")
         self.assertEqual(len(ops), 5)  # bogus + non-dict dropped
@@ -53,38 +53,15 @@ class ReconcileParserTest(unittest.TestCase):
         raw = json.dumps({"ops": [
             {"op": "add", "type": "long_term_goal", "content": "x", "evidence_event_ids": [1]}
         ]})
-        parsed = reflection_router._parse_memory_reconcile_content(raw)
+        parsed = memory_router._parse_memory_reconcile_content(raw)
         self.assertEqual(parsed["ops"][0]["type"], "insight")
 
     def test_parser_rejects_non_json(self) -> None:
-        self.assertIsNone(reflection_router._parse_memory_reconcile_content("not json"))
+        self.assertIsNone(memory_router._parse_memory_reconcile_content("not json"))
 
     def test_parser_handles_missing_ops(self) -> None:
-        parsed = reflection_router._parse_memory_reconcile_content(json.dumps({"summary": "无"}))
+        parsed = memory_router._parse_memory_reconcile_content(json.dumps({"summary": "无"}))
         self.assertEqual(parsed["ops"], [])
-
-    def test_legacy_relationship_migration_parser(self) -> None:
-        parsed = reflection_router._parse_legacy_relationship_migration_content(
-            json.dumps(
-                {
-                    "decision": "revise",
-                    "content": " 用户难过时希望先陪伴 ",
-                    "evidence_event_ids": [1, "2", "bad"],
-                    "confidence": 1.2,
-                    "importance": 0.8,
-                }
-            )
-        )
-        self.assertEqual("revise", parsed["decision"])
-        self.assertEqual("用户难过时希望先陪伴", parsed["content"])
-        self.assertEqual([1, 2], parsed["evidence_event_ids"])
-        self.assertEqual(1.0, parsed["confidence"])
-        self.assertIsNone(
-            reflection_router._parse_legacy_relationship_migration_content(
-                json.dumps({"decision": "revise", "content": ""})
-            )
-        )
-
 
 class ReconcileProducerTest(unittest.TestCase):
     def test_producer_formats_inputs_and_passes_through(self) -> None:
@@ -97,7 +74,7 @@ class ReconcileProducerTest(unittest.TestCase):
             captured["tombstones_text"] = tombstones_text
             return {"ops": [{"op": "add"}], "summary": "s"}
 
-        with patch.object(reflection_router, "call_memory_reconcile", fake_call):
+        with patch.object(memory_router, "call_memory_reconcile", fake_call):
             producer = producer_mod.make_llm_op_producer(client=object(), model="m")
             result = producer(
                 boundary={"owner_scope": "global", "visibility_scope": "public"},
@@ -118,12 +95,13 @@ class ReconcileProducerTest(unittest.TestCase):
         self.assertEqual(result["summary"], "s")
 
     def test_describe_scene_keeps_soul_as_context_not_subject(self) -> None:
-        # comment scene: soul appears as context, with an explicit "don't describe the soul" instruction
+        # route A public-relationship scene (soul:X, public): soul appears as
+        # context, relationship-only, with an explicit "don't describe the soul".
         comment = producer_mod.describe_scene(
-            {"owner_scope": "soul:喜多郁代", "visibility_scope": "thread:20260616-001"}
+            {"owner_scope": "soul:喜多郁代", "visibility_scope": "public"}
         )
         self.assertIn("喜多郁代", comment)
-        self.assertIn("用户", comment)
+        self.assertIn("相处", comment)
         self.assertIn("绝不要描述", comment)
 
         post = producer_mod.describe_scene({"owner_scope": "global", "visibility_scope": "public"})
@@ -140,58 +118,11 @@ class ReconcileProducerTest(unittest.TestCase):
         # A failed LLM call (None) must surface as an error, not a silent empty
         # batch — collapsing it to {"ops": []} would advance the cursor and drop
         # this evidence forever.
-        with patch.object(reflection_router, "call_memory_reconcile", lambda *a, **k: None):
+        with patch.object(memory_router, "call_memory_reconcile", lambda *a, **k: None):
             producer = producer_mod.make_llm_op_producer(client=object(), model="m")
             with self.assertRaises(producer_mod.ReconcileProducerError):
                 producer(boundary={"owner_scope": "global", "visibility_scope": "public"},
                          events=[], active_units=[], tombstones=[])
-
-    def test_legacy_migration_judge_formats_candidate_and_evidence(self) -> None:
-        captured = {}
-
-        def fake_call(
-            client,
-            model,
-            *,
-            candidate_text,
-            evidence_text,
-            trace_context=None,
-        ):
-            captured["candidate"] = candidate_text
-            captured["evidence"] = evidence_text
-            return {
-                "decision": "confirm",
-                "content": "",
-                "evidence_event_ids": [7],
-                "confidence": 0.9,
-                "importance": 0.8,
-            }
-
-        with patch.object(
-            reflection_router,
-            "call_legacy_relationship_migration",
-            fake_call,
-        ):
-            judge = producer_mod.make_legacy_relationship_judge(object(), "m")
-            result = judge(
-                candidate={"id": "mu_old", "owner_scope": "soul:luna", "content": "老友称呼"},
-                evidence=[
-                    {
-                        "id": 7,
-                        "visibility_scope": "private:soul:luna",
-                        "source_channel": "chat",
-                        "content_snapshot": "以后叫我老友吧",
-                        "conversation_context": [
-                            {"role": "assistant", "content": "好，老友。"}
-                        ],
-                    }
-                ],
-            )
-        self.assertEqual("老友称呼", captured["candidate"])
-        self.assertIn("event_id=7", captured["evidence"])
-        self.assertIn("仅帮助理解", captured["evidence"])
-        self.assertEqual("confirm", result["decision"])
-
 
 class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
     """LLM-shaped JSON -> parser -> producer -> reconcile -> a real unit."""
@@ -223,12 +154,12 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
                 "ops": [{"op": "add", "type": "goal", "content": "用户在准备考研，焦虑但坚持",
                          "confidence": 0.75, "tier": "core", "importance": 0.85, "evidence_event_ids": ids}],
             })
-            return reflection_router._parse_memory_reconcile_content(raw)
+            return memory_router._parse_memory_reconcile_content(raw)
 
-        with patch.object(reflection_router, "call_memory_reconcile", fake_call):
+        with patch.object(memory_router, "call_memory_reconcile", fake_call):
             producer = producer_mod.make_llm_op_producer(client=object(), model="m")
             summary = recon.reconcile_bucket(
-                "global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL
+                "global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL
             )
 
         self.assertEqual(summary.applied, 1)
@@ -250,7 +181,7 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
 
         with self.assertRaises(producer_mod.ReconcileProducerError):
             recon.reconcile_bucket(
-                "global", "public", op_producer=failing_producer, reflection_type=recon.RECONCILE_GLOBAL
+                "global", "public", op_producer=failing_producer, run_type=recon.RECONCILE_GLOBAL
             )
 
         self.assertEqual(mes.get_cursor("global", "public"), cursor_before)
@@ -307,10 +238,10 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
             return {"summary": "no-op", "ops": []}
 
         recon.reconcile_bucket(
-            "soul:luna",
-            "thread:p1",
+            "global",
+            "public",
             op_producer=producer,
-            reflection_type=recon.RECONCILE_THREAD,
+            run_type=recon.RECONCILE_GLOBAL,
         )
         self.assertEqual(len(captured["events"]), 1)
         context = captured["events"][0]["conversation_context"]
@@ -333,7 +264,7 @@ class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
             }]}
 
         summary = recon.reconcile_bucket(
-            "global", "public", op_producer=racing_producer, reflection_type=recon.RECONCILE_GLOBAL
+            "global", "public", op_producer=racing_producer, run_type=recon.RECONCILE_GLOBAL
         )
         self.assertIsNone(summary)
         self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 0)

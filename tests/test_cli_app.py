@@ -54,7 +54,7 @@ class CliAppTest(unittest.TestCase):
             patch("core.cli.app.todo_service.load_todos", return_value=[]),
             patch("core.cli.app.tool_config_service.is_tool_enabled", return_value=False),
             patch("core.cli.app.read_cli_input", side_effect=KeyboardInterrupt),
-            patch("core.cli.app.sessions.run_deep_reflection_on_exit"),
+            patch("core.cli.app.sessions.run_memory_reconcile"),
             redirect_stdout(StringIO()),
         ):
             cli_app.main()
@@ -84,7 +84,7 @@ class CliAppTest(unittest.TestCase):
             patch("core.cli.app.todo_service.load_todos", return_value=[]),
             patch("core.cli.app.tool_config_service.is_tool_enabled", return_value=False),
             patch("core.cli.app.read_cli_input", side_effect=KeyboardInterrupt),
-            patch("core.cli.app.sessions.run_deep_reflection_on_exit"),
+            patch("core.cli.app.sessions.run_memory_reconcile"),
             redirect_stdout(StringIO()),
         ):
             cli_app.main()

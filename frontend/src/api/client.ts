@@ -200,12 +200,6 @@ export type PostEventType =
   | 'todo_started'
   | 'todo_succeeded'
   | 'todo_failed'
-  | 'light_reflection_started'
-  | 'light_reflection_succeeded'
-  | 'light_reflection_failed'
-  | 'deep_reflection_queued'
-  | 'deep_reflection_succeeded'
-  | 'deep_reflection_failed'
   | 'pipeline_done'
 
 export interface PostEvent {
@@ -263,34 +257,8 @@ export interface EvidenceFeedbackResult {
   created: boolean
 }
 
-export interface ReflectionScope {
-  post_ids: string[]
-  scope_start: string | null
-  scope_end: string | null
-}
-
-export interface SoulReflectionScope {
-  soul_name: string
-  interaction_count: number
-  scope_start: number
-  scope_end: number
-}
-
-export interface MemoryRevisionSummary {
-  id: number
-  target_type: 'user' | 'soul'
-  target_name: string | null
-  source: string
-  patch: unknown
-  created_at: number
-}
-
-export interface MemoryRevisionDetail extends MemoryRevisionSummary {
-  snapshot: string
-}
-
 export interface JobQueued {
-  job_id: number
+  job_id: number | null
   status: string
 }
 
@@ -410,8 +378,6 @@ export interface WorkspaceStatus {
   db_exists: boolean
   db_size_bytes: number
   souls_dir: string
-  soul_memories_dir: string
-  user_memory_path: string
   counts: {
     posts: number
     comments: number
@@ -420,6 +386,8 @@ export interface WorkspaceStatus {
     todos: number
     jobs: number
     vision_cache: number
+    memory_units: number
+    memory_views: number
   }
   web_search: ModelSettings['web_search']
   vector_index: {
@@ -599,12 +567,6 @@ const POST_EVENT_TYPES: PostEventType[] = [
   'todo_started',
   'todo_succeeded',
   'todo_failed',
-  'light_reflection_started',
-  'light_reflection_succeeded',
-  'light_reflection_failed',
-  'deep_reflection_queued',
-  'deep_reflection_succeeded',
-  'deep_reflection_failed',
   'pipeline_done',
 ]
 
@@ -692,49 +654,6 @@ export function reorderSouls(order: string[]) {
   })
 }
 
-/* Profile */
-export function getProfile() {
-  return request<{ content: string }>('/profile')
-}
-
-export function updateProfile(content: string) {
-  return request<{ ok: boolean; content: string }>('/profile', {
-    method: 'PUT',
-    body: JSON.stringify({ content }),
-  })
-}
-
-export function listProfileRevisions(limit = 10) {
-  return request<MemoryRevisionSummary[]>(`/profile/revisions?limit=${limit}`)
-}
-
-export function getProfileRevision(revisionId: number) {
-  return request<MemoryRevisionDetail>(`/profile/revisions/${revisionId}`)
-}
-
-export function getSoulMemory(name: string) {
-  return request<{ soul_name: string; content: string }>(`/souls/${encodeURIComponent(name)}/memory`)
-}
-
-export function updateSoulMemory(name: string, content: string) {
-  return request<{ soul_name: string; content: string }>(`/souls/${encodeURIComponent(name)}/memory`, {
-    method: 'PUT',
-    body: JSON.stringify({ content }),
-  })
-}
-
-export function listSoulMemoryRevisions(name: string, limit = 5) {
-  return request<MemoryRevisionSummary[]>(
-    `/souls/${encodeURIComponent(name)}/memory/revisions?limit=${limit}`,
-  )
-}
-
-export function getSoulMemoryRevision(name: string, revisionId: number) {
-  return request<MemoryRevisionDetail>(
-    `/souls/${encodeURIComponent(name)}/memory/revisions/${revisionId}`,
-  )
-}
-
 /* Todos */
 export function listTodos() {
   return request<Todo[]>('/todos')
@@ -799,9 +718,16 @@ export function deleteGoal(goalId: string) {
 }
 
 /* Suggestions */
-export function listSuggestions(kind?: Suggestion['kind']) {
+export function listPendingSuggestions(kind?: 'goal' | 'todo'): Promise<Suggestion[]> {
   const suffix = kind ? `?kind=${kind}` : ''
   return request<Suggestion[]>(`/suggestions${suffix}`)
+}
+
+/** Extract the post id from a suggestion's evidence_ref (e.g. "post:20260622-003"). */
+export function postIdFromEvidenceRef(ref: string | null | undefined): string | null {
+  if (!ref) return null
+  const match = /^post:(.+)$/.exec(ref)
+  return match?.[1] ?? null
 }
 
 export function acceptSuggestion(suggestionId: string) {
@@ -851,33 +777,6 @@ export function rerunChatMessage(messageId: number) {
     `/chat/messages/${messageId}/rerun`,
     { method: 'POST', body: JSON.stringify({}) },
   )
-}
-
-/* Reflections */
-const DEFAULT_REFLECTION_LIMIT = 100
-
-export function previewGlobalReflection(limit = DEFAULT_REFLECTION_LIMIT) {
-  return request<ReflectionScope>(`/reflections/global/preview?limit=${limit}`)
-}
-
-export function triggerGlobalReflection(limit = DEFAULT_REFLECTION_LIMIT) {
-  return request<JobQueued>('/reflections/global', {
-    method: 'POST',
-    body: JSON.stringify({ limit }),
-  })
-}
-
-export function previewSoulReflections(limitPerSoul = DEFAULT_REFLECTION_LIMIT) {
-  return request<SoulReflectionScope[]>(
-    `/reflections/souls/preview?limit_per_soul=${limitPerSoul}`,
-  )
-}
-
-export function triggerSoulReflections(limitPerSoul = DEFAULT_REFLECTION_LIMIT) {
-  return request<JobQueued>('/reflections/souls', {
-    method: 'POST',
-    body: JSON.stringify({ limit_per_soul: limitPerSoul }),
-  })
 }
 
 /* Jobs */
@@ -975,4 +874,205 @@ export function reconcileVectorIndex() {
     method: 'POST',
     body: JSON.stringify({}),
   })
+}
+
+/* ===== Memory workbench (v2 unit/view control surface) ===== */
+export type MemoryPortraitPolicy = 'auto' | 'force_include' | 'force_exclude'
+export type MemoryPromptPolicy = 'allow' | 'no_prompt'
+export type MemoryTier = 'core' | 'contextual' | 'episodic'
+export type MemoryViewType = 'user_portrait' | 'soul_relationship_memory'
+export type MemoryViewStatus = 'fresh' | 'stale'
+
+/** A row from GET /memory/units (memory_units table). */
+export interface MemoryUnit {
+  id: string
+  owner_scope: string
+  visibility_scope: string
+  type: string
+  content: string
+  confidence: number
+  importance: number
+  tier: MemoryTier
+  status: string
+  source: string
+  source_channel: string
+  prompt_policy: MemoryPromptPolicy
+  portrait_policy: MemoryPortraitPolicy
+  in_portrait: number
+}
+
+/** One piece of raw evidence backing a unit. */
+export interface MemoryEvidenceRef {
+  event_id: number
+  source_channel: string
+  source_type: string
+  source_id: string
+  content: string
+  occurred_at: number
+  author: string | null
+  state: string
+  review_pending: boolean
+}
+
+/** GET /memory/units/{id} — unit plus its evidence trail. */
+export interface MemoryUnitDetail {
+  unit_id: string
+  type: string
+  content: string
+  confidence: number
+  importance: number
+  tier: MemoryTier
+  status: string
+  owner_scope: string
+  visibility_scope: string
+  source: string
+  source_channel: string
+  in_portrait: boolean
+  prompt_policy: MemoryPromptPolicy
+  portrait_policy: MemoryPortraitPolicy
+  evidence: MemoryEvidenceRef[]
+}
+
+/** A materialized portrait view (top layer of the workbench drill-down). */
+export interface MemoryView {
+  id: string
+  owner_scope: string
+  visibility_scope: string
+  view_type: MemoryViewType
+  content_md: string
+  status: MemoryViewStatus
+  generated_at?: number | null
+  updated_at: number
+}
+
+export interface MemoryStatus {
+  pending_event_count: number
+  pending_buckets: Array<{ owner_scope: string; visibility_scope: string }>
+  pending_review_count: number
+  pending_relink_count: number
+  stale_view_count: number
+  active_jobs: Job[]
+}
+
+export interface MemoryOperation {
+  id: number
+  unit_id: string
+  related_unit_id: string | null
+  op: string
+  actor: string
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+  reconcile_run_id: number | null
+  created_at: number
+}
+
+export interface ListMemoryUnitsParams {
+  owner_scope?: string
+  visibility_scope?: string
+  /** 'active' (default) or 'all'. */
+  status?: string
+  type?: string
+  limit?: number
+}
+
+export async function listMemoryUnits(params: ListMemoryUnitsParams = {}): Promise<MemoryUnit[]> {
+  const query = new URLSearchParams()
+  if (params.owner_scope) query.set('owner_scope', params.owner_scope)
+  if (params.visibility_scope) query.set('visibility_scope', params.visibility_scope)
+  if (params.status) query.set('status', params.status)
+  if (params.type) query.set('type', params.type)
+  if (params.limit !== undefined) query.set('limit', String(params.limit))
+  const suffix = query.toString() ? `?${query.toString()}` : ''
+  const data = await request<{ units: MemoryUnit[] }>(`/memory/units${suffix}`)
+  return data.units
+}
+
+export function getMemoryUnit(unitId: string): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}`)
+}
+
+export function createMemoryUnit(input: {
+  owner_scope?: string
+  visibility_scope?: string
+  type: string
+  content: string
+  confidence?: number
+  tier?: MemoryTier
+  importance?: number
+}): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>('/memory/units', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export interface UpdateMemoryUnitInput {
+  content: string
+  confidence?: number
+  type?: string
+  tier?: MemoryTier
+  importance?: number
+}
+
+export function updateMemoryUnit(unitId: string, input: UpdateMemoryUnitInput): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
+/** Delete a belief as wrong ('false') or outdated ('outdated'). To merely
+ *  stop mentioning a still-true memory, use setMemoryPromptPolicy('no_prompt'). */
+export function retractMemoryUnit(unitId: string, reason: 'false' | 'outdated' = 'false'): Promise<{ ok: boolean }> {
+  return request<{ ok: boolean }>(`/memory/units/${encodeURIComponent(unitId)}?reason=${reason}`, {
+    method: 'DELETE',
+  })
+}
+
+export function setMemoryPromptPolicy(unitId: string, promptPolicy: MemoryPromptPolicy): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}/prompt-policy`, {
+    method: 'POST',
+    body: JSON.stringify({ prompt_policy: promptPolicy }),
+  })
+}
+
+export function setMemoryPortraitPolicy(unitId: string, portraitPolicy: MemoryPortraitPolicy): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}/portrait-policy`, {
+    method: 'POST',
+    body: JSON.stringify({ portrait_policy: portraitPolicy }),
+  })
+}
+
+export async function listMemoryViews(): Promise<MemoryView[]> {
+  const data = await request<{ views: MemoryView[] }>('/memory/views')
+  return data.views
+}
+
+export function resynthesizeMemoryView(input: {
+  owner_scope: string
+  visibility_scope: string
+  view_type: MemoryViewType
+}): Promise<MemoryView> {
+  return request<MemoryView>('/memory/views/resynthesize', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function getMemoryStatus(): Promise<MemoryStatus> {
+  return request<MemoryStatus>('/memory/status')
+}
+
+export function triggerMemoryReconcile(): Promise<JobQueued> {
+  return request<JobQueued>('/memory/reconcile', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export async function listMemoryOperations(limit = 20): Promise<MemoryOperation[]> {
+  const data = await request<{ operations: MemoryOperation[] }>(
+    `/memory/operations?limit=${limit}`,
+  )
+  return data.operations
 }

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from api import deps
-from api.routes import attachments, chat, comments, feedback, goals, jobs, memory, posts, profile, reflections, settings, souls, suggestions, todos
+from api.routes import attachments, chat, comments, feedback, goals, jobs, memory, posts, settings, souls, suggestions, todos
 
 
 @asynccontextmanager
@@ -23,12 +23,10 @@ def create_app() -> FastAPI:
     app = FastAPI(title="TraceLog API", lifespan=lifespan)
     app.include_router(posts.router)
     app.include_router(jobs.router)
-    app.include_router(profile.router)
     app.include_router(souls.router)
     app.include_router(todos.router)
     app.include_router(goals.router)
     app.include_router(suggestions.router)
-    app.include_router(reflections.router)
     app.include_router(chat.router)
     app.include_router(comments.router)
     app.include_router(feedback.router)

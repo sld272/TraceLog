@@ -111,9 +111,9 @@ class MemoryEventsWiringTest(unittest.TestCase):
         events = _events("comment_message", str(msg.id))
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["op"], "create")
-        self.assertEqual(events[0]["owner_scope"], "soul:luna")  # owned by the thread's soul
+        self.assertEqual(events[0]["owner_scope"], "global")  # public comments join the global portrait
         self.assertEqual(events[0]["author"], "user")
-        self.assertEqual(events[0]["visibility_scope"], f"thread:{post_id}")
+        self.assertEqual(events[0]["visibility_scope"], "public")
 
     def test_delete_comment_appends_delete_events(self) -> None:
         post_id = record_service.save_post("帖子", index_immediately=False, track_embedding=False)
@@ -123,12 +123,11 @@ class MemoryEventsWiringTest(unittest.TestCase):
         events = _events("comment_message", str(msg.id))
         self.assertEqual([e["op"] for e in events], ["create", "delete"])
 
-    def test_delete_comment_enqueues_reconcile_in_v2_write_mode(self) -> None:
+    def test_delete_comment_enqueues_reconcile(self) -> None:
         post_id = record_service.save_post("帖子", index_immediately=False, track_embedding=False)
         self._seed_root_comment(post_id)
         msg = comment_service.append_comment(post_id, "luna", "user", "要删除")
-        with patch.dict(os.environ, {memory_read.WRITE_MODE_ENV: "reconcile"}):
-            comment_service.delete_message(msg.id)
+        comment_service.delete_message(msg.id)
         self.assertEqual(
             [row["type"] for row in db.query_all("SELECT type FROM jobs")],
             [job_service.TYPE_RUN_MEMORY_RECONCILE],
@@ -176,8 +175,7 @@ class MemoryEventsWiringTest(unittest.TestCase):
         chat_service._append_message(thread_id, "assistant", "回答")
         later_user = chat_service._append_message(thread_id, "user", "后续问题")
 
-        with patch.dict(os.environ, {memory_read.WRITE_MODE_ENV: "reconcile"}):
-            chat_service.edit_user_message(first.id, "第一句修改")
+        chat_service.edit_user_message(first.id, "第一句修改")
 
         later_events = _events("chat_message", str(later_user.id))
         self.assertEqual(later_events[-1]["op"], "delete")

@@ -60,6 +60,40 @@ class ApiMemoryTest(unittest.TestCase):
 
         self.assertEqual(404, client.get("/memory/units/mu_missing").status_code)
 
+    def test_create_user_authored_unit_and_list_operation(self) -> None:
+        client = self._client()
+        created = client.post(
+            "/memory/units",
+            json={
+                "type": "preference",
+                "content": "用户喜欢安静的学习环境",
+                "tier": "core",
+                "importance": 0.9,
+            },
+        )
+        self.assertEqual(200, created.status_code)
+        self.assertEqual("user_authored", created.json()["source"])
+
+        operations = client.get("/memory/operations")
+        self.assertEqual(200, operations.status_code)
+        operation = operations.json()["operations"][0]
+        self.assertEqual("add", operation["op"])
+        self.assertEqual("user", operation["actor"])
+        self.assertEqual(
+            "用户喜欢安静的学习环境", operation["after"]["content"]
+        )
+
+    def test_status_reports_pending_evidence(self) -> None:
+        self._seed_unit()
+        client = self._client()
+        response = client.get("/memory/status")
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(1, response.json()["pending_event_count"])
+        self.assertEqual(
+            [{"owner_scope": "global", "visibility_scope": "public"}],
+            response.json()["pending_buckets"],
+        )
+
     def test_update_marks_pending_and_enqueues_relink(self) -> None:
         unit_id, _ = self._seed_unit()
         client = self._client()
@@ -82,7 +116,7 @@ class ApiMemoryTest(unittest.TestCase):
         resp = client.patch(f"/memory/units/{unit_id}", json={"content": "想复活"})
         self.assertEqual(422, resp.status_code)
 
-    def test_prompt_and_profile_policy(self) -> None:
+    def test_prompt_and_portrait_policy(self) -> None:
         unit_id, _ = self._seed_unit()
         client = self._client()
 
@@ -92,11 +126,11 @@ class ApiMemoryTest(unittest.TestCase):
         self.assertEqual(r1.json()["prompt_policy"], "no_prompt")  # response reflects change
 
         r2 = client.post(
-            f"/memory/units/{unit_id}/profile-policy", json={"profile_policy": "force_exclude"}
+            f"/memory/units/{unit_id}/portrait-policy", json={"portrait_policy": "force_exclude"}
         )
         self.assertEqual(200, r2.status_code)
-        self.assertEqual(mus.get_unit(unit_id)["profile_policy"], "force_exclude")
-        self.assertEqual(r2.json()["profile_policy"], "force_exclude")
+        self.assertEqual(mus.get_unit(unit_id)["portrait_policy"], "force_exclude")
+        self.assertEqual(r2.json()["portrait_policy"], "force_exclude")
 
         bad = client.post(f"/memory/units/{unit_id}/prompt-policy", json={"prompt_policy": "bogus"})
         self.assertEqual(422, bad.status_code)
@@ -132,7 +166,7 @@ class ApiMemoryTest(unittest.TestCase):
             json={
                 "owner_scope": "soul:luna",
                 "visibility_scope": "private:soul:nova",
-                "view_type": "user_md",
+                "view_type": "user_portrait",
             },
         )
         self.assertEqual(422, resp.status_code)
@@ -157,12 +191,12 @@ class ApiMemoryTest(unittest.TestCase):
 
         resp = client.post(
             "/memory/views/resynthesize",
-            json={"owner_scope": "global", "visibility_scope": "public", "view_type": "user_md"},
+            json={"owner_scope": "global", "visibility_scope": "public", "view_type": "user_portrait"},
         )
         self.assertEqual(200, resp.status_code)
-        self.assertEqual(resp.json()["view_type"], "user_md")
+        self.assertEqual(resp.json()["view_type"], "user_portrait")
         from core import memory_view_service as mvs
-        self.assertEqual(mvs.get_view("global", "public", "user_md")["status"], "fresh")
+        self.assertEqual(mvs.get_view("global", "public", "user_portrait")["status"], "fresh")
 
     def test_resynthesize_soul_relationship_view(self) -> None:
         with db.transaction() as conn:

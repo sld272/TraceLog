@@ -1,4 +1,4 @@
-"""Materialize identity views (user.md / soul private memory) from core units.
+"""Materialize bounded portrait views from core memory units.
 
 A view is a low-frequency *synthesis* of the core subset of memory units in one
 (owner, visibility) boundary — a bounded, always-injected identity floor. The
@@ -9,11 +9,8 @@ This module owns:
   * the core-subset selector (entry predicate + confidence hysteresis),
   * the source_unit_set_hash that drives stale/re-synthesis,
   * a deterministic template renderer (the failure fallback / default), and
-  * synthesize_view, which accepts an injectable LLM synthesizer (Phase 4b)
+  * synthesize_view, which accepts an injectable LLM synthesizer
     and falls back to the template.
-
-Nothing here is wired into the live reply path yet; Phase 6 flips user.md to be
-produced from this. Phase 4 only builds and tests the capability.
 """
 
 from __future__ import annotations
@@ -29,7 +26,7 @@ from core import db, memory_unit_service as mus
 
 # selector thresholds (design §3.2). Importance is a three-band structure:
 #   < MIN_ADD_IMPORTANCE (0.30, in memory_reconciler) -> trivia, never a unit
-#   0.30 .. MIN_IMPORTANCE                            -> unit + retrieval + current-state block, NOT user.md
+#   0.30 .. MIN_IMPORTANCE                            -> retrieval/current-state only
 #   >= MIN_IMPORTANCE (0.70)                          -> eligible for the always-on identity portrait
 # Confidence (ENTER/EXIT) is the orthogonal "is it true" axis with hysteresis.
 ENTER = 0.82
@@ -37,12 +34,10 @@ EXIT = 0.62
 MIN_IMPORTANCE = 0.70
 
 RENDERER_VERSION = "baseline-v1"
-USER_MD_CHAR_BUDGET = 1200
-SOUL_MEMORY_CHAR_BUDGET = 600
+USER_PORTRAIT_CHAR_BUDGET = 1200
+SOUL_RELATIONSHIP_CHAR_BUDGET = 600
 
-VIEW_USER_MD = "user_md"
-# Legacy view type kept only so old rows can be recognized and migrated away.
-VIEW_SOUL_PRIVATE = "soul_private_memory"
+VIEW_USER_PORTRAIT = "user_portrait"
 VIEW_SOUL_RELATIONSHIP = "soul_relationship_memory"
 
 # md section ordering + labels by unit type
@@ -77,10 +72,10 @@ def _passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bo
         return False
     if unit["type"] == "goal":
         return False
-    profile_policy = unit["profile_policy"]
-    if profile_policy == "force_exclude":
+    portrait_policy = unit["portrait_policy"]
+    if portrait_policy == "force_exclude":
         return False
-    if profile_policy == "force_include":
+    if portrait_policy == "force_include":
         return True
 
     if unit["tier"] != "core":
@@ -101,8 +96,13 @@ def passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> boo
     return _passes_core_predicate(unit, currently_in_slice=currently_in_slice)
 
 
-def recompute_slice(owner_scope: str, visibility_scope: str, *, conn: sqlite3.Connection | None = None) -> list[str]:
-    """Recompute in_md_slice for all units in a boundary; return the core ids
+def recompute_portrait_membership(
+    owner_scope: str,
+    visibility_scope: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> list[str]:
+    """Recompute portrait membership for all units in a boundary; return core ids
     (ordered for rendering). Hysteresis uses each unit's current flag."""
     def _run(c: sqlite3.Connection) -> list[str]:
         rows = c.execute(
@@ -114,11 +114,11 @@ def recompute_slice(owner_scope: str, visibility_scope: str, *, conn: sqlite3.Co
         ).fetchall()
         core_ids: list[str] = []
         for row in rows:
-            currently = bool(row["in_md_slice"])
+            currently = bool(row["in_portrait"])
             keep = _passes_core_predicate(row, currently_in_slice=currently)
             if keep != currently:
                 c.execute(
-                    "UPDATE memory_units SET in_md_slice = ? WHERE id = ?",
+                    "UPDATE memory_units SET in_portrait = ? WHERE id = ?",
                     (1 if keep else 0, row["id"]),
                 )
             if keep:
@@ -135,7 +135,7 @@ def _core_units_for_render(owner_scope: str, visibility_scope: str) -> list[sqli
     rows = db.query_all(
         """
         SELECT * FROM memory_units
-        WHERE owner_scope = ? AND visibility_scope = ? AND in_md_slice = 1 AND status = 'active'
+        WHERE owner_scope = ? AND visibility_scope = ? AND in_portrait = 1 AND status = 'active'
         """,
         (owner_scope, visibility_scope),
     )
@@ -169,7 +169,7 @@ def source_unit_set_hash(units: list[sqlite3.Row]) -> str:
             str(x) for x in (
                 row["id"], row["content"], row["status"], row["type"], row["tier"],
                 row["source"], row["importance"], row["sensitivity"],
-                row["profile_policy"], row["prompt_policy"],
+                row["portrait_policy"], row["prompt_policy"],
             )
         )
         h.update(b"\x00")
@@ -237,10 +237,10 @@ def synthesize_view(
     it falls back to the deterministic template. The DAG is one-way (units ->
     view), so the view is just a cached synthesis with no independent truth."""
     if char_budget is None:
-        char_budget = USER_MD_CHAR_BUDGET if view_type == VIEW_USER_MD else SOUL_MEMORY_CHAR_BUDGET
+        char_budget = USER_PORTRAIT_CHAR_BUDGET if view_type == VIEW_USER_PORTRAIT else SOUL_RELATIONSHIP_CHAR_BUDGET
 
     if recompute:
-        recompute_slice(owner_scope, visibility_scope)
+        recompute_portrait_membership(owner_scope, visibility_scope)
     units = _core_units_for_render(owner_scope, visibility_scope)
     return synthesize_units_view(
         owner_scope,
@@ -268,7 +268,7 @@ def synthesize_units_view(
     bookkeeping.
     """
     if char_budget is None:
-        char_budget = USER_MD_CHAR_BUDGET if view_type == VIEW_USER_MD else SOUL_MEMORY_CHAR_BUDGET
+        char_budget = USER_PORTRAIT_CHAR_BUDGET if view_type == VIEW_USER_PORTRAIT else SOUL_RELATIONSHIP_CHAR_BUDGET
     unit_hash = source_unit_set_hash(units)
 
     used_fallback = True
@@ -355,7 +355,7 @@ def mark_stale_if_changed(owner_scope: str, visibility_scope: str, view_type: st
     view = get_view(owner_scope, visibility_scope, view_type)
     if view is None:
         return False
-    recompute_slice(owner_scope, visibility_scope)
+    recompute_portrait_membership(owner_scope, visibility_scope)
     units = _core_units_for_render(owner_scope, visibility_scope)
     new_hash = source_unit_set_hash(units)
     if new_hash == view["source_unit_set_hash"] and view["renderer_version"] == RENDERER_VERSION:
@@ -374,7 +374,7 @@ def view_type_for_bucket(owner_scope: str, visibility_scope: str) -> str | None:
     Only the global/public bucket maps directly to a view. SOUL relationship
     memory is a cross-bucket aggregate managed by soul_relationship_memory."""
     if owner_scope == "global" and visibility_scope == "public":
-        return VIEW_USER_MD
+        return VIEW_USER_PORTRAIT
     return None
 
 
@@ -400,12 +400,12 @@ def per_bucket_views_needing_refresh() -> list[tuple[str, str, str]]:
     for row in db.query_all(
         "SELECT owner_scope, visibility_scope, view_type FROM memory_views "
         "WHERE status = 'stale' AND view_type = ?",
-        (VIEW_USER_MD,),
+        (VIEW_USER_PORTRAIT,),
     ):
         out.append((row["owner_scope"], row["visibility_scope"], row["view_type"]))
     for row in db.query_all(
         "SELECT DISTINCT owner_scope, visibility_scope FROM memory_units "
-        "WHERE in_md_slice = 1 AND status = 'active'"
+        "WHERE in_portrait = 1 AND status = 'active'"
     ):
         owner_scope, visibility_scope = row["owner_scope"], row["visibility_scope"]
         view_type = view_type_for_bucket(owner_scope, visibility_scope)
@@ -436,7 +436,7 @@ def read_portrait_body(
     Prefers a fresh synthesized view body (header stripped). Missing or stale
     views fall back to the deterministic template over the current active core
     units so challenged beliefs cannot leak through an old portrait. Returns ''
-    when there is nothing stable to say (caller may then fall back to legacy)."""
+    when there is nothing stable to say."""
     view = get_view(owner_scope, visibility_scope, view_type)
     if view is not None and view["status"] == "fresh":
         body = strip_generated_header(view["content_md"]).strip()
@@ -445,7 +445,7 @@ def read_portrait_body(
     units = _core_units_for_render(owner_scope, visibility_scope)
     if units:
         if char_budget is None:
-            char_budget = USER_MD_CHAR_BUDGET if view_type == VIEW_USER_MD else SOUL_MEMORY_CHAR_BUDGET
+            char_budget = USER_PORTRAIT_CHAR_BUDGET if view_type == VIEW_USER_PORTRAIT else SOUL_RELATIONSHIP_CHAR_BUDGET
         return render_template(units, char_budget=char_budget)
     return ""
 

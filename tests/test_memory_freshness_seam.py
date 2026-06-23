@@ -67,16 +67,12 @@ class FreshnessSeamTest(unittest.TestCase):
         items_self, _ = memory_read.freshness_seam("chat", "luna", now=now)
         self.assertEqual(len(items_self), 1)
 
-    def test_section_includes_seam_only_in_freshness_mode(self) -> None:
+    def test_section_always_includes_freshness_seam(self) -> None:
         now = db.now_ts()
         self._post("我刚开始学法语", now - 50)
-        with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "units_and_freshness"}):
-            text = memory_read.build_memory_section("public_post", None, "法语").text
+        text = memory_read.build_memory_section("public_post", None, "法语").text
         self.assertIn("尚未稳定沉淀的原始证据", text)
         self.assertIn("我刚开始学法语", text)
-        with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "units"}):
-            text2 = memory_read.build_memory_section("public_post", None, "法语").text
-        self.assertNotIn("尚未稳定沉淀的原始证据", text2)
 
 
 if __name__ == "__main__":

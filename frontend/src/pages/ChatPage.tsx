@@ -17,6 +17,7 @@ import { ImageGrid } from '@/components/ImageGrid'
 import { ImageUploader } from '@/components/ImageUploader'
 import { InlineSuggestions } from '@/components/InlineSuggestions'
 import { Notice } from '@/components/Notice'
+import { SoulAvatar } from '@/components/SoulAvatar'
 import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
@@ -436,14 +437,12 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   return (
     <div className={styles.page}>
       <div className={styles.chatShell}>
-        <header className={styles.header}>
-          <div className={styles.titleGroup}>
-            <h1 className={styles.title}>{soulName}</h1>
-            {thread?.title && <p className={styles.subtitle}>{thread.title}</p>}
+        <header className={styles.chatHead}>
+          <SoulAvatar name={soulName} className={styles.chatHeadAvatar} />
+          <div className={styles.chatHeadInfo}>
+            <div className={styles.chatHeadName}>{soulName}</div>
+            <div className={styles.chatHeadStatus}>{thread?.title || '会记得你们的对话'}</div>
           </div>
-          <button className={styles.ghostButton} onClick={fetchThread} disabled={loading || chatBusy}>
-            刷新
-          </button>
         </header>
 
         {modelUnavailable && (
@@ -520,7 +519,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
               }}
               placeholder={`和 ${soulName} 说点什么...`}
               disabled={modelUnavailable}
-              rows={2}
+              rows={1}
               aria-label="私聊消息"
             />
             <ImageUploader

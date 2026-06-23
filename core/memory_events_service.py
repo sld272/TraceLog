@@ -9,9 +9,7 @@ to mutable source rows, so editing a post or rerunning a reply never silently
 rewrites the historical basis of a belief. The auto-increment ``id`` doubles as
 the monotonic consumption cursor for per-bucket reconcile.
 
-This module deliberately has *no consumer* yet — Phase 1 only establishes the
-ledger and backfills history. Live write-path wiring and unit reconcile arrive
-in later phases.
+The reconcile worker is the sole consumer and advances one cursor per boundary.
 """
 
 from __future__ import annotations
@@ -28,7 +26,17 @@ GLOBAL_SCOPE = "global"
 PUBLIC_VISIBILITY = "public"
 
 SOURCE_CHANNELS = frozenset({"post", "comment", "chat"})
-SOURCE_TYPES = frozenset({"post", "comment_message", "chat_message"})
+# comment_relationship is the route-A parallel lens of a user comment: the SAME
+# utterance, routed to the persona's (soul:X, public) bucket so the relationship
+# lens can mine it independently of the user-fact lens (comment_message). Its
+# source_revision sequence is independent (keyed per source_type), so the two
+# never collide on UNIQUE(source_type, source_id, source_revision).
+SOURCE_TYPES = frozenset(
+    {"post", "post_vision", "comment_message", "comment_relationship", "chat_message"}
+)
+# The two comment lenses of one underlying comment — grouped so a single edit/
+# delete challenge propagates to both user-fact and relationship units.
+COMMENT_SOURCE_TYPES = ("comment_message", "comment_relationship")
 EVENT_OPS = frozenset({"create", "edit", "rerun", "delete"})
 
 
@@ -170,6 +178,34 @@ def record_post_mutation(
     )
 
 
+def record_post_vision(
+    conn: sqlite3.Connection,
+    *,
+    post_id: str,
+    content: str,
+    occurred_at: float,
+    created_at: float | None = None,
+) -> IngestEvent:
+    """AI-generated image descriptions attached to a user post.
+
+    The description is evidence about user-provided media, so it belongs to the
+    same global/public bucket while remaining distinguishable from typed text.
+    """
+    return append_event(
+        conn,
+        owner_scope=GLOBAL_SCOPE,
+        visibility_scope=PUBLIC_VISIBILITY,
+        source_channel="post",
+        source_type="post_vision",
+        source_id=str(post_id),
+        op="create",
+        content_snapshot=content,
+        occurred_at=occurred_at,
+        author="user",
+        created_at=created_at,
+    )
+
+
 def record_comment_mutation(
     conn: sqlite3.Connection,
     *,
@@ -182,17 +218,29 @@ def record_comment_mutation(
     occurred_at: float,
     created_at: float | None = None,
 ) -> IngestEvent:
-    """Comment -> owned by the SOUL whose thread it is (both roles), visibility
-    thread:<post_id>. A comment conversation is the user interacting with that
-    soul, so the memory it yields is that soul's relationship memory; the user's
-    own comments (author='user') are what reconcile mines, the soul's replies are
-    provenance only. Thread membership never auto-promotes to a durable soul
-    portrait / public; that requires an explicit promote op in a later phase."""
-    owner = soul_scope(soul_name)
-    return append_event(
+    """Comment on a public post -> dual-lens fan-out (route A).
+
+    A user's public comment carries two orthogonal subjects: facts about the
+    *user* (which belong in the shared global/public portrait, merged with
+    post-derived facts) AND the texture of the user<->soul *relationship*
+    (称呼/节奏/默契/边界), which belongs in that persona's memory. So we emit two
+    events from this one chokepoint:
+
+      * ``comment_message`` -> (global, public): the user-fact lens (unchanged).
+      * ``comment_relationship`` -> (soul:<name>, public): the relationship lens,
+        only for user comments. The soul's own replies are provenance/context
+        (conversation_context_for_event reads them from the comments table), so
+        they need no parallel event.
+
+    The user-fact ``comment_message`` event is the primary return value, so
+    callers' challenge/cursor handling is unchanged; a single comment edit/delete
+    challenge propagates to BOTH unit kinds via COMMENT_SOURCE_TYPES grouping in
+    challenge_units_for_source. Genuinely private, soul-scoped memory still comes
+    from 1:1 chat (record_chat_mutation)."""
+    primary = append_event(
         conn,
-        owner_scope=owner,
-        visibility_scope=thread_visibility(str(post_id)),
+        owner_scope=GLOBAL_SCOPE,
+        visibility_scope=PUBLIC_VISIBILITY,
         source_channel="comment",
         source_type="comment_message",
         source_id=str(comment_id),
@@ -202,6 +250,21 @@ def record_comment_mutation(
         author=role if role in ("user", "assistant") else None,
         created_at=created_at,
     )
+    if role == "user":
+        append_event(
+            conn,
+            owner_scope=soul_scope(soul_name),
+            visibility_scope=PUBLIC_VISIBILITY,
+            source_channel="comment",
+            source_type="comment_relationship",
+            source_id=str(comment_id),
+            op=op,
+            content_snapshot=content,
+            occurred_at=occurred_at,
+            author="user",
+            created_at=created_at,
+        )
+    return primary
 
 
 def record_chat_mutation(
@@ -414,7 +477,7 @@ def conversation_context_for_event(
     source_id = str(event["source_id"])
     radius = max(1, min(int(radius), 10))
 
-    if source_type == "comment_message":
+    if source_type in COMMENT_SOURCE_TYPES:
         target = db.query_one(
             "SELECT post_id, soul_name, seq FROM comments WHERE id = ?",
             (int(source_id),),

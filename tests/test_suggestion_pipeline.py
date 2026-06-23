@@ -23,9 +23,9 @@ class SuggestionPipelineTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
-    def test_disabled_by_default(self) -> None:
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop(suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV, None)
+    def test_disabled_when_env_explicitly_off(self) -> None:
+        env = {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0"}
+        with patch.dict(os.environ, env):
             with patch("core.suggestion_pipeline.goal_router.call_goal_router") as router:
                 self.assertEqual(
                     [],

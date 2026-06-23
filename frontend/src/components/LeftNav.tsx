@@ -5,8 +5,12 @@ import styles from './LeftNav.module.css'
 interface LeftNavProps {
   souls: Soul[]
   soulsLoadState?: 'loading' | 'ready' | 'error'
-  /** 待整理条目数，>0 时在「整理」项上显示 badge（右栏隐藏的窄屏也能看到队列） */
-  reflectionQueueCount?: number
+  /** 待对账 evidence 数，>0 时在「记忆」项上显示 badge。 */
+  memoryQueueCount?: number
+  /** 进行中的目标数，>0 时在「目标」项上显示 badge */
+  goalCount?: number
+  /** 未完成的待办数，>0 时在「待办」项上显示 badge */
+  todoCount?: number
   activePage: string
   onNavigate: (page: string) => void
   onAfterNavigate?: () => void
@@ -15,7 +19,9 @@ interface LeftNavProps {
 export function LeftNav({
   souls,
   soulsLoadState = 'ready',
-  reflectionQueueCount = 0,
+  memoryQueueCount = 0,
+  goalCount = 0,
+  todoCount = 0,
   activePage,
   onNavigate,
   onAfterNavigate,
@@ -27,6 +33,10 @@ export function LeftNav({
 
   return (
     <div className={styles.nav}>
+      <div className={styles.navLogo}>
+        <img className={styles.logoMark} src="/brand/tracelog-icon-transparent-256.png" alt="" aria-hidden="true" />
+        <img className={styles.logoWordmark} src="/brand/shiji-wordmark-transparent.png" alt="拾迹" />
+      </div>
       <section className={styles.section}>
         <NavItem
           icon={<HomeIcon />}
@@ -35,37 +45,47 @@ export function LeftNav({
           onClick={() => navigate('home')}
         />
         <NavItem
-          icon={<TodoIcon />}
-          label="待办"
-          active={activePage === 'todos'}
-          onClick={() => navigate('todos')}
-        />
-        <NavItem
           icon={<GoalIcon />}
           label="目标"
+          badge={goalCount > 0 ? goalCount : undefined}
           active={activePage === 'goals'}
           onClick={() => navigate('goals')}
         />
         <NavItem
-          icon={<ReflectIcon />}
-          label="整理"
-          badge={reflectionQueueCount > 0 ? reflectionQueueCount : undefined}
-          active={activePage === 'reflections'}
-          onClick={() => navigate('reflections')}
+          icon={<TodoIcon />}
+          label="待办"
+          badge={todoCount > 0 ? todoCount : undefined}
+          active={activePage === 'todos'}
+          onClick={() => navigate('todos')}
+        />
+        <NavItem
+          icon={<MemoryIcon />}
+          label="记忆"
+          badge={memoryQueueCount > 0 ? memoryQueueCount : undefined}
+          active={activePage === 'memory'}
+          onClick={() => navigate('memory')}
         />
       </section>
 
       <section className={styles.section}>
         <h3 className={styles.sectionTitle}>私聊</h3>
-        {souls.map((soul) => (
-          <NavItem
-            key={soul.name}
-            icon={<SoulAvatar name={soul.name} className={styles.soulIcon} />}
-            label={soul.name}
-            active={activePage === `chat:${soul.name}`}
-            onClick={() => navigate(`chat:${soul.name}`)}
-          />
-        ))}
+        {souls.map((soul) => {
+          const active = activePage === `chat:${soul.name}`
+          return (
+            <button
+              key={soul.name}
+              className={`${styles.dmItem} ${active ? styles.dmItemActive : ''}`}
+              onClick={() => navigate(`chat:${soul.name}`)}
+              aria-current={active ? 'page' : undefined}
+            >
+              <SoulAvatar name={soul.name} className={styles.dmAvatar} />
+              <span className={styles.dmBody}>
+                <span className={styles.dmName}>{soul.name}</span>
+                {soul.description && <span className={styles.dmPreview}>{soul.description}</span>}
+              </span>
+            </button>
+          )
+        })}
         {souls.length === 0 && soulsLoadState === 'loading' && (
           <p className={styles.emptySoul}>加载中...</p>
         )}
@@ -144,12 +164,10 @@ function GoalIcon() {
   )
 }
 
-function ReflectIcon() {
+function MemoryIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="10" />
-      <path d="M12 16v-4" />
-      <path d="M12 8h.01" />
+      <path d="M12 3a4 4 0 0 0-4 4 4 4 0 0 0-1 7.9V18a3 3 0 0 0 6 0M12 3a4 4 0 0 1 4 4 4 4 0 0 1 1 7.9V18a3 3 0 0 1-6 0M12 3v15" />
     </svg>
   )
 }

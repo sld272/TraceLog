@@ -14,18 +14,18 @@ from core import (
     memory_view_service as mvs,
     soul_relationship_memory as srm,
 )
-from core.llm import reflection_router
+from core.llm import memory_router
 
 
 class ViewSynthParserTest(unittest.TestCase):
     def test_parser_extracts_profile_md(self) -> None:
         raw = json.dumps({"profile_md": "  这是画像。  "})
-        self.assertEqual(reflection_router._parse_view_synthesis_content(raw), "这是画像。")
+        self.assertEqual(memory_router._parse_view_synthesis_content(raw), "这是画像。")
 
     def test_parser_rejects_empty_or_bad(self) -> None:
-        self.assertIsNone(reflection_router._parse_view_synthesis_content(json.dumps({"profile_md": "  "})))
-        self.assertIsNone(reflection_router._parse_view_synthesis_content("not json"))
-        self.assertIsNone(reflection_router._parse_view_synthesis_content(json.dumps({"x": 1})))
+        self.assertIsNone(memory_router._parse_view_synthesis_content(json.dumps({"profile_md": "  "})))
+        self.assertIsNone(memory_router._parse_view_synthesis_content("not json"))
+        self.assertIsNone(memory_router._parse_view_synthesis_content(json.dumps({"x": 1})))
 
 
 class ViewSynthProducerTest(unittest.TestCase):
@@ -67,20 +67,20 @@ class ViewSynthProducerTest(unittest.TestCase):
             captured["budget"] = char_budget
             return "综合：用户是一名专注备考的研究生考生。"
 
-        with patch.object(reflection_router, "call_view_synthesis", fake_call):
-            synthesizer = vproducer.make_llm_synthesizer(object(), "m", mvs.VIEW_USER_MD)
-            view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD, synthesizer=synthesizer)
+        with patch.object(memory_router, "call_view_synthesis", fake_call):
+            synthesizer = vproducer.make_llm_synthesizer(object(), "m", mvs.VIEW_USER_PORTRAIT)
+            view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT, synthesizer=synthesizer)
 
         self.assertIn("我是一名考研学生", captured["units_text"])
-        self.assertEqual(captured["budget"], mvs.USER_MD_CHAR_BUDGET)
+        self.assertEqual(captured["budget"], mvs.USER_PORTRAIT_CHAR_BUDGET)
         self.assertFalse(view.used_fallback)
         self.assertIn("专注备考", view.content_md)
 
     def test_falls_back_to_template_when_llm_returns_none(self) -> None:
         self._core_unit("我是研究生")
-        with patch.object(reflection_router, "call_view_synthesis", lambda *a, **k: None):
-            synthesizer = vproducer.make_llm_synthesizer(object(), "m", mvs.VIEW_USER_MD)
-            view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD, synthesizer=synthesizer)
+        with patch.object(memory_router, "call_view_synthesis", lambda *a, **k: None):
+            synthesizer = vproducer.make_llm_synthesizer(object(), "m", mvs.VIEW_USER_PORTRAIT)
+            view = mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT, synthesizer=synthesizer)
         self.assertTrue(view.used_fallback)
         self.assertIn("## 身份", view.content_md)
 
@@ -113,7 +113,7 @@ class ViewSynthProducerTest(unittest.TestCase):
             captured["view_type"] = view_type
             return "难过时，我们先安静陪伴。"
 
-        with patch.object(reflection_router, "call_view_synthesis", fake_call):
+        with patch.object(memory_router, "call_view_synthesis", fake_call):
             results = vproducer.refresh_views_after_reconcile(object(), "m")
 
         self.assertEqual(1, len(results))

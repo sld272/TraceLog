@@ -12,8 +12,7 @@ helpers. Every mutating primitive:
 All primitives accept an optional ``conn`` so a reconcile batch can commit unit
 ops + cursor advance in one transaction; when omitted they open their own.
 
-No producer is wired yet — Phase 3 connects deep reflection to these. Phase 2
-only establishes the layer.
+The reconciler and workbench are the only writers of this layer.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from core import db
+from core import db, memory_events_service as mes
 
 # --- boundary vocabulary / validation --------------------------------------
 
@@ -44,6 +43,11 @@ class BoundaryError(ValueError):
 
 def _is_owner(scope: str) -> bool:
     return scope == OWNER_GLOBAL or scope.startswith("soul:")
+
+
+def validate_owner_scope(owner_scope: str) -> None:
+    if not _is_owner(owner_scope):
+        raise BoundaryError(f"非法 owner_scope：{owner_scope}")
 
 
 def validate_boundary(owner_scope: str, visibility_scope: str) -> None:
@@ -86,7 +90,7 @@ class MemoryUnit:
     source: str
     tier: str
     prompt_policy: str
-    profile_policy: str
+    portrait_policy: str
     importance: float
 
 
@@ -158,13 +162,13 @@ def _record_op(
     before: dict | None,
     after: dict | None,
     related_unit_id: str | None = None,
-    reflection_id: int | None = None,
+    reconcile_run_id: int | None = None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO memory_unit_ops(
             unit_id, related_unit_id, op, actor, before_json, after_json,
-            reflection_id, created_at
+            reconcile_run_id, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
@@ -174,7 +178,7 @@ def _record_op(
             actor,
             json.dumps(before, ensure_ascii=False) if before is not None else None,
             json.dumps(after, ensure_ascii=False) if after is not None else None,
-            reflection_id,
+            reconcile_run_id,
             db.now_ts(),
         ),
     )
@@ -196,9 +200,9 @@ def add_unit(
     sensitivity: str = "normal",
     source: str = "reflected",
     prompt_policy: str = "allow",
-    profile_policy: str = "auto",
+    portrait_policy: str = "auto",
     actor: str = "reconciler",
-    reflection_id: int | None = None,
+    reconcile_run_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> str:
     validate_boundary(owner_scope, visibility_scope)
@@ -217,14 +221,14 @@ def add_unit(
             """
             INSERT INTO memory_units(
                 id, owner_scope, visibility_scope, source_channel, prompt_policy,
-                type, content, confidence, source, status, tier, profile_policy,
+                type, content, confidence, source, status, tier, portrait_policy,
                 importance, sensitivity, first_seen, last_confirmed,
                 created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 unit_id, owner_scope, visibility_scope, source_channel, prompt_policy,
-                type, body, float(confidence), source, tier, profile_policy,
+                type, body, float(confidence), source, tier, portrait_policy,
                 float(importance), sensitivity, now, now, now, now,
             ),
         )
@@ -232,7 +236,7 @@ def add_unit(
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
             c, unit_id=unit_id, op="add", actor=actor,
-            before=None, after=after, reflection_id=reflection_id,
+            before=None, after=after, reconcile_run_id=reconcile_run_id,
         )
         _mark_bucket_view_stale(c, owner_scope, visibility_scope, now)
     return unit_id
@@ -245,7 +249,7 @@ def confirm_unit(
     confidence_delta: float = 0.05,
     confidence: float | None = None,
     actor: str = "reconciler",
-    reflection_id: int | None = None,
+    reconcile_run_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
     """Re-evidence an existing unit: bump last_confirmed and confidence, link new
@@ -274,7 +278,7 @@ def confirm_unit(
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
             c, unit_id=unit_id, op="confirm", actor=actor,
-            before=before, after=after, reflection_id=reflection_id,
+            before=before, after=after, reconcile_run_id=reconcile_run_id,
         )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
 
@@ -289,7 +293,7 @@ def revise_unit(
     tier: str | None = None,
     importance: float | None = None,
     actor: str = "reconciler",
-    reflection_id: int | None = None,
+    reconcile_run_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
     """In-place content update by the reconciler (branch D1). History is preserved
@@ -333,7 +337,7 @@ def revise_unit(
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
             c, unit_id=unit_id, op="revise", actor=actor,
-            before=before, after=after, reflection_id=reflection_id,
+            before=before, after=after, reconcile_run_id=reconcile_run_id,
         )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
 
@@ -344,10 +348,10 @@ def retract_unit(
     by: str = "model",
     reason: str | None = None,
     actor: str = "reconciler",
-    reflection_id: int | None = None,
+    reconcile_run_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    if by not in {"model", "user", "migration"}:
+    if by not in {"model", "user"}:
         raise ValueError(f"非法 retract by：{by}")
     status = "retracted_by_user" if by == "user" else "retracted_by_model"
     if by == "user" and reason not in {None, "false", "outdated"}:
@@ -370,15 +374,24 @@ def retract_unit(
         # synthesized text that still contains the deleted belief.
         c.execute(
             "UPDATE memory_units SET status = ?, retraction_reason = ?, "
-            "in_md_slice = 0, updated_at = ? WHERE id = ?",
+            "in_portrait = 0, updated_at = ? WHERE id = ?",
             (status, reason, now, unit_id),
         )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
             c, unit_id=unit_id, op="retract", actor=actor,
-            before=before, after=after, reflection_id=reflection_id,
+            before=before, after=after, reconcile_run_id=reconcile_run_id,
         )
+
+
+def visibility_rank(visibility_scope: str) -> int:
+    """Sensitivity ordering for the iron law: private memory outranks public.
+
+    A belief may be folded only into a survivor at least as private as itself —
+    never the reverse — so consolidation can never expose private memory through
+    a more-public surviving unit."""
+    return 2 if visibility_scope.startswith("private:") else 1
 
 
 def supersede_unit(
@@ -386,32 +399,39 @@ def supersede_unit(
     new_unit_id_: str,
     *,
     actor: str = "reconciler",
-    reflection_id: int | None = None,
+    reconcile_run_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Mark old unit superseded by a (contradiction) replacement (bi-temporal)."""
+    """Mark old unit superseded by a survivor (contradiction or merge).
+
+    Cross-visibility within ONE owner is allowed (so deep reflection can merge a
+    persona's public-layer belief into its private-layer one, decision 1A), but
+    the iron law is enforced: the survivor must be at least as private as the
+    unit it absorbs. Evidence is NOT moved (old keeps its own links), so no
+    cross-bucket evidence relinking occurs."""
     now = db.now_ts()
     with _conn_ctx(conn) as c:
         old = _get_unit_row(c, old_unit_id)
         new = _get_unit_row(c, new_unit_id_)
         if old is None or new is None:
             raise ValueError("supersede 的新旧 unit 必须都存在")
-        if not same_bucket(
-            old["owner_scope"], old["visibility_scope"],
-            new["owner_scope"], new["visibility_scope"],
-        ):
-            raise BoundaryError("supersede 只能发生在同一 bucket 内")
+        if old["owner_scope"] != new["owner_scope"]:
+            raise BoundaryError("supersede 只能发生在同一 owner（主体/人格）内")
+        if visibility_rank(new["visibility_scope"]) < visibility_rank(old["visibility_scope"]):
+            raise BoundaryError(
+                "supersede 违反铁律：survivor 不能比被取代的 unit 更不私密"
+            )
         before = _row_to_dict(old)
         c.execute(
             "UPDATE memory_units SET status = 'superseded', superseded_by = ?, "
-            "in_md_slice = 0, updated_at = ? WHERE id = ?",
+            "in_portrait = 0, updated_at = ? WHERE id = ?",
             (new_unit_id_, now, old_unit_id),
         )
         after = _row_to_dict(_get_unit_row(c, old_unit_id))
         _record_op(
             c, unit_id=old_unit_id, op="supersede", actor=actor,
             before=before, after=after, related_unit_id=new_unit_id_,
-            reflection_id=reflection_id,
+            reconcile_run_id=reconcile_run_id,
         )
         _mark_bucket_view_stale(c, old["owner_scope"], old["visibility_scope"], now)
 
@@ -420,7 +440,7 @@ def retain_unit(
     unit_id: str,
     *,
     actor: str = "reconciler",
-    reflection_id: int | None = None,
+    reconcile_run_id: int | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
     """Restore a challenged unit without changing its claim or evidence."""
@@ -445,9 +465,84 @@ def retain_unit(
             actor=actor,
             before=before,
             after=after,
-            reflection_id=reflection_id,
+            reconcile_run_id=reconcile_run_id,
         )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+
+
+# --- reflection (P2 deep-reflection) primitives ----------------------------
+
+def decay_unit(
+    unit_id: str,
+    *,
+    actor: str = "reflection",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Deep reflection retires a stale, non-core reflected belief to ``dormant``.
+
+    A dormant unit leaves every read path and the reconcile comparison set (which
+    only loads active/challenged), so it stops bloating prompts and growth —
+    while staying as history that a future confirm can revive. Only callable on
+    an active reflected unit; identity-floor (core) and user-authored beliefs are
+    out of scope and rejected by the caller, never decayed here silently."""
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        if row["status"] != "active":
+            raise ValueError("decay 只能作用于 active unit")
+        before = _row_to_dict(row)
+        c.execute(
+            "UPDATE memory_units SET status = 'dormant', in_portrait = 0, updated_at = ? "
+            "WHERE id = ?",
+            (now, unit_id),
+        )
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="decay", actor=actor, before=before, after=after
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+
+
+def promote_unit_tier(
+    unit_id: str,
+    *,
+    tier: str,
+    actor: str = "reflection",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Deep reflection sediments a unit's tier (e.g. contextual -> core after it
+    survives repeated confirms). Tier only; content and evidence are untouched.
+    Recomputes portrait membership so a promotion can newly enter the portrait."""
+    if tier not in {"core", "contextual", "episodic"}:
+        raise ValueError(f"非法 tier：{tier}")
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        if row["status"] != "active":
+            raise ValueError("promote 只能作用于 active unit")
+        before = _row_to_dict(row)
+        c.execute(
+            "UPDATE memory_units SET tier = ?, updated_at = ? WHERE id = ?",
+            (tier, now, unit_id),
+        )
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="promote", actor=actor, before=before, after=after
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+
+
+def count_confirm_ops(unit_id: str, *, conn: sqlite3.Connection | None = None) -> int:
+    """How many times reconcile re-evidenced this unit — the survival signal deep
+    reflection uses to decide a contextual belief has sedimented into core."""
+    sql = "SELECT COUNT(*) AS n FROM memory_unit_ops WHERE unit_id = ? AND op = 'confirm'"
+    if conn is not None:
+        return int(conn.execute(sql, (unit_id,)).fetchone()["n"])
+    return int(db.query_one(sql, (unit_id,))["n"])
 
 
 # --- user-facing workbench primitives --------------------------------------
@@ -573,7 +668,9 @@ def update_unit(
         # confidence/source/content); recompute the slice now so it takes effect
         # immediately rather than waiting for the next reconcile.
         from core import memory_view_service as _mvs  # local import avoids cycle
-        _mvs.recompute_slice(row["owner_scope"], row["visibility_scope"], conn=c)
+        _mvs.recompute_portrait_membership(
+            row["owner_scope"], row["visibility_scope"], conn=c
+        )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
@@ -592,7 +689,7 @@ def set_prompt_policy(
     """Set whether a unit may be used in any reply prompt ('不要提到该记忆').
 
     ``no_prompt`` keeps the unit active and reconcilable but removes it from both
-    retrieval and the portrait; it is orthogonal to ``profile_policy``."""
+    retrieval and the portrait; it is orthogonal to ``portrait_policy``."""
     if prompt_policy not in {"allow", "no_prompt"}:
         raise ValueError(f"非法 prompt_policy：{prompt_policy}")
     now = db.now_ts()
@@ -605,11 +702,13 @@ def set_prompt_policy(
             "UPDATE memory_units SET prompt_policy = ?, updated_at = ? WHERE id = ?",
             (prompt_policy, now, unit_id),
         )
-        # recompute_slice respects prompt_policy in both directions: no_prompt drops
+        # Portrait selection respects prompt_policy in both directions: no_prompt drops
         # it from the slice, allow restores it if it otherwise qualifies — so
         # re-allowing a memory brings it back without waiting for a reconcile.
         from core import memory_view_service as _mvs  # local import avoids cycle
-        _mvs.recompute_slice(row["owner_scope"], row["visibility_scope"], conn=c)
+        _mvs.recompute_portrait_membership(
+            row["owner_scope"], row["visibility_scope"], conn=c
+        )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
@@ -618,19 +717,19 @@ def set_prompt_policy(
         )
 
 
-def set_profile_policy(
+def set_portrait_policy(
     unit_id: str,
     *,
-    profile_policy: str,
+    portrait_policy: str,
     actor: str = "user",
     conn: sqlite3.Connection | None = None,
 ) -> None:
     """Set whether a unit is forced in/out of the portrait ('不进画像').
 
-    ``force_exclude`` only keeps the unit out of the md portrait; it can still be
+    ``force_exclude`` only keeps the unit out of the portrait; it can still be
     retrieved. Orthogonal to ``prompt_policy``."""
-    if profile_policy not in {"auto", "force_include", "force_exclude"}:
-        raise ValueError(f"非法 profile_policy：{profile_policy}")
+    if portrait_policy not in {"auto", "force_include", "force_exclude"}:
+        raise ValueError(f"非法 portrait_policy：{portrait_policy}")
     now = db.now_ts()
     with _conn_ctx(conn) as c:
         row = _get_unit_row(c, unit_id)
@@ -638,14 +737,16 @@ def set_profile_policy(
             raise ValueError(f"unit 不存在：{unit_id}")
         before = _row_to_dict(row)
         c.execute(
-            "UPDATE memory_units SET profile_policy = ?, updated_at = ? WHERE id = ?",
-            (profile_policy, now, unit_id),
+            "UPDATE memory_units SET portrait_policy = ?, updated_at = ? WHERE id = ?",
+            (portrait_policy, now, unit_id),
         )
-        # recompute_slice respects profile_policy in both directions: force_exclude
+        # Portrait selection respects portrait_policy in both directions: force_exclude
         # drops it now, force_include / auto restore it if it qualifies — so
         # re-including a memory brings it back without waiting for a reconcile.
         from core import memory_view_service as _mvs  # local import avoids cycle
-        _mvs.recompute_slice(row["owner_scope"], row["visibility_scope"], conn=c)
+        _mvs.recompute_portrait_membership(
+            row["owner_scope"], row["visibility_scope"], conn=c
+        )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
@@ -669,19 +770,28 @@ def challenge_units_for_source(
         raise ValueError(f"trigger event 不存在：{trigger_event_id}")
     if trigger["op"] not in {"edit", "delete"}:
         return []
+    # A comment has two lenses (comment_message + comment_relationship) over the
+    # SAME utterance; editing/deleting it must challenge both the user-fact unit
+    # and the relationship unit, so match across the grouped source types.
+    source_types = (
+        mes.COMMENT_SOURCE_TYPES
+        if trigger["source_type"] in mes.COMMENT_SOURCE_TYPES
+        else (trigger["source_type"],)
+    )
+    placeholders = ",".join("?" for _ in source_types)
     rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT u.*
         FROM memory_units u
         JOIN memory_unit_evidence ue ON ue.unit_id = u.id
         JOIN memory_ingest_events e ON e.id = ue.event_id
-        WHERE e.source_type = ? AND e.source_id = ?
+        WHERE e.source_type IN ({placeholders}) AND e.source_id = ?
           AND ue.review_pending = 0
-          AND u.source IN ('reflected','migrated','user_authored')
+          AND u.source IN ('reflected','user_authored')
           AND u.status IN ('active','challenged')
         ORDER BY u.id
         """,
-        (trigger["source_type"], trigger["source_id"]),
+        (*source_types, trigger["source_id"]),
     ).fetchall()
     now = db.now_ts()
     challenged: list[str] = []
@@ -690,7 +800,7 @@ def challenge_units_for_source(
         if row["status"] == "active":
             before = _row_to_dict(row)
             conn.execute(
-                "UPDATE memory_units SET status = 'challenged', in_md_slice = 0, updated_at = ? "
+                "UPDATE memory_units SET status = 'challenged', in_portrait = 0, updated_at = ? "
                 "WHERE id = ?",
                 (now, unit_id),
             )
@@ -726,17 +836,19 @@ def _mark_bucket_view_stale(
         from core import memory_view_service as _mvs
         view = conn.execute(
             "SELECT * FROM memory_views "
-            "WHERE owner_scope = ? AND visibility_scope = ? AND view_type = 'user_md'",
+            "WHERE owner_scope = ? AND visibility_scope = ? AND view_type = 'user_portrait'",
             (owner_scope, visibility_scope),
         ).fetchone()
         if view is not None:
-            _mvs.recompute_slice(owner_scope, visibility_scope, conn=conn)
+            _mvs.recompute_portrait_membership(
+                owner_scope, visibility_scope, conn=conn
+            )
             units = conn.execute(
                 """
                 SELECT *
                 FROM memory_units
                 WHERE owner_scope = ? AND visibility_scope = ?
-                  AND in_md_slice = 1 AND status = 'active'
+                  AND in_portrait = 1 AND status = 'active'
                 """,
                 (owner_scope, visibility_scope),
             ).fetchall()
@@ -773,7 +885,7 @@ def list_units(
     type: str | None = None,
     tier: str | None = None,
     prompt_policy: str | None = None,
-    in_md_slice: int | None = None,
+    in_portrait: int | None = None,
     limit: int = 500,
 ) -> list[sqlite3.Row]:
     clauses: list[str] = []
@@ -796,9 +908,9 @@ def list_units(
     if prompt_policy is not None:
         clauses.append("prompt_policy = ?")
         params.append(prompt_policy)
-    if in_md_slice is not None:
-        clauses.append("in_md_slice = ?")
-        params.append(int(in_md_slice))
+    if in_portrait is not None:
+        clauses.append("in_portrait = ?")
+        params.append(int(in_portrait))
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(int(limit))
     return db.query_all(
@@ -816,6 +928,19 @@ def list_active_units_in_bucket(owner_scope: str, visibility_scope: str) -> list
         ORDER BY id ASC
         """,
         (owner_scope, visibility_scope),
+    )
+
+
+def list_active_units_for_owner(owner_scope: str) -> list[sqlite3.Row]:
+    """All active units of one owner across BOTH visibility layers — the
+    comparison set for owner-level deep-reflection consolidation."""
+    return db.query_all(
+        """
+        SELECT * FROM memory_units
+        WHERE owner_scope = ? AND status = 'active'
+        ORDER BY id ASC
+        """,
+        (owner_scope,),
     )
 
 
@@ -1008,15 +1133,15 @@ def get_unit_evidence(unit_id: str) -> list[sqlite3.Row]:
 
 def list_unit_ops(
     *,
-    reflection_id: int | None = None,
+    reconcile_run_id: int | None = None,
     unit_id: str | None = None,
     limit: int = 500,
 ) -> list[sqlite3.Row]:
     clauses: list[str] = []
     params: list = []
-    if reflection_id is not None:
-        clauses.append("reflection_id = ?")
-        params.append(int(reflection_id))
+    if reconcile_run_id is not None:
+        clauses.append("reconcile_run_id = ?")
+        params.append(int(reconcile_run_id))
     if unit_id is not None:
         clauses.append("unit_id = ?")
         params.append(unit_id)

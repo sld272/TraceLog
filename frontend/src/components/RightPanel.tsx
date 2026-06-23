@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  type ReflectionScope,
-  type SoulReflectionScope,
+  type MemoryOperation,
   type Todo,
+  listMemoryOperations,
 } from '@/api/client'
 import { isTodoDone, getTodayKey } from '@/utils/todo'
-import { formatDateLabel, formatDateScope, formatUnixScope } from '@/utils/date'
+import { formatDateLabel, formatSmartTime } from '@/utils/date'
+import { ChevronRightIcon } from '@/components/icons'
 import styles from './RightPanel.module.css'
 
 interface PendingCompletedTodo {
@@ -15,29 +16,42 @@ interface PendingCompletedTodo {
 
 interface RightPanelProps {
   todos: Todo[]
-  globalReflection: ReflectionScope | null
-  soulReflections: SoulReflectionScope[]
+  searchQuery: string
+  onSearchQueryChange: (value: string) => void
   onTodoToggle: (todo: Todo) => Promise<void> | void
   onOpenTodos: () => void
-  onOpenReflections: () => void
+  onOpenMemory: () => void
 }
 
 export function RightPanel({
   todos,
-  globalReflection,
-  soulReflections,
+  searchQuery,
+  onSearchQueryChange,
   onTodoToggle,
   onOpenTodos,
-  onOpenReflections,
+  onOpenMemory,
 }: RightPanelProps) {
   return (
     <div className={styles.panel}>
+      <div className={styles.panelSearch}>
+        <SearchIcon />
+        <input
+          value={searchQuery}
+          onChange={(event) => onSearchQueryChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') onSearchQueryChange('')
+          }}
+          placeholder="搜索动态…"
+          aria-label="搜索动态"
+        />
+        {searchQuery && (
+          <button className={styles.panelSearchClear} onClick={() => onSearchQueryChange('')} aria-label="清空搜索" title="清空搜索">
+            ×
+          </button>
+        )}
+      </div>
       <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} onOpenTodos={onOpenTodos} />
-      <ReflectionQueueCard
-        globalReflection={globalReflection}
-        soulReflections={soulReflections}
-        onOpenReflections={onOpenReflections}
-      />
+      <MemoryPulseCard onOpenMemory={onOpenMemory} />
     </div>
   )
 }
@@ -128,7 +142,7 @@ function TodayTodosCard({
 
   return (
     <section className={styles.card}>
-      <PanelHeader title="待办速览" />
+      <PanelHeader title="待办速览" onMore={onOpenTodos} />
       <div className={styles.itemList}>
         {displayTodos.length > 0 ? (
           displayTodos.map((todo) => {
@@ -171,72 +185,93 @@ function TodayTodosCard({
         ) : (
           <p className={styles.empty}>今天没有待办。记录里提到的事会自动出现在这里。</p>
         )}
-        <button type="button" className={styles.queueAction} onClick={onOpenTodos}>
-          查看
-        </button>
         {error && <p className={styles.inlineError}>{error}</p>}
       </div>
     </section>
   )
 }
 
-function ReflectionQueueCard({
-  globalReflection,
-  soulReflections,
-  onOpenReflections,
-}: {
-  globalReflection: ReflectionScope | null
-  soulReflections: SoulReflectionScope[]
-  onOpenReflections: () => void
-}) {
-  const globalCount = globalReflection?.post_ids.length ?? 0
-  const soulCount = soulReflections.reduce(
-    (total, scope) => total + Math.max(scope.interaction_count, 0),
-    0,
-  )
-  const hasQueue = globalCount > 0 || soulCount > 0
+function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
+  const [operations, setOperations] = useState<MemoryOperation[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    void listMemoryOperations(6)
+      .then((data) => {
+        if (!cancelled) setOperations(data.slice().reverse())
+      })
+      .catch(() => {
+        /* 右栏保持安静：拿不到记忆变化时不打扰用户 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   return (
     <section className={styles.card}>
-      <PanelHeader title="待整理" />
+      <PanelHeader title="最近记忆变化" onMore={onOpenMemory} />
       <div className={styles.itemList}>
-        {hasQueue ? (
-          <div className={styles.queueRows}>
-            <QueueRow
-              label="公开记录"
-              count={globalCount}
-              detail={formatDateScope(globalReflection?.scope_start, globalReflection?.scope_end)}
-            />
-            <QueueRow label="人格回应" count={soulCount} detail={formatSoulScope(soulReflections)} />
+        {operations.length > 0 ? (
+          <div className={styles.pulseList}>
+            {operations.map((operation) => (
+              <button key={operation.id} type="button" className={styles.pulse} onClick={onOpenMemory}>
+                <span className={styles.pulseTitle}>{operationTitle(operation)}</span>
+                <span className={styles.pulseMeta}>{operationMeta(operation)}</span>
+              </button>
+            ))}
           </div>
         ) : (
-          <p className={styles.empty}>没有待整理内容</p>
+          <p className={styles.empty}>还没有记忆变化。和 AI 好友多聊聊，TA 会慢慢记住你。</p>
         )}
-        <p className={styles.queueHint}>让 AI 阅读新增记录，更新对你的长期理解。</p>
-        <button type="button" className={styles.queueAction} onClick={onOpenReflections}>
-          去整理
-        </button>
       </div>
     </section>
   )
 }
 
-function PanelHeader({ title }: { title: string }) {
+function operationTitle(operation: MemoryOperation): string {
+  const content = operation.after?.content ?? operation.before?.content
+  if (typeof content === 'string' && content.trim()) return content
+  return `记忆 ${operation.unit_id}`
+}
+
+function operationMeta(operation: MemoryOperation): string {
+  return `${operationLabel(operation.op, operation.actor)} · ${formatSmartTime(operation.created_at)}`
+}
+
+function operationLabel(op: string, actor: string): string {
+  const labels: Record<string, string> = {
+    add: '新增',
+    confirm: '确认',
+    revise: '修订',
+    retract: '撤回',
+    retain: '保留',
+    user_create: '手动新增',
+    user_edit: '手动编辑',
+    user_delete: '手动删除',
+  }
+  return labels[op] ?? (actor === 'user' ? '手动调整' : 'AI 对账')
+}
+
+function SearchIcon() {
   return (
-    <div className={styles.cardHeader}>
-      <h3 className={styles.cardTitle}>{title}</h3>
-    </div>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.35-4.35" />
+    </svg>
   )
 }
 
-function QueueRow({ label, count, detail }: { label: string; count: number; detail: string }) {
+function PanelHeader({ title, onMore }: { title: string; onMore?: () => void }) {
   return (
-    <div className={styles.queueRow}>
-      <div>
-        <p>{label}</p>
-        <span>{detail}</span>
-      </div>
-      <strong>{count} 条</strong>
+    <div className={styles.cardHeader}>
+      <h3 className={styles.cardTitle}>{title}</h3>
+      {onMore && (
+        <button className={styles.cardMore} type="button" onClick={onMore}>
+          查看更多
+          <ChevronRightIcon width={13} height={13} />
+        </button>
+      )}
     </div>
   )
 }
@@ -253,12 +288,4 @@ function todoMeta(todo: Todo): string {
   if (!todo.date) return time ? `无日期 · ${time}` : '无日期'
   const dateLabel = formatDateLabel(todo.date, getTodayKey())
   return time ? `${dateLabel} ${time}` : dateLabel
-}
-
-function formatSoulScope(soulReflections: SoulReflectionScope[]): string {
-  const activeScopes = soulReflections.filter((scope) => scope.interaction_count > 0)
-  if (activeScopes.length === 0) return '等待整理'
-  const start = Math.min(...activeScopes.map((scope) => scope.scope_start))
-  const end = Math.max(...activeScopes.map((scope) => scope.scope_end))
-  return formatUnixScope(start, end)
 }

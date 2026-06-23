@@ -7,7 +7,7 @@ from pathlib import Path
 
 from unittest.mock import patch
 
-from core import context_builder, db, goal_service, logging_service, profile_service, soul_memory_service, soul_service, tool_config_service, web_search_gate, web_search_service
+from core import context_builder, db, goal_service, logging_service, memory_unit_service, memory_view_service, soul_service, tool_config_service, web_search_gate, web_search_service
 
 
 class ContextBuilderTest(unittest.TestCase):
@@ -17,34 +17,39 @@ class ContextBuilderTest(unittest.TestCase):
 
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_user_md_path = profile_service.USER_MD_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
-        self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
         self.old_web_search_config = web_search_service.CONFIG_FILE
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
-        profile_service.USER_MD_PATH = str(self.workspace / "user.md")
         soul_service.SOULS_DIR = self.workspace / "souls"
-        soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
-        soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         web_search_service.CONFIG_FILE = str(Path(self.tmp.name) / "config.json")
 
         db.init_db()
         logging_service.init_logging({"enabled": True})
         self.workspace.mkdir(parents=True, exist_ok=True)
-        (self.workspace / "user.md").write_text("# 用户档案\n\n## 基本信息\n测试用户\n", encoding="utf-8")
         soul_service.sync_souls()
+        memory_unit_service.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="user",
+            type="identity",
+            content="测试用户",
+            confidence=1.0,
+            tier="core",
+            importance=1.0,
+            source="user_authored",
+            actor="user",
+        )
+        memory_view_service.synthesize_view(
+            "global", "public", memory_view_service.VIEW_USER_PORTRAIT
+        )
 
     def tearDown(self) -> None:
         logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        profile_service.USER_MD_PATH = self.old_user_md_path
         soul_service.SOULS_DIR = self.old_souls_dir
-        soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
-        soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         web_search_service.CONFIG_FILE = self.old_web_search_config
         self.tmp.cleanup()
 

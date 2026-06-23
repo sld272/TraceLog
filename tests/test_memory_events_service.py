@@ -81,13 +81,13 @@ class MemoryEventsServiceTest(unittest.TestCase):
         self.assertEqual(post["source_revision"], 1)
 
         user_comment = by_source[("comment_message", "1")]
-        self.assertEqual(user_comment["owner_scope"], "soul:luna")  # owned by the thread's soul
-        self.assertEqual(user_comment["visibility_scope"], "thread:20260101-001")
+        self.assertEqual(user_comment["owner_scope"], "global")  # public comments join the global portrait
+        self.assertEqual(user_comment["visibility_scope"], "public")
         self.assertEqual(user_comment["author"], "user")
 
         soul_comment = by_source[("comment_message", "2")]
-        self.assertEqual(soul_comment["owner_scope"], "soul:luna")
-        self.assertEqual(soul_comment["visibility_scope"], "thread:20260101-001")
+        self.assertEqual(soul_comment["owner_scope"], "global")
+        self.assertEqual(soul_comment["visibility_scope"], "public")
 
         chat = by_source[("chat_message", "1")]
         self.assertEqual(chat["owner_scope"], "soul:luna")
@@ -101,13 +101,30 @@ class MemoryEventsServiceTest(unittest.TestCase):
             second = mes.backfill_from_existing(conn)
         self.assertEqual(first, 4)
         self.assertEqual(second, 0)
-        self.assertEqual(len(self._all_events()), 4)
+        # 4 business rows -> 5 events: the one user comment also emits a parallel
+        # comment_relationship event (route A) into its persona's public bucket.
+        self.assertEqual(len(self._all_events()), 5)
 
-    def test_init_db_autoruns_backfill(self) -> None:
-        # init_db already ran in setUp; seed then re-init to trigger migration backfill.
-        self._seed_business_rows()
-        db.init_db()
-        self.assertEqual(len(self._all_events()), 4)
+    def test_user_comment_fans_out_relationship_event(self) -> None:
+        with db.transaction() as conn:
+            mes.record_comment_mutation(
+                conn, comment_id=1, post_id="p1", soul_name="luna",
+                role="user", op="create", content="我有点焦虑", occurred_at=1.0,
+            )
+            mes.record_comment_mutation(
+                conn, comment_id=2, post_id="p1", soul_name="luna",
+                role="assistant", op="create", content="我懂你", occurred_at=2.0,
+            )
+        by = {
+            (r["source_type"], r["source_id"], r["owner_scope"], r["visibility_scope"])
+            for r in self._all_events()
+        }
+        # user comment fans out to both lenses
+        self.assertIn(("comment_message", "1", "global", "public"), by)
+        self.assertIn(("comment_relationship", "1", "soul:luna", "public"), by)
+        # the soul's own reply only carries the user-fact lens (provenance)
+        self.assertIn(("comment_message", "2", "global", "public"), by)
+        self.assertNotIn(("comment_relationship", "2", "soul:luna", "public"), by)
 
     def test_content_hash_recorded(self) -> None:
         self._seed_business_rows()

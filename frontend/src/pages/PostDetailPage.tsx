@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { deletePost, type Attachment, type Post } from '@/api/client'
+import {
+  deletePost,
+  listPendingSuggestions,
+  postIdFromEvidenceRef,
+  type Attachment,
+  type Post,
+  type Suggestion,
+} from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Notice } from '@/components/Notice'
@@ -29,7 +36,26 @@ export function PostDetailPage({
   const detail = usePostDetail(postId, onTodosChanged)
   const [deletingPost, setDeletingPost] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const highlightDoneRef = useRef(false)
+
+  /* Pending suggestions belong to the post itself; fetch them independently
+     so the prompt shows under the post regardless of comment state. */
+  const latestEventType = detail.post?.latest_event_type
+  useEffect(() => {
+    let cancelled = false
+    listPendingSuggestions()
+      .then((all) => {
+        if (cancelled) return
+        setSuggestions(all.filter((item) => postIdFromEvidenceRef(item.evidence_ref) === postId))
+      })
+      .catch(() => {
+        /* keep prior suggestions on a transient failure */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [postId, latestEventType])
   const [confirmDialog, setConfirmDialog] = useState<{
     title: string
     message: string
@@ -193,6 +219,7 @@ export function PostDetailPage({
             post={postForCard}
             variant="detail"
             comments={detail.comments}
+            suggestions={suggestions}
             commentConversations={detail.conversations}
             busyCommentId={detail.busyCommentId}
             deletingPost={deletingPost}

@@ -1,15 +1,15 @@
-"""Bridges memory_reconciler's op_producer seam to the reflection_router LLM.
+"""Bridges memory_reconciler's op-producer seam to the memory LLM router.
 
 memory_reconciler.reconcile_bucket calls op_producer(boundary, events,
 active_units, tombstones) outside its write transaction. This module formats
 those structured inputs into prompt text and returns the parsed op batch, so
 the reconcile engine stays LLM-free and the prompt lives with the other
-reflection prompts.
+memory prompts.
 """
 
 from __future__ import annotations
 
-from core.llm import reflection_router
+from core.llm import memory_router
 from core.llm.types import LLMClient
 
 
@@ -36,19 +36,25 @@ def describe_scene(boundary: dict) -> str:
     vis = str(boundary.get("visibility_scope") or "")
     soul = _soul_of(owner)
     if vis == "public" and owner == "global":
-        return "用户的公开帖子。抽取关于【用户本人】的信念。"
-    if vis.startswith("thread:") and soul:
+        return (
+            "用户的公开帖子与公开评论。抽取关于【用户本人】的信念"
+            "（身份、偏好、目标、持续处境）；某个人格专属的称呼或约定不是用户事实，跳过。"
+        )
+    if vis == "public" and soul:
+        # Route A: the persona's public relationship lens over the user's comments
+        # with this soul. Only the relationship texture beyond the public baseline.
         return (
             f"用户在 AI 人格【{soul}】的公开评论区与其互动。"
-            f"抽取关于【用户】（以及用户与{soul}的关系、用户对{soul}的要求）的信念；"
-            "特别留意稳定的称呼、互动约定、语气节奏、边界和默契；"
+            f"只抽取【用户与{soul}的相处】在公开基线之上的增量——稳定称呼、互动约定、"
+            f"回应偏好、语气节奏、边界与默契，以及用户对{soul}的专属要求；"
+            f"用户的客观事实（身份/偏好/处境）交给主记忆，这里不要重复；"
             f"绝不要描述{soul}自身的设定或性格。"
         )
     if vis.startswith("private:soul:") and soul:
         return (
             f"用户与 AI 人格【{soul}】的私聊。"
-            f"抽取关于【用户】（以及用户与{soul}的关系、用户对{soul}的要求）的信念；"
-            "特别留意稳定的称呼、互动约定、语气节奏、边界和默契；"
+            f"抽取【用户与{soul}的相处】以及用户在私聊中额外透露的信息——"
+            "稳定称呼、互动约定、语气节奏、边界、默契，以及私下才说的处境；"
             f"绝不要描述{soul}自身的设定或性格。"
         )
     return f"owner={owner}, visibility={vis}。抽取关于【用户】的信念。"
@@ -127,67 +133,12 @@ def _format_relink_evidence(evidence: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _format_legacy_migration_evidence(evidence: list[dict]) -> str:
-    if not evidence:
-        return ""
-    parts: list[str] = []
-    for item in evidence:
-        snapshot = str(item.get("content_snapshot") or "").strip()[:600]
-        if not snapshot:
-            continue
-        text = (
-            f"- event_id={item.get('id')} | bucket={item.get('visibility_scope')} "
-            f"| {item.get('source_channel')}\n  【用户】{snapshot}"
-        )
-        context = item.get("conversation_context") or []
-        if context:
-            text += "\n  对话上下文（仅帮助理解，不能作为 evidence 引用）："
-            for message in context:
-                role = "用户" if message.get("role") == "user" else "SOUL"
-                body = str(message.get("content") or "").strip()[:300]
-                if body:
-                    text += f"\n    - 【{role}】{body}"
-        parts.append(text)
-    return "\n".join(parts)
-
-
-def make_legacy_relationship_judge(
-    client: LLMClient,
-    model: str,
-    *,
-    trace_context: dict | None = None,
-):
-    def judge(*, candidate: dict, evidence: list[dict]) -> dict:
-        ctx = dict(trace_context or {})
-        ctx.update(
-            {
-                "unit_id": candidate.get("id"),
-                "owner_scope": candidate.get("owner_scope"),
-                "evidence_count": len(evidence),
-            }
-        )
-        result = reflection_router.call_legacy_relationship_migration(
-            client,
-            model,
-            candidate_text=str(candidate.get("content") or ""),
-            evidence_text=_format_legacy_migration_evidence(evidence),
-            trace_context=ctx,
-        )
-        if result is None:
-            raise ReconcileProducerError(
-                "legacy relationship migration LLM call failed or returned invalid JSON"
-            )
-        return result
-
-    return judge
-
-
 def make_relink_judge(client: LLMClient, model: str, *, trace_context: dict | None = None):
     """Return a narrow judge for the post-edit re-link pass: given a unit's new
     content and its candidate evidence, decide which links still support it."""
 
     def judge(*, content: str, evidence: list[dict]) -> dict:
-        result = reflection_router.call_memory_relink(
+        result = memory_router.call_memory_relink(
             client,
             model,
             content=content,
@@ -203,6 +154,38 @@ def make_relink_judge(client: LLMClient, model: str, *, trace_context: dict | No
     return judge
 
 
+def _format_consolidation_units(units: list[dict]) -> str:
+    parts = []
+    for unit in units:
+        visibility = str(unit.get("visibility_scope") or "")
+        layer = "private" if visibility.startswith("private:") else "public"
+        parts.append(
+            f"- unit_id={unit.get('id')} | visibility={layer} | type={unit.get('type')}\n"
+            f"  {unit.get('content')}"
+        )
+    return "\n".join(parts)
+
+
+def make_consolidation_producer(client: LLMClient, model: str, *, trace_context: dict | None = None):
+    """Return a consolidation producer for memory_reflection.consolidate_persona:
+    given an owner's active units, propose merge/retract ops."""
+
+    def producer(*, owner_scope: str, units: list[dict]):
+        result = memory_router.call_memory_consolidation(
+            client,
+            model,
+            units_text=_format_consolidation_units(units),
+            trace_context={**(trace_context or {}), "owner_scope": owner_scope},
+        )
+        if result is None:
+            raise ReconcileProducerError(
+                "memory_consolidation LLM call failed or returned unparseable JSON"
+            )
+        return result
+
+    return producer
+
+
 def make_llm_op_producer(client: LLMClient, model: str, *, trace_context: dict | None = None):
     """Return an op_producer closure suitable for reconcile_bucket."""
 
@@ -211,7 +194,7 @@ def make_llm_op_producer(client: LLMClient, model: str, *, trace_context: dict |
         ctx = dict(trace_context or {})
         ctx.update(boundary)
         ctx["event_count"] = len(events)
-        result = reflection_router.call_memory_reconcile(
+        result = memory_router.call_memory_reconcile(
             client,
             model,
             boundary_text=boundary_text,

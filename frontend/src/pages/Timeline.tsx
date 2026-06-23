@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import {
   type Attachment,
   type Comment,
@@ -6,13 +6,16 @@ import {
   type PostDetail,
   type SearchMode,
   type SearchResultItem,
+  type Suggestion,
   createPost,
   deleteCommentMessage,
   deletePost,
   getCommentConversation,
   getPost,
   listCommentConversations,
+  listPendingSuggestions,
   listPosts,
+  postIdFromEvidenceRef,
   retryJob,
   searchPosts,
   sendCommentMessage,
@@ -43,6 +46,8 @@ interface TimelineProps {
   modelConfigured?: boolean | null
   onOpenSettings?: () => void
   postMutationSignal?: PostMutationSignal | null
+  /** Search is driven by the right panel input; query is lifted to App. */
+  searchQuery: string
 }
 
 export function Timeline({
@@ -51,9 +56,11 @@ export function Timeline({
   modelConfigured,
   onOpenSettings,
   postMutationSignal,
+  searchQuery,
 }: TimelineProps) {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
+  const [postSuggestions, setPostSuggestions] = useState<Record<string, Suggestion[]>>({})
   const [postCommentConversations, setPostCommentConversations] = useState<Record<string, Record<string, CommentConversationState>>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -62,7 +69,6 @@ export function Timeline({
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null)
   const [expandingPostIds, setExpandingPostIds] = useState<Record<string, boolean>>({})
   const [expandErrors, setExpandErrors] = useState<Record<string, string | null>>({})
-  const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([])
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [semanticAvailable, setSemanticAvailable] = useState<boolean | null>(null)
@@ -86,12 +92,31 @@ export function Timeline({
   const trimmedSearchQuery = searchQuery.trim()
   const searching = trimmedSearchQuery.length > 0
 
+  /* Pending suggestions belong to the post (not its comments), so they are
+     fetched independently and keyed by post id — this keeps the prompt under
+     the post visible regardless of whether comments are loaded/expanded. */
+  const refreshSuggestions = useCallback(async () => {
+    try {
+      const all = await listPendingSuggestions()
+      const grouped: Record<string, Suggestion[]> = {}
+      for (const suggestion of all) {
+        const postId = postIdFromEvidenceRef(suggestion.evidence_ref)
+        if (!postId) continue
+        ;(grouped[postId] ??= []).push(suggestion)
+      }
+      setPostSuggestions(grouped)
+    } catch {
+      /* keep the previous suggestions on a transient failure */
+    }
+  }, [])
+
   const fetchPosts = useCallback(async () => {
     try {
       const data = await listPosts(API_LIMITS.POSTS_DEFAULT, 0)
       setPosts(data)
       setHasMorePosts(data.length >= API_LIMITS.POSTS_DEFAULT)
       setError(null)
+      void refreshSuggestions()
       data.forEach((post) => {
         if (isActivePipeline(post)) void restorePostStream(post.post_id)
       })
@@ -100,7 +125,7 @@ export function Timeline({
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [refreshSuggestions])
 
   useEffect(() => {
     fetchPosts()
@@ -144,6 +169,7 @@ export function Timeline({
   }, [])
 
   useEffect(() => {
+    lastHybridQueryRef.current = null
     searchTimerRef.current = window.setTimeout(() => {
       searchTimerRef.current = null
       void runSearch(searchQuery, 'keyword')
@@ -159,23 +185,6 @@ export function Timeline({
     }
   }, [])
 
-  const clearSearch = () => {
-    searchTokenRef.current += 1
-    lastHybridQueryRef.current = null
-    setSearchQuery('')
-    setSearchResults([])
-    setSearchMode('keyword')
-    setSemanticAvailable(null)
-    setSearchError(null)
-    setSearchLoading(false)
-  }
-
-  const handleSearchChange = (value: string) => {
-    setSearchQuery(value)
-    setSearchMode('keyword')
-    lastHybridQueryRef.current = null
-  }
-
   const runDeepSearch = () => {
     const clean = searchQuery.trim()
     if (!clean) return
@@ -183,18 +192,6 @@ export function Timeline({
     clearSearchTimer()
     lastHybridQueryRef.current = clean
     void runSearch(clean, 'hybrid')
-  }
-
-  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing) return
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      runDeepSearch()
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      clearSearch()
-    }
   }
 
   const handleSubmit = async (content: string, attachments: Attachment[]) => {
@@ -290,6 +287,7 @@ export function Timeline({
 
         if (shouldRefreshPostDetail(event)) {
           void refreshPostDetail(postId, event.event_type)
+          void refreshSuggestions()
         }
 
         if (event.event_type === 'todo_succeeded') {
@@ -306,6 +304,7 @@ export function Timeline({
         )
         stopPostStream(postId)
         void refreshPostDetail(postId)
+        void refreshSuggestions()
         onActivitySettled?.()
       },
       afterEventId === undefined ? {} : { afterEventId },
@@ -625,22 +624,6 @@ export function Timeline({
   return (
     <div className={styles.timeline}>
       <TimelineHeader />
-      <div className={styles.searchBox}>
-        <SearchIcon />
-        <input
-          value={searchQuery}
-          onChange={(event) => handleSearchChange(event.target.value)}
-          onKeyDown={handleSearchKeyDown}
-          placeholder="搜索记录"
-          aria-label="搜索记录"
-        />
-        {searchLoading && <span className={styles.searchLoading}>搜索中...</span>}
-        {searching && (
-          <button className={styles.searchClear} onClick={clearSearch} aria-label="清空搜索" title="清空搜索">
-            ×
-          </button>
-        )}
-      </div>
       <Composer
         onSubmit={handleSubmit}
         disabled={modelUnavailable}
@@ -693,6 +676,7 @@ export function Timeline({
                   key={post.post_id}
                   post={post}
                   comments={postComments[post.post_id]}
+                  suggestions={postSuggestions[post.post_id]}
                   commentConversations={postCommentConversations[post.post_id]}
                   busyCommentId={busyCommentId}
                   deletingPost={deletingPostId === post.post_id}
@@ -831,6 +815,7 @@ function SearchResults({
 const TimelinePostCard = memo(function TimelinePostCard({
   post,
   comments,
+  suggestions,
   commentConversations,
   busyCommentId,
   deletingPost,
@@ -847,6 +832,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
 }: {
   post: Post
   comments?: Comment[]
+  suggestions?: Suggestion[]
   commentConversations?: Record<string, CommentConversationState>
   busyCommentId: number | null
   deletingPost: boolean
@@ -891,6 +877,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
       <PostCard
         post={post}
         comments={comments}
+        suggestions={suggestions}
         commentConversations={commentConversations}
         busyCommentId={busyCommentId}
         deletingPost={deletingPost}
@@ -924,21 +911,29 @@ function searchSummaryText(
 }
 
 function TimelineHeader() {
+  const now = new Date()
+  const hour = now.getHours()
+  const greeting =
+    hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
+  const today = now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })
   return (
     <header className={styles.header}>
       <div>
-        <h1>首页</h1>
-        <p>记录、回应、整理都流回这里</p>
+        <h1>{greeting}</h1>
+        <p>记录日常、想法与情绪，和拾迹一起回看自己。</p>
+      </div>
+      <div className={styles.headerDate}>
+        <CalendarIcon />
+        {today}
       </div>
     </header>
   )
 }
 
-function SearchIcon() {
+function CalendarIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.35-4.35" />
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
     </svg>
   )
 }

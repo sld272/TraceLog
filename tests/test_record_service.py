@@ -157,48 +157,23 @@ class RecordServiceTest(unittest.TestCase):
         self.assertEqual("post", vector_doc["doc_type"])
         self.assertEqual("今天想练歌", vector_doc["content"])
 
-    def test_retry_pending_vector_docs_indexes_and_clears_legacy_pending(self) -> None:
+    def test_retry_pending_vector_docs_rebuilds_missing_doc(self) -> None:
         self._insert_post("p-1", "待补索引")
-        self._insert_pending_vector_doc("p-1", "待补索引")
 
         fixed = record_service.retry_pending_vector_docs()
 
         self.assertEqual(1, fixed)
         self.assertEqual([("p-1", "待补索引")], self.fake_vectorstore.indexed)
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_vector_doc:post-p-1",)))
         self.assertTrue(vector_index_service.collection_state("tracelog_test").query_ready)
 
     def test_retry_pending_vector_docs_keeps_outbox_failed_on_error(self) -> None:
         self.fake_vectorstore.error = RuntimeError("still failing")
         self._insert_post("p-1", "待补索引")
-        self._insert_pending_vector_doc("p-1", "待补索引")
 
         fixed = record_service.retry_pending_vector_docs()
 
         self.assertEqual(0, fixed)
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_vector_doc:post-p-1",)))
         self.assertEqual(1, vector_index_service.collection_state("tracelog_test").failed_count)
-
-    def test_retry_pending_vector_docs_migrates_legacy_pending_embedding(self) -> None:
-        self._insert_post("p-1", "待补索引")
-        self._insert_legacy_pending_embedding("p-1", "待补索引")
-
-        fixed = record_service.retry_pending_vector_docs()
-
-        self.assertEqual(1, fixed)
-        self.assertEqual([("p-1", "待补索引")], self.fake_vectorstore.indexed)
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_embedding:p-1",)))
-
-    def test_retry_pending_vector_docs_does_not_restore_missing_sqlite_post_from_legacy_meta(self) -> None:
-        self._insert_pending_vector_doc("p-1", "待补索引")
-
-        fixed = record_service.retry_pending_vector_docs()
-
-        self.assertEqual(1, fixed)
-        self.assertEqual([], self.fake_vectorstore.indexed)
-        self.assertEqual(["post-p-1"], self.fake_vectorstore.deleted)
-        self.assertIsNone(db.query_one("SELECT * FROM vector_docs WHERE doc_id = ?", ("post-p-1",)))
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", ("pending_vector_doc:post-p-1",)))
 
     def test_delete_vector_doc_goes_through_outbox(self) -> None:
         post_id = record_service.save_post("今天想练歌")
@@ -210,26 +185,6 @@ class RecordServiceTest(unittest.TestCase):
         self.assertIsNone(db.query_one("SELECT * FROM vector_docs WHERE doc_id = ?", (f"post-{post_id}",)))
         self.assertTrue(vector_index_service.collection_state("tracelog_test").query_ready)
 
-    def _insert_pending_vector_doc(self, post_id: str, content: str) -> None:
-        db.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            (
-                f"pending_vector_doc:post-{post_id}",
-                json.dumps(
-                    {
-                        "doc_id": f"post-{post_id}",
-                        "type": "post",
-                        "source_id": post_id,
-                        "content": content,
-                        "metadata": {"type": "post", "post_id": post_id},
-                        "error": "test",
-                        "updated_at": 1.0,
-                    },
-                    ensure_ascii=False,
-                ),
-            ),
-        )
-
     def _insert_post(self, post_id: str, content: str) -> None:
         db.execute(
             """
@@ -238,24 +193,6 @@ class RecordServiceTest(unittest.TestCase):
             """,
             (post_id, "2026-06-09T00:00:00+08:00", content, 1.0, 1.0),
         )
-
-    def _insert_legacy_pending_embedding(self, post_id: str, content: str) -> None:
-        db.execute(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
-            (
-                f"pending_embedding:{post_id}",
-                json.dumps(
-                    {
-                        "post_id": post_id,
-                        "content": content,
-                        "error": "test",
-                        "created_at": 1.0,
-                    },
-                    ensure_ascii=False,
-                ),
-            ),
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

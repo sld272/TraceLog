@@ -1,17 +1,16 @@
 """Per-bucket reconcile: consume evidence events -> apply memory unit ops.
 
-This is the spine of the memory-v2 write path. Reconcile replaces the old
-"rewrite the whole markdown" deep reflection with an event-driven, per
-(owner_scope, visibility_scope) bucket loop:
+This is the spine of the memory-v2 write path: an event-driven, per
+(owner_scope, visibility_scope) bucket loop.
 
     events since cursor + active units in bucket + tombstones
         --(op_producer; the LLM seam)-->  add/confirm/revise/retract ops
         --apply (boundary + batch-membership validated)-->  memory_units
-        --advance cursor + log reflection + unit ops--  (one transaction)
+        --advance cursor + log reconcile run + unit ops--  (one transaction)
 
 The LLM call is injected as ``op_producer`` so this module stays deterministic
-and unit-testable; Phase 3b plugs in the real reflection_router prompt. Per the
-write invariants: the op_producer (LLM) runs OUTSIDE the transaction; unit ops
+and unit-testable. Per the write invariants: the op_producer (LLM) runs
+OUTSIDE the transaction; unit ops
 + cursor advance commit together inside one short transaction.
 """
 
@@ -20,7 +19,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
 
 from core import db, logging_service, memory_events_service as mes, memory_unit_service as mus, memory_view_service as mvs
 
@@ -28,13 +26,13 @@ from core import db, logging_service, memory_events_service as mes, memory_unit_
 # The LLM already scores momentary trivia low (e.g. "用户正在上课" -> ~0.2); this
 # deterministic floor enforces it regardless of the LLM's stochastic decision to
 # emit. It is well below the core-portrait entry bar (memory_view_service
-# MIN_IMPORTANCE 0.70): 0.30 just to exist as a unit, 0.70 to enter user.md.
+# MIN_IMPORTANCE 0.70): 0.30 just to exist, 0.70 to enter the portrait.
 MIN_ADD_IMPORTANCE = 0.30
 
-# reflection.type values per bucket kind (kept distinct for the workbench).
-RECONCILE_GLOBAL = "global_deep_reflection"
-RECONCILE_THREAD = "thread_deep_reflection"
-RECONCILE_SOUL_PRIVATE = "soul_deep_reflection"
+# Run types per bucket kind (kept distinct for the workbench).
+RECONCILE_GLOBAL = "global_reconcile"
+RECONCILE_THREAD = "thread_reconcile"
+RECONCILE_SOUL_PRIVATE = "private_reconcile"
 
 # bucket visibility -> default source_channel for newly added units.
 _CHANNEL_BY_VISIBILITY_PREFIX = (
@@ -55,7 +53,7 @@ def _channel_for_visibility(visibility_scope: str) -> str:
 class ReconcileSummary:
     owner_scope: str
     visibility_scope: str
-    reflection_id: int | None = None
+    reconcile_run_id: int | None = None
     event_count: int = 0
     last_event_id: int = 0
     applied: int = 0
@@ -90,17 +88,17 @@ def _load_tombstones(owner_scope: str, visibility_scope: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _insert_reflection_row(
+def _insert_reconcile_run(
     conn: sqlite3.Connection,
     *,
-    reflection_type: str,
+    run_type: str,
     owner_scope: str,
     visibility_scope: str,
     trigger: str,
     event_ids: list[int],
     summary_text: str,
 ) -> int:
-    ts = datetime.now().astimezone().isoformat()
+    created_at = db.now_ts()
     metadata = {
         "trigger": trigger,
         "op": "reconcile",
@@ -112,20 +110,27 @@ def _insert_reflection_row(
     }
     cur = conn.execute(
         """
-        INSERT INTO reflections(ts, type, scope_start, scope_end, content, related_posts, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO memory_reconcile_runs(
+            run_type, owner_scope, visibility_scope, trigger,
+            event_id_start, event_id_end, event_count, summary,
+            metadata_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            ts,
-            reflection_type,
-            str(event_ids[0]) if event_ids else None,
-            str(event_ids[-1]) if event_ids else None,
+            run_type,
+            owner_scope,
+            visibility_scope,
+            trigger,
+            event_ids[0] if event_ids else None,
+            event_ids[-1] if event_ids else None,
+            len(event_ids),
             summary_text,
-            json.dumps(event_ids, ensure_ascii=False),
             json.dumps(metadata, ensure_ascii=False),
+            created_at,
         ),
     )
-    return db.require_lastrowid(cur, "reconcile reflection insert")
+    return db.require_lastrowid(cur, "memory reconcile run insert")
 
 
 def apply_ops(
@@ -137,7 +142,7 @@ def apply_ops(
     allowed_add_event_ids: set[int],
     review_event_ids_by_unit: dict[str, set[int]],
     required_review_unit_ids: set[str],
-    reflection_id: int | None,
+    reconcile_run_id: int | None,
     summary: ReconcileSummary,
 ) -> None:
     """Apply a validated batch of ops inside the caller's transaction.
@@ -181,7 +186,7 @@ def apply_ops(
                     tier=str(op_obj.get("tier") or "contextual"),
                     importance=importance,
                     actor="reconciler",
-                    reflection_id=reflection_id,
+                    reconcile_run_id=reconcile_run_id,
                     conn=conn,
                 )
             elif op in {"retain", "confirm", "revise", "retract"}:
@@ -193,7 +198,7 @@ def apply_ops(
                         raise ValueError("retain 不应引用 evidence")
                     mus.retain_unit(
                         target_id,
-                        reflection_id=reflection_id,
+                        reconcile_run_id=reconcile_run_id,
                         conn=conn,
                     )
                 elif op == "confirm":
@@ -203,7 +208,7 @@ def apply_ops(
                         target_id,
                         evidence_event_ids=event_ids,
                         confidence=op_obj.get("confidence"),
-                        reflection_id=reflection_id,
+                        reconcile_run_id=reconcile_run_id,
                         conn=conn,
                     )
                 elif op == "revise":
@@ -217,7 +222,7 @@ def apply_ops(
                         type=op_obj.get("type"),
                         tier=op_obj.get("tier"),
                         importance=op_obj.get("importance"),
-                        reflection_id=reflection_id,
+                        reconcile_run_id=reconcile_run_id,
                         conn=conn,
                     )
                 else:  # retract
@@ -226,7 +231,7 @@ def apply_ops(
                         target_id,
                         by="model",
                         reason=reason if reason in {"false", "outdated"} else None,
-                        reflection_id=reflection_id,
+                        reconcile_run_id=reconcile_run_id,
                         conn=conn,
                     )
                 del self_unit
@@ -386,7 +391,7 @@ def reconcile_bucket(
     visibility_scope: str,
     *,
     op_producer,
-    reflection_type: str,
+    run_type: str,
     trigger: str = "manual",
     limit: int = 200,
     dry_run: bool = False,
@@ -531,18 +536,18 @@ def reconcile_bucket(
                     review_ids_by_unit=review_ids_by_unit,
                     source_versions=source_versions,
                 )
-            reflection_id = None
+            reconcile_run_id = None
             if not dry_run:
-                reflection_id = _insert_reflection_row(
+                reconcile_run_id = _insert_reconcile_run(
                     conn,
-                    reflection_type=reflection_type,
+                    run_type=run_type,
                     owner_scope=owner_scope,
                     visibility_scope=visibility_scope,
                     trigger=trigger,
                     event_ids=all_event_ids,
                     summary_text=summary_text or f"reconcile {len(all_event_ids)} events",
                 )
-                summary.reflection_id = reflection_id
+                summary.reconcile_run_id = reconcile_run_id
             for unit_id in sorted(deterministic_retracts):
                 du = conn.execute(
                     "SELECT source FROM memory_units WHERE id = ?", (unit_id,)
@@ -552,7 +557,9 @@ def reconcile_bucket(
                     # not on the deleted source — keep it instead of auto-retracting.
                     # It can still be overturned later by *new* contradicting
                     # evidence through normal reconcile.
-                    mus.retain_unit(unit_id, reflection_id=reflection_id, conn=conn)
+                    mus.retain_unit(
+                        unit_id, reconcile_run_id=reconcile_run_id, conn=conn
+                    )
                     summary.applied += 1
                     summary._count("retain")
                 else:
@@ -560,7 +567,7 @@ def reconcile_bucket(
                         unit_id,
                         by="model",
                         reason="outdated",
-                        reflection_id=reflection_id,
+                        reconcile_run_id=reconcile_run_id,
                         conn=conn,
                     )
                     summary.applied += 1
@@ -573,7 +580,7 @@ def reconcile_bucket(
                 allowed_add_event_ids=set(event_ids),
                 review_event_ids_by_unit=review_event_ids_by_unit,
                 required_review_unit_ids=required_decisions,
-                reflection_id=reflection_id,
+                reconcile_run_id=reconcile_run_id,
                 summary=summary,
             )
             mus.resolve_review_rows(conn, sorted(review_ids))
@@ -602,12 +609,12 @@ def reconcile_bucket(
         return None
 
     if not dry_run:
-        # Keep in_md_slice current so a first-time bucket becomes eligible for a
+        # Keep portrait membership current so a first-time bucket becomes eligible for a
         # per-bucket view refresh, and mark an existing view
         # stale if its core set changed. Hash-gated, so a no-op reconcile leaves
         # a fresh view fresh. LLM re-synthesis runs in the reconcile job after
         # the whole pass.
-        mvs.recompute_slice(owner_scope, visibility_scope)
+        mvs.recompute_portrait_membership(owner_scope, visibility_scope)
         mvs.mark_stale_for_bucket(owner_scope, visibility_scope)
 
     logging_service.log_event(

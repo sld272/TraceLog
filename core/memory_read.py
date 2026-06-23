@@ -1,6 +1,6 @@
-"""Phase 5 read model: scope-filtered memory retrieval for reply assembly.
+"""Scope-filtered memory retrieval and prompt assembly.
 
-Pure read functions (no hot-path wiring yet) that the reply contexts will use:
+The reply paths use these read functions:
 
   * recent_state_block: the always-on "当前状态" block — recent `state` units in
     the admissible scopes, recency×importance ordered, within a per-type expiry
@@ -18,54 +18,39 @@ reach a prompt — never left to the model to self-censor.
 
 from __future__ import annotations
 
-import os
 import re
 import sqlite3
 from dataclasses import dataclass, field
 
-from core import db, goal_service, memory_events_service as mes, memory_scope_policy as policy, memory_unit_service as mus, memory_view_service as mvs, soul_relationship_memory as srm
+from core import (
+    db,
+    goal_service,
+    memory_events_service as mes,
+    memory_scope_policy as policy,
+    memory_unit_service as mus,
+    memory_view_service as mvs,
+    soul_relationship_memory as srm,
+)
 
-# read-mode flag (design §7.2). legacy = pre-v2 behavior, no unit reading.
-READ_MODE_ENV = "MEMORY_V2_READ_MODE"
-_READ_MODES = ("legacy", "units", "units_and_freshness")
-
-
-def read_mode() -> str:
-    mode = os.environ.get(READ_MODE_ENV, "legacy").strip().lower()
-    return mode if mode in _READ_MODES else "legacy"
-
-
-def memory_reading_enabled() -> bool:
-    return read_mode() != "legacy"
-
-
-# write-mode flag (design §7.2). legacy = pre-v2 light/deep reflection rewriting
-# markdown; reconcile = event-driven unit reconcile is the write path. Kept here
-# beside the read-mode flag so all memory-v2 toggles live in one place.
-WRITE_MODE_ENV = "MEMORY_V2_WRITE_MODE"
-_WRITE_MODES = ("legacy", "reconcile")
-
-
-def write_mode() -> str:
-    mode = os.environ.get(WRITE_MODE_ENV, "legacy").strip().lower()
-    return mode if mode in _WRITE_MODES else "legacy"
-
-
-def reconcile_write_enabled() -> bool:
-    return write_mode() == "reconcile"
-
-
-def memory_section_for(channel: str, reply_soul: str | None, query: str) -> str:
-    """Single entry the reply paths call. Returns '' in legacy mode (zero change)
-    or when there is no memory to inject."""
-    if not memory_reading_enabled():
-        return ""
-    return build_memory_section(channel, reply_soul, query).text
+def memory_section_for(
+    channel: str,
+    reply_soul: str | None,
+    query: str,
+    *,
+    excluded_sources: set[tuple[str, str]] | None = None,
+) -> str:
+    """Single entry used by every reply path for memory-v2 prompt assembly."""
+    return build_memory_section(
+        channel,
+        reply_soul,
+        query,
+        excluded_sources=excluded_sources,
+    ).text
 
 
 def relationship_memory_for(reply_soul: str | None) -> str:
     """Current SOUL's complete relationship narrative for its system prompt."""
-    if not memory_reading_enabled() or reply_soul is None:
+    if reply_soul is None:
         return ""
     body = srm.read_relationship_memory(reply_soul).strip()
     if not body:
@@ -79,9 +64,13 @@ DAY_SECONDS = 86400.0
 
 # unit retrieval
 RETRIEVE_DEFAULT_K = 8
-# states live in the state block; in_md_slice units live in the portrait — both
+# states live in the state block; portrait members live in the portrait — both
 # excluded here so relevant-memory retrieval surfaces the mid-tier beliefs.
-_RETRIEVE_EXCLUDED_TYPES = ("state",)
+# relationship units are owner-scoped to one persona and are injected ONLY through
+# that persona's relationship narrative; excluding them here keeps a (soul:X,public)
+# relationship belief from leaking into another soul's cross-persona retrieval
+# (owner becomes the access boundary even though visibility is public).
+_RETRIEVE_EXCLUDED_TYPES = ("state", "relationship")
 
 # freshness seam (units_and_freshness mode): the most recent raw evidence that
 # reconcile has NOT yet folded into units, so "just happened" facts are usable
@@ -185,7 +174,7 @@ def retrieve_units(
     k: int = RETRIEVE_DEFAULT_K,
 ) -> list[MemoryItem]:
     """Query-relevant beliefs in the admissible scopes, excluding state units
-    (state block) and portrait members (in_md_slice). MVP scoring: keyword
+    (state block) and portrait members. MVP scoring: keyword
     overlap first, then importance, then recency — no vector index yet."""
     plan = policy.admissible_visibility_filters(channel, reply_soul)
     vis_sql, params = _allowed_visibility_sql(plan)
@@ -198,7 +187,7 @@ def retrieve_units(
         FROM memory_units
         WHERE status = 'active'
           AND prompt_policy = 'allow'
-          AND in_md_slice = 0
+          AND in_portrait = 0
           AND type NOT IN ({type_placeholders})
           AND {vis_sql}
         """,
@@ -438,6 +427,7 @@ def freshness_seam(
     *,
     now: float | None = None,
     query: str = "",
+    excluded_sources: set[tuple[str, str]] | None = None,
 ) -> tuple[list[FreshnessItem], bool]:
     """Recent user evidence past each admissible bucket's reconcile cursor — raw
     facts not yet folded into units. Most-recent first, gated by an age window
@@ -445,6 +435,7 @@ def freshness_seam(
     unit retrieval: public scene shared, own private admitted with discretion,
     other souls' private never returned."""
     now = db.now_ts() if now is None else now
+    excluded_sources = excluded_sources or set()
     cutoff = now - FRESHNESS_WINDOW_DAYS * DAY_SECONDS
     plan = policy.admissible_visibility_filters(channel, reply_soul)
 
@@ -457,6 +448,16 @@ def freshness_seam(
             owner_scope, visibility_scope, cursor, limit=FRESHNESS_MAX_EVENTS * 4
         )
         for event in mes.collapse_to_current_events(pending_events):
+            # comment_relationship is the relationship lens's private copy of a
+            # comment; its content already surfaces here as the canonical
+            # comment_message, so skip it to avoid double-showing the same line.
+            if str(event["source_type"]) == "comment_relationship":
+                continue
+            if (
+                str(event["source_type"]),
+                str(event["source_id"]),
+            ) in excluded_sources:
+                continue
             if event["author"] != "user":
                 continue
             snapshot = str(event["content_snapshot"] or "").strip()
@@ -476,6 +477,13 @@ def freshness_seam(
             if trigger_current is not None:
                 review_events = [*review_events, trigger_current]
             for event in review_events:
+                if str(event["source_type"]) == "comment_relationship":
+                    continue
+                if (
+                    str(event["source_type"]),
+                    str(event["source_id"]),
+                ) in excluded_sources:
+                    continue
                 if event["author"] != "user":
                     continue
                 if not str(event["content_snapshot"] or "").strip():
@@ -542,7 +550,7 @@ def _keyword_overlap(content: str, terms: list[str]) -> int:
     return sum(1 for t in terms if t in content)
 
 
-# --- prompt section assembly (Phase 5b) ------------------------------------
+# --- prompt section assembly -----------------------------------------------
 
 _DISCRETION_TAG = "「私密·谨慎」"
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
@@ -559,7 +567,13 @@ def _portrait_text(owner_scope: str, visibility_scope: str, view_type: str) -> s
     return mvs.read_portrait_body(owner_scope, visibility_scope, view_type)
 
 
-def build_memory_section(channel: str, reply_soul: str | None, query: str) -> MemoryPrompt:
+def build_memory_section(
+    channel: str,
+    reply_soul: str | None,
+    query: str,
+    *,
+    excluded_sources: set[tuple[str, str]] | None = None,
+) -> MemoryPrompt:
     """Assemble the always-on + retrieved memory block for a reply prompt.
 
     Layers (design §4.5): baseline portrait -> current state -> relevant units,
@@ -571,7 +585,7 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
     has_discretion = False
 
     # 1. baseline identity portrait (always-on, query-independent)
-    portrait = _portrait_text("global", "public", mvs.VIEW_USER_MD)
+    portrait = _portrait_text("global", "public", mvs.VIEW_USER_PORTRAIT)
     if portrait:
         sections.append(f"[基线认知]\n{portrait}")
     # 2. current-state block (always-on)
@@ -606,21 +620,25 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
         if recall:
             sections.append(recall)
 
-    # 4. freshness seam (units_and_freshness only): recent raw evidence not yet
-    #    reconciled into units, so just-happened facts are available immediately.
-    if read_mode() == "units_and_freshness":
-        fresh_items, truncated = freshness_seam(channel, reply_soul, query=query)
-        if fresh_items:
-            lines = []
-            for fitem in fresh_items:
-                tag = f" {_DISCRETION_TAG}" if fitem.needs_discretion else ""
-                has_discretion = has_discretion or fitem.needs_discretion
-                attribution = _attribution_for(fitem.visibility_scope, fitem.owner_scope, reply_soul)
-                attr = f"{attribution} " if attribution else ""
-                state = "（unit 重判中）" if fitem.reviewing else "（新近未整理）"
-                lines.append(f"- {state}{attr}{fitem.content}{tag}")
-            note = "（仅最近部分）" if truncated else ""
-            sections.append(f"[尚未稳定沉淀的原始证据]{note}\n" + "\n".join(lines))
+    # 4. freshness seam: recent raw evidence not yet reconciled into units, so
+    # just-happened facts are available immediately.
+    fresh_items, truncated = freshness_seam(
+        channel,
+        reply_soul,
+        query=query,
+        excluded_sources=excluded_sources,
+    )
+    if fresh_items:
+        lines = []
+        for fitem in fresh_items:
+            tag = f" {_DISCRETION_TAG}" if fitem.needs_discretion else ""
+            has_discretion = has_discretion or fitem.needs_discretion
+            attribution = _attribution_for(fitem.visibility_scope, fitem.owner_scope, reply_soul)
+            attr = f"{attribution} " if attribution else ""
+            state = "（unit 重判中）" if fitem.reviewing else "（新近未整理）"
+            lines.append(f"- {state}{attr}{fitem.content}{tag}")
+        note = "（仅最近部分）" if truncated else ""
+        sections.append(f"[尚未稳定沉淀的原始证据]{note}\n" + "\n".join(lines))
 
     if not sections:
         return MemoryPrompt(text="", used_unit_ids=[], has_discretion_items=False)
@@ -643,7 +661,7 @@ def build_memory_section(channel: str, reply_soul: str | None, query: str) -> Me
 
 
 def list_goals() -> list[dict]:
-    """Compatibility read entry now backed by goaltool, the sole truth source."""
+    """Read active goals from GoalTool, the sole truth source."""
     return goal_service.list_goals(status="active")
 
 
@@ -673,9 +691,11 @@ class UnitDetail:
     status: str
     owner_scope: str
     visibility_scope: str
-    in_md_slice: bool
+    source: str
+    source_channel: str
+    in_portrait: bool
     prompt_policy: str
-    profile_policy: str
+    portrait_policy: str
     evidence: list[EvidenceRef]
 
 
@@ -718,8 +738,10 @@ def unit_detail(unit_id: str) -> UnitDetail | None:
         status=row["status"],
         owner_scope=row["owner_scope"],
         visibility_scope=row["visibility_scope"],
-        in_md_slice=bool(row["in_md_slice"]),
+        source=row["source"],
+        source_channel=row["source_channel"],
+        in_portrait=bool(row["in_portrait"]),
         prompt_policy=row["prompt_policy"],
-        profile_policy=row["profile_policy"],
+        portrait_policy=row["portrait_policy"],
         evidence=evidence,
     )

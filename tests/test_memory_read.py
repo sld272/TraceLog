@@ -37,7 +37,7 @@ class MemoryReadTest(unittest.TestCase):
                 return mes.record_post_mutation(conn, post_id=f"p{self._seq}", op="create", content="e", occurred_at=float(self._seq)).id
             return mes.record_chat_mutation(conn, message_id=self._seq, soul_name=owner.split(":")[1], op="create", content="e", occurred_at=float(self._seq), role="user").id
 
-    def _unit(self, owner, vis, *, type="insight", content="x", importance=0.5, last_confirmed=None, in_md_slice=0):
+    def _unit(self, owner, vis, *, type="insight", content="x", importance=0.5, last_confirmed=None, in_portrait=0):
         ev = self._ev(owner, vis, "post" if vis == "public" or vis.startswith("thread") else "chat")
         uid = mus.add_unit(
             owner_scope=owner, visibility_scope=vis, source_channel="post" if vis != "private:soul:" else "chat",
@@ -47,8 +47,8 @@ class MemoryReadTest(unittest.TestCase):
         params = []
         if last_confirmed is not None:
             sets.append("last_confirmed = ?"); params.append(last_confirmed)
-        if in_md_slice:
-            sets.append("in_md_slice = 1")
+        if in_portrait:
+            sets.append("in_portrait = 1")
         if sets:
             with db.transaction() as conn:
                 conn.execute(f"UPDATE memory_units SET {', '.join(sets)} WHERE id=?", (*params, uid))
@@ -95,7 +95,7 @@ class MemoryReadTest(unittest.TestCase):
         self._unit("global", "public", type="preference", content="喜欢安静的咖啡馆看书", importance=0.5)
         self._unit("global", "public", type="preference", content="讨厌早起", importance=0.5)
         self._unit("global", "public", type="state", content="咖啡喝多了睡不着", importance=0.5)  # state excluded
-        self._unit("global", "public", type="identity", content="咖啡相关核心身份", importance=0.8, in_md_slice=1)  # portrait excluded
+        self._unit("global", "public", type="identity", content="咖啡相关核心身份", importance=0.8, in_portrait=1)  # portrait excluded
         hits = memory_read.retrieve_units("咖啡馆 看书", "public_post", "gotoh")
         contents = [h.content for h in hits]
         self.assertIn("喜欢安静的咖啡馆看书", contents)
@@ -105,14 +105,14 @@ class MemoryReadTest(unittest.TestCase):
         self.assertEqual(hits[0].content, "喜欢安静的咖啡馆看书")
 
     def test_retrieve_public_sees_other_souls_public_memory(self) -> None:
-        # user's comment-conversation belief with kita (owner soul:kita, thread visibility)
+        # user's public comment-conversation belief lands in global/public, shared across souls
         with db.transaction() as conn:
             ev = mes.record_comment_mutation(
                 conn, comment_id=901, post_id="20260616-001", soul_name="kita",
                 role="user", op="create", content="我自学吉他", occurred_at=1.0,
             ).id
         uid = mus.add_unit(
-            owner_scope="soul:kita", visibility_scope="thread:20260616-001", source_channel="comment",
+            owner_scope=mes.GLOBAL_SCOPE, visibility_scope=mes.PUBLIC_VISIBILITY, source_channel="comment",
             type="preference", content="用户喜欢弹吉他自学", importance=0.5, evidence_event_ids=[ev],
         )
         hits = memory_read.retrieve_units("弹吉他", "public_post", "gotoh")
@@ -148,7 +148,7 @@ class MemoryReadTest(unittest.TestCase):
         mus.confirm_unit(core, evidence_event_ids=[self._ev("global", "public")], confidence=0.9)
         with db.transaction() as conn:
             conn.execute("UPDATE memory_units SET tier='core', confidence=0.9 WHERE id=?", (core,))
-        mvs.synthesize_view("global", "public", mvs.VIEW_USER_MD)
+        mvs.synthesize_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         # state + relevant
         self._unit("global", "public", type="state", content="这周备考很累", importance=0.5, last_confirmed=now)
         self._unit("global", "public", type="preference", content="喜欢安静咖啡馆", importance=0.5)

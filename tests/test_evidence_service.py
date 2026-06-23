@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from PIL import Image
 
-from core import attachment_service, db, evidence_service, soul_memory_service, soul_service, vision_service
+from core import attachment_service, db, evidence_service, soul_service, vision_service
 
 
 class EvidenceServiceTest(unittest.TestCase):
@@ -21,14 +21,10 @@ class EvidenceServiceTest(unittest.TestCase):
         self.old_db_path = db.DB_PATH
         self.old_config_file = vision_service.CONFIG_FILE
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_service_memories_dir = soul_service.SOUL_MEMORIES_DIR
-        self.old_memory_memories_dir = soul_memory_service.SOUL_MEMORIES_DIR
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         vision_service.CONFIG_FILE = str(self.config_path)
         soul_service.SOULS_DIR = self.workspace / "souls"
-        soul_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
-        soul_memory_service.SOUL_MEMORIES_DIR = self.workspace / "soul_memories"
         self.config_path.write_text(
             json.dumps(
                 {
@@ -47,8 +43,6 @@ class EvidenceServiceTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         vision_service.CONFIG_FILE = self.old_config_file
         soul_service.SOULS_DIR = self.old_souls_dir
-        soul_service.SOUL_MEMORIES_DIR = self.old_service_memories_dir
-        soul_memory_service.SOUL_MEMORIES_DIR = self.old_memory_memories_dir
         self.tmp.cleanup()
 
     def test_format_retrieval_hits_dedupes_posts_and_uses_vision_context(self) -> None:

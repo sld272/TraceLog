@@ -15,13 +15,12 @@ import {
   saveModelSettings,
   updateSoul,
 } from '@/api/client'
-import { MemorySettingsPanel } from './MemorySettingsPanel'
 import { Notice } from '@/components/Notice'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
-type SettingsTab = 'model' | 'souls' | 'memory' | 'data'
+type SettingsTab = 'model' | 'souls' | 'data' | 'about'
 type CreateSoulMode = 'ai' | 'markdown'
 type WebSearchProvider = ModelSettings['web_search']['provider']
 
@@ -97,6 +96,13 @@ const DEFAULT_MODEL_FORM: ModelForm = {
 
 const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语气、相处方式、边界、适合的场景，或任何灵感。系统会把它整理成完整的人格 Markdown 文件。'
 
+const TAB_SUBTITLES: Record<SettingsTab, string> = {
+  model: '模型、图片识别、网页搜索与 Embedding 配置',
+  souls: '排序决定首页并发回应顺序，禁用后不进入回应队列',
+  data: '本地 workspace 状态、数据概览与记忆检索索引',
+  about: '关于拾迹这个项目',
+}
+
 export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSoulsChanged }: SettingsPageProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('model')
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null)
@@ -116,10 +122,10 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
 
   const tabs = useMemo(
     () => [
-      { id: 'model' as const, label: '模型' },
+      { id: 'model' as const, label: '基本' },
       { id: 'souls' as const, label: '人格' },
-      { id: 'memory' as const, label: '记忆' },
       { id: 'data' as const, label: '数据' },
+      { id: 'about' as const, label: '关于' },
     ],
     [],
   )
@@ -293,11 +299,8 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       <header className={workspaceStyles.header}>
         <div className={workspaceStyles.titleGroup}>
           <h1 className={workspaceStyles.title}>设置</h1>
-          <p className={workspaceStyles.subtitle}>模型、人格、记忆与本地数据</p>
+          <p className={workspaceStyles.subtitle}>{TAB_SUBTITLES[activeTab]}</p>
         </div>
-        <button className={workspaceStyles.ghostButton} onClick={refreshSettings} disabled={loading}>
-          刷新
-        </button>
       </header>
 
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
@@ -306,62 +309,96 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       )}
       {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
 
-      <div className={styles.tabs} role="tablist" aria-label="设置分类">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`${styles.tab} ${activeTab === tab.id ? styles.tabActive : ''}`}
-            type="button"
-            onClick={() => setActiveTab(tab.id)}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <div className={styles.settingsGrid}>
+        <nav className={styles.settingsSide} role="tablist" aria-label="设置分类">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`${styles.sideItem} ${activeTab === tab.id ? styles.sideItemActive : ''}`}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
 
-      {loading ? (
-        <div className={workspaceStyles.empty}>加载设置中...</div>
-      ) : (
-        <div className={styles.content}>
-          {activeTab === 'model' && (
-            <ModelSettingsPanel
-              form={modelForm}
-              settings={modelSettings}
-              saving={savingModel}
-              onChange={setModelForm}
-              onSubmit={handleSaveModel}
-            />
-          )}
-          {activeTab === 'souls' && (
-            <SoulSettingsPanel
-              souls={souls}
-              savingSoul={savingSoul}
-              createSoulMode={createSoulMode}
-              newSoulName={createSoulMode === 'ai' ? aiSoulDraft.name : markdownSoulDraft.name}
-              newSoulContent={createSoulMode === 'ai' ? aiSoulDraft.inspiration : markdownSoulDraft.content}
-              onCreateSoulModeChange={handleCreateSoulModeChange}
-              onNewSoulNameChange={handleNewSoulNameChange}
-              onNewSoulContentChange={handleNewSoulContentChange}
-              onCreateSoul={handleCreateSoul}
-              onToggleSoul={handleToggleSoul}
-              onMoveSoul={handleMoveSoul}
-            />
-          )}
-          {activeTab === 'memory' && (
-            <MemorySettingsPanel souls={souls} workspaceStatus={workspaceStatus} />
-          )}
-          {activeTab === 'data' && (
-            <DataSettingsPanel
-              status={workspaceStatus}
-              vectorAction={vectorAction}
-              vectorError={vectorError}
-              onVectorAction={handleVectorAction}
-            />
+        <div className={styles.settingsMain}>
+          {loading ? (
+            <div className={workspaceStyles.empty}>加载设置中...</div>
+          ) : (
+            <>
+              {activeTab === 'model' && (
+                <ModelSettingsPanel
+                  form={modelForm}
+                  settings={modelSettings}
+                  saving={savingModel}
+                  onChange={setModelForm}
+                  onSubmit={handleSaveModel}
+                />
+              )}
+              {activeTab === 'souls' && (
+                <SoulSettingsPanel
+                  souls={souls}
+                  savingSoul={savingSoul}
+                  createSoulMode={createSoulMode}
+                  newSoulName={createSoulMode === 'ai' ? aiSoulDraft.name : markdownSoulDraft.name}
+                  newSoulContent={createSoulMode === 'ai' ? aiSoulDraft.inspiration : markdownSoulDraft.content}
+                  onCreateSoulModeChange={handleCreateSoulModeChange}
+                  onNewSoulNameChange={handleNewSoulNameChange}
+                  onNewSoulContentChange={handleNewSoulContentChange}
+                  onCreateSoul={handleCreateSoul}
+                  onToggleSoul={handleToggleSoul}
+                  onMoveSoul={handleMoveSoul}
+                />
+              )}
+              {activeTab === 'data' && (
+                <DataSettingsPanel
+                  status={workspaceStatus}
+                  vectorAction={vectorAction}
+                  vectorError={vectorError}
+                  onVectorAction={handleVectorAction}
+                />
+              )}
+              {activeTab === 'about' && <AboutSettingsPanel />}
+            </>
           )}
         </div>
-      )}
+      </div>
+    </div>
+  )
+}
+
+function AboutSettingsPanel() {
+  return (
+    <div className={styles.aboutPage}>
+      <img className={styles.apIcon} src="/brand/tracelog-icon-transparent-512.png" alt="拾迹" />
+      <div className={styles.apWords}>
+        <img className={styles.apShiji} src="/brand/shiji-wordmark-transparent.png" alt="拾迹" />
+        <img className={styles.apWord} src="/brand/tracelog-wordmark-transparent.png" alt="TraceLog" />
+      </div>
+      <div className={styles.apCn}>向内运行的 AI 社交媒体，也是一台陪你成长的记忆引擎。</div>
+      <p className={styles.apLead}>
+        在这里，你和 AI 好友的每段对话都不会白费——它们会沉淀成记忆，看见你的成长轨迹。
+      </p>
+      <p className={styles.apDesc}>
+        拾迹把「社交媒体的表达」和「AI 的长期记忆」缝在一起。你发帖、和不同性格的 AI 好友聊天，系统会在背后整理、提炼出关于你的画像与记忆条目，并保留每一条记忆的证据来源。记忆不是黑盒——画像、记忆条目、证据追溯、编辑与删除，都在记忆工作台里一目了然。
+      </p>
+      <div className={styles.aboutFeats}>
+        <span className={styles.ft}>成长记忆引擎</span>
+        <span className={styles.ft}>多重 AI 人格</span>
+        <span className={styles.ft}>证据可追溯</span>
+        <span className={styles.ft}>目标与待办</span>
+        <span className={styles.ft}>本地优先</span>
+      </div>
+      <div className={styles.aboutMeta}>
+        <span>版本 v2.0</span>
+        <a href="https://github.com/sld272/TraceLog" target="_blank" rel="noreferrer">
+          GitHub 仓库
+        </a>
+      </div>
     </div>
   )
 }
@@ -728,9 +765,7 @@ function DataSettingsPanel({
         </div>
         <div className={styles.pathGrid}>
           <PathRow label="SQLite" value={status.db_path} />
-          <PathRow label="用户画像" value={status.user_memory_path} />
           <PathRow label="人格" value={status.souls_dir} />
-          <PathRow label="人格记忆" value={status.soul_memories_dir} />
         </div>
       </section>
 

@@ -9,9 +9,9 @@ import {
   markGoalProgress,
   updateGoal,
 } from '@/api/client'
+import { CollapsibleGroup } from '@/components/CollapsibleGroup'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Notice } from '@/components/Notice'
-import { SuggestionTray } from '@/components/SuggestionTray'
 import { PlusIcon } from '@/components/icons'
 import { formatAbsoluteTime } from '@/utils/date'
 import styles from './WorkspacePages.module.css'
@@ -24,10 +24,6 @@ interface GoalForm {
   focus: boolean
 }
 
-interface GoalsPageProps {
-  onTodosChanged?: () => void
-}
-
 const EMPTY_FORM: GoalForm = {
   title: '',
   detail: '',
@@ -36,7 +32,7 @@ const EMPTY_FORM: GoalForm = {
   focus: true,
 }
 
-export function GoalsPage({ onTodosChanged }: GoalsPageProps) {
+export function GoalsPage() {
   const [goals, setGoals] = useState<Goal[]>([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -166,12 +162,9 @@ export function GoalsPage({ onTodosChanged }: GoalsPageProps) {
       <header className={styles.header}>
         <div className={styles.titleGroup}>
           <h1 className={styles.title}>目标</h1>
-          <p className={styles.subtitle}>{activeCount} 个进行中 · 只有确认过的目标才会出现在这里</p>
+          <p className={styles.subtitle}>{activeCount} 个进行中</p>
         </div>
         <div className={styles.headerActions}>
-          <button className={styles.ghostButton} onClick={() => void refresh()} disabled={loading}>
-            刷新
-          </button>
           <button className={styles.button} onClick={openCreate}>
             <PlusIcon />
             新增目标
@@ -181,31 +174,22 @@ export function GoalsPage({ onTodosChanged }: GoalsPageProps) {
 
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
 
-      <SuggestionTray
-        onAccepted={(kind) => {
-          if (kind === 'goal') void refresh()
-          if (kind === 'todo') onTodosChanged?.()
-        }}
-      />
-
       {loading ? (
         <div className={styles.empty}>加载中...</div>
       ) : (
         <div className={`${styles.goalWorkspace} ${drawerMode ? styles.drawerOpen : ''}`}>
           <section className={styles.goalListPanel}>
             {groups.map((group) => (
-              <section key={group.key} className={styles.goalGroup}>
-                <div className={styles.goalGroupHeader}>
-                  <div>
-                    <h2>{group.title}</h2>
-                    <p>{group.description}</p>
-                  </div>
-                  <span>{group.goals.length}</span>
-                </div>
+              <CollapsibleGroup
+                key={group.key}
+                title={group.title}
+                count={group.goals.length}
+                defaultCollapsed={group.key === 'paused' || group.key === 'done' || group.key === 'abandoned'}
+              >
                 {group.goals.length === 0 ? (
                   <p className={styles.groupEmpty}>暂无</p>
                 ) : (
-                  <div className={styles.goalRows}>
+                  <div className={styles.col}>
                     {group.goals.map((goal) => (
                       <GoalRow
                         key={goal.id}
@@ -218,7 +202,7 @@ export function GoalsPage({ onTodosChanged }: GoalsPageProps) {
                     ))}
                   </div>
                 )}
-              </section>
+              </CollapsibleGroup>
             ))}
           </section>
 
@@ -269,46 +253,51 @@ function GoalRow({
   onProgress: () => void
 }) {
   return (
-    <article className={styles.goalItem}>
-      <div className={styles.goalBody}>
-        <div className={styles.goalTitleLine}>
-          <h3>{goal.title}</h3>
-          {goal.focus && <span className={styles.focusBadge}>当前关注</span>}
-        </div>
-        {goal.detail && <p>{goal.detail}</p>}
-        <div className={styles.goalMeta}>
-          <span>{goal.horizon === 'long' ? '长期' : '短期'}</span>
-          <span>{statusLabel(goal.status)}</span>
-          {goal.last_progress_at && <span>最近推进 {formatAbsoluteTime(goal.last_progress_at)}</span>}
-          <span>{goal.source === 'user' ? '手动新增' : '采纳建议'}</span>
-        </div>
-      </div>
-      <div className={styles.goalActions}>
-        {goal.status === 'active' && (
-          <>
-            {goal.horizon === 'short' && (
-              <button
-                className={styles.textButton}
-                disabled={busy}
-                onClick={() => onPatch({ focus: !goal.focus })}
-              >
-                {goal.focus ? '取消关注' : '设为关注'}
-              </button>
+    <article className={styles.itemCard}>
+      <div className={styles.itemRow}>
+        <div className={styles.goalBody}>
+          <div className={styles.goalTitleLine}>
+            <h3>{goal.title}</h3>
+            {goal.focus && <span className={styles.focusBadge}>当前关注</span>}
+          </div>
+          {goal.detail && <p className={styles.itemDetail}>{goal.detail}</p>}
+          <div className={styles.goalMeta}>
+            <span className={styles.chip}>{goal.horizon === 'long' ? '长期' : '短期'}</span>
+            <span className={styles.chip}>{statusLabel(goal.status)}</span>
+            {goal.last_progress_at && (
+              <span className={styles.chip}>最近推进 {formatAbsoluteTime(goal.last_progress_at)}</span>
             )}
-            <button className={styles.textButton} disabled={busy} onClick={onProgress}>
-              记录推进
+            <span className={styles.chip}>{goal.source === 'user' ? '手动新增' : '采纳建议'}</span>
+          </div>
+        </div>
+        <div className={styles.rowActs}>
+          {goal.status === 'active' && (
+            <>
+              {goal.horizon === 'short' && (
+                <button disabled={busy} onClick={() => onPatch({ focus: !goal.focus })}>
+                  {goal.focus ? '取消关注' : '设为关注'}
+                </button>
+              )}
+              <button disabled={busy} onClick={onProgress}>
+                记录推进
+              </button>
+              <button disabled={busy} onClick={() => onPatch({ status: 'done' })}>
+                完成
+              </button>
+            </>
+          )}
+          {goal.status === 'paused' && (
+            <button disabled={busy} onClick={() => onPatch({ status: 'active' })}>
+              恢复
             </button>
-            <button className={styles.textButton} disabled={busy} onClick={() => onPatch({ status: 'done' })}>
-              完成
+          )}
+          {(goal.status === 'done' || goal.status === 'abandoned') && (
+            <button disabled={busy} onClick={() => onPatch({ status: 'active' })}>
+              重新激活
             </button>
-          </>
-        )}
-        {goal.status === 'paused' && (
-          <button className={styles.textButton} disabled={busy} onClick={() => onPatch({ status: 'active' })}>
-            恢复
-          </button>
-        )}
-        <button className={styles.textButton} disabled={busy} onClick={onEdit}>编辑</button>
+          )}
+          <button disabled={busy} onClick={onEdit}>编辑</button>
+        </div>
       </div>
     </article>
   )
@@ -408,15 +397,21 @@ function groupGoals(goals: Goal[]) {
     },
     {
       key: 'paused',
-      title: '暂停',
+      title: '已暂停',
       description: '暂时不推进，但保留目标',
       goals: goals.filter((goal) => goal.status === 'paused'),
     },
     {
-      key: 'archive',
-      title: '归档',
-      description: '已完成或已放弃',
-      goals: goals.filter((goal) => goal.status === 'done' || goal.status === 'abandoned'),
+      key: 'done',
+      title: '已完成',
+      description: '达成的目标',
+      goals: goals.filter((goal) => goal.status === 'done'),
+    },
+    {
+      key: 'abandoned',
+      title: '已放弃',
+      description: '不再追求的目标',
+      goals: goals.filter((goal) => goal.status === 'abandoned'),
     },
   ]
 }

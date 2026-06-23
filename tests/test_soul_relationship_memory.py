@@ -35,19 +35,9 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def _event(self, soul: str, visibility: str, content: str) -> int:
+        # relationship memory is now sourced only from private 1:1 chat
         self.seq += 1
         with db.transaction() as conn:
-            if visibility.startswith("thread:"):
-                return mes.record_comment_mutation(
-                    conn,
-                    comment_id=self.seq,
-                    post_id=visibility[len("thread:"):],
-                    soul_name=soul,
-                    role="user",
-                    op="create",
-                    content=content,
-                    occurred_at=float(self.seq),
-                ).id
             return mes.record_chat_mutation(
                 conn,
                 message_id=self.seq,
@@ -73,7 +63,7 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         return mus.add_unit(
             owner_scope=f"soul:{soul}",
             visibility_scope=visibility,
-            source_channel="comment" if visibility.startswith("thread:") else "chat",
+            source_channel="chat",
             type=type,
             content=content,
             confidence=confidence,
@@ -82,17 +72,79 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
             evidence_event_ids=[event_id],
         )
 
-    def test_selects_relationship_units_across_own_thread_and_private_only(self) -> None:
-        thread = self._unit("luna", "thread:p1", "用户希望 luna 先共情再建议")
-        private = self._unit("luna", "private:soul:luna", "双方习惯称呼彼此为老友")
-        self._unit("luna", "thread:p2", "用户喜欢爵士乐", type="preference")
+    def test_selects_relationship_units_from_private_bucket(self) -> None:
+        rel = self._unit("luna", "private:soul:luna", "双方习惯称呼彼此为老友")
+        self._unit("luna", "private:soul:luna", "用户喜欢爵士乐", type="preference")
         self._unit("nova", "private:soul:nova", "nova 的私聊关系")
 
         selected = srm.relationship_units_for_soul("luna")
-        self.assertEqual({row["id"] for row in selected}, {thread, private})
+        self.assertEqual({row["id"] for row in selected}, {rel})
 
-    def test_refresh_persists_one_cross_bucket_view_and_reads_body(self) -> None:
-        self._unit("luna", "thread:p1", "评论区里双方习惯轻微互损")
+    def test_contextual_relationship_units_enter_narrative(self) -> None:
+        # The portrait's triple bar (tier=core ∧ conf>=0.82 ∧ imp>=0.70) would
+        # exclude both; the relationship predicate admits soft texture but still
+        # floors out near-zero confidence.
+        soft = self._unit(
+            "luna", "private:soul:luna", "用户喜欢被轻轻调侃",
+            tier="contextual", confidence=0.6, importance=0.4,
+        )
+        low_conf = self._unit(
+            "luna", "private:soul:luna", "也许用户讨厌早起",
+            tier="contextual", confidence=0.3, importance=0.4,
+        )
+        selected = {row["id"] for row in srm.relationship_units_for_soul("luna")}
+        self.assertIn(soft, selected)
+        self.assertNotIn(low_conf, selected)
+
+    def test_no_prompt_relationship_unit_excluded(self) -> None:
+        muted = self._unit(
+            "luna", "private:soul:luna", "用户的某个小习惯",
+            tier="contextual", confidence=0.7, importance=0.5,
+        )
+        mus.set_prompt_policy(muted, prompt_policy="no_prompt")
+        selected = {row["id"] for row in srm.relationship_units_for_soul("luna")}
+        self.assertNotIn(muted, selected)
+
+    def test_narrative_count_capped(self) -> None:
+        for i in range(srm.REL_MAX_UNITS + 3):
+            self._unit(
+                "luna", "private:soul:luna", f"相处默契 {i}",
+                tier="contextual", confidence=0.7, importance=0.5,
+            )
+        self.assertEqual(
+            len(srm.relationship_units_for_soul("luna")), srm.REL_MAX_UNITS
+        )
+
+    def test_public_relationship_unit_enters_persona_memory(self) -> None:
+        # route A: a relationship belief formed from public comments
+        # (visibility=public) is part of the persona's relationship memory
+        # alongside private-chat ones; souls_needing_view picks the soul up.
+        with db.transaction() as conn:
+            mes.record_comment_mutation(
+                conn, comment_id=1, post_id="p1", soul_name="luna",
+                role="user", op="create", content="老地方见", occurred_at=1.0,
+            )
+        rel_event = db.query_one(
+            "SELECT id FROM memory_ingest_events "
+            "WHERE source_type='comment_relationship' AND source_id='1'"
+        )["id"]
+        public_rel = mus.add_unit(
+            owner_scope="soul:luna", visibility_scope="public",
+            source_channel="comment", type="relationship",
+            content="用户和 luna 把评论区叫老地方",
+            confidence=0.7, tier="contextual", importance=0.5,
+            evidence_event_ids=[rel_event],
+        )
+        private_rel = self._unit(
+            "luna", "private:soul:luna", "私下会互道晚安",
+            tier="contextual", confidence=0.7, importance=0.5,
+        )
+        selected = {row["id"] for row in srm.relationship_units_for_soul("luna")}
+        self.assertEqual(selected, {public_rel, private_rel})
+        self.assertIn("luna", srm.souls_needing_view())
+
+    def test_refresh_persists_relationship_view_and_reads_body(self) -> None:
+        self._unit("luna", "private:soul:luna", "平时可以轻微互损")
         self._unit("luna", "private:soul:luna", "用户低落时希望先安静陪伴")
 
         view = srm.refresh_relationship_memory(
@@ -107,7 +159,7 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         )
 
     def test_relation_unit_edit_and_retract_mark_view_stale(self) -> None:
-        unit_id = self._unit("luna", "thread:p1", "用户喜欢直球提醒")
+        unit_id = self._unit("luna", "private:soul:luna", "用户喜欢直球提醒")
         srm.refresh_relationship_memory("luna")
         ref = srm.view_ref("luna")
         self.assertEqual(
@@ -128,7 +180,7 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
         )
         self.assertEqual(srm.read_relationship_memory("luna"), "")
 
-    def test_v2_reply_uses_relationship_view_in_public_and_private(self) -> None:
+    def test_reply_uses_relationship_view_in_public_and_private(self) -> None:
         self._unit("luna", "private:soul:luna", "用户允许 luna 用老友称呼")
         srm.refresh_relationship_memory(
             "luna",
@@ -139,19 +191,16 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
             description=None,
             sort_order=0,
             soul="你是 luna。",
-            soul_memory="LEGACY SHOULD NOT APPEAR",
         )
-        with patch.dict(os.environ, {memory_read.READ_MODE_ENV: "units"}):
-            public = reply_router._relationship_memory(
-                soul, channel="public_post", query="你好"
-            )
-            private = reply_router._relationship_memory(
-                soul, channel="chat", query="你好"
-            )
+        public = reply_router._relationship_memory(
+            soul, channel="public_post", query="你好"
+        )
+        private = reply_router._relationship_memory(
+            soul, channel="chat", query="你好"
+        )
         self.assertIn("老友", public)
         self.assertIn("拿不准时不要主动公开", public)
         self.assertEqual(public, private)
-        self.assertNotIn("LEGACY", public)
 
 
 if __name__ == "__main__":

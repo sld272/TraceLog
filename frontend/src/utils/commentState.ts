@@ -113,7 +113,6 @@ export function shouldRefreshPostDetail(event: PostEvent): boolean {
   return [
     'reply_succeeded',
     'reply_failed',
-    'light_reflection_succeeded',
     'pipeline_done',
   ].includes(event.event_type)
 }

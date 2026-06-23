@@ -95,7 +95,7 @@ def run_for_post(post_id: str, client: LLMClient, model: str) -> TodoToolResult:
 
 
 def run_for_post_safely(post_id: str, client: LLMClient, model: str) -> TodoToolResult:
-    """Run TodoTool without interrupting the post/reply/reflection flow."""
+    """Run TodoTool without interrupting the post/reply pipeline."""
     try:
         return run_for_post(post_id, client, model)
     except Exception as exc:

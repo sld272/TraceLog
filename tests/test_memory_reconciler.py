@@ -52,7 +52,7 @@ class MemoryReconcilerTest(unittest.TestCase):
              "confidence": 0.7, "tier": "core", "importance": 0.8, "evidence_event_ids": ids},
         ])
         summary = recon.reconcile_bucket(
-            "global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL
+            "global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL
         )
         self.assertIsNotNone(summary)
         self.assertEqual(summary.applied, 1)
@@ -61,14 +61,14 @@ class MemoryReconcilerTest(unittest.TestCase):
         self.assertEqual(len(units), 1)
         self.assertEqual(mes.get_cursor("global", "public"), ids[-1])
 
-        # op log links to the reflection row
-        ops = mus.list_unit_ops(reflection_id=summary.reflection_id)
+        # op log links to the reconcile run
+        ops = mus.list_unit_ops(reconcile_run_id=summary.reconcile_run_id)
         self.assertEqual([o["op"] for o in ops], ["add"])
 
     def test_reconcile_returns_none_when_no_new_events(self) -> None:
         producer = self._producer([])
         self.assertIsNone(
-            recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL)
+            recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         )
 
     def test_second_run_only_sees_new_events(self) -> None:
@@ -79,11 +79,11 @@ class MemoryReconcilerTest(unittest.TestCase):
             seen["ids"] = [e["id"] for e in events]
             return {"ops": []}
 
-        recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL)
+        recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(seen["ids"], ids1)
 
         ids2 = self._emit_public_events(1)  # creates p0 again -> different id
-        recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL)
+        recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(seen["ids"], ids2)
 
     # --- confirm / revise / retract ---------------------------------------
@@ -98,7 +98,7 @@ class MemoryReconcilerTest(unittest.TestCase):
         producer = self._producer([
             {"op": "confirm", "target_id": unit_id, "evidence_event_ids": new_ids, "confidence": 0.8},
         ])
-        summary = recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL)
+        summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(summary.by_op, {"confirm": 1})
         self.assertAlmostEqual(mus.get_unit(unit_id)["confidence"], 0.8, places=6)
 
@@ -110,7 +110,7 @@ class MemoryReconcilerTest(unittest.TestCase):
         )
         self._emit_public_events(1)
         producer = self._producer([{"op": "retract", "target_id": unit_id, "reason": "outdated"}])
-        recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL)
+        recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(mus.get_unit(unit_id)["status"], "retracted_by_model")
 
     # --- validation / safety ----------------------------------------------
@@ -118,14 +118,14 @@ class MemoryReconcilerTest(unittest.TestCase):
     def test_add_referencing_out_of_batch_event_is_skipped(self) -> None:
         first = self._emit_public_events(1)  # consumed in run 1
         producer1 = self._producer([])
-        recon.reconcile_bucket("global", "public", op_producer=producer1, reflection_type=recon.RECONCILE_GLOBAL)
+        recon.reconcile_bucket("global", "public", op_producer=producer1, run_type=recon.RECONCILE_GLOBAL)
 
         second = self._emit_public_events(1)
         # op references an event id from the FIRST (already consumed) batch -> not allowed
         producer2 = self._producer([
             {"op": "add", "type": "goal", "content": "x", "evidence_event_ids": first},
         ])
-        summary = recon.reconcile_bucket("global", "public", op_producer=producer2, reflection_type=recon.RECONCILE_GLOBAL)
+        summary = recon.reconcile_bucket("global", "public", op_producer=producer2, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(summary.applied, 0)
         self.assertEqual(summary.skipped, 1)
         self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 0)
@@ -142,7 +142,7 @@ class MemoryReconcilerTest(unittest.TestCase):
         )
         ids = self._emit_public_events(1)
         producer = self._producer([{"op": "confirm", "target_id": priv, "evidence_event_ids": ids}])
-        summary = recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL)
+        summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(summary.skipped, 1)
         self.assertEqual(summary.applied, 0)
 
@@ -153,7 +153,7 @@ class MemoryReconcilerTest(unittest.TestCase):
              "confidence": 0.9, "tier": "episodic", "importance": 0.2, "evidence_event_ids": ids},
         ])
         summary = recon.reconcile_bucket(
-            "global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL
+            "global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL
         )
         self.assertEqual(summary.applied, 0)
         self.assertEqual(summary.skipped, 1)
@@ -168,7 +168,7 @@ class MemoryReconcilerTest(unittest.TestCase):
              "confidence": 0.8, "tier": "contextual", "importance": 0.5, "evidence_event_ids": ids},
         ])
         summary = recon.reconcile_bucket(
-            "global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL
+            "global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL
         )
         self.assertEqual(summary.applied, 1)
         self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 1)
@@ -180,7 +180,7 @@ class MemoryReconcilerTest(unittest.TestCase):
             {"op": "add", "type": "bogus_type", "content": "坏 type", "evidence_event_ids": [ids[1]]},
             {"op": "add", "type": "insight", "content": "", "evidence_event_ids": [ids[1]]},  # empty content
         ])
-        summary = recon.reconcile_bucket("global", "public", op_producer=producer, reflection_type=recon.RECONCILE_GLOBAL)
+        summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(summary.applied, 1)
         self.assertEqual(summary.skipped, 2)
         self.assertEqual(len(mus.list_active_units_in_bucket("global", "public")), 1)
