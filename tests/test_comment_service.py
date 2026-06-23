@@ -395,22 +395,26 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIn("不能伪造事实", messages[0]["content"])
         self.assertIn("听起来像", messages[0]["content"])
         self.assertIn("没有证据时", messages[0]["content"])
-        self.assertEqual("user", messages[1]["role"])
-        self.assertIn("可参考的历史证据", messages[1]["content"])
-        self.assertEqual([{"role": "user", "content": "继续聊练歌"}], messages[2:])
+        # context-first, query-last: background folds into the FINAL user turn
+        # (no separate competing evidence turn), the real message comes last
+        self.assertEqual(2, len(messages))
+        self.assertEqual("user", messages[-1]["role"])
+        self.assertIn("参考背景", messages[-1]["content"])
+        self.assertTrue(messages[-1]["content"].rstrip().endswith("继续聊练歌"))
 
     def test_comment_reply_multi_turn_preserves_conversation_order(self) -> None:
         comment_service.call_comment_reply("20260525-001", "拾迹者", "你好", FakeClient({"reply": "你好呀"}), "fake-model")
         client = FakeClient({"reply": "继续。"})
 
         comment_service.call_comment_reply("20260525-001", "拾迹者", "再说说", client, "fake-model")
-        thread_messages = client.calls[-1]["messages"][2:]
+        # history stays as turns after system; the latest message is the final
+        # user turn (background folded in, actual text at the end)
+        thread_messages = client.calls[-1]["messages"][1:]
 
         self.assertEqual(["user", "assistant", "user"], [message["role"] for message in thread_messages])
-        self.assertEqual(
-            ["你好", '{"reply": "你好呀"}', "再说说"],
-            [message["content"] for message in thread_messages],
-        )
+        self.assertEqual("你好", thread_messages[0]["content"])
+        self.assertEqual('{"reply": "你好呀"}', thread_messages[1]["content"])
+        self.assertTrue(thread_messages[2]["content"].rstrip().endswith("再说说"))
 
     def test_comment_reply_failure_preserves_user_message_and_failed_assistant(self) -> None:
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):

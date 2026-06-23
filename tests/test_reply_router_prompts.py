@@ -61,17 +61,6 @@ class ReplyRouterPromptTest(unittest.TestCase):
         self.assertIn("不要直接与其他 SOUL 对话", prompt)
         self.assertIn("不要替其他 SOUL 发言", prompt)
 
-    def test_comment_reply_subject_anchor_pins_current_message(self) -> None:
-        anchor = reply_router._comment_reply_subject_anchor("实则躺平")
-        self.assertIn("「实则躺平」", anchor)
-        self.assertIn("回复主体", anchor)            # primary subject = current message
-        self.assertIn("默认不要扯到那些话题", anchor)  # default: stay on this thread
-        self.assertIn("直接相关", anchor)             # but may reference when relevant
-        self.assertIn("自相矛盾", anchor)             # the contradiction case
-        self.assertIn("天天内卷", anchor)             # calibration example
-        # nothing to anchor when there is no current user message
-        self.assertEqual(reply_router._comment_reply_subject_anchor("  "), "")
-
 
 if __name__ == "__main__":
     unittest.main()
