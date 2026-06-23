@@ -201,6 +201,19 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(expected, captured["query"])
         self.assertNotIn("这句不该进检索", context.retrieval_query)
 
+    def test_other_soul_user_comment_excluded_from_memory_section(self) -> None:
+        # All public-post comments share the global/public bucket, so without the
+        # fix the freshness seam surfaced the user's comment to ANOTHER soul as the
+        # current user's recent evidence (cross-talk). It may appear as labeled
+        # background, but must NOT be in the # 记忆 (memory/freshness) section.
+        comment_service.append_comment(
+            "20260525-001", "毒舌好友", "user", "实则躺平唯一标记XYZ"
+        )
+        context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊")
+        memory_section = context.context.split("# 记忆", 1)
+        memory_text = memory_section[1] if len(memory_section) > 1 else ""
+        self.assertNotIn("实则躺平唯一标记XYZ", memory_text)
+
     def test_build_comment_context_includes_other_soul_threads_with_user_followups(self) -> None:
         soul_service.create_soul("安静好友", "安静人格")
         self._insert_post_and_comment("20260525-001", "安静好友", "只首评，不应进入")

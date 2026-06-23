@@ -329,15 +329,21 @@ def build_comment_context(
     if web_section:
         sections.append(web_section)
 
+    # Exclude EVERY comment under this post (all SOULs' threads) from the memory
+    # section. Public-post comments all share the global/public bucket, so the
+    # freshness seam would otherwise surface the user's parallel comments to OTHER
+    # SOULs as the current user's "recent evidence" and pull the reply off-topic
+    # (cross-talk). The current thread is already the live multi-turn conversation,
+    # and other threads are shown as labeled background — neither belongs in memory.
+    excluded_comment_sources = {
+        ("comment_message", str(row["id"]))
+        for row in db.query_all("SELECT id FROM comments WHERE post_id = ?", (post_id,))
+    }
     memory_section = memory_read.memory_section_for(
         "comment",
         soul_name,
         user_message,
-        excluded_sources={
-            ("comment_message", str(message.id))
-            for message in llm_messages
-            if message.id > 0
-        },
+        excluded_sources=excluded_comment_sources,
     )
     if memory_section:
         sections.append(f"# 记忆\n\n{memory_section}")
