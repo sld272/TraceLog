@@ -21,6 +21,9 @@ import { soulColors } from '@/utils/soulColor'
 import styles from './PostCard.module.css'
 
 const FEED_MAX_THREAD_MESSAGES = 4
+// Only fold the middle of a feed thread when it would hide at least this many
+// messages — collapsing to hide a single message isn't worth the detail-page trip.
+const FEED_MIN_COLLAPSED = 2
 
 export interface CommentConversationState {
   conversation?: CommentConversation
@@ -378,7 +381,7 @@ function CommentPreview({
         <div className={styles.threadMessages}>
           {isThreadTruncated && detailHref && (
             <a className={styles.threadMoreLink} href={detailHref}>
-              中间省略 {threadMessages.length - visibleThreadMessages.length} 条 · 查看完整对话
+              省略 {threadMessages.length - visibleThreadMessages.length} 条评论 · 在详情页查看完整对话
             </a>
           )}
           {visibleThreadMessages.map((message) => (
@@ -461,8 +464,9 @@ function visibleMessagesForVariant(
   messages: CommentMessage[],
   variant: 'feed' | 'detail',
 ): CommentMessage[] {
-  if (variant === 'detail' || messages.length <= FEED_MAX_THREAD_MESSAGES - 1) return messages
-  const tail = messages.slice(-(FEED_MAX_THREAD_MESSAGES - 1))
+  const tailSize = FEED_MAX_THREAD_MESSAGES - 1
+  if (variant === 'detail' || messages.length - tailSize < FEED_MIN_COLLAPSED) return messages
+  const tail = messages.slice(-tailSize)
   const optimistic = messages.filter((message) => message.id < 0 && !tail.some((item) => item.id === message.id))
   const visibleIds = new Set([...tail, ...optimistic].map((message) => message.id))
   return messages.filter((message) => visibleIds.has(message.id))
