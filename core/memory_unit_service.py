@@ -45,6 +45,11 @@ def _is_owner(scope: str) -> bool:
     return scope == OWNER_GLOBAL or scope.startswith("soul:")
 
 
+def validate_owner_scope(owner_scope: str) -> None:
+    if not _is_owner(owner_scope):
+        raise BoundaryError(f"非法 owner_scope：{owner_scope}")
+
+
 def validate_boundary(owner_scope: str, visibility_scope: str) -> None:
     if not _is_owner(owner_scope):
         raise BoundaryError(f"非法 owner_scope：{owner_scope}")
@@ -447,6 +452,81 @@ def retain_unit(
             reconcile_run_id=reconcile_run_id,
         )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+
+
+# --- reflection (P2 deep-reflection) primitives ----------------------------
+
+def decay_unit(
+    unit_id: str,
+    *,
+    actor: str = "reflection",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Deep reflection retires a stale, non-core reflected belief to ``dormant``.
+
+    A dormant unit leaves every read path and the reconcile comparison set (which
+    only loads active/challenged), so it stops bloating prompts and growth —
+    while staying as history that a future confirm can revive. Only callable on
+    an active reflected unit; identity-floor (core) and user-authored beliefs are
+    out of scope and rejected by the caller, never decayed here silently."""
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        if row["status"] != "active":
+            raise ValueError("decay 只能作用于 active unit")
+        before = _row_to_dict(row)
+        c.execute(
+            "UPDATE memory_units SET status = 'dormant', in_portrait = 0, updated_at = ? "
+            "WHERE id = ?",
+            (now, unit_id),
+        )
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="decay", actor=actor, before=before, after=after
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+
+
+def promote_unit_tier(
+    unit_id: str,
+    *,
+    tier: str,
+    actor: str = "reflection",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Deep reflection sediments a unit's tier (e.g. contextual -> core after it
+    survives repeated confirms). Tier only; content and evidence are untouched.
+    Recomputes portrait membership so a promotion can newly enter the portrait."""
+    if tier not in {"core", "contextual", "episodic"}:
+        raise ValueError(f"非法 tier：{tier}")
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        if row["status"] != "active":
+            raise ValueError("promote 只能作用于 active unit")
+        before = _row_to_dict(row)
+        c.execute(
+            "UPDATE memory_units SET tier = ?, updated_at = ? WHERE id = ?",
+            (tier, now, unit_id),
+        )
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="promote", actor=actor, before=before, after=after
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+
+
+def count_confirm_ops(unit_id: str, *, conn: sqlite3.Connection | None = None) -> int:
+    """How many times reconcile re-evidenced this unit — the survival signal deep
+    reflection uses to decide a contextual belief has sedimented into core."""
+    sql = "SELECT COUNT(*) AS n FROM memory_unit_ops WHERE unit_id = ? AND op = 'confirm'"
+    if conn is not None:
+        return int(conn.execute(sql, (unit_id,)).fetchone()["n"])
+    return int(db.query_one(sql, (unit_id,))["n"])
 
 
 # --- user-facing workbench primitives --------------------------------------
