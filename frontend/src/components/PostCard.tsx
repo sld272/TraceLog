@@ -357,7 +357,7 @@ function CommentPreview({
                     重跑
                   </button>
                 )}
-                {onReply && (
+                {onReply && latestMessage?.id === comment.id && (
                   <button
                     type="button"
                     className={`${styles.quietAction} ${styles.quietPrimary} ${styles.replyTrigger} ${replyOpen ? styles.quietOn : ''}`}
@@ -390,6 +390,9 @@ function CommentPreview({
               busy={busyCommentId === message.id}
               onDelete={onDelete}
               onRerun={onRerun}
+              onReplyTrigger={onReply ? () => setReplyOpen((open) => !open) : undefined}
+              replyOpen={replyOpen}
+              replyDisabled={replyInputDisabled}
             />
           ))}
         </div>
@@ -504,6 +507,9 @@ function ThreadMessage({
   busy,
   onDelete,
   onRerun,
+  onReplyTrigger,
+  replyOpen = false,
+  replyDisabled = false,
 }: {
   message: CommentMessage
   soulName: string
@@ -511,6 +517,9 @@ function ThreadMessage({
   busy: boolean
   onDelete?: (commentId: number) => Promise<void>
   onRerun?: (commentId: number) => Promise<void>
+  onReplyTrigger?: () => void
+  replyOpen?: boolean
+  replyDisabled?: boolean
 }) {
   const isUser = message.role === 'user'
   const isPersisted = message.id > 0
@@ -569,7 +578,20 @@ function ThreadMessage({
         {!isUser && !isFailedAssistant && !isPendingAssistant && (
           <>
             <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
-            <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
+            <div className={styles.commentFooter}>
+              <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
+              {isPersisted && isLatest && onReplyTrigger && (
+                <button
+                  type="button"
+                  className={`${styles.quietAction} ${styles.quietPrimary} ${styles.replyTrigger} ${replyOpen ? styles.quietOn : ''}`}
+                  onClick={onReplyTrigger}
+                  disabled={replyDisabled}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5M4 12h11a4 4 0 0 1 4 4v1" /></svg>
+                  回复
+                </button>
+              )}
+            </div>
           </>
         )}
       </div>
