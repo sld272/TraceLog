@@ -66,7 +66,11 @@ DAY_SECONDS = 86400.0
 RETRIEVE_DEFAULT_K = 8
 # states live in the state block; portrait members live in the portrait — both
 # excluded here so relevant-memory retrieval surfaces the mid-tier beliefs.
-_RETRIEVE_EXCLUDED_TYPES = ("state",)
+# relationship units are owner-scoped to one persona and are injected ONLY through
+# that persona's relationship narrative; excluding them here keeps a (soul:X,public)
+# relationship belief from leaking into another soul's cross-persona retrieval
+# (owner becomes the access boundary even though visibility is public).
+_RETRIEVE_EXCLUDED_TYPES = ("state", "relationship")
 
 # freshness seam (units_and_freshness mode): the most recent raw evidence that
 # reconcile has NOT yet folded into units, so "just happened" facts are usable
@@ -444,6 +448,11 @@ def freshness_seam(
             owner_scope, visibility_scope, cursor, limit=FRESHNESS_MAX_EVENTS * 4
         )
         for event in mes.collapse_to_current_events(pending_events):
+            # comment_relationship is the relationship lens's private copy of a
+            # comment; its content already surfaces here as the canonical
+            # comment_message, so skip it to avoid double-showing the same line.
+            if str(event["source_type"]) == "comment_relationship":
+                continue
             if (
                 str(event["source_type"]),
                 str(event["source_id"]),
@@ -468,6 +477,8 @@ def freshness_seam(
             if trigger_current is not None:
                 review_events = [*review_events, trigger_current]
             for event in review_events:
+                if str(event["source_type"]) == "comment_relationship":
+                    continue
                 if (
                     str(event["source_type"]),
                     str(event["source_id"]),

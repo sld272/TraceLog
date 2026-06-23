@@ -115,6 +115,34 @@ class SoulRelationshipMemoryTest(unittest.TestCase):
             len(srm.relationship_units_for_soul("luna")), srm.REL_MAX_UNITS
         )
 
+    def test_public_relationship_unit_enters_persona_memory(self) -> None:
+        # route A: a relationship belief formed from public comments
+        # (visibility=public) is part of the persona's relationship memory
+        # alongside private-chat ones; souls_needing_view picks the soul up.
+        with db.transaction() as conn:
+            mes.record_comment_mutation(
+                conn, comment_id=1, post_id="p1", soul_name="luna",
+                role="user", op="create", content="老地方见", occurred_at=1.0,
+            )
+        rel_event = db.query_one(
+            "SELECT id FROM memory_ingest_events "
+            "WHERE source_type='comment_relationship' AND source_id='1'"
+        )["id"]
+        public_rel = mus.add_unit(
+            owner_scope="soul:luna", visibility_scope="public",
+            source_channel="comment", type="relationship",
+            content="用户和 luna 把评论区叫老地方",
+            confidence=0.7, tier="contextual", importance=0.5,
+            evidence_event_ids=[rel_event],
+        )
+        private_rel = self._unit(
+            "luna", "private:soul:luna", "私下会互道晚安",
+            tier="contextual", confidence=0.7, importance=0.5,
+        )
+        selected = {row["id"] for row in srm.relationship_units_for_soul("luna")}
+        self.assertEqual(selected, {public_rel, private_rel})
+        self.assertIn("luna", srm.souls_needing_view())
+
     def test_refresh_persists_relationship_view_and_reads_body(self) -> None:
         self._unit("luna", "private:soul:luna", "平时可以轻微互损")
         self._unit("luna", "private:soul:luna", "用户低落时希望先安静陪伴")

@@ -36,19 +36,25 @@ def describe_scene(boundary: dict) -> str:
     vis = str(boundary.get("visibility_scope") or "")
     soul = _soul_of(owner)
     if vis == "public" and owner == "global":
-        return "用户的公开帖子。抽取关于【用户本人】的信念。"
-    if vis.startswith("thread:") and soul:
+        return (
+            "用户的公开帖子与公开评论。抽取关于【用户本人】的信念"
+            "（身份、偏好、目标、持续处境）；某个人格专属的称呼或约定不是用户事实，跳过。"
+        )
+    if vis == "public" and soul:
+        # Route A: the persona's public relationship lens over the user's comments
+        # with this soul. Only the relationship texture beyond the public baseline.
         return (
             f"用户在 AI 人格【{soul}】的公开评论区与其互动。"
-            f"抽取关于【用户】（以及用户与{soul}的关系、用户对{soul}的要求）的信念；"
-            "特别留意稳定的称呼、互动约定、语气节奏、边界和默契；"
+            f"只抽取【用户与{soul}的相处】在公开基线之上的增量——稳定称呼、互动约定、"
+            f"回应偏好、语气节奏、边界与默契，以及用户对{soul}的专属要求；"
+            f"用户的客观事实（身份/偏好/处境）交给主记忆，这里不要重复；"
             f"绝不要描述{soul}自身的设定或性格。"
         )
     if vis.startswith("private:soul:") and soul:
         return (
             f"用户与 AI 人格【{soul}】的私聊。"
-            f"抽取关于【用户】（以及用户与{soul}的关系、用户对{soul}的要求）的信念；"
-            "特别留意稳定的称呼、互动约定、语气节奏、边界和默契；"
+            f"抽取【用户与{soul}的相处】以及用户在私聊中额外透露的信息——"
+            "稳定称呼、互动约定、语气节奏、边界、默契，以及私下才说的处境；"
             f"绝不要描述{soul}自身的设定或性格。"
         )
     return f"owner={owner}, visibility={vis}。抽取关于【用户】的信念。"

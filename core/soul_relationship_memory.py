@@ -70,13 +70,13 @@ def view_ref(soul_name: str) -> ViewRef:
 
 
 def soul_for_bucket(owner_scope: str, visibility_scope: str) -> str | None:
-    # Public-post comments now land in global/public; the only soul-scoped
-    # interaction left is private 1:1 chat, so relationship memory is sourced
-    # exclusively from a soul's private bucket.
+    # Route A: a persona's relationship memory is fed by the two visibility layers
+    # it owns — its private 1:1 chat bucket AND its public-comment bucket
+    # (soul:X, public). Both must mark this soul's aggregate view stale on change.
     if not owner_scope.startswith("soul:"):
         return None
     soul_name = owner_scope[len("soul:"):]
-    if visibility_scope == f"private:soul:{soul_name}":
+    if visibility_scope in (f"private:soul:{soul_name}", "public"):
         return soul_name
     return None
 
@@ -130,6 +130,9 @@ def relationship_units_for_soul(
             )
         }
 
+    # Route A: a persona's relationship memory spans BOTH visibility layers it
+    # owns — public (from public-comment interaction) and private (from 1:1 chat).
+    # The discretion gate (HARD vs SOFT) is per-unit by its visibility downstream.
     rows = _fetchall(
         conn,
         """
@@ -137,7 +140,7 @@ def relationship_units_for_soul(
         FROM memory_units
         WHERE owner_scope = ?
           AND type = 'relationship'
-          AND visibility_scope = ?
+          AND visibility_scope IN ('public', ?)
         """,
         (ref.owner_scope, f"private:soul:{soul_name}"),
     )
@@ -220,7 +223,7 @@ def souls_needing_view() -> list[str]:
               AND type = 'relationship'
               AND status = 'active'
               AND (
-                    visibility_scope LIKE 'thread:%'
+                    visibility_scope = 'public'
                     OR visibility_scope = 'private:' || owner_scope
               )
             """

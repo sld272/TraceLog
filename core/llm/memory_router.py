@@ -47,7 +47,7 @@ MEMORY_RECONCILE_PROMPT = """\
 4. 正式 goal 由目标系统管理；这里只记录与理解用户有关的倾向或持续处境。
 5. challenged unit：剩余证据完整支持用 retain；新版本支持用 confirm；需改写用 revise；
    已不支持用 retract。confirm/revise 必须引用其当前有效 evidence。
-6. thread/private 场景应识别稳定称呼、互动约定、回应偏好、语气、边界和默契。
+6. 与某个人格互动的场景（公开评论或私聊）应识别稳定称呼、互动约定、回应偏好、语气、边界和默契。
 7. 没有可靠增量时返回空 ops。宁缺毋滥。
 
 当前时间：{current_datetime}

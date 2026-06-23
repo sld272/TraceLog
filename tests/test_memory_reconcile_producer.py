@@ -95,12 +95,13 @@ class ReconcileProducerTest(unittest.TestCase):
         self.assertEqual(result["summary"], "s")
 
     def test_describe_scene_keeps_soul_as_context_not_subject(self) -> None:
-        # comment scene: soul appears as context, with an explicit "don't describe the soul" instruction
+        # route A public-relationship scene (soul:X, public): soul appears as
+        # context, relationship-only, with an explicit "don't describe the soul".
         comment = producer_mod.describe_scene(
-            {"owner_scope": "soul:喜多郁代", "visibility_scope": "thread:20260616-001"}
+            {"owner_scope": "soul:喜多郁代", "visibility_scope": "public"}
         )
         self.assertIn("喜多郁代", comment)
-        self.assertIn("用户", comment)
+        self.assertIn("相处", comment)
         self.assertIn("绝不要描述", comment)
 
         post = producer_mod.describe_scene({"owner_scope": "global", "visibility_scope": "public"})

@@ -24,7 +24,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from core import db
+from core import db, memory_events_service as mes
 
 # --- boundary vocabulary / validation --------------------------------------
 
@@ -674,19 +674,28 @@ def challenge_units_for_source(
         raise ValueError(f"trigger event 不存在：{trigger_event_id}")
     if trigger["op"] not in {"edit", "delete"}:
         return []
+    # A comment has two lenses (comment_message + comment_relationship) over the
+    # SAME utterance; editing/deleting it must challenge both the user-fact unit
+    # and the relationship unit, so match across the grouped source types.
+    source_types = (
+        mes.COMMENT_SOURCE_TYPES
+        if trigger["source_type"] in mes.COMMENT_SOURCE_TYPES
+        else (trigger["source_type"],)
+    )
+    placeholders = ",".join("?" for _ in source_types)
     rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT u.*
         FROM memory_units u
         JOIN memory_unit_evidence ue ON ue.unit_id = u.id
         JOIN memory_ingest_events e ON e.id = ue.event_id
-        WHERE e.source_type = ? AND e.source_id = ?
+        WHERE e.source_type IN ({placeholders}) AND e.source_id = ?
           AND ue.review_pending = 0
           AND u.source IN ('reflected','user_authored')
           AND u.status IN ('active','challenged')
         ORDER BY u.id
         """,
-        (trigger["source_type"], trigger["source_id"]),
+        (*source_types, trigger["source_id"]),
     ).fetchall()
     now = db.now_ts()
     challenged: list[str] = []

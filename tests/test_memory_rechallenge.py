@@ -54,6 +54,40 @@ class MemoryRechallengeTest(unittest.TestCase):
             evidence_event_ids=event_ids,
         )
 
+    def test_comment_edit_challenges_both_lenses(self) -> None:
+        # one user comment -> comment_message (global/public) + comment_relationship
+        # (soul:luna/public). A single edit-challenge on the comment_message event
+        # must propagate to BOTH the user-fact unit and the relationship unit.
+        with db.transaction() as conn:
+            create = mes.record_comment_mutation(
+                conn, comment_id=1, post_id="p1", soul_name="luna",
+                role="user", op="create", content="我喜欢你直接点", occurred_at=1.0,
+            )
+        msg_create = create.id
+        rel_create = db.query_one(
+            "SELECT id FROM memory_ingest_events "
+            "WHERE source_type='comment_relationship' AND source_id='1'"
+        )["id"]
+        fact_unit = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="comment",
+            type="preference", content="用户喜欢直接", confidence=0.8, tier="core",
+            importance=0.8, evidence_event_ids=[msg_create],
+        )
+        rel_unit = mus.add_unit(
+            owner_scope="soul:luna", visibility_scope="public", source_channel="comment",
+            type="relationship", content="用户希望 luna 说话直接", confidence=0.7,
+            tier="contextual", importance=0.5, evidence_event_ids=[rel_create],
+        )
+        with db.transaction() as conn:
+            edit = mes.record_comment_mutation(
+                conn, comment_id=1, post_id="p1", soul_name="luna",
+                role="user", op="edit", content="用户喜欢非常直接", occurred_at=2.0,
+            )
+            challenged = mus.challenge_units_for_source(conn, edit.id)
+        self.assertEqual(set(challenged), {fact_unit, rel_unit})
+        self.assertEqual(mus.get_unit(fact_unit)["status"], "challenged")
+        self.assertEqual(mus.get_unit(rel_unit)["status"], "challenged")
+
     def _settle(self, event_id: int) -> None:
         with db.transaction() as conn:
             mes.advance_cursor(conn, "global", "public", event_id)

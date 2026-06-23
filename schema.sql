@@ -365,7 +365,7 @@ CREATE TABLE IF NOT EXISTS memory_ingest_events (
     source_channel   TEXT NOT NULL
                        CHECK(source_channel IN ('post','comment','chat')),
     source_type      TEXT NOT NULL
-                       CHECK(source_type IN ('post','post_vision','comment_message','chat_message')),
+                       CHECK(source_type IN ('post','post_vision','comment_message','comment_relationship','chat_message')),
     source_id        TEXT NOT NULL,
     source_revision  INTEGER NOT NULL,           -- monotonic from 1 per source_id
     op               TEXT NOT NULL
