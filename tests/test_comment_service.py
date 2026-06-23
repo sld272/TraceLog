@@ -216,6 +216,9 @@ class CommentServiceTest(unittest.TestCase):
 
         self.assertIn("# 本帖其他评论区对话(其他 SOUL,公开评论背景)", context.context)
         self.assertIn("## 毒舌好友", context.context)
+        # the user line in another SOUL's thread is disambiguated as addressed to
+        # that SOUL, never a bare follow-up the current SOUL might answer
+        self.assertIn("用户对 毒舌好友", context.context)
         self.assertNotIn("只首评，不应进入", context.context)
         self.assertNotIn("别装了，继续讲重点。", context.context)
         background = context.context.split("# 记忆", 1)[0]

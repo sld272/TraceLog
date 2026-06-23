@@ -750,8 +750,12 @@ def _other_soul_comment_context(post_id: str, current_soul: str) -> str:
 
 
 def _comment_context_label(role: str, seq: int, soul_name: str) -> str:
+    # Used ONLY for other SOULs' threads shown as background. The user line here
+    # is the user talking TO that other SOUL — label it explicitly so the current
+    # SOUL never mistakes it for a follow-up addressed to itself (which crossed
+    # wires when the user replied to several SOULs at once).
     if role == "user":
-        return "用户 · 追问"
+        return f"用户对 {soul_name} 说"
     if seq == 0:
         return f"{soul_name} · 首评"
     return f"{soul_name} · 回复"
