@@ -60,6 +60,14 @@ class ReplyRouterPromptTest(unittest.TestCase):
         self.assertIn("不要替其他 SOUL 发言", prompt)
         self.assertIn("不要让其他线程抢走当前追问的重心", prompt)
 
+    def test_comment_reply_subject_anchor_pins_current_message(self) -> None:
+        anchor = reply_router._comment_reply_subject_anchor("实则躺平")
+        self.assertIn("「实则躺平」", anchor)
+        self.assertIn("只回应这一句", anchor)
+        self.assertIn("不要回应用户对别的 SOUL 说的话", anchor)
+        # nothing to anchor when there is no current user message
+        self.assertEqual(reply_router._comment_reply_subject_anchor("  "), "")
+
 
 if __name__ == "__main__":
     unittest.main()

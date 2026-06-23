@@ -227,7 +227,8 @@ class CommentServiceTest(unittest.TestCase):
 
         context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊")
 
-        self.assertIn("# 本帖其他评论区对话(其他 SOUL,公开评论背景)", context.context)
+        self.assertIn("# 本帖其他评论区（公开氛围，仅供你知道）", context.context)
+        self.assertIn("本轮不要回应这里的任何内容", context.context)
         self.assertIn("## 毒舌好友", context.context)
         # the user line in another SOUL's thread is disambiguated as addressed to
         # that SOUL, never a bare follow-up the current SOUL might answer

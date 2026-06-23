@@ -729,7 +729,11 @@ def _other_soul_comment_context(post_id: str, current_soul: str) -> str:
     if not threads:
         return ""
 
-    sections = ["# 本帖其他评论区对话(其他 SOUL,公开评论背景)"]
+    sections = [
+        "# 本帖其他评论区（公开氛围，仅供你知道）\n"
+        "下面是用户在本帖和**其他 SOUL** 的公开互动。**本轮不要回应这里的任何内容，"
+        "也不要主动提起**；这些用户消息不是对你说的。只用于让你大致知道帖子下的氛围。"
+    ]
     for thread in threads:
         soul_name = str(thread["soul_name"])
         rows = db.query_all(

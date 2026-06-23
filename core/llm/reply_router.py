@@ -193,14 +193,17 @@ def call_soul_comment_reply(
     trace_context: dict | None = None,
 ) -> dict | None:
     """Call one SOUL for a post comment thread reply."""
-    relationship = _relationship_memory(
-        soul, channel="comment", query=_last_user_text(comment_context.messages)
-    )
-    system_msg = (
-        f"## SOUL 人格\n{soul.soul.strip()}\n\n"
-        f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
-        f"---\n\n{_comment_reply_task_prompt()}"
-    )
+    current = _last_user_text(comment_context.messages).strip()
+    relationship = _relationship_memory(soul, channel="comment", query=current)
+    parts = [
+        f"## SOUL 人格\n{soul.soul.strip()}",
+        f"## SOUL 相处记忆\n{relationship}",
+    ]
+    anchor = _comment_reply_subject_anchor(current)
+    if anchor:
+        parts.append(anchor)
+    parts.append(_comment_reply_task_prompt())
+    system_msg = "\n\n---\n\n".join(parts)
     messages = _build_multi_turn_messages(system_msg, comment_context.context, comment_context.messages)
     if messages is None:
         return None
@@ -219,6 +222,23 @@ def _post_reply_task_prompt() -> str:
 
 def _chat_reply_task_prompt() -> str:
     return _render_task_prompt(CHAT_REPLY_TASK_PROMPT)
+
+
+def _comment_reply_subject_anchor(current: str) -> str:
+    """Pin the reply to THIS thread's latest user message. The post's other
+    comment threads are public ambience the SOUL may be aware of, but a weak model
+    otherwise latches onto that richer background and answers it instead of the
+    user's actual (often terse) message to this SOUL."""
+    current = (current or "").strip()
+    if not current:
+        return ""
+    return (
+        "## 本轮回复对象（最重要，优先于其他一切上下文）\n"
+        f"用户在你这条评论线里对你说的最新一句是：「{current}」。\n"
+        "你本轮**只回应这一句**，并贴合你和用户在这条线里的上下文。"
+        "本帖其他评论区只是公开氛围，你可以知道，但本轮**绝不要主动提起其他评论区的内容、"
+        "不要接别人的话题、不要回应用户对别的 SOUL 说的话**。"
+    )
 
 
 def _comment_reply_task_prompt() -> str:
