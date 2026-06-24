@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
-from core import attachment_service, db, query_rewriter, reply_service, retrieval, vector_index_service, vision_service
+from core import attachment_service, db, reply_service, vector_index_service, vision_service
 from core.app_services import event_service, job_service, public_post_pipeline
 from tests.helpers import require_not_none
 
@@ -43,8 +43,6 @@ class PublicPostPipelineTest(unittest.TestCase):
         self.workspace = Path(self.tmp.name) / "workspace"
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_rewrite = query_rewriter.rewrite_query
-        self.old_search = retrieval.hybrid_search
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         db.init_db()
@@ -58,8 +56,6 @@ class PublicPostPipelineTest(unittest.TestCase):
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        query_rewriter.rewrite_query = self.old_rewrite
-        retrieval.hybrid_search = self.old_search
         self.tmp.cleanup()
 
     def test_create_post_returns_immediately_and_enqueues_jobs(self) -> None:
@@ -162,13 +158,6 @@ class PublicPostPipelineTest(unittest.TestCase):
         first = require_not_none(job_service.claim_next_pending())
         job_service.mark_succeeded(first["id"])
         job = require_not_none(job_service.claim_next_pending())
-        query_rewriter.rewrite_query = lambda *args, **kwargs: query_rewriter.RewrittenQuery(
-            raw_query="今天想练歌",
-            semantic_query="今天想练歌",
-            keywords=[],
-            used_rewrite=False,
-        )
-        retrieval.hybrid_search = lambda *args, **kwargs: []
 
         public_post_pipeline.execute_job(job, client=None, model="fake")  # type: ignore[arg-type]
         event_types = [event["event_type"] for event in event_service.list_post_events(created.post_id)]
@@ -254,13 +243,6 @@ class PublicPostPipelineTest(unittest.TestCase):
         first = require_not_none(job_service.claim_next_pending())
         job_service.mark_succeeded(first["id"])
         job = require_not_none(job_service.claim_next_pending())
-        query_rewriter.rewrite_query = lambda *args, **kwargs: query_rewriter.RewrittenQuery(
-            raw_query="今天想练歌",
-            semantic_query="今天想练歌",
-            keywords=[],
-            used_rewrite=False,
-        )
-        retrieval.hybrid_search = lambda *args, **kwargs: []
 
         with self.assertRaisesRegex(RuntimeError, "reply generation failed"):
             public_post_pipeline.execute_job(job, client=None, model="bad-model")  # type: ignore[arg-type]

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, memory_unit_service, memory_view_service, query_rewriter, retrieval, soul_relationship_memory, soul_service, suggestion_pipeline, tool_config_service, web_search_gate, web_search_service
+from core import chat_service, db, logging_service, memory_unit_service, memory_view_service, soul_relationship_memory, soul_service, suggestion_pipeline, tool_config_service, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
 from tests.helpers import require_not_none
@@ -49,15 +49,11 @@ class ChatServiceTest(unittest.TestCase):
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_hybrid_search = retrieval.hybrid_search
-        self.old_hybrid_docs = retrieval.hybrid_search_documents
         self.old_web_search_config = web_search_service.CONFIG_FILE
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         soul_service.SOULS_DIR = self.workspace / "souls"
-        retrieval.hybrid_search = lambda query, k=3, **kwargs: []
-        retrieval.hybrid_search_documents = lambda *args, **kwargs: []
         web_search_service.CONFIG_FILE = str(Path(self.tmp.name) / "config.json")
 
         db.init_db()
@@ -85,8 +81,6 @@ class ChatServiceTest(unittest.TestCase):
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         soul_service.SOULS_DIR = self.old_souls_dir
-        retrieval.hybrid_search = self.old_hybrid_search
-        retrieval.hybrid_search_documents = self.old_hybrid_docs
         web_search_service.CONFIG_FILE = self.old_web_search_config
         self.tmp.cleanup()
 
@@ -240,15 +234,6 @@ class ChatServiceTest(unittest.TestCase):
             patch("core.reply_context.web_search_service.effective_config", return_value=settings),
             patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
             patch("core.reply_context.web_search_service.search", return_value=run) as search,
-            patch(
-                "core.reply_context.query_rewriter.rewrite_query",
-                return_value=query_rewriter.RewrittenQuery(
-                    raw_query="raw",
-                    semantic_query="OpenAI latest model",
-                    keywords=[],
-                    used_rewrite=True,
-                ),
-            ),
         ):
             context = chat_service.build_chat_context(
                 thread.id,

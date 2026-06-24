@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 from PIL import Image
 
-from core import chat_service, db, logging_service, retrieval, soul_service, suggestion_service
+from core import chat_service, db, logging_service, soul_service, suggestion_service
 from core.app_services import job_service
 
 
@@ -26,13 +26,11 @@ class ApiManagementTest(unittest.TestCase):
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_hybrid_search = retrieval.hybrid_search
         self.config_path = Path(self.tmp.name) / "config.json"
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         soul_service.SOULS_DIR = self.workspace / "souls"
-        retrieval.hybrid_search = lambda *args, **kwargs: []
 
         db.init_db()
         logging_service.init_logging({"enabled": False})
@@ -56,7 +54,6 @@ class ApiManagementTest(unittest.TestCase):
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         soul_service.SOULS_DIR = self.old_souls_dir
-        retrieval.hybrid_search = self.old_hybrid_search
         self.tmp.cleanup()
 
     def _client(self):

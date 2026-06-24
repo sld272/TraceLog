@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import re
 import sqlite3
-from typing import Any
 
 from core import db
 from core import fts_query
@@ -13,40 +12,6 @@ from core import logging_service
 
 LIKE_FALLBACK_TRUST = 0.85
 MAX_VECTOR_DISTANCE = 0.73
-
-DOC_WEIGHT_BY_CHANNEL = {
-    "comment": {
-        ("comment", "user", "same"): 0.90,
-        ("comment", "user", "other"): 0.77,
-        ("comment", "assistant", "same"): 0.70,
-        ("comment", "assistant", "other"): 0.60,
-        ("chat", "user", "same"): 0.80,
-        ("chat", "assistant", "same"): 0.65,
-    },
-    "comment_thread": {
-        ("comment", "user", "same"): 0.90,
-        ("comment", "user", "other"): 0.77,
-        ("comment", "assistant", "same"): 0.70,
-        ("comment", "assistant", "other"): 0.60,
-        ("chat", "user", "same"): 0.80,
-        ("chat", "assistant", "same"): 0.65,
-    },
-    "chat": {
-        ("comment", "user", "same"): 0.85,
-        ("comment", "user", "other"): 0.60,
-        ("comment", "assistant", "same"): 0.65,
-        ("comment", "assistant", "other"): 0.45,
-        ("chat", "user", "same"): 0.90,
-        ("chat", "assistant", "same"): 0.70,
-    },
-}
-
-DOC_TYPE_CAPS_BY_CHANNEL = {
-    "comment": {"post": 3, "comment": 2, "chat": 1},
-    "comment_thread": {"post": 3, "comment": 2, "chat": 1},
-    "chat": {"post": 3, "comment": 1, "chat": 2},
-}
-
 
 @dataclass(frozen=True)
 class RetrievalHit:
@@ -76,19 +41,6 @@ class UserSearchHit:
 class UserSearchResult:
     hits: list[UserSearchHit]
     semantic_available: bool
-
-
-@dataclass(frozen=True)
-class RetrievalDocHit:
-    doc_id: str
-    type: str
-    source_id: str
-    score: float
-    rank: int
-    metadata: dict[str, Any]
-    sources: list[str]
-    reasons: list[str]
-    distance: float | None = None
 
 
 @dataclass(frozen=True)
@@ -266,88 +218,6 @@ def _semantic_search_available() -> bool:
         return False
 
 
-def build_retrieval_filter(channel: str, soul_name: str | None = None) -> dict | None:
-    """Build a Chroma metadata filter for one reply context."""
-    if channel == "public_post":
-        return {"$or": [{"type": {"$eq": "post"}}, {"type": {"$eq": "post_vision"}}]}
-    if channel in {"chat", "comment", "comment_thread"} and soul_name:
-        return {
-            "$or": [
-                {"type": {"$eq": "post"}},
-                {"type": {"$eq": "post_vision"}},
-                {"type": {"$eq": "comment"}},
-                {
-                    "$and": [
-                        {"type": {"$eq": "chat"}},
-                        {"soul_name": {"$eq": soul_name}},
-                    ]
-                },
-            ]
-        }
-    return {"type": {"$eq": "post"}}
-
-
-def hybrid_search_documents(
-    query: str,
-    k: int = 5,
-    candidate_k: int = 20,
-    semantic_query: str | None = None,
-    fts_keywords: list[str] | None = None,
-    trace_context: dict | None = None,
-    filter_dict: dict | None = None,
-    exclusion: RetrievalExclusion | None = None,
-    channel: str | None = None,
-    soul_name: str | None = None,
-) -> list[RetrievalDocHit]:
-    """Return mixed post/comment/chat retrieval hits."""
-    candidate_limit = max(k, candidate_k)
-    fts_hits = (
-        fts_search_scored(query, k=candidate_limit, fts_keywords=fts_keywords, trace_context=trace_context)
-        if fts_keywords is not None
-        else fts_search_scored(query, k=candidate_limit, trace_context=trace_context)
-    )
-    vector_query = semantic_query or query
-    vector_hits = vector_search_documents_scored(vector_query, k=candidate_limit, filter_dict=filter_dict)
-    fts_hits, vector_hits = _filter_excluded_document_candidates(
-        fts_hits,
-        vector_hits,
-        exclusion,
-        trace_context=trace_context,
-    )
-    final_hits = _merge_document_hits(
-        query,
-        fts_hits,
-        vector_hits,
-        k,
-        channel=channel,
-        current_soul=soul_name,
-    )
-    _log_hybrid_doc_retrieval_result(
-        query=query,
-        semantic_query=semantic_query,
-        fts_keywords=fts_keywords,
-        fts_hits=fts_hits,
-        vector_hits=vector_hits,
-        final_hits=final_hits,
-        trace_context=trace_context,
-    )
-    return final_hits
-
-
-def vector_search_documents_scored(
-    query: str,
-    k: int = 20,
-    filter_dict: dict | None = None,
-) -> list:
-    try:
-        from core import vectorstore
-
-        hits = vectorstore.query_documents(query, n_results=k, where=filter_dict)
-        return _filter_vector_hits(hits, key=lambda hit: hit.distance, trace="documents")
-    except Exception:
-        return []
-
-
 def _within_vector_distance(distance: float | None) -> bool:
     if distance is None:
         return True
@@ -381,29 +251,6 @@ def _filter_vector_hits(hits: list, *, key, trace: str) -> list:
             dropped_distances=[round(distance, 4) for distance in dropped_distances[:10]],
         )
     return [replace(hit, rank=index + 1) for index, hit in enumerate(kept)]
-
-
-def hybrid_search(
-    query: str,
-    k: int = 3,
-    semantic_query: str | None = None,
-    fts_keywords: list[str] | None = None,
-    trace_context: dict | None = None,
-    exclusion: RetrievalExclusion | None = None,
-) -> list[str]:
-    """Return top hybrid result ids for prompt context."""
-    return [
-        hit.post_id
-        for hit in hybrid_search_scored(
-            query,
-            k=k,
-            min_score=None,
-            semantic_query=semantic_query,
-            fts_keywords=fts_keywords,
-            trace_context=trace_context,
-            exclusion=exclusion,
-        )
-    ]
 
 
 def hybrid_search_scored(
@@ -553,72 +400,6 @@ def _like_search_scored(query: str, k: int) -> list[RetrievalHit]:
     ]
 
 
-def _merge_document_hits(
-    query: str,
-    fts_hits: list[RetrievalHit],
-    vector_hits: list,
-    k: int,
-    *,
-    channel: str | None = None,
-    current_soul: str | None = None,
-) -> list[RetrievalDocHit]:
-    fts_scores = _score_fts_hits(fts_hits)
-    vector_scores = _score_vector_doc_hits(vector_hits)
-    by_doc: dict[str, RetrievalDocHit] = {}
-
-    for hit in fts_hits:
-        doc_id = f"post-{hit.post_id}"
-        base_score = fts_scores.get(hit.post_id, 0.0)
-        bonus_score, bonus_reasons = _content_bonus(query, _read_post_content(hit.post_id))
-        by_doc[doc_id] = RetrievalDocHit(
-            doc_id=doc_id,
-            type="post",
-            source_id=hit.post_id,
-            score=round(min(base_score + bonus_score, 1.0), 6),
-            rank=hit.rank,
-            metadata={"type": "post", "post_id": hit.post_id},
-            sources=[hit.source],
-            reasons=[f"{hit.source}:rank={hit.rank}", *bonus_reasons],
-            distance=None,
-        )
-
-    for hit in vector_hits:
-        doc_id = str(hit.doc_id)
-        doc_type = str(hit.type)
-        metadata = dict(hit.metadata)
-        raw_score = vector_scores.get(doc_id, 0.0) * _doc_weight(doc_type, metadata, current_soul, channel)
-        existing = by_doc.get(doc_id)
-        if existing is not None:
-            sources = fts_query.ordered_unique([*existing.sources, "vector"])
-            reasons = [*existing.reasons, f"vector:rank={hit.rank}", "agreement"]
-            by_doc[doc_id] = RetrievalDocHit(
-                doc_id=existing.doc_id,
-                type=existing.type,
-                source_id=existing.source_id,
-                score=round(max(existing.score, raw_score), 6),
-                rank=min(existing.rank, int(hit.rank)),
-                metadata={**metadata, **existing.metadata},
-                sources=sources,
-                reasons=reasons,
-                distance=hit.distance if hit.distance is not None else existing.distance,
-            )
-            continue
-        by_doc[doc_id] = RetrievalDocHit(
-            doc_id=doc_id,
-            type=doc_type,
-            source_id=str(hit.source_id),
-            score=round(raw_score, 6),
-            rank=int(hit.rank),
-            metadata=metadata,
-            sources=["vector"],
-            reasons=[f"vector:rank={hit.rank}"],
-            distance=hit.distance,
-        )
-
-    ordered = sorted(by_doc.values(), key=lambda hit: (hit.score, -hit.rank, hit.doc_id), reverse=True)
-    return _apply_doc_type_caps(ordered, k, channel)
-
-
 def _filter_excluded_post_candidates(
     fts_hits: list[RetrievalHit],
     vector_hits: list[RetrievalHit],
@@ -648,126 +429,6 @@ def _filter_excluded_post_candidates(
 
     _log_retrieval_self_excluded(excluded_doc_ids, trace_context=trace_context)
     return filtered_fts, filtered_vector
-
-
-def _filter_excluded_document_candidates(
-    fts_hits: list[RetrievalHit],
-    vector_hits: list,
-    exclusion: RetrievalExclusion | None,
-    *,
-    trace_context: dict | None,
-) -> tuple[list[RetrievalHit], list]:
-    if exclusion is None:
-        return fts_hits, vector_hits
-
-    excluded_doc_ids: list[str] = []
-    filtered_fts = []
-    for hit in fts_hits:
-        doc_id = f"post-{hit.post_id}"
-        if hit.post_id in exclusion.post_ids:
-            excluded_doc_ids.append(doc_id)
-            continue
-        filtered_fts.append(hit)
-
-    filtered_vector = []
-    for hit in vector_hits:
-        doc_id = str(getattr(hit, "doc_id", ""))
-        if _is_document_excluded(hit, exclusion):
-            excluded_doc_ids.append(doc_id)
-            continue
-        filtered_vector.append(hit)
-
-    _log_retrieval_self_excluded(excluded_doc_ids, trace_context=trace_context)
-    return filtered_fts, filtered_vector
-
-
-def _is_document_excluded(hit, exclusion: RetrievalExclusion) -> bool:
-    doc_type = str(getattr(hit, "type", ""))
-    metadata = getattr(hit, "metadata", {}) or {}
-    if doc_type in {"post", "post_vision"}:
-        post_id = str(metadata.get("post_id") or getattr(hit, "source_id", ""))
-        return post_id in exclusion.post_ids
-    if doc_type == "comment":
-        post_id = str(metadata.get("post_id") or "")
-        return post_id in exclusion.comment_post_ids
-    if doc_type == "chat":
-        message_id = _int_or_none(metadata.get("message_id") or getattr(hit, "source_id", None))
-        return message_id in exclusion.chat_message_ids
-    return False
-
-
-def _int_or_none(value) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _score_vector_doc_hits(hits: list) -> dict[str, float]:
-    distances = [hit.distance for hit in hits if hit.distance is not None]
-    min_distance = min(distances) if distances else None
-    max_distance = max(distances) if distances else None
-    scores: dict[str, float] = {}
-    total = len(hits)
-    for hit in hits:
-        rank_score = _position_score(int(hit.rank), total)
-        if hit.distance is None or min_distance is None or max_distance is None or max_distance == min_distance:
-            distance_score = rank_score
-        else:
-            distance_score = 1.0 - ((hit.distance - min_distance) / (max_distance - min_distance))
-        scores[str(hit.doc_id)] = 0.7 * distance_score + 0.3 * rank_score
-    return scores
-
-
-def _doc_weight(doc_type: str, metadata: dict[str, Any], current_soul: str | None, channel: str | None) -> float:
-    normalized_type = "post" if doc_type in {"post", "post_vision"} else doc_type
-    if normalized_type == "post":
-        return 1.0
-
-    channel_weights = DOC_WEIGHT_BY_CHANNEL.get(str(channel or ""))
-    if channel_weights is None:
-        return _type_weight(doc_type)
-
-    role = str(metadata.get("role") or "").strip()
-    if role not in {"user", "assistant"}:
-        return _type_weight(doc_type)
-
-    if normalized_type == "chat":
-        relation = "same"
-    else:
-        soul_name = str(metadata.get("soul_name") or "").strip()
-        if not current_soul or not soul_name:
-            return _type_weight(doc_type)
-        relation = "same" if soul_name == current_soul else "other"
-
-    return channel_weights.get((normalized_type, role, relation), _type_weight(doc_type))
-
-
-def _apply_doc_type_caps(hits: list[RetrievalDocHit], k: int, channel: str | None) -> list[RetrievalDocHit]:
-    caps = DOC_TYPE_CAPS_BY_CHANNEL.get(str(channel or ""))
-    if not caps:
-        return hits[:k]
-
-    selected: list[RetrievalDocHit] = []
-    counts = {doc_type: 0 for doc_type in caps}
-    for hit in hits:
-        if len(selected) >= k:
-            break
-        bucket = "post" if hit.type in {"post", "post_vision"} else hit.type
-        cap = caps.get(bucket, k)
-        if counts.get(bucket, 0) >= cap:
-            continue
-        counts[bucket] = counts.get(bucket, 0) + 1
-        selected.append(hit)
-    return selected
-
-
-def _type_weight(doc_type: str) -> float:
-    if doc_type == "comment":
-        return 0.85
-    if doc_type == "chat":
-        return 0.75
-    return 1.0
 
 
 def _read_post_content(post_id: str) -> str:
@@ -977,28 +638,6 @@ def _log_hybrid_retrieval_result(
     )
 
 
-def _log_hybrid_doc_retrieval_result(
-    *,
-    query: str,
-    semantic_query: str | None,
-    fts_keywords: list[str] | None,
-    fts_hits: list[RetrievalHit],
-    vector_hits: list,
-    final_hits: list[RetrievalDocHit],
-    trace_context: dict | None,
-) -> None:
-    logging_service.log_event(
-        "hybrid_doc_retrieval_result",
-        **(trace_context or {}),
-        raw_query=query,
-        semantic_query=semantic_query or query,
-        fts_keywords=fts_keywords or [],
-        fts_hits=[_retrieval_hit_payload(hit) for hit in fts_hits],
-        vector_hits=[_vector_doc_hit_payload(hit) for hit in vector_hits],
-        final_hits=[_doc_hit_payload(hit) for hit in final_hits],
-    )
-
-
 def _log_retrieval_self_excluded(doc_ids: list[str], *, trace_context: dict | None) -> None:
     excluded_doc_ids = fts_query.ordered_unique([doc_id for doc_id in doc_ids if doc_id])
     if not excluded_doc_ids:
@@ -1009,29 +648,6 @@ def _log_retrieval_self_excluded(doc_ids: list[str], *, trace_context: dict | No
         excluded_doc_ids=excluded_doc_ids,
         excluded_count=len(excluded_doc_ids),
     )
-
-
-def _vector_doc_hit_payload(hit) -> dict:
-    return {
-        "doc_id": str(getattr(hit, "doc_id", "")),
-        "type": str(getattr(hit, "type", "")),
-        "source_id": str(getattr(hit, "source_id", "")),
-        "rank": getattr(hit, "rank", None),
-        "distance": getattr(hit, "distance", None),
-    }
-
-
-def _doc_hit_payload(hit: RetrievalDocHit) -> dict:
-    return {
-        "doc_id": hit.doc_id,
-        "type": hit.type,
-        "source_id": hit.source_id,
-        "score": hit.score,
-        "rank": hit.rank,
-        "distance": hit.distance,
-        "sources": hit.sources,
-        "reasons": hit.reasons,
-    }
 
 
 def _retrieval_hit_payload(hit: RetrievalHit) -> dict:

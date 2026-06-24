@@ -15,8 +15,6 @@ from core import (
     memory_read,
     memory_unit_service,
     memory_view_service,
-    query_rewriter,
-    retrieval,
     soul_relationship_memory,
     soul_service,
     suggestion_pipeline,
@@ -60,13 +58,11 @@ class CommentServiceTest(unittest.TestCase):
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
         self.old_souls_dir = soul_service.SOULS_DIR
-        self.old_hybrid_docs = retrieval.hybrid_search_documents
         self.old_web_search_config = web_search_service.CONFIG_FILE
 
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         soul_service.SOULS_DIR = self.workspace / "souls"
-        retrieval.hybrid_search_documents = lambda *args, **kwargs: []
         web_search_service.CONFIG_FILE = str(Path(self.tmp.name) / "config.json")
 
         db.init_db()
@@ -96,7 +92,6 @@ class CommentServiceTest(unittest.TestCase):
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         soul_service.SOULS_DIR = self.old_souls_dir
-        retrieval.hybrid_search_documents = self.old_hybrid_docs
         web_search_service.CONFIG_FILE = self.old_web_search_config
         self.tmp.cleanup()
 
@@ -284,15 +279,6 @@ class CommentServiceTest(unittest.TestCase):
             patch("core.reply_context.web_search_service.effective_config", return_value=settings),
             patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
             patch("core.reply_context.web_search_service.search", return_value=run) as search,
-            patch(
-                "core.reply_context.query_rewriter.rewrite_query",
-                return_value=query_rewriter.RewrittenQuery(
-                    raw_query="raw",
-                    semantic_query="Python 3.13 stable release",
-                    keywords=[],
-                    used_rewrite=True,
-                ),
-            ),
         ):
             context = comment_service.build_comment_context(
                 "20260525-001",
