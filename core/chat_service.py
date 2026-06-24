@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from core import attachment_service, db, evidence_service, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, record_service, reply_context, retrieval, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -12,9 +12,6 @@ from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 CHAT_HISTORY_LIMIT = 20
-# 检索 k 必须覆盖配额总和,否则高分 post 会占满名额,chat/comment 配额永远填不上
-RELATED_POST_LIMIT = sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["chat"].values())
-RETRIEVAL_USER_MESSAGE_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -46,9 +43,6 @@ class ChatContext:
     soul: SoulContext
     context: str
     messages: list[ChatMessage]
-    retrieval_query: str
-    relevant_post_ids: list[str]
-    retrieval_hits: list
     cited_memory: list[dict] = field(default_factory=list)
 
 
@@ -193,27 +187,9 @@ def build_chat_context(
     soul = _load_soul_context(thread.soul_name)
     messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT, before_message_id=before_message_id)
     llm_messages = [_message_for_llm(message) for message in messages]
-    retrieval_query = _build_retrieval_query(user_message, llm_messages)
     sections: list[str] = []
 
     sections.extend(goal_service.prompt_sections())
-
-    rewritten_query = reply_context.rewrite_for_retrieval(client, model, retrieval_query, "chat", thread_id=thread_id, soul_name=thread.soul_name)
-    retrieval_hits = reply_context.hybrid_search_documents_with_rewrite(
-        retrieval_query,
-        rewritten_query,
-        k=RELATED_POST_LIMIT,
-        channel="chat",
-        soul_name=thread.soul_name,
-        trace_context={"channel": "chat", "thread_id": thread_id, "soul_name": thread.soul_name},
-        exclusion=retrieval.RetrievalExclusion(
-            chat_message_ids=frozenset(message.id for message in llm_messages if message.id > 0),
-        ),
-    )
-    relevant_post_ids = _post_ids_from_hits(retrieval_hits)
-    related_memory = evidence_service.format_retrieval_hits(retrieval_hits, current_soul=thread.soul_name)
-    if related_memory:
-        sections.append(f"# 相关记忆\n\n{related_memory}")
 
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()
@@ -232,7 +208,7 @@ def build_chat_context(
     if web_section:
         sections.append(web_section)
 
-    memory_prompt = memory_read.build_memory_section(
+    memory = memory_read.memory_section_with_citations(
         "chat",
         thread.soul_name,
         user_message,
@@ -242,11 +218,8 @@ def build_chat_context(
             if message.id > 0
         },
     )
-    if memory_prompt.text:
-        sections.append(f"# 记忆\n\n{memory_prompt.text}")
-    cited_memory = memory_read.cited_memory(
-        memory_prompt.used_unit_ids, memory_prompt.used_freshness
-    )
+    if memory.text:
+        sections.append(f"# 记忆\n\n{memory.text}")
 
     context_text = "\n\n---\n\n".join(sections)
     logging_service.log_event(
@@ -256,7 +229,6 @@ def build_chat_context(
         thread_id=thread_id,
         soul_name=thread.soul_name,
         sections=reply_context.section_summaries(sections),
-        relevant_post_ids=relevant_post_ids,
         context_length=len(context_text),
         message_count=len(messages),
     )
@@ -265,10 +237,7 @@ def build_chat_context(
         soul=soul,
         context=context_text,
         messages=llm_messages,
-        retrieval_query=retrieval_query,
-        relevant_post_ids=relevant_post_ids,
-        retrieval_hits=retrieval_hits,
-        cited_memory=cited_memory,
+        cited_memory=memory.cited_memory,
     )
 
 
@@ -302,7 +271,6 @@ def _call_assistant_reply_for_user_message(
             "thread_id": user_message_row.thread_id,
             "soul_name": chat_context.thread.soul_name,
             "user_message_id": user_message_row.id,
-            "relevant_post_ids": chat_context.relevant_post_ids,
         },
     )
     if data is None:
@@ -351,7 +319,6 @@ def _call_assistant_reply_for_user_message(
         reply.strip(),
         metadata={
             "status": "ok",
-            "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
             "memory_citations": memory_read.cited_memory_metadata_from(chat_context.cited_memory),
             "suggestions": suggestions,
         },
@@ -539,7 +506,6 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
             "thread_id": thread.id,
             "soul_name": thread.soul_name,
             "rerun_message_id": message.id,
-            "relevant_post_ids": chat_context.relevant_post_ids,
         },
     )
     if data is None:
@@ -555,7 +521,6 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
         "status": "ok",
         "model": model,
         "rerun": True,
-        "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
         "memory_citations": memory_read.cited_memory_metadata_from(chat_context.cited_memory),
     }
     with db.transaction() as conn:
@@ -623,23 +588,6 @@ def _load_soul_context(soul_name: str) -> SoulContext:
     )
 
 
-def _build_retrieval_query(user_message: str, messages: list[ChatMessage]) -> str:
-    """Return the search query for related posts; currently no LLM rewrite is applied."""
-    parts = _recent_user_message_contents(messages, limit=RETRIEVAL_USER_MESSAGE_LIMIT)
-    if parts:
-        return "\n".join(parts)
-    return user_message
-
-
-def _recent_user_message_contents(messages, limit: int) -> list[str]:
-    contents = [
-        message.content.strip()
-        for message in messages
-        if message.role == "user" and message.content.strip()
-    ]
-    return contents[-limit:]
-
-
 def _last_user_message_content(messages: list[ChatMessage]) -> str:
     for message in reversed(messages):
         if message.role == "user" and message.content.strip():
@@ -690,20 +638,6 @@ def _refresh_thread_activity(conn, thread_id: int, now: float) -> None:
         """,
         (now, last_message_at, thread_id),
     )
-
-
-def _post_ids_from_hits(hits: list) -> list[str]:
-    post_ids: list[str] = []
-    for hit in hits:
-        post_id = None
-        if getattr(hit, "type", None) == "post":
-            post_id = str(getattr(hit, "source_id", ""))
-        else:
-            metadata = getattr(hit, "metadata", {}) or {}
-            post_id = metadata.get("post_id")
-        if post_id and post_id not in post_ids:
-            post_ids.append(post_id)
-    return post_ids
 
 
 def _is_failed_reply_metadata(metadata: dict | None) -> bool:

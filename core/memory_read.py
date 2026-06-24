@@ -32,6 +32,38 @@ from core import (
     soul_relationship_memory as srm,
 )
 
+@dataclass(frozen=True)
+class MemorySection:
+    """Assembled memory-v2 block plus the citations it leaned on."""
+
+    text: str
+    cited_memory: list[dict] = field(default_factory=list)
+
+
+def memory_section_with_citations(
+    channel: str,
+    reply_soul: str | None,
+    query: str,
+    *,
+    excluded_sources: set[tuple[str, str]] | None = None,
+) -> MemorySection:
+    """Single entry used by every reply path for memory-v2 prompt assembly.
+
+    Returns both the prompt text and the cited belief units + raw freshness so
+    every reply path (post first-reply, comment, chat) surfaces the same 引用记忆
+    panel from one code path."""
+    prompt = build_memory_section(
+        channel,
+        reply_soul,
+        query,
+        excluded_sources=excluded_sources,
+    )
+    return MemorySection(
+        text=prompt.text,
+        cited_memory=cited_memory(prompt.used_unit_ids, prompt.used_freshness),
+    )
+
+
 def memory_section_for(
     channel: str,
     reply_soul: str | None,
@@ -39,8 +71,8 @@ def memory_section_for(
     *,
     excluded_sources: set[tuple[str, str]] | None = None,
 ) -> str:
-    """Single entry used by every reply path for memory-v2 prompt assembly."""
-    return build_memory_section(
+    """Text-only memory block (no citations). Kept for the first-reply path."""
+    return memory_section_with_citations(
         channel,
         reply_soul,
         query,

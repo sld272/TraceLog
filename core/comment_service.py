@@ -16,7 +16,6 @@ from core import (
     memory_unit_service,
     record_service,
     reply_context,
-    retrieval,
     soul_service,
     suggestion_pipeline,
     todo_service,
@@ -30,9 +29,6 @@ from core.soul_service import SoulContext
 from core.app_services import job_service, public_post_pipeline
 
 COMMENT_HISTORY_LIMIT = 30
-# 检索 k 必须覆盖配额总和,否则高分 post 会占满名额,comment/chat 配额永远填不上
-COMMENT_RELATED_MEMORY_LIMIT = sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["comment"].values())
-RETRIEVAL_USER_MESSAGE_LIMIT = 3
 OTHER_SOUL_THREAD_CONTEXT_LIMIT = 6
 
 
@@ -67,9 +63,6 @@ class CommentContext:
     soul: SoulContext
     context: str
     messages: list[CommentMessage]
-    retrieval_query: str
-    relevant_post_ids: list[str]
-    retrieval_hits: list
     cited_memory: list[dict] = field(default_factory=list)
 
 
@@ -281,34 +274,6 @@ def build_comment_context(
     if other_soul_context:
         sections.append(other_soul_context)
 
-    retrieval_query = _build_comment_retrieval_query(post, llm_messages, user_message)
-    rewritten_query = reply_context.rewrite_for_retrieval(
-        client,
-        model,
-        retrieval_query,
-        "comment",
-        post_id=post_id,
-        soul_name=soul_name,
-    )
-    retrieval_hits = reply_context.hybrid_search_documents_with_rewrite(
-        retrieval_query,
-        rewritten_query,
-        k=COMMENT_RELATED_MEMORY_LIMIT,
-        channel="comment",
-        soul_name=soul_name,
-        trace_context={"channel": "comment", "post_id": post_id, "soul_name": soul_name},
-        exclusion=retrieval.RetrievalExclusion(
-            post_ids=frozenset({post_id}),
-            comment_post_ids=frozenset({post_id}),
-        ),
-    )
-    related_memory = evidence_service.format_retrieval_hits(
-        retrieval_hits,
-        current_soul=soul_name,
-    )
-    if related_memory:
-        sections.append(f"# 相关记忆\n\n{related_memory}")
-
     root_comment = _get_root_comment(post_id, soul_name)
     if include_root_comment and root_comment is not None:
         sections.append(f"# {soul_name} 的首条回复\n\n{root_comment['content']}")
@@ -340,20 +305,16 @@ def build_comment_context(
         ("comment_message", str(row["id"]))
         for row in db.query_all("SELECT id FROM comments WHERE post_id = ?", (post_id,))
     }
-    memory_prompt = memory_read.build_memory_section(
+    memory = memory_read.memory_section_with_citations(
         "comment",
         soul_name,
         user_message,
         excluded_sources=excluded_comment_sources,
     )
-    if memory_prompt.text:
-        sections.append(f"# 记忆\n\n{memory_prompt.text}")
-    cited_memory = memory_read.cited_memory(
-        memory_prompt.used_unit_ids, memory_prompt.used_freshness
-    )
+    if memory.text:
+        sections.append(f"# 记忆\n\n{memory.text}")
 
     context_text = "\n\n---\n\n".join(sections)
-    relevant_post_ids = _post_ids_from_hits(retrieval_hits)
     logging_service.log_event(
         "context_assembly_result",
         channel="comment",
@@ -361,8 +322,6 @@ def build_comment_context(
         post_id=post_id,
         soul_name=soul_name,
         sections=reply_context.section_summaries(sections),
-        relevant_post_ids=relevant_post_ids,
-        retrieval_hit_count=len(retrieval_hits),
         context_length=len(context_text),
         message_count=len(messages),
     )
@@ -371,10 +330,7 @@ def build_comment_context(
         soul=soul,
         context=context_text,
         messages=llm_messages,
-        retrieval_query=retrieval_query,
-        relevant_post_ids=relevant_post_ids,
-        retrieval_hits=retrieval_hits,
-        cited_memory=cited_memory,
+        cited_memory=memory.cited_memory,
     )
 
 
@@ -399,7 +355,6 @@ def call_comment_reply(
             "post_id": post_id,
             "soul_name": soul_name,
             "user_message_id": user_message_row.id,
-            "relevant_post_ids": comment_context.relevant_post_ids,
         },
     )
     if data is None:
@@ -449,7 +404,6 @@ def call_comment_reply(
         reply.strip(),
         metadata={
             "status": "ok",
-            "evidence": evidence_service.evidence_metadata(comment_context.retrieval_hits),
             "memory_citations": memory_read.cited_memory_metadata_from(comment_context.cited_memory),
             "suggestions": suggestions,
         },
@@ -590,7 +544,6 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
             "post_id": message.post_id,
             "soul_name": message.soul_name,
             "rerun_comment_id": message.id,
-            "relevant_post_ids": context.relevant_post_ids,
         },
     )
     if data is None:
@@ -604,7 +557,6 @@ def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: st
         "status": "ok",
         "model": model,
         "rerun": True,
-        "evidence": evidence_service.evidence_metadata(context.retrieval_hits),
         "memory_citations": memory_read.cited_memory_metadata_from(context.cited_memory),
     }
     with db.transaction() as conn:
@@ -919,16 +871,6 @@ def _message_for_llm(message: CommentMessage) -> CommentMessage:
     return replace(message, content=content)
 
 
-def _build_comment_retrieval_query(post, messages: list[CommentMessage], user_message: str) -> str:
-    parts: list[str] = []
-    if post is not None:
-        parts.append(_post_content_for_llm(post).strip())
-    parts.extend(_recent_user_message_contents(messages, limit=RETRIEVAL_USER_MESSAGE_LIMIT))
-    if parts:
-        return "\n".join(part for part in parts if part)
-    return user_message
-
-
 def _should_append_synthetic_user_message(messages: list[CommentMessage], user_message: str) -> bool:
     body = user_message.strip()
     if not body:
@@ -955,24 +897,3 @@ def _post_content_for_llm(post) -> str:
     return attachment_service.content_for_llm(content, attachment_count)
 
 
-def _recent_user_message_contents(messages: list[CommentMessage], limit: int) -> list[str]:
-    contents = [
-        message.content.strip()
-        for message in messages
-        if message.role == "user" and message.content.strip()
-    ]
-    return contents[-limit:]
-
-
-def _post_ids_from_hits(hits: list) -> list[str]:
-    post_ids: list[str] = []
-    for hit in hits:
-        post_id = None
-        if getattr(hit, "type", None) == "post":
-            post_id = str(getattr(hit, "source_id", ""))
-        else:
-            metadata = getattr(hit, "metadata", {}) or {}
-            post_id = metadata.get("post_id")
-        if post_id and post_id not in post_ids:
-            post_ids.append(post_id)
-    return post_ids

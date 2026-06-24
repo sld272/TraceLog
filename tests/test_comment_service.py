@@ -179,28 +179,6 @@ class CommentServiceTest(unittest.TestCase):
         self.assertNotIn("继续聊练歌", context.context)
         self.assertEqual(["继续聊练歌"], [message.content for message in context.messages])
 
-    def test_build_comment_context_uses_post_and_recent_user_messages_as_retrieval_query(self) -> None:
-        comment_service.append_comment("20260525-001", "拾迹者", "user", "第一条")
-        comment_service.append_comment("20260525-001", "拾迹者", "assistant", "这句不该进检索")
-        comment_service.append_comment("20260525-001", "拾迹者", "user", "第二条")
-        comment_service.append_comment("20260525-001", "拾迹者", "user", "第三条")
-        comment_service.append_comment("20260525-001", "拾迹者", "user", "第四条")
-        captured: dict[str, str] = {}
-
-        def fake_search(query: str, **kwargs: object) -> list:
-            del kwargs
-            captured["query"] = query
-            return []
-
-        retrieval.hybrid_search_documents = fake_search
-
-        context = comment_service.build_comment_context("20260525-001", "拾迹者", "第四条")
-
-        expected = "今天想认真练歌。\n第二条\n第三条\n第四条"
-        self.assertEqual(expected, context.retrieval_query)
-        self.assertEqual(expected, captured["query"])
-        self.assertNotIn("这句不该进检索", context.retrieval_query)
-
     def test_other_soul_user_comment_excluded_from_memory_section(self) -> None:
         # All public-post comments share the global/public bucket, so without the
         # fix the freshness seam surfaced the user's comment to ANOTHER soul as the
@@ -245,24 +223,6 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIn("其他回复六", context.context)
         self.assertIn("其他追问七", context.context)
 
-    def test_build_comment_context_excludes_current_post_and_post_comments_from_retrieval(self) -> None:
-        comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊练歌")
-        captured: dict[str, object] = {}
-
-        def fake_search(query: str, **kwargs: object) -> list:
-            del query
-            captured["exclusion"] = kwargs.get("exclusion")
-            return []
-
-        retrieval.hybrid_search_documents = fake_search
-
-        comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊练歌")
-
-        exclusion = captured["exclusion"]
-        self.assertIsInstance(exclusion, retrieval.RetrievalExclusion)
-        self.assertEqual(frozenset({"20260525-001"}), exclusion.post_ids)
-        self.assertEqual(frozenset({"20260525-001"}), exclusion.comment_post_ids)
-
     def test_build_comment_context_loads_current_soul_relationship_view_only(self) -> None:
         for soul_name, content in (
             ("拾迹者", "拾迹者评论记忆"),
@@ -287,40 +247,6 @@ class CommentServiceTest(unittest.TestCase):
         relationship = memory_read.relationship_memory_for("拾迹者")
         self.assertIn("拾迹者评论记忆", relationship)
         self.assertNotIn("其他 SOUL 评论记忆", relationship)
-
-    def test_build_comment_context_uses_query_rewrite_for_related_memories(self) -> None:
-        comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊图书馆学习效率")
-        captured: dict[str, object] = {}
-
-        def fake_search(
-            query: str,
-            semantic_query: str | None = None,
-            fts_keywords: list[str] | None = None,
-            **kwargs: object,
-        ) -> list:
-            del kwargs
-            captured["query"] = query
-            captured["semantic_query"] = semantic_query
-            captured["fts_keywords"] = fts_keywords
-            return []
-
-        retrieval.hybrid_search_documents = fake_search
-        rewritten = query_rewriter.RewrittenQuery(
-            raw_query="raw",
-            semantic_query="用户是否表达过图书馆学习效率更高",
-            keywords=["图书馆", "学习效率"],
-            used_rewrite=True,
-        )
-
-        with patch("core.reply_context.query_rewriter.rewrite_query", return_value=rewritten) as rewrite:
-            comment_service.build_comment_context("20260525-001", "拾迹者", "图书馆学习", FakeClient(), "fake-model")
-
-        rewrite.assert_called_once()
-        self.assertEqual("用户是否表达过图书馆学习效率更高", captured["semantic_query"])
-        self.assertEqual(["图书馆", "学习效率"], captured["fts_keywords"])
-        event = self._last_log_event("query_rewrite_result")
-        self.assertEqual("comment", event["channel"])
-        self.assertTrue(event["used_rewrite"])
 
     def test_build_comment_context_injects_web_search_results_when_gate_requests_search(self) -> None:
         comment_service.append_comment("20260525-001", "拾迹者", "user", "查一下 Python 3.13 稳定版")
@@ -440,38 +366,26 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual("重试后的回复", messages[-1].content)
         self.assertEqual("ok", json.loads(messages[-1].metadata or "{}")["status"])
 
-    def test_comment_reply_metadata_includes_evidence_snapshot(self) -> None:
-        root_id = require_not_none(comment_service.get_conversation("20260525-001", "毒舌好友").root_comment_id)
-        retrieval.hybrid_search_documents = lambda *args, **kwargs: [
-            retrieval.RetrievalDocHit(
-                doc_id=f"comment-{root_id}",
-                type="comment",
-                source_id=str(root_id),
-                score=0.73,
-                rank=1,
-                metadata={
-                    "type": "comment",
-                    "comment_id": root_id,
-                    "post_id": "20260525-001",
-                    "soul_name": "毒舌好友",
-                },
-                sources=["vector"],
-                reasons=["vector:rank=1"],
-                distance=0.42,
-            )
-        ]
+    def test_comment_reply_metadata_snapshots_memory_citations(self) -> None:
+        memory_unit_service.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="user",
+            type="state",
+            content="这阵子在准备一场公开演出",
+            confidence=0.9,
+            importance=0.6,
+            source="user_authored",
+            actor="user",
+        )
 
         result = comment_service.call_comment_reply("20260525-001", "拾迹者", "继续聊", FakeClient({"reply": "继续拆。"}), "fake-model")
         message = comment_service.get_message(require_not_none(result.assistant_message_id))
         metadata = json.loads(message.metadata or "{}")
 
         self.assertEqual("ok", metadata["status"])
-        item = metadata["evidence"]["items"][0]
-        self.assertEqual(f"comment-{root_id}", item["doc_id"])
-        self.assertEqual("comment", item["type"])
-        self.assertEqual(0.73, item["score"])
-        self.assertEqual(0.42, item["distance"])
-        self.assertIn("别装了，继续讲重点", item["snippet"])
+        contents = [item["content"] for item in metadata["memory_citations"]["items"]]
+        self.assertIn("这阵子在准备一场公开演出", contents)
 
     def test_comment_reply_attaches_inline_goal_suggestion_when_enabled(self) -> None:
         candidate = {

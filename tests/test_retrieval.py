@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import chat_service, comment_service, db, fts_query, logging_service, retrieval, vectorstore
+from core import db, fts_query, logging_service, retrieval, vectorstore
 
 
 class FtsQueryTest(unittest.TestCase):
@@ -647,7 +647,7 @@ class VectorDistanceFilterTest(unittest.TestCase):
             "旧私聊",
             [],
             vector_hits,
-            k=chat_service.RELATED_POST_LIMIT,
+            k=sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["chat"].values()),
             channel="chat",
             current_soul="拾迹者",
         )
@@ -656,16 +656,6 @@ class VectorDistanceFilterTest(unittest.TestCase):
         self.assertIn("chat-9", doc_ids)
         self.assertEqual(3, sum(1 for hit in hits if hit.type == "post"))
         self.assertNotIn("post-p-4", doc_ids)
-
-    def test_reply_channel_retrieval_limits_cover_quota_sums(self) -> None:
-        self.assertGreaterEqual(
-            chat_service.RELATED_POST_LIMIT,
-            sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["chat"].values()),
-        )
-        self.assertGreaterEqual(
-            comment_service.COMMENT_RELATED_MEMORY_LIMIT,
-            sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["comment"].values()),
-        )
 
 
 class RetrievalDatabaseTest(unittest.TestCase):
