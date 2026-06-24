@@ -278,6 +278,86 @@ class MemoryReadTest(unittest.TestCase):
         self.assertIn("我自学吉他三个月了", recall)  # user's comment
         self.assertIn("三个月能弹完整首很厉害", recall)  # soul's reply
 
+    # --- provenance attribution keyed on source_type (post vs comment) -------
+
+    def test_relevant_memory_attributes_comment_unit_to_its_soul_area(self) -> None:
+        # Comment user-facts and posts both live in (…, public) after bucketing, so
+        # attribution must key on source_type, not visibility. A belief from kita's
+        # comment area, surfaced for luna, must read "用户在 kita 的评论区" — not the
+        # post label — so luna never reads it as said to herself. Old occurred_at
+        # keeps these out of the freshness seam, isolating the [相关记忆] tags.
+        old = 1000.0
+        db.execute(
+            "INSERT INTO souls(name, file_path, created_at, updated_at) VALUES(?, ?, ?, ?)",
+            ("kita", "souls/kita.md", old, old),
+        )
+        db.execute(
+            "INSERT INTO posts(id, ts, content, created_at, updated_at) VALUES(?, ?, ?, ?, ?)",
+            ("p-comment", "2026-06-16", "练吉他", old, old),
+        )
+        db.execute(
+            "INSERT INTO comments(id, post_id, soul_name, role, content, seq, created_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (901, "p-comment", "kita", "user", "我自学吉他三个月了", 0, old),
+        )
+        with db.transaction() as conn:
+            cev = mes.record_comment_mutation(
+                conn, comment_id=901, post_id="p-comment", soul_name="kita",
+                role="user", op="create", content="我自学吉他三个月了", occurred_at=old,
+            )
+            pev = mes.record_post_mutation(
+                conn, post_id="p-post", op="create", content="想换把新吉他", occurred_at=old,
+            )
+        mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="comment",
+            type="preference", content="用户在自学吉他", confidence=0.8, importance=0.5,
+            evidence_event_ids=[cev.id],
+        )
+        mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="preference", content="用户想换新吉他", confidence=0.8, importance=0.5,
+            evidence_event_ids=[pev.id],
+        )
+
+        text = memory_read.build_memory_section("public_post", "luna", "吉他").text
+
+        self.assertIn("用户在自学吉他 （用户在 kita 的评论区）", text)
+        self.assertIn("用户想换新吉他 （公开帖子）", text)
+
+    def test_freshness_attributes_cross_soul_comment_line(self) -> None:
+        # The higher-severity case: a raw comment line the user said in kita's area
+        # surfaces verbatim in luna's freshness (the comment_message lens is global/
+        # public, cross-soul readable). Without source-keyed attribution it would be
+        # mislabeled "公开帖子"; luna could read "你说得对" as a public broadcast.
+        now = db.now_ts()
+        db.execute(
+            "INSERT INTO souls(name, file_path, created_at, updated_at) VALUES(?, ?, ?, ?)",
+            ("kita", "souls/kita.md", now, now),
+        )
+        db.execute(
+            "INSERT INTO posts(id, ts, content, created_at, updated_at) VALUES(?, ?, ?, ?, ?)",
+            ("p1", "2026-06-16", "练吉他", now, now),
+        )
+        db.execute(
+            "INSERT INTO comments(id, post_id, soul_name, role, content, seq, created_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (901, "p1", "kita", "user", "我自学吉他三个月了", 0, now),
+        )
+        with db.transaction() as conn:
+            mes.record_comment_mutation(
+                conn, comment_id=901, post_id="p1", soul_name="kita",
+                role="user", op="create", content="我自学吉他三个月了", occurred_at=now,
+            )
+
+        seen_by_luna = memory_read.build_memory_section("public_post", "luna", "吉他").text
+        self.assertIn("[尚未稳定沉淀的原始证据]", seen_by_luna)
+        self.assertIn("（用户在 kita 的评论区） 我自学吉他三个月了", seen_by_luna)
+
+        # For kita herself it is her own comment area — no cross-soul "用户在 X" tag.
+        seen_by_kita = memory_read.build_memory_section("public_post", "kita", "吉他").text
+        self.assertIn("（评论区） 我自学吉他三个月了", seen_by_kita)
+        self.assertNotIn("用户在 kita 的评论区", seen_by_kita)
+
 
 if __name__ == "__main__":
     unittest.main()

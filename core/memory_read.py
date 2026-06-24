@@ -145,6 +145,10 @@ class FreshnessItem:
     visibility_scope: str
     needs_discretion: bool
     reviewing: bool = False
+    # source_type/source_id let attribution key on provenance (post vs which
+    # soul's comment area) instead of the now-flattened visibility_scope.
+    source_type: str = ""
+    source_id: str = ""
 
 
 def _allowed_visibility_sql(plan: dict) -> tuple[str, list]:
@@ -463,22 +467,23 @@ def _row_to_item(row: sqlite3.Row, channel: str, reply_soul: str | None) -> Memo
     )
 
 
-def _attribution_for(visibility_scope: str, owner_scope: str, reply_soul: str | None) -> str:
-    """A short provenance tag so a soul knows whose public conversation an item
-    came from, and never mistakes another soul's comment thread for something
-    said to itself. Own private memory is flagged via discretion, not here."""
-    if visibility_scope.startswith("thread:"):
-        soul = owner_scope[len("soul:"):] if owner_scope.startswith("soul:") else None
+def _attribution_for_source(source_type: str, source_id: str, reply_soul: str | None) -> str:
+    """A short provenance tag keyed on the evidence's source_type, not its
+    visibility_scope. After the comment bucketing flatten, comment user-facts and
+    posts both live in (…, public), so visibility can no longer tell them apart —
+    source_type can. For a comment we resolve which soul's area it was (via the
+    comments table) so a soul never reads a line said in another soul's comment
+    thread as something said to itself. Private chat carries no tag here;
+    disclosure is governed by the discretion flag instead."""
+    if source_type in ("post", "post_vision"):
+        return "（公开帖子）"
+    if source_type in mes.COMMENT_SOURCE_TYPES:
+        target = _comment_target(source_id)
+        soul = str(target["soul_name"]) if target is not None else None
         if soul and soul != reply_soul:
             return f"（用户在 {soul} 的评论区）"
         return "（评论区）"
-    if visibility_scope == "public":
-        return "（公开帖子）"
     return ""
-
-
-def _attribution(item: MemoryItem, reply_soul: str | None) -> str:
-    return _attribution_for(item.visibility_scope, item.owner_scope, reply_soul)
 
 
 def _vis_admissible(visibility_scope: str, plan: dict) -> bool:
@@ -585,6 +590,8 @@ def freshness_seam(
             visibility_scope=vis,
             needs_discretion=_discretion_for(vis, channel, reply_soul),
             reviewing=reviewing,
+            source_type=str(event["source_type"]),
+            source_id=str(event["source_id"]),
         ))
     return items, truncated
 
@@ -674,7 +681,12 @@ def build_memory_section(
         for item in hits:
             tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
             has_discretion = has_discretion or item.needs_discretion
-            attribution = _attribution(item, reply_soul)
+            ev = _top_evidence_row(item.unit_id, terms)
+            attribution = (
+                _attribution_for_source(str(ev["source_type"]), str(ev["source_id"]), reply_soul)
+                if ev is not None
+                else ""
+            )
             attr = f" {attribution}" if attribution else ""
             lines.append(f"- [{item.type}|置信{item.confidence:.1f}] {item.content}{attr}{tag}")
             used.append(item.unit_id)
@@ -700,7 +712,7 @@ def build_memory_section(
         for fitem in fresh_items:
             tag = f" {_DISCRETION_TAG}" if fitem.needs_discretion else ""
             has_discretion = has_discretion or fitem.needs_discretion
-            attribution = _attribution_for(fitem.visibility_scope, fitem.owner_scope, reply_soul)
+            attribution = _attribution_for_source(fitem.source_type, fitem.source_id, reply_soul)
             attr = f"{attribution} " if attribution else ""
             state = "（unit 重判中）" if fitem.reviewing else "（新近未整理）"
             lines.append(f"- {state}{attr}{fitem.content}{tag}")
