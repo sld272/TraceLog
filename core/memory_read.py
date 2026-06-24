@@ -314,6 +314,40 @@ def _format_dialogue(events: list[sqlite3.Row], soul_label: str) -> list[str]:
     return lines
 
 
+def _comment_target(comment_id: str) -> sqlite3.Row | None:
+    """Resolve a comment_message/comment_relationship source_id to its post and
+    soul. Comment evidence lives in the flat (global|soul, public) buckets, so the
+    only way back to the originating post/thread is the comments table itself."""
+    return db.query_one(
+        "SELECT post_id, soul_name FROM comments WHERE id = ?",
+        (int(comment_id),),
+    )
+
+
+def _comment_thread_lines(post_id: str, soul: str) -> list[str]:
+    """One soul's comment exchange under a post, read straight from the comments
+    table (the live store) rather than the memory event buckets, which are no
+    longer thread-scoped."""
+    rows = db.query_all(
+        """
+        SELECT role, content
+        FROM comments
+        WHERE post_id = ? AND soul_name = ?
+        ORDER BY seq ASC, id ASC
+        LIMIT ?
+        """,
+        (post_id, soul, RECALL_THREAD_EVENT_LIMIT),
+    )
+    lines: list[str] = []
+    for row in rows:
+        content = str(row["content"] or "").strip()
+        if not content:
+            continue
+        speaker = "用户" if row["role"] == "user" else soul
+        lines.append(f"{speaker}：{_clip(content, RECALL_MSG_MAX_CHARS)}")
+    return lines
+
+
 def _recall_post_block(post_id: str, hit_souls: list[str], reply_soul: str | None) -> str:
     """Original post + the reply soul's own comment line + each hit soul's line."""
     parts: list[str] = []
@@ -327,12 +361,7 @@ def _recall_post_block(post_id: str, hit_souls: list[str], reply_soul: str | Non
         if soul and soul not in souls:
             souls.append(soul)
     for soul in souls:
-        events = mes.list_current_events_in_bucket(
-            f"soul:{soul}",
-            f"thread:{post_id}",
-            limit=RECALL_THREAD_EVENT_LIMIT,
-        )
-        dialogue = _format_dialogue(events, soul)
+        dialogue = _comment_thread_lines(post_id, soul)
         if dialogue:
             parts.append(f"  与{soul}：\n" + "\n".join(f"    {line}" for line in dialogue))
     return "\n".join(parts) if parts else ""
@@ -365,23 +394,28 @@ def _recall_conversations(hits: list[MemoryItem], channel: str, reply_soul: str 
         ev = _top_evidence_row(item.unit_id, terms)
         if ev is None:
             continue
-        vis = str(ev["visibility_scope"])
+        source_type = str(ev["source_type"])
         owner = str(ev["owner_scope"])
-        if vis == "public":
+        if source_type in ("post", "post_vision"):
+            # Post evidence: source_id is the post id.
             pid = str(ev["source_id"])
             if pid not in post_hit_souls:
                 post_hit_souls[pid] = []
                 order.append(("post", pid))
-        elif vis.startswith("thread:"):
-            pid = vis[len("thread:"):]
-            soul = owner[len("soul:"):] if owner.startswith("soul:") else None
+        elif source_type in mes.COMMENT_SOURCE_TYPES:
+            # Comment evidence: source_id is a comment id; resolve its post+soul.
+            target = _comment_target(str(ev["source_id"]))
+            if target is None:
+                continue
+            pid = str(target["post_id"])
+            soul = str(target["soul_name"])
             if pid not in post_hit_souls:
                 post_hit_souls[pid] = []
                 order.append(("post", pid))
             if soul and soul not in post_hit_souls[pid]:
                 post_hit_souls[pid].append(soul)
-        elif vis.startswith("private:soul:"):
-            soul = vis[len("private:soul:"):]
+        elif source_type == "chat_message":
+            soul = owner[len("soul:"):] if owner.startswith("soul:") else None
             # retrieve already restricts private hits to the reply soul; guard.
             if reply_soul and soul == reply_soul and soul not in chat_souls:
                 chat_souls.append(soul)

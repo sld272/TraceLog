@@ -225,6 +225,59 @@ class MemoryReadTest(unittest.TestCase):
         hits = memory_read.retrieve_units("跨专业考研", "public_post", "gotoh")
         self.assertEqual([], hits)
 
+    # --- recall around comment-derived units (相关对话原文) ----------------
+
+    def test_recall_resolves_comment_unit_to_its_post_and_thread(self) -> None:
+        # A belief distilled from a public comment: its evidence source_id is the
+        # comment id, NOT the post id. Recall must resolve comment -> post/soul via
+        # the comments table, then surface the original post and the comment thread.
+        now = 1000.0
+        db.execute(
+            "INSERT INTO souls(name, file_path, created_at, updated_at) VALUES(?, ?, ?, ?)",
+            ("kita", "souls/kita.md", now, now),
+        )
+        db.execute(
+            "INSERT INTO posts(id, ts, content, created_at, updated_at) VALUES(?, ?, ?, ?, ?)",
+            ("20260616-001", "2026-06-16", "今天终于把吉他练到能弹完一整首", now, now),
+        )
+        db.execute(
+            "INSERT INTO comments(id, post_id, soul_name, role, content, seq, created_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (901, "20260616-001", "kita", "user", "我自学吉他三个月了", 0, now),
+        )
+        db.execute(
+            "INSERT INTO comments(id, post_id, soul_name, role, content, seq, created_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (902, "20260616-001", "kita", "assistant", "三个月能弹完整首很厉害", 1, now),
+        )
+        with db.transaction() as conn:
+            mes.record_post_mutation(
+                conn, post_id="20260616-001", op="create",
+                content="今天终于把吉他练到能弹完一整首", occurred_at=now,
+            )
+            ev = mes.record_comment_mutation(
+                conn, comment_id=901, post_id="20260616-001", soul_name="kita",
+                role="user", op="create", content="我自学吉他三个月了", occurred_at=now,
+            )
+        uid = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="comment",
+            type="preference", content="用户在自学吉他", confidence=0.8, importance=0.5,
+            evidence_event_ids=[ev.id],
+        )
+        hit = memory_read.MemoryItem(
+            unit_id=uid, type="preference", content="用户在自学吉他",
+            confidence=0.8, importance=0.5, owner_scope="global",
+            visibility_scope="public", needs_discretion=False,
+        )
+
+        recall = memory_read._recall_conversations([hit], "public_post", "kita", ["吉他"])
+
+        self.assertIn("[相关对话原文]", recall)
+        self.assertIn("今天终于把吉他练到能弹完一整首", recall)  # original post
+        self.assertIn("与kita", recall)
+        self.assertIn("我自学吉他三个月了", recall)  # user's comment
+        self.assertIn("三个月能弹完整首很厉害", recall)  # soul's reply
+
 
 if __name__ == "__main__":
     unittest.main()
