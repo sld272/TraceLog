@@ -504,43 +504,28 @@ class CommentServiceTest(unittest.TestCase):
     def test_rerun_root_assistant_comment_uses_public_post_reply_path(self) -> None:
         root_id = comment_service.get_conversation("20260525-001", "拾迹者").root_comment_id
         self.assertIsNotNone(root_id)
-        db.execute(
-            """
-            INSERT INTO posts(id, ts, content, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("20260520-001", "2026-05-20T10:00:00+08:00", "历史相关帖子。", 0.5, 0.5),
+        memory_unit_service.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="user",
+            type="state",
+            content="最近在重排练歌计划",
+            confidence=0.9,
+            importance=0.6,
+            source="user_authored",
+            actor="user",
         )
         captured = {}
 
-        def fake_rewrite(client, model, raw_query, channel, trace_context=None):
-            del client, model, trace_context
-            captured["rewrite_channel"] = channel
-            captured["rewrite_query"] = raw_query
-            return query_rewriter.RewrittenQuery(
-                raw_query=raw_query,
-                semantic_query="认真练歌",
-                keywords=["练歌"],
-                used_rewrite=True,
-            )
-
-        def fake_search(*args, **kwargs):
-            captured["search_args"] = args
-            captured["exclusion"] = kwargs.get("exclusion")
-            captured["search_trace"] = kwargs.get("trace_context")
-            return ["20260520-001"]
-
-        def fake_post_reply(user_input, client, model, shared_context, soul, *, trace_context=None):
+        def fake_post_reply(user_input, client, model, soul_context, soul, *, trace_context=None):
             del client, model
             captured["user_input"] = user_input
-            captured["shared_context"] = shared_context
+            captured["soul_context"] = soul_context
             captured["soul_name"] = soul.name
             captured["post_reply_trace"] = trace_context
             return {"reply": "根评论重跑回复"}
 
         with (
-            patch("core.app_services.public_post_pipeline.query_rewriter.rewrite_query", side_effect=fake_rewrite),
-            patch("core.app_services.public_post_pipeline.retrieval.hybrid_search", side_effect=fake_search),
             patch("core.comment_service.reply_router.call_soul_post_reply", side_effect=fake_post_reply),
             patch(
                 "core.comment_service.reply_router.call_soul_comment_reply",
@@ -550,18 +535,16 @@ class CommentServiceTest(unittest.TestCase):
             rerun = comment_service.rerun_latest_assistant_message(root_id, FakeClient(), "fake-model")
 
         self.assertEqual("根评论重跑回复", rerun["message"].content)
-        self.assertEqual("public_post", captured["rewrite_channel"])
-        self.assertIn("今天想认真练歌", captured["rewrite_query"])
-        self.assertEqual(frozenset({"20260525-001"}), captured["exclusion"].post_ids)
-        self.assertEqual("public_post", captured["search_trace"]["channel"])
-        self.assertIn("今天想认真练歌", captured["user_input"])
-        self.assertIn("历史相关帖子", captured["shared_context"])
         self.assertEqual("拾迹者", captured["soul_name"])
-        self.assertEqual(["20260520-001"], captured["post_reply_trace"]["relevant_post_ids"])
+        self.assertIn("今天想认真练歌", captured["user_input"])
+        # the rerun goes through the public_post reply path and carries the soul's
+        # own scope-filtered memory-v2 block (not the comment-reply path)
+        self.assertIn("# 记忆", captured["soul_context"])
+        self.assertIn("最近在重排练歌计划", captured["soul_context"])
         metadata = json.loads(rerun["message"].metadata or "{}")
         self.assertTrue(metadata["rerun"])
-        self.assertEqual("post", metadata["evidence"]["items"][0]["type"])
-        self.assertEqual("20260520-001", metadata["evidence"]["items"][0]["post_id"])
+        citations = [item["content"] for item in metadata["memory_citations"]["items"]]
+        self.assertIn("最近在重排练歌计划", citations)
         self.assertIsNotNone(rerun["message"].rerun_at)
 
     def test_rerun_comment_requires_latest_assistant_message(self) -> None:

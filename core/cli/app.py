@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from core import context_builder, logging_service, query_rewriter, record_service, reply_service, retrieval, todo_service, tool_config_service, vector_index_service
+from core import context_builder, logging_service, record_service, reply_service, todo_service, tool_config_service, vector_index_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
 from core.cli.config import load_config
@@ -105,38 +105,9 @@ def main() -> None:
         if commands.handle_soul_command(user_input):
             continue
 
-        rewritten_query = query_rewriter.rewrite_query(
-            client,
-            model,
-            user_input,
-            "public_post",
-            trace_context={"channel": "public_post"},
-        )
-        logging_service.log_event(
-            "query_rewrite_result",
-            channel="public_post",
-            raw_query=rewritten_query.raw_query,
-            semantic_query=rewritten_query.semantic_query,
-            keywords=rewritten_query.keywords,
-            used_rewrite=rewritten_query.used_rewrite,
-            keyword_count=len(rewritten_query.keywords),
-            semantic_query_length=len(rewritten_query.semantic_query),
-            raw_query_length=len(rewritten_query.raw_query),
-            rewrite_skipped_by_gate=rewritten_query.rewrite_skipped_by_gate,
-        )
-        relevant_ids = retrieval.hybrid_search(
-            user_input,
-            k=3,
-            semantic_query=rewritten_query.semantic_query,
-            fts_keywords=rewritten_query.keywords,
-            trace_context={"channel": "public_post"},
-        )
-
         print("\n[TraceLog 正在思考...]\n")
         built_context = context_builder.build_context(
-            relevant_post_ids=relevant_ids,
             query=user_input,
-            fts_keywords=rewritten_query.keywords,
             trace_context={"channel": "public_post"},
         )
 

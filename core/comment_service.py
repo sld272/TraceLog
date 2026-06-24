@@ -8,7 +8,6 @@ from dataclasses import dataclass, field, replace
 from core import (
     db,
     attachment_service,
-    evidence_service,
     goal_service,
     logging_service,
     memory_events_service,
@@ -611,17 +610,28 @@ def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClie
         },
     )
     soul = _load_soul_context(message.soul_name)
+    memory = memory_read.memory_section_with_citations(
+        "public_post",
+        message.soul_name,
+        llm_content,
+        excluded_sources={("post", message.post_id), ("post_vision", message.post_id)},
+    )
+    shared_context = public_context.built_context.shared_context
+    soul_context = (
+        f"{shared_context}\n\n---\n\n# 记忆\n\n{memory.text}" if memory.text and shared_context
+        else f"# 记忆\n\n{memory.text}" if memory.text
+        else shared_context
+    )
     data = reply_router.call_soul_post_reply(
         llm_content,
         client,
         model,
-        public_context.built_context.shared_context,
+        soul_context,
         soul,
         trace_context={
             "post_id": message.post_id,
             "soul_name": message.soul_name,
             "rerun_comment_id": message.id,
-            "relevant_post_ids": public_context.relevant_post_ids,
         },
     )
     if data is None:
@@ -635,7 +645,7 @@ def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClie
         "status": "ok",
         "model": model,
         "rerun": True,
-        "evidence": evidence_service.post_id_evidence_metadata(public_context.relevant_post_ids),
+        "memory_citations": memory_read.cited_memory_metadata_from(memory.cited_memory),
     }
     with db.transaction() as conn:
         conn.execute(

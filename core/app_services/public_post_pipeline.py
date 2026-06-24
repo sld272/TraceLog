@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import attachment_service, context_builder, db, memory_events_service, memory_reconcile_runner, memory_view_producer, query_rewriter, record_service, reply_service, retrieval, suggestion_pipeline, vector_index_service, vision_service
+from core import attachment_service, context_builder, db, memory_events_service, memory_reconcile_runner, memory_view_producer, record_service, reply_service, suggestion_pipeline, vector_index_service, vision_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
@@ -18,7 +18,6 @@ class CreatedPost:
 @dataclass(frozen=True)
 class PublicPostReplyContext:
     llm_content: str
-    relevant_post_ids: list[str]
     built_context: context_builder.BuiltContext
 
 
@@ -192,34 +191,18 @@ def build_public_post_reply_context(
     *,
     trace_context: dict[str, Any] | None = None,
 ) -> PublicPostReplyContext:
-    """Build the retrieval and shared context used by public post first replies."""
+    """Build the soul-agnostic shared context used by public post first replies.
+
+    Per-soul memory-v2 is appended downstream in reply_service."""
     effective_trace_context = trace_context or {"channel": "public_post", "post_id": post_id}
-    rewritten_query = query_rewriter.rewrite_query(
-        client,
-        model,
-        llm_content,
-        "public_post",
-        trace_context=effective_trace_context,
-    )
-    relevant_ids = retrieval.hybrid_search(
-        llm_content,
-        k=3,
-        semantic_query=rewritten_query.semantic_query,
-        fts_keywords=rewritten_query.keywords,
-        trace_context=effective_trace_context,
-        exclusion=retrieval.RetrievalExclusion(post_ids=frozenset({post_id})),
-    )
     built_context = context_builder.build_context(
-        relevant_post_ids=relevant_ids,
         query=llm_content,
-        fts_keywords=rewritten_query.keywords,
         client=client,
         model=model,
         trace_context=effective_trace_context,
     )
     return PublicPostReplyContext(
         llm_content=llm_content,
-        relevant_post_ids=built_context.relevant_post_ids,
         built_context=built_context,
     )
 

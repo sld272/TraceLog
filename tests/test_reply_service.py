@@ -55,7 +55,6 @@ class ReplyServiceTest(unittest.TestCase):
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul_a, soul_b],
-            relevant_post_ids=[],
         )
         captured_contexts: dict[str, str] = {}
 
@@ -79,7 +78,6 @@ class ReplyServiceTest(unittest.TestCase):
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul],
-            relevant_post_ids=[],
         )
         db.execute(
             """
@@ -112,7 +110,6 @@ class ReplyServiceTest(unittest.TestCase):
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul_a, soul_b],
-            relevant_post_ids=[],
         )
         db.execute(
             """
@@ -151,7 +148,6 @@ class ReplyServiceTest(unittest.TestCase):
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul],
-            relevant_post_ids=[],
         )
 
         client = cast(LLMClient, SimpleNamespace(chat=SimpleNamespace()))
@@ -164,13 +160,23 @@ class ReplyServiceTest(unittest.TestCase):
         self.assertIsNone(row)
         index_comment.assert_not_called()
 
-    def test_successful_root_comment_metadata_includes_evidence_from_built_context(self) -> None:
-        self._insert_post("p-related")
+    def test_successful_root_comment_metadata_snapshots_memory_citations(self) -> None:
+        from core import memory_unit_service
+        memory_unit_service.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="user",
+            type="state",
+            content="最近在筹备一场公开分享",
+            confidence=0.9,
+            importance=0.6,
+            source="user_authored",
+            actor="user",
+        )
         soul = SoulContext("拾迹者", None, 1, "拾迹者人格")
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[soul],
-            relevant_post_ids=["p-related"],
         )
         client = cast(LLMClient, SimpleNamespace(chat=SimpleNamespace()))
 
@@ -183,16 +189,13 @@ class ReplyServiceTest(unittest.TestCase):
         )
         metadata = json.loads(require_not_none(row)["metadata"])
         self.assertEqual("ok", metadata["status"])
-        item = metadata["evidence"]["items"][0]
-        self.assertEqual("post-p-related", item["doc_id"])
-        self.assertEqual("p-related", item["post_id"])
-        self.assertIn("新的公开 post", item["snippet"])
+        contents = [item["content"] for item in metadata["memory_citations"]["items"]]
+        self.assertIn("最近在筹备一场公开分享", contents)
 
     def test_save_comment_does_not_overwrite_existing_success(self) -> None:
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[],
-            relevant_post_ids=[],
         )
         db.execute(
             """
@@ -204,7 +207,7 @@ class ReplyServiceTest(unittest.TestCase):
         result = reply_service.SoulReplyResult("拾迹者", 1, True, "后到的回复", None)
 
         with patch("core.reply_service.record_service.index_comment_embedding") as index_comment:
-            reply_service._save_comment("p-1", result, "fake-model", built_context)
+            reply_service._save_comment("p-1", result, "fake-model")
 
         row = db.query_one(
             "SELECT content, metadata, created_at FROM comments WHERE post_id = ? AND soul_name = ? AND seq = 0",
@@ -219,7 +222,6 @@ class ReplyServiceTest(unittest.TestCase):
         built_context = BuiltContext(
             shared_context="共享上下文",
             enabled_souls=[],
-            relevant_post_ids=[],
         )
         db.execute(
             """
@@ -231,7 +233,7 @@ class ReplyServiceTest(unittest.TestCase):
         result = reply_service.SoulReplyResult("拾迹者", 1, True, "补救成功", None)
 
         with patch("core.reply_service.record_service.index_comment_embedding") as index_comment:
-            reply_service._save_comment("p-1", result, "fake-model", built_context)
+            reply_service._save_comment("p-1", result, "fake-model")
 
         row = db.query_one(
             "SELECT content, metadata, created_at FROM comments WHERE post_id = ? AND soul_name = ? AND seq = 0",

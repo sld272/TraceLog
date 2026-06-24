@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core import (
-    context_builder,
     db,
     goal_service,
     memory_events_service as mes,
@@ -149,9 +148,10 @@ class ContextBuilderPortraitTest(_DbTestBase):
         self._seed_core_unit("用户在准备考研")
         with patch.object(memory_router, "call_view_synthesis", lambda *a, **k: "VIEWMARK 你在备考。"):
             view_producer.refresh_views_after_reconcile(client=object(), model="m")
-        ctx = context_builder.build_context()
-        self.assertIn("VIEWMARK", ctx.shared_context)
-        self.assertNotIn("generated_by", ctx.shared_context)  # header stripped
+        # the portrait reaches replies through the per-soul # 记忆 block (baseline layer)
+        section = memory_read.memory_section_for("public_post", "拾迹者", "随便")
+        self.assertIn("VIEWMARK", section)
+        self.assertNotIn("generated_by", section)  # header stripped
 
 
 class GoalLifecycleTest(_DbTestBase):
