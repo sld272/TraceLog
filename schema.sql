@@ -445,6 +445,42 @@ CREATE INDEX IF NOT EXISTS idx_units_boundary_status
 CREATE INDEX IF NOT EXISTS idx_units_portrait
     ON memory_units(owner_scope, visibility_scope, in_portrait, status);
 
+-- FTS5 over unit content (keyword side of memory-v2 unit retrieval). Mirrors the
+-- posts_fts pair: a default-tokenizer table for non-CJK and a trigram table for
+-- CJK substring matching. External-content, keyed on the (implicit) integer rowid.
+-- Triggers keep it in sync; a pre-existing DB seeds its historical rows once with
+-- INSERT INTO memory_units_fts(memory_units_fts) VALUES('rebuild') (+ the trigram table).
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_units_fts USING fts5(
+    content,
+    content='memory_units',
+    content_rowid='rowid'
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_units_fts_trigram USING fts5(
+    content,
+    tokenize='trigram',
+    content='memory_units',
+    content_rowid='rowid'
+);
+CREATE TRIGGER IF NOT EXISTS memory_units_ai AFTER INSERT ON memory_units BEGIN
+    INSERT INTO memory_units_fts(rowid, content) VALUES (new.rowid, new.content);
+    INSERT INTO memory_units_fts_trigram(rowid, content) VALUES (new.rowid, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_units_ad AFTER DELETE ON memory_units BEGIN
+    INSERT INTO memory_units_fts(memory_units_fts, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+    INSERT INTO memory_units_fts_trigram(memory_units_fts_trigram, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_units_au AFTER UPDATE ON memory_units BEGIN
+    INSERT INTO memory_units_fts(memory_units_fts, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+    INSERT INTO memory_units_fts(rowid, content) VALUES (new.rowid, new.content);
+
+    INSERT INTO memory_units_fts_trigram(memory_units_fts_trigram, rowid, content)
+        VALUES ('delete', old.rowid, old.content);
+    INSERT INTO memory_units_fts_trigram(rowid, content) VALUES (new.rowid, new.content);
+END;
+
 CREATE TABLE IF NOT EXISTS memory_unit_evidence (
     unit_id     TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
     event_id    INTEGER NOT NULL REFERENCES memory_ingest_events(id) ON DELETE RESTRICT,

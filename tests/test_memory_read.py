@@ -225,6 +225,31 @@ class MemoryReadTest(unittest.TestCase):
         hits = memory_read.retrieve_units("跨专业考研", "public_post", "gotoh")
         self.assertEqual([], hits)
 
+    # --- FTS keyword channel for units ------------------------------------
+
+    def test_fts_unit_ranks_matches_long_cjk_via_trigram(self) -> None:
+        u = self._unit("global", "public", type="preference", content="喜欢在深夜的图书馆学习")
+        self.assertIn(u, memory_read._fts_unit_ranks("图书馆"))  # ≥3-char CJK -> trigram
+
+    def test_fts_unit_ranks_matches_short_cjk_via_like(self) -> None:
+        # 2-char CJK words can't be tokenized by trigram; LIKE fallback must find them.
+        u = self._unit("global", "public", type="preference", content="正在准备考研")
+        self.assertIn(u, memory_read._fts_unit_ranks("考研"))
+
+    def test_fts_unit_ranks_uses_rewrite_keywords_including_short_cjk(self) -> None:
+        long_hit = self._unit("global", "public", type="preference", content="喜欢去图书馆")
+        short_hit = self._unit("global", "public", type="preference", content="在准备考研")
+        ranks = memory_read._fts_unit_ranks("随便问问", keywords=["图书馆", "考研"])
+        self.assertIn(long_hit, ranks)   # trigram
+        self.assertIn(short_hit, ranks)  # LIKE (2-char keyword)
+
+    def test_retrieve_units_keeps_only_fts_or_semantic_matches(self) -> None:
+        hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")
+        self._unit("global", "public", type="preference", content="讨厌喝咖啡")
+        ids = [h.unit_id for h in memory_read.retrieve_units("爬山", "public_post", "gotoh")]
+        self.assertIn(hit, ids)
+        self.assertEqual(1, len(ids))  # the unrelated unit is gated out
+
     # --- recall around comment-derived units (相关对话原文) ----------------
 
     def test_recall_resolves_comment_unit_to_its_post_and_thread(self) -> None:

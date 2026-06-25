@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 
 from core import (
     db,
+    fts_query,
     goal_service,
     memory_events_service as mes,
     memory_scope_policy as policy,
@@ -46,17 +47,23 @@ def memory_section_with_citations(
     query: str,
     *,
     excluded_sources: set[tuple[str, str]] | None = None,
+    semantic_query: str | None = None,
+    keywords: list[str] | None = None,
 ) -> MemorySection:
     """Single entry used by every reply path for memory-v2 prompt assembly.
 
     Returns both the prompt text and the cited belief units + raw freshness so
     every reply path (post first-reply, comment, chat) surfaces the same 引用记忆
-    panel from one code path."""
+    panel from one code path. ``semantic_query``/``keywords`` are the query-rewrite
+    outputs steering unit retrieval; absent them retrieval falls back to the raw
+    query."""
     prompt = build_memory_section(
         channel,
         reply_soul,
         query,
         excluded_sources=excluded_sources,
+        semantic_query=semantic_query,
+        keywords=keywords,
     )
     return MemorySection(
         text=prompt.text,
@@ -70,6 +77,8 @@ def memory_section_for(
     query: str,
     *,
     excluded_sources: set[tuple[str, str]] | None = None,
+    semantic_query: str | None = None,
+    keywords: list[str] | None = None,
 ) -> str:
     """Text-only memory block (no citations). Kept for the first-reply path."""
     return memory_section_with_citations(
@@ -77,6 +86,8 @@ def memory_section_for(
         reply_soul,
         query,
         excluded_sources=excluded_sources,
+        semantic_query=semantic_query,
+        keywords=keywords,
     ).text
 
 
@@ -208,10 +219,18 @@ def retrieve_units(
     reply_soul: str | None,
     *,
     k: int = RETRIEVE_DEFAULT_K,
+    semantic_query: str | None = None,
+    keywords: list[str] | None = None,
 ) -> list[MemoryItem]:
     """Query-relevant beliefs in the admissible scopes, excluding state units
-    (state block) and portrait members. MVP scoring: keyword
-    overlap first, then importance, then recency — no vector index yet."""
+    (state block) and portrait members.
+
+    Two parallel recall channels, intersected with a scope-filtered candidate set:
+    FTS5 over unit content (``keywords`` from query-rewrite, else the raw query)
+    and semantic ANN over the unit vector index (``semantic_query`` from rewrite,
+    else the raw query). A unit is kept iff it matches EITHER channel; scored by a
+    blend of both ranks, then importance, then recency. Scope/discretion is
+    enforced by the SQL candidate set, so neither channel can widen visibility."""
     plan = policy.admissible_visibility_filters(channel, reply_soul)
     vis_sql, params = _allowed_visibility_sql(plan)
     type_placeholders = ",".join("?" for _ in _RETRIEVE_EXCLUDED_TYPES)
@@ -230,26 +249,24 @@ def retrieve_units(
         (*_RETRIEVE_EXCLUDED_TYPES, *params),
     )
 
-    terms = _tokenize(query)
     now = db.now_ts()
-    semantic = _semantic_unit_ranks(query)
+    semantic = _semantic_unit_ranks(semantic_query or query)
+    fts = _fts_unit_ranks(query, keywords)
 
     def score(r: sqlite3.Row) -> tuple:
-        overlap = _keyword_overlap(str(r["content"]), terms)
-        sem_rank = semantic.get(str(r["id"]))
+        rid = str(r["id"])
+        fts_rank = fts.get(rid)
+        fts_score = (1.0 / (1 + fts_rank)) if fts_rank is not None else 0.0
+        sem_rank = semantic.get(rid)
         sem_score = (1.0 / (1 + sem_rank)) if sem_rank is not None else 0.0
-        combined = overlap + 2.0 * sem_score
+        combined = fts_score + 2.0 * sem_score
         return (combined, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
 
-    # relevance gate: keep units matching on keyword OR semantic similarity.
-    # Semantic recall catches paraphrases keyword overlap misses; keyword catches
-    # exact terms the embedding blurs. Units matching neither are not injected as
-    # importance-ranked filler. Scope/discretion is still enforced by the SQL
-    # candidate set above, so ANN results can never widen visibility.
-    kept = [
-        r for r in rows
-        if _keyword_overlap(str(r["content"]), terms) > 0 or str(r["id"]) in semantic
-    ]
+    # relevance gate: keep units matching the FTS keyword channel OR the semantic
+    # channel. Semantic recall catches paraphrases keyword search misses; FTS
+    # catches exact terms the embedding blurs. Units matching neither are not
+    # injected as importance-ranked filler.
+    kept = [r for r in rows if str(r["id"]) in fts or str(r["id"]) in semantic]
     kept = [
         r for r in kept
         if not goal_service.memory_content_duplicates_active_goal(str(r["content"]))
@@ -281,6 +298,90 @@ def _semantic_unit_ranks(query: str) -> dict[str, int]:
         if uid:
             ranks.setdefault(str(uid), int(getattr(hit, "rank", len(ranks) + 1)))
     return ranks
+
+
+def _is_short_cjk(term: str) -> bool:
+    """A CJK term under 3 chars: the trigram tokenizer produces no token for it, so
+    it can never MATCH and must be served by LIKE instead (2-char words like 考研/
+    安静 are extremely common)."""
+    return fts_query.has_cjk(term) and len(term.replace(" ", "")) < 3
+
+
+def _fts_unit_ranks(query: str, keywords: list[str] | None = None) -> dict[str, int]:
+    """unit_id -> rank for the rewrite ``keywords`` (preferred) or the raw query,
+    over the unit FTS index. Trigram MATCH for tokenizable terms (CJK ≥3 / ASCII),
+    LIKE for short CJK terms the trigram tokenizer cannot index; union, MATCH hits
+    first. Empty when nothing matches. Scope is NOT applied here; the caller
+    intersects these with its scope-filtered SQL candidates."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def add(ids: list[str]) -> None:
+        for uid in ids:
+            if uid not in seen:
+                seen.add(uid)
+                ordered.append(uid)
+
+    keywords = keywords or []
+    if keywords:
+        terms = fts_query.keyword_candidates(keywords)
+        tokenizable = [t for t in terms if not _is_short_cjk(t)]
+        if tokenizable:
+            add(_units_matching_fts(
+                fts_query.quote_match_candidates(tokenizable),
+                cjk=any(fts_query.has_cjk(t) for t in tokenizable),
+            ))
+        for term in terms:
+            if _is_short_cjk(term):
+                add(_units_matching_like(term))
+    else:
+        clean = fts_query.sanitize_fts5(query)
+        if clean and _is_short_cjk(clean):
+            add(_units_matching_like(clean))
+        elif clean:
+            match = fts_query.quote_match_candidates(fts_query.match_candidates(clean))
+            if match:
+                add(_units_matching_fts(match, cjk=fts_query.has_cjk(clean)))
+
+    return {uid: index + 1 for index, uid in enumerate(ordered)}
+
+
+def _units_matching_fts(match: str, *, cjk: bool) -> list[str]:
+    """Unit ids matching an FTS5 MATCH expression, best-rank first. Trigram table
+    for CJK, default tokenizer otherwise."""
+    table = "memory_units_fts_trigram" if cjk else "memory_units_fts"
+    try:
+        rows = db.query_all(
+            f"""
+            SELECT u.id AS id
+            FROM {table}
+            JOIN memory_units u ON u.rowid = {table}.rowid
+            WHERE {table} MATCH ?
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (match, RETRIEVE_DEFAULT_K * 3),
+        )
+    except sqlite3.Error:
+        return []
+    return [str(row["id"]) for row in rows]
+
+
+def _units_matching_like(term: str) -> list[str]:
+    """Short-CJK fallback: match the compact term as a LIKE substring against unit
+    content, recency-ordered."""
+    pattern = f"%{term.replace(' ', '')}%"
+    rows = db.query_all(
+        """
+        SELECT id
+        FROM memory_units
+        WHERE content LIKE ?
+        ORDER BY last_confirmed DESC, id DESC
+        LIMIT ?
+        """,
+        (pattern, RETRIEVE_DEFAULT_K * 3),
+    )
+    return [str(row["id"]) for row in rows]
 
 
 def _top_evidence_row(unit_id: str, terms: list[str]) -> sqlite3.Row | None:
@@ -647,13 +748,20 @@ def build_memory_section(
     query: str,
     *,
     excluded_sources: set[tuple[str, str]] | None = None,
+    semantic_query: str | None = None,
+    keywords: list[str] | None = None,
 ) -> MemoryPrompt:
     """Assemble the always-on + retrieved memory block for a reply prompt.
 
     Layers (design §4.5): baseline portrait -> current state -> relevant units,
     plus a precedence/discretion rule line. Private-but-admitted items are
     tagged so the model self-censors before public disclosure; forbidden memory
-    never reaches here (filtered upstream by scope policy)."""
+    never reaches here (filtered upstream by scope policy).
+
+    ``semantic_query``/``keywords`` (query-rewrite outputs) steer ONLY unit
+    retrieval — the abstracted belief layer. The raw ``query`` still drives recall
+    and the freshness seam, which match raw user evidence and so prefer the user's
+    own words over a rewritten paraphrase."""
     sections: list[str] = []
     used: list[str] = []
     has_discretion = False
@@ -674,7 +782,9 @@ def build_memory_section(
         sections.append("[当前状态]\n" + "\n".join(lines))
 
     # 3. query-relevant beliefs (de-noised topic anchors)
-    hits = retrieve_units(query, channel, reply_soul)
+    hits = retrieve_units(
+        query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords
+    )
     terms = _tokenize(query)
     if hits:
         lines = []
