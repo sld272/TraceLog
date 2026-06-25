@@ -325,10 +325,25 @@ def _is_short_cjk(term: str) -> bool:
 
 def _fts_unit_ranks(query: str, keywords: list[str] | None = None) -> dict[str, int]:
     """unit_id -> rank for the rewrite ``keywords`` (preferred) or the raw query,
-    over the unit FTS index. Trigram MATCH for tokenizable terms (CJK ≥3 / ASCII),
-    LIKE for short CJK terms the trigram tokenizer cannot index; union, MATCH hits
-    first. Empty when nothing matches. Scope is NOT applied here; the caller
-    intersects these with its scope-filtered SQL candidates."""
+    over the unit FTS index. Empty when nothing matches. Scope is NOT applied here;
+    the caller intersects these with its scope-filtered SQL candidates."""
+    keywords = keywords or []
+    if keywords:
+        return _fts_ranks_for_terms(fts_query.keyword_candidates(keywords))
+    clean = fts_query.sanitize_fts5(query)
+    if not clean:
+        return {}
+    # match_candidates yields trigram windows + word terms (incl. short CJK ones).
+    # A single CJK char yields none, so fall back to the whole query (LIKE below).
+    return _fts_ranks_for_terms(fts_query.match_candidates(clean) or [clean])
+
+
+def _fts_ranks_for_terms(terms: list[str]) -> dict[str, int]:
+    """Split terms into trigram-tokenizable (CJK ≥3 / ASCII) and short CJK (<3,
+    which the trigram tokenizer cannot index) — MATCH the former in one OR query,
+    LIKE each of the latter so common 2-char Chinese words ("考研", "规划") are not
+    lost even when they arrive embedded in a longer query. Union, with FTS hits
+    ranked ahead of LIKE-only hits."""
     ordered: list[str] = []
     seen: set[str] = set()
 
@@ -338,27 +353,15 @@ def _fts_unit_ranks(query: str, keywords: list[str] | None = None) -> dict[str, 
                 seen.add(uid)
                 ordered.append(uid)
 
-    keywords = keywords or []
-    if keywords:
-        terms = fts_query.keyword_candidates(keywords)
-        tokenizable = [t for t in terms if not _is_short_cjk(t)]
-        if tokenizable:
-            add(_units_matching_fts(
-                fts_query.quote_match_candidates(tokenizable),
-                cjk=any(fts_query.has_cjk(t) for t in tokenizable),
-            ))
-        for term in terms:
-            if _is_short_cjk(term):
-                add(_units_matching_like(term))
-    else:
-        clean = fts_query.sanitize_fts5(query)
-        if clean and _is_short_cjk(clean):
-            add(_units_matching_like(clean))
-        elif clean:
-            match = fts_query.quote_match_candidates(fts_query.match_candidates(clean))
-            if match:
-                add(_units_matching_fts(match, cjk=fts_query.has_cjk(clean)))
-
+    tokenizable = [t for t in terms if not _is_short_cjk(t)]
+    if tokenizable:
+        add(_units_matching_fts(
+            fts_query.quote_match_candidates(tokenizable),
+            cjk=any(fts_query.has_cjk(t) for t in tokenizable),
+        ))
+    for term in terms:
+        if _is_short_cjk(term):
+            add(_units_matching_like(term))
     return {uid: index + 1 for index, uid in enumerate(ordered)}
 
 

@@ -245,6 +245,18 @@ class MemoryReadTest(unittest.TestCase):
         self.assertIn(long_hit, ranks)   # trigram
         self.assertIn(short_hit, ranks)  # LIKE (2-char keyword)
 
+    def test_fts_raw_query_recovers_embedded_short_cjk_words(self) -> None:
+        # raw fallback (no rewrite): a unit whose only overlap is a 2-char word must
+        # still be found even though the whole query is >=3 chars — trigram can't
+        # tokenize the 2-char parts, so they must be routed to LIKE.
+        u = self._unit("global", "public", type="preference", content="用户在准备考研")
+        self.assertIn(u, memory_read._fts_unit_ranks("考研 规划"))  # space-separated words
+        self.assertIn(u, memory_read._fts_unit_ranks("考研进展"))   # spaceless, same gap
+
+    def test_fts_raw_query_single_cjk_char_via_like(self) -> None:
+        u = self._unit("global", "public", type="preference", content="喜欢画画")
+        self.assertIn(u, memory_read._fts_unit_ranks("画"))  # no candidates -> LIKE whole query
+
     def test_retrieve_units_keeps_only_fts_or_semantic_matches(self) -> None:
         hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")
         self._unit("global", "public", type="preference", content="讨厌喝咖啡")
