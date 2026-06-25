@@ -5,11 +5,15 @@ this pass runs low-frequency over a WHOLE persona (one ``owner_scope``, spanning
 its public + private visibility layers) and does the holistic work the
 event-driven reconcile structurally cannot:
 
-  * decay  — a stale, non-core, reflected belief that has not been re-confirmed
-    within the window drops to ``dormant``. Dormant units leave every read path
-    AND the reconcile comparison set (which loads only active/challenged), so the
-    persona's prompt stops growing without bound. This is the deterministic fix
-    for "memory only ever grows". Reversible: a future confirm revives it.
+  * decay  — a stale, non-core, reflected ``state`` that has not been re-confirmed
+    within the window drops to ``dormant``. Only ``state`` ages out: it is a
+    transient "current status", so one nobody has reconfirmed in a month is no
+    longer current. Durable beliefs (preference/identity/insight/…) never decay by
+    age — they persist and are recalled on relevance, leaving only via promotion to
+    core or explicit retraction. Dormant units leave every read path AND the
+    reconcile comparison set (which loads only active/challenged), so the persona's
+    prompt stops growing without bound. This is the deterministic fix for "state
+    memory only ever grows". Reversible: a future confirm revives it.
   * promote — a contextual belief that has been re-confirmed across enough
     reflections (and is important + confident) sediments into ``core`` and may
     enter the always-on portrait. Time-sedimented entry replaces the single-pass
@@ -54,16 +58,20 @@ def decay_dormant(
     window_days: float = DECAY_WINDOW_DAYS,
     conn,
 ) -> list[str]:
-    """Retire stale, non-core, reflected beliefs in this owner to dormant.
+    """Retire stale, non-core, reflected ``state`` units in this owner to dormant.
 
-    Skips core (the identity floor), user-authored beliefs, challenged units, and
-    anything the user pinned into the portrait (force_include)."""
+    Only ``type='state'`` decays by age — a transient current-status nobody has
+    reconfirmed within the window is no longer current. Durable beliefs persist
+    indefinitely (recalled on relevance) and are never aged out here. Skips core
+    (the identity floor), user-authored beliefs, challenged units, and anything the
+    user pinned into the portrait (force_include)."""
     now = db.now_ts() if now is None else now
     cutoff = now - window_days * DAY_SECONDS
     rows = conn.execute(
         """
         SELECT id FROM memory_units
         WHERE owner_scope = ?
+          AND type = 'state'
           AND status = 'active'
           AND source = 'reflected'
           AND tier IN ('contextual','episodic')

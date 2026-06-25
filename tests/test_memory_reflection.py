@@ -55,31 +55,35 @@ class MemoryReflectionTest(unittest.TestCase):
 
     # --- decay -------------------------------------------------------------
 
-    def test_decay_retires_only_stale_noncore_reflected(self) -> None:
-        stale = self._unit("旧的次要信息", tier="contextual")
-        core = self._unit("核心身份", tier="core")
-        authored = self._unit("用户自述", tier="contextual", source="user_authored")
+    def test_decay_retires_only_stale_state(self) -> None:
+        # Only `state` ages out. A stale durable belief (insight/preference) must
+        # survive — durable memory is never forgotten by age, only by relevance.
+        stale_state = self._unit("上周在搬家", type="state", tier="contextual")
+        stale_durable = self._unit("喜欢安静", type="preference", tier="contextual")
+        core_state = self._unit("长期目标状态", type="state", tier="core")
+        authored_state = self._unit("用户自述状态", type="state", source="user_authored")
         summary = refl.reflect_persona("global", now=self._future())
-        self.assertEqual(summary.decayed, [stale])
-        self.assertEqual(mus.get_unit(stale)["status"], "dormant")
-        self.assertEqual(mus.get_unit(core)["status"], "active")
-        self.assertEqual(mus.get_unit(authored)["status"], "active")
+        self.assertEqual(summary.decayed, [stale_state])
+        self.assertEqual(mus.get_unit(stale_state)["status"], "dormant")
+        self.assertEqual(mus.get_unit(stale_durable)["status"], "active")  # durable: immune
+        self.assertEqual(mus.get_unit(core_state)["status"], "active")
+        self.assertEqual(mus.get_unit(authored_state)["status"], "active")
 
-    def test_fresh_units_not_decayed(self) -> None:
-        u = self._unit("最近的信息", tier="contextual")
+    def test_fresh_state_not_decayed(self) -> None:
+        u = self._unit("最近的状态", type="state", tier="contextual")
         summary = refl.reflect_persona("global")  # cutoff is in the past
         self.assertEqual(summary.decayed, [])
         self.assertEqual(mus.get_unit(u)["status"], "active")
 
-    def test_force_include_unit_not_decayed(self) -> None:
-        pinned = self._unit("用户钉住的次要信息", tier="contextual")
+    def test_force_include_state_not_decayed(self) -> None:
+        pinned = self._unit("用户钉住的状态", type="state", tier="contextual")
         mus.set_portrait_policy(pinned, portrait_policy="force_include")
         summary = refl.reflect_persona("global", now=self._future())
         self.assertNotIn(pinned, summary.decayed)
         self.assertEqual(mus.get_unit(pinned)["status"], "active")
 
-    def test_dormant_leaves_reconcile_comparison_set(self) -> None:
-        u = self._unit("旧次要", tier="contextual")
+    def test_dormant_state_leaves_reconcile_comparison_set(self) -> None:
+        u = self._unit("旧状态", type="state", tier="contextual")
         refl.reflect_persona("global", now=self._future())
         active = {r["id"] for r in mus.list_reconcile_units_in_bucket("global", "public")}
         self.assertNotIn(u, active)

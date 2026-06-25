@@ -18,6 +18,7 @@ from core import (
     logging_service,
     memory_events_service as mes,
     memory_reconciler as recon,
+    memory_reflection,
     memory_unit_service as mus,
 )
 from core.memory_reconcile_producer import (
@@ -185,6 +186,21 @@ def run_pending_reconcile(
         except Exception as exc:
             logging_service.log_event("memory_relink_pass_failed", error=str(exc))
             relink_failures = [RelinkFailure(unit_id="*", error=str(exc))]
+    # Piggyback deterministic deep reflection on the live pass: each persona whose
+    # beliefs were just brought current gets its stale states retired (>30d
+    # unconfirmed -> dormant) and its durable beliefs sedimented into core. Owner-
+    # level and best-effort — a reflection failure must never fail the reconcile
+    # job. Skipped in dry-run (it mutates). Decay being time-based, riding the
+    # reconcile trigger is fine: an owner with no activity injects nothing anyway.
+    if not dry_run:
+        for owner_scope in sorted({summary.owner_scope for summary in summaries}):
+            try:
+                memory_reflection.reflect_persona(owner_scope)
+            except Exception as exc:
+                logging_service.log_event(
+                    "memory_reflection_failed", owner_scope=owner_scope, error=str(exc)
+                )
+
     pending_relinks = bool(mus.list_pending_relinks()) if not dry_run else False
     has_pending = (
         False

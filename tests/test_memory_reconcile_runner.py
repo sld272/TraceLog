@@ -139,6 +139,31 @@ class BucketDiscoveryTest(unittest.TestCase):
         self.assertEqual(len(mus.list_units("global", "public")), 1)
         self.assertEqual(len(mus.list_units("soul:luna", "private:soul:luna")), 1)
 
+    def test_runner_piggybacks_reflection_decaying_stale_state(self) -> None:
+        # Deep reflection rides the live reconcile pass: a stale state (>30d
+        # unconfirmed) in a reconciled owner is retired to dormant.
+        with db.transaction() as conn:
+            ev = mes.record_post_mutation(
+                conn, post_id="seed", op="create", content="立个状态", occurred_at=1.0
+            ).id
+        stale = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="state", content="上周在搬家", confidence=0.8, importance=0.5,
+            tier="contextual", source="reflected", evidence_event_ids=[ev],
+        )
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE memory_units SET last_confirmed = ? WHERE id = ?",
+                (db.now_ts() - 40 * 86400.0, stale),
+            )
+
+        result = runner.run_pending_reconcile(
+            client=object(), model="m", op_producer=self._producer([])
+        )
+
+        self.assertIn("global", {summary.owner_scope for summary in result.summaries})
+        self.assertEqual(mus.get_unit(stale)["status"], "dormant")
+
     def test_runner_collects_failure_and_continues_other_buckets(self) -> None:
         with db.transaction() as conn:
             public_id = mes.record_post_mutation(
