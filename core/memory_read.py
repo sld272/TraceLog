@@ -107,6 +107,12 @@ DAY_SECONDS = 86400.0
 
 # unit retrieval
 RETRIEVE_DEFAULT_K = 8
+# Cosine-similarity floor for a semantic (ANN) hit to count. Chroma always returns
+# the k nearest neighbours even when the nearest is barely related; without a floor
+# every one passes the relevance gate and fills [相关记忆] with noise. similarity =
+# 1 - cosine_distance; 0.30 (distance <= 0.70) is conservative — it drops clearly
+# unrelated units while keeping paraphrase recall. Tune against real distances.
+SEMANTIC_SIM_FLOOR = 0.30
 # states live in the state block; portrait members live in the portrait — both
 # excluded here so relevant-memory retrieval surfaces the mid-tier beliefs.
 # relationship units are owner-scoped to one persona and are injected ONLY through
@@ -250,15 +256,14 @@ def retrieve_units(
     )
 
     now = db.now_ts()
-    semantic = _semantic_unit_ranks(semantic_query or query)
+    semantic = _semantic_unit_sims(semantic_query or query)
     fts = _fts_unit_ranks(query, keywords)
 
     def score(r: sqlite3.Row) -> tuple:
         rid = str(r["id"])
         fts_rank = fts.get(rid)
         fts_score = (1.0 / (1 + fts_rank)) if fts_rank is not None else 0.0
-        sem_rank = semantic.get(rid)
-        sem_score = (1.0 / (1 + sem_rank)) if sem_rank is not None else 0.0
+        sem_score = semantic.get(rid, 0.0)  # cosine similarity, already floored
         combined = fts_score + 2.0 * sem_score
         return (combined, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
 
@@ -275,11 +280,14 @@ def retrieve_units(
     return [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
 
 
-def _semantic_unit_ranks(query: str) -> dict[str, int]:
-    """unit_id -> ANN rank for the query, from the unit vector docs. Empty when
-    the query is blank or the vector index is unavailable / not query-ready, in
-    which case retrieval degrades to keyword-only. Scope is NOT applied here; the
-    caller intersects these with its scope-filtered SQL candidates."""
+def _semantic_unit_sims(query: str) -> dict[str, float]:
+    """unit_id -> cosine similarity (1 - distance) for the query, from the unit
+    vector docs, keeping only hits at or above SEMANTIC_SIM_FLOOR. Empty when the
+    query is blank or the vector index is unavailable / not query-ready, in which
+    case retrieval degrades to FTS-only. When a hit carries no distance (rare
+    Chroma fallback) it is kept fail-open with an ANN-order similarity rather than
+    floored. Scope is NOT applied here; the caller intersects these with its
+    scope-filtered SQL candidates."""
     if not str(query or "").strip():
         return {}
     try:
@@ -287,7 +295,7 @@ def _semantic_unit_ranks(query: str) -> dict[str, int]:
         hits = vectorstore.query_documents(query, n_results=RETRIEVE_DEFAULT_K * 3, where={"type": "unit"})
     except Exception:
         return {}
-    ranks: dict[str, int] = {}
+    sims: dict[str, float] = {}
     for hit in hits:
         meta = getattr(hit, "metadata", None) or {}
         uid = meta.get("unit_id")
@@ -295,9 +303,17 @@ def _semantic_unit_ranks(query: str) -> dict[str, int]:
             doc_id = str(getattr(hit, "doc_id", ""))
             if doc_id.startswith("unit-"):
                 uid = doc_id[len("unit-"):]
-        if uid:
-            ranks.setdefault(str(uid), int(getattr(hit, "rank", len(ranks) + 1)))
-    return ranks
+        if not uid:
+            continue
+        distance = getattr(hit, "distance", None)
+        if distance is None:
+            sim = 1.0 / (1 + int(getattr(hit, "rank", len(sims) + 1)))
+        else:
+            sim = 1.0 - float(distance)
+            if sim < SEMANTIC_SIM_FLOOR:
+                continue
+        sims.setdefault(str(uid), sim)
+    return sims
 
 
 def _is_short_cjk(term: str) -> bool:

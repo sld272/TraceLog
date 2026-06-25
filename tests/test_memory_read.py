@@ -3,6 +3,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from core import (
     db,
@@ -249,6 +251,32 @@ class MemoryReadTest(unittest.TestCase):
         ids = [h.unit_id for h in memory_read.retrieve_units("爬山", "public_post", "gotoh")]
         self.assertIn(hit, ids)
         self.assertEqual(1, len(ids))  # the unrelated unit is gated out
+
+    # --- semantic distance floor (R3) -------------------------------------
+
+    def test_semantic_sims_apply_distance_floor(self) -> None:
+        hits = [
+            SimpleNamespace(doc_id="unit-near", metadata={"unit_id": "near"}, rank=1, distance=0.2),
+            SimpleNamespace(doc_id="unit-far", metadata={"unit_id": "far"}, rank=2, distance=0.95),
+        ]
+        with patch("core.vectorstore.query_documents", return_value=hits):
+            sims = memory_read._semantic_unit_sims("随便问问")
+        self.assertIn("near", sims)          # similarity 0.8 >= floor
+        self.assertNotIn("far", sims)        # similarity 0.05 gated out
+        self.assertAlmostEqual(0.8, sims["near"])
+
+    def test_semantic_sims_keep_missing_distance_fail_open(self) -> None:
+        hits = [SimpleNamespace(doc_id="unit-x", metadata={"unit_id": "x"}, rank=1, distance=None)]
+        with patch("core.vectorstore.query_documents", return_value=hits):
+            sims = memory_read._semantic_unit_sims("随便问问")
+        self.assertIn("x", sims)  # unknown distance kept (fail-open), not floored
+
+    def test_retrieve_units_gates_out_far_semantic_only_match(self) -> None:
+        u = self._unit("global", "public", type="preference", content="完全无关的内容")
+        far = [SimpleNamespace(doc_id=f"unit-{u}", metadata={"unit_id": u}, rank=1, distance=0.95)]
+        with patch("core.vectorstore.query_documents", return_value=far):
+            hits = memory_read.retrieve_units("zzz", "public_post", "gotoh")
+        self.assertEqual([], [h.unit_id for h in hits])  # far semantic + no FTS -> dropped
 
     # --- recall around comment-derived units (相关对话原文) ----------------
 
