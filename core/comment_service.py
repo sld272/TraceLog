@@ -13,6 +13,7 @@ from core import (
     memory_events_service,
     memory_read,
     memory_unit_service,
+    query_rewriter,
     record_service,
     reply_context,
     soul_service,
@@ -304,11 +305,25 @@ def build_comment_context(
         ("comment_message", str(row["id"]))
         for row in db.query_all("SELECT id FROM comments WHERE post_id = ?", (post_id,))
     }
+    rewrite = (
+        query_rewriter.rewrite_query(
+            client,
+            model,
+            user_message,
+            "comment",
+            recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
+            trace_context={"post_id": post_id, "soul_name": soul_name},
+        )
+        if client and model
+        else None
+    )
     memory = memory_read.memory_section_with_citations(
         "comment",
         soul_name,
         user_message,
         excluded_sources=excluded_comment_sources,
+        semantic_query=rewrite.semantic_query if rewrite else None,
+        keywords=rewrite.keywords if rewrite else None,
     )
     if memory.text:
         sections.append(f"# 记忆\n\n{memory.text}")
@@ -610,11 +625,20 @@ def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClie
         },
     )
     soul = _load_soul_context(message.soul_name)
+    rewrite = query_rewriter.rewrite_query(
+        client,
+        model,
+        llm_content,
+        "public_post",
+        trace_context={"post_id": message.post_id, "soul_name": message.soul_name},
+    )
     memory = memory_read.memory_section_with_citations(
         "public_post",
         message.soul_name,
         llm_content,
         excluded_sources={("post", message.post_id), ("post_vision", message.post_id)},
+        semantic_query=rewrite.semantic_query,
+        keywords=rewrite.keywords,
     )
     shared_context = public_context.built_context.shared_context
     soul_context = (

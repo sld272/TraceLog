@@ -6,7 +6,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
-from core import db, logging_service, memory_events_service, memory_read, record_service
+from core import db, logging_service, memory_events_service, memory_read, query_rewriter, record_service
 from core.context_builder import BuiltContext
 from core.llm import reply_router
 from core.llm.types import LLMClient
@@ -39,6 +39,13 @@ def fanout(
     if not pending_souls:
         return []
 
+    # Query rewrite is soul-independent, so rewrite the post ONCE and share it
+    # across the fanout rather than per soul. First replies have no thread, so
+    # there is no anaphora context to resolve — content only.
+    rewrite = query_rewriter.rewrite_query(
+        client, model, user_input, "public_post", trace_context={"post_id": post_id}
+    )
+
     max_workers = max(1, len(pending_souls))
     results: list[SoulReplyResult] = []
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -51,6 +58,7 @@ def fanout(
                 client,
                 model,
                 built_context.shared_context,
+                rewrite,
             ): soul
             for soul in pending_souls
         }
@@ -88,6 +96,7 @@ def _call_one_soul(
     client: LLMClient,
     model: str,
     shared_context: str,
+    rewrite: query_rewriter.RewrittenQuery | None = None,
 ) -> SoulReplyResult:
     soul_context, cited_memory = _with_memory_section(
         shared_context,
@@ -95,6 +104,7 @@ def _call_one_soul(
         soul.name,
         user_input,
         excluded_sources={("post", post_id), ("post_vision", post_id)},
+        rewrite=rewrite,
     )
     data = reply_router.call_soul_post_reply(
         user_input,
@@ -146,6 +156,7 @@ def _with_memory_section(
     query: str,
     *,
     excluded_sources: set[tuple[str, str]] | None = None,
+    rewrite: query_rewriter.RewrittenQuery | None = None,
 ) -> tuple[str, list[dict]]:
     """Append the per-soul scope-filtered memory-v2 block, returning its citations."""
     memory = memory_read.memory_section_with_citations(
@@ -153,6 +164,8 @@ def _with_memory_section(
         soul_name,
         query,
         excluded_sources=excluded_sources,
+        semantic_query=rewrite.semantic_query if rewrite else None,
+        keywords=rewrite.keywords if rewrite else None,
     )
     if not memory.text:
         return base_context, memory.cited_memory

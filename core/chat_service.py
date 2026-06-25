@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -208,6 +208,18 @@ def build_chat_context(
     if web_section:
         sections.append(web_section)
 
+    rewrite = (
+        query_rewriter.rewrite_query(
+            client,
+            model,
+            user_message,
+            "chat",
+            recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
+            trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
+        )
+        if client and model
+        else None
+    )
     memory = memory_read.memory_section_with_citations(
         "chat",
         thread.soul_name,
@@ -217,6 +229,8 @@ def build_chat_context(
             for message in llm_messages
             if message.id > 0
         },
+        semantic_query=rewrite.semantic_query if rewrite else None,
+        keywords=rewrite.keywords if rewrite else None,
     )
     if memory.text:
         sections.append(f"# 记忆\n\n{memory.text}")
