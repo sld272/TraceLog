@@ -53,29 +53,19 @@ class RetrievalExclusion:
 def fts_search_scored(
     query: str,
     k: int = 20,
-    fts_keywords: list[str] | None = None,
     trace_context: dict | None = None,
 ) -> list[RetrievalHit]:
     """Return FTS hits with source, rank position, and raw FTS rank for debug."""
     clean = fts_query.sanitize_fts5(query)
-    if not clean and not fts_keywords:
+    if not clean:
         return []
 
-    keyword_candidates = fts_query.keyword_candidates(fts_keywords or [])
-    keyword_match = fts_query.quote_match_candidates(keyword_candidates)
-    deterministic_candidates: list[str] = []
-    if keyword_match:
-        match = keyword_match
-        table = "posts_fts_trigram" if any(fts_query.has_cjk(keyword) for keyword in fts_keywords or []) else "posts_fts"
-        source = "fts_rewrite"
-    elif fts_query.has_cjk(clean):
+    if fts_query.has_cjk(clean):
         if len(clean.replace(" ", "")) < 3:
             hits = _like_search_scored(clean, k)
             _log_fts_query_built(
                 query=query,
                 clean=clean,
-                fts_keywords=fts_keywords or [],
-                keyword_candidates=keyword_candidates,
                 deterministic_candidates=[],
                 match="",
                 table="posts",
@@ -91,9 +81,8 @@ def fts_search_scored(
         table = "posts_fts"
         source = "fts"
 
-    if not keyword_match:
-        deterministic_candidates = fts_query.match_candidates(clean)
-        match = fts_query.quote_match_candidates(deterministic_candidates)
+    deterministic_candidates = fts_query.match_candidates(clean)
+    match = fts_query.quote_match_candidates(deterministic_candidates)
     if not match:
         return []
     sql = f"""
@@ -117,8 +106,6 @@ def fts_search_scored(
         _log_fts_query_built(
             query=query,
             clean=clean,
-            fts_keywords=fts_keywords or [],
-            keyword_candidates=keyword_candidates,
             deterministic_candidates=deterministic_candidates,
             match=match,
             table=table,
@@ -132,8 +119,6 @@ def fts_search_scored(
         _log_fts_query_built(
             query=query,
             clean=clean,
-            fts_keywords=fts_keywords or [],
-            keyword_candidates=keyword_candidates,
             deterministic_candidates=deterministic_candidates,
             match=match,
             table=table,
@@ -260,16 +245,11 @@ def hybrid_search_scored(
     candidate_k: int = 20,
     allow_fallback: bool = True,
     semantic_query: str | None = None,
-    fts_keywords: list[str] | None = None,
     trace_context: dict | None = None,
     exclusion: RetrievalExclusion | None = None,
 ) -> list[HybridHit]:
     """Combine FTS5 and ChromaDB with dynamic weights and explainable scores."""
-    fts_hits = (
-        fts_search_scored(query, k=candidate_k, fts_keywords=fts_keywords, trace_context=trace_context)
-        if fts_keywords is not None
-        else fts_search_scored(query, k=candidate_k, trace_context=trace_context)
-    )
+    fts_hits = fts_search_scored(query, k=candidate_k, trace_context=trace_context)
     vector_query = semantic_query or query
     vector_hits = vector_search_scored(vector_query, k=candidate_k)
     fts_hits, vector_hits = _filter_excluded_post_candidates(
@@ -282,7 +262,6 @@ def hybrid_search_scored(
         _log_hybrid_retrieval_result(
             query=query,
             semantic_query=semantic_query,
-            fts_keywords=fts_keywords,
             fts_hits=[],
             vector_hits=[],
             final_hits=[],
@@ -337,7 +316,6 @@ def hybrid_search_scored(
         _log_hybrid_retrieval_result(
             query=query,
             semantic_query=semantic_query,
-            fts_keywords=fts_keywords,
             fts_hits=fts_hits,
             vector_hits=vector_hits,
             final_hits=final_hits,
@@ -351,7 +329,6 @@ def hybrid_search_scored(
         _log_hybrid_retrieval_result(
             query=query,
             semantic_query=semantic_query,
-            fts_keywords=fts_keywords,
             fts_hits=fts_hits,
             vector_hits=vector_hits,
             final_hits=final_hits,
@@ -363,7 +340,6 @@ def hybrid_search_scored(
         _log_hybrid_retrieval_result(
             query=query,
             semantic_query=semantic_query,
-            fts_keywords=fts_keywords,
             fts_hits=fts_hits,
             vector_hits=vector_hits,
             final_hits=final_hits,
@@ -373,7 +349,6 @@ def hybrid_search_scored(
     _log_hybrid_retrieval_result(
         query=query,
         semantic_query=semantic_query,
-        fts_keywords=fts_keywords,
         fts_hits=fts_hits,
         vector_hits=vector_hits,
         final_hits=[],
@@ -589,8 +564,6 @@ def _log_fts_query_built(
     *,
     query: str,
     clean: str,
-    fts_keywords: list[str],
-    keyword_candidates: list[str],
     deterministic_candidates: list[str],
     match: str,
     table: str,
@@ -605,8 +578,6 @@ def _log_fts_query_built(
         target="posts",
         raw_query=query,
         sanitized_query=clean,
-        fts_keywords=fts_keywords,
-        keyword_candidates=keyword_candidates,
         deterministic_candidates=deterministic_candidates,
         match=match,
         table=table,
@@ -620,7 +591,6 @@ def _log_hybrid_retrieval_result(
     *,
     query: str,
     semantic_query: str | None,
-    fts_keywords: list[str] | None,
     fts_hits: list[RetrievalHit],
     vector_hits: list[RetrievalHit],
     final_hits: list[HybridHit],
@@ -631,7 +601,6 @@ def _log_hybrid_retrieval_result(
         **(trace_context or {}),
         raw_query=query,
         semantic_query=semantic_query or query,
-        fts_keywords=fts_keywords or [],
         fts_hits=[_retrieval_hit_payload(hit) for hit in fts_hits],
         vector_hits=[_retrieval_hit_payload(hit) for hit in vector_hits],
         final_hits=[_hybrid_hit_payload(hit) for hit in final_hits],

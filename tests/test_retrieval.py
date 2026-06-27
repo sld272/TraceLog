@@ -389,23 +389,6 @@ class RetrievalDatabaseTest(unittest.TestCase):
             result.hits,
         )
 
-    def test_fts_keywords_can_drive_fts_search(self) -> None:
-        self.insert_post("p-library", "晚上在图书馆学习时，我的效率确实更高。", 2.0)
-        self.insert_post("p-other", "今天只是随便散步。", 1.0)
-
-        hits = retrieval.fts_search_scored(
-            "完全不相关的原始查询",
-            k=5,
-            fts_keywords=["图书馆", "学习效率"],
-        )
-
-        self.assertIn("p-library", [hit.post_id for hit in hits])
-        self.assertEqual("fts_rewrite", hits[0].source)
-        event = self._last_event("fts_query_built")
-        self.assertEqual(["图书馆", "学习效率"], event["fts_keywords"])
-        self.assertEqual(["图书馆", "学习效率"], event["keyword_candidates"])
-        self.assertEqual("fts_rewrite", event["source"])
-
     def test_semantic_query_is_used_for_vector_search(self) -> None:
         captured: dict[str, str] = {}
         retrieval.vector_search_scored = lambda query, k=20: captured.setdefault("query", query) and []
@@ -414,14 +397,12 @@ class RetrievalDatabaseTest(unittest.TestCase):
             "原始查询",
             k=3,
             semantic_query="改写后的语义查询",
-            fts_keywords=[],
         )
 
         self.assertEqual("改写后的语义查询", captured["query"])
         event = self._last_event("hybrid_retrieval_result")
         self.assertEqual("原始查询", event["raw_query"])
         self.assertEqual("改写后的语义查询", event["semantic_query"])
-        self.assertEqual([], event["fts_keywords"])
 
     def _last_event(self, event_name: str) -> dict:
         current = self.workspace / "logs" / "current.jsonl"
