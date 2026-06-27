@@ -265,14 +265,12 @@ def hybrid_search_scored(
     min_score: float | None = None,
     candidate_k: int = 20,
     allow_fallback: bool = True,
-    semantic_query: str | None = None,
     trace_context: dict | None = None,
     exclusion: RetrievalExclusion | None = None,
 ) -> list[HybridHit]:
     """Combine FTS5 and ChromaDB with dynamic weights and explainable scores."""
     fts_hits = fts_search_scored(query, k=candidate_k, trace_context=trace_context)
-    vector_query = semantic_query or query
-    vector_hits = vector_search_scored(vector_query, k=candidate_k)
+    vector_hits = vector_search_scored(query, k=candidate_k)
     fts_hits, vector_hits = _filter_excluded_post_candidates(
         fts_hits,
         vector_hits,
@@ -282,7 +280,6 @@ def hybrid_search_scored(
     if not fts_hits and not vector_hits:
         _log_hybrid_retrieval_result(
             query=query,
-            semantic_query=semantic_query,
             fts_hits=[],
             vector_hits=[],
             final_hits=[],
@@ -336,7 +333,6 @@ def hybrid_search_scored(
         final_hits = ordered[:k]
         _log_hybrid_retrieval_result(
             query=query,
-            semantic_query=semantic_query,
             fts_hits=fts_hits,
             vector_hits=vector_hits,
             final_hits=final_hits,
@@ -349,7 +345,6 @@ def hybrid_search_scored(
         final_hits = filtered[:k]
         _log_hybrid_retrieval_result(
             query=query,
-            semantic_query=semantic_query,
             fts_hits=fts_hits,
             vector_hits=vector_hits,
             final_hits=final_hits,
@@ -360,7 +355,6 @@ def hybrid_search_scored(
         final_hits = ordered[: min(k, 1)]
         _log_hybrid_retrieval_result(
             query=query,
-            semantic_query=semantic_query,
             fts_hits=fts_hits,
             vector_hits=vector_hits,
             final_hits=final_hits,
@@ -369,7 +363,6 @@ def hybrid_search_scored(
         return final_hits
     _log_hybrid_retrieval_result(
         query=query,
-        semantic_query=semantic_query,
         fts_hits=fts_hits,
         vector_hits=vector_hits,
         final_hits=[],
@@ -611,7 +604,6 @@ def _log_fts_query_built(
 def _log_hybrid_retrieval_result(
     *,
     query: str,
-    semantic_query: str | None,
     fts_hits: list[RetrievalHit],
     vector_hits: list[RetrievalHit],
     final_hits: list[HybridHit],
@@ -621,7 +613,6 @@ def _log_hybrid_retrieval_result(
         "hybrid_retrieval_result",
         **(trace_context or {}),
         raw_query=query,
-        semantic_query=semantic_query or query,
         fts_hits=[_retrieval_hit_payload(hit) for hit in fts_hits],
         vector_hits=[_retrieval_hit_payload(hit) for hit in vector_hits],
         final_hits=[_hybrid_hit_payload(hit) for hit in final_hits],

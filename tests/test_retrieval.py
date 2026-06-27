@@ -413,21 +413,6 @@ class RetrievalDatabaseTest(unittest.TestCase):
             result.hits,
         )
 
-    def test_semantic_query_is_used_for_vector_search(self) -> None:
-        captured: dict[str, str] = {}
-        retrieval.vector_search_scored = lambda query, k=20: captured.setdefault("query", query) and []
-
-        retrieval.hybrid_search_scored(
-            "原始查询",
-            k=3,
-            semantic_query="改写后的语义查询",
-        )
-
-        self.assertEqual("改写后的语义查询", captured["query"])
-        event = self._last_event("hybrid_retrieval_result")
-        self.assertEqual("原始查询", event["raw_query"])
-        self.assertEqual("改写后的语义查询", event["semantic_query"])
-
     def _last_event(self, event_name: str) -> dict:
         current = self.workspace / "logs" / "current.jsonl"
         records = [
