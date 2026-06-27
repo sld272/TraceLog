@@ -427,13 +427,6 @@ def _semantic_unit_sims(query: str) -> dict[str, float]:
     return {h.unit_id: h.sim for h in _semantic_unit_hits(query) if h.passed}
 
 
-def _is_short_cjk(term: str) -> bool:
-    """A CJK term under 3 chars: the trigram tokenizer produces no token for it, so
-    it can never MATCH and must be served by LIKE instead (2-char words like 考研/
-    安静 are extremely common)."""
-    return fts_query.has_cjk(term) and len(term.replace(" ", "")) < 3
-
-
 def _fts_unit_ranks(query: str, keywords: list[str] | None = None) -> dict[str, int]:
     """unit_id -> rank for the rewrite ``keywords`` (preferred) or the raw query,
     over the unit FTS index. Empty when nothing matches. Scope is NOT applied here;
@@ -472,14 +465,14 @@ def _fts_ranks_for_terms(terms: list[str]) -> dict[str, int]:
                 seen.add(uid)
                 ordered.append(uid)
 
-    tokenizable = [t for t in terms if not _is_short_cjk(t)]
+    tokenizable = [t for t in terms if not fts_query.is_short_cjk(t)]
     if tokenizable:
         add(_units_matching_fts(
             fts_query.quote_match_candidates(tokenizable),
             cjk=any(fts_query.has_cjk(t) for t in tokenizable),
         ))
     for term in terms:
-        if _is_short_cjk(term):
+        if fts_query.is_short_cjk(term):
             add(_units_matching_like(term))
     return {uid: index + 1 for index, uid in enumerate(ordered)}
 
