@@ -26,6 +26,7 @@ from core import (
     db,
     fts_query,
     goal_service,
+    logging_service,
     memory_events_service as mes,
     memory_scope_policy as policy,
     memory_unit_service as mus,
@@ -49,6 +50,7 @@ def memory_section_with_citations(
     excluded_sources: set[tuple[str, str]] | None = None,
     semantic_query: str | None = None,
     keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> MemorySection:
     """Single entry used by every reply path for memory-v2 prompt assembly.
 
@@ -64,6 +66,7 @@ def memory_section_with_citations(
         excluded_sources=excluded_sources,
         semantic_query=semantic_query,
         keywords=keywords,
+        trace_context=trace_context,
     )
     return MemorySection(
         text=prompt.text,
@@ -79,6 +82,7 @@ def memory_section_for(
     excluded_sources: set[tuple[str, str]] | None = None,
     semantic_query: str | None = None,
     keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> str:
     """Text-only memory block (no citations). Kept for the first-reply path."""
     return memory_section_with_citations(
@@ -88,6 +92,7 @@ def memory_section_for(
         excluded_sources=excluded_sources,
         semantic_query=semantic_query,
         keywords=keywords,
+        trace_context=trace_context,
     ).text
 
 
@@ -113,6 +118,10 @@ RETRIEVE_DEFAULT_K = 8
 # 1 - cosine_distance; 0.30 (distance <= 0.70) is conservative — it drops clearly
 # unrelated units while keeping paraphrase recall. Tune against real distances.
 SEMANTIC_SIM_FLOOR = 0.30
+# Weight on the semantic similarity vs the FTS rank score in the blended unit
+# ranking. Coupled with SEMANTIC_SIM_FLOOR (which sets the floor of sem_score's
+# contribution); tune the pair together, not in isolation.
+SEMANTIC_RANK_WEIGHT = 2.0
 # states live in the state block; portrait members live in the portrait — both
 # excluded here so relevant-memory retrieval surfaces the mid-tier beliefs.
 # relationship units are owner-scoped to one persona and are injected ONLY through
@@ -227,6 +236,7 @@ def retrieve_units(
     k: int = RETRIEVE_DEFAULT_K,
     semantic_query: str | None = None,
     keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> list[MemoryItem]:
     """Query-relevant beliefs in the admissible scopes, excluding state units
     (state block) and portrait members.
@@ -256,16 +266,21 @@ def retrieve_units(
     )
 
     now = db.now_ts()
-    semantic = _semantic_unit_sims(semantic_query or query)
+    sem_hits = _semantic_unit_hits(semantic_query or query)
+    semantic = {h.unit_id: h.sim for h in sem_hits if h.passed}
     fts = _fts_unit_ranks(query, keywords)
+
+    scored: dict[str, tuple] = {}
 
     def score(r: sqlite3.Row) -> tuple:
         rid = str(r["id"])
         fts_rank = fts.get(rid)
         fts_score = (1.0 / (1 + fts_rank)) if fts_rank is not None else 0.0
         sem_score = semantic.get(rid, 0.0)  # cosine similarity, already floored
-        combined = fts_score + 2.0 * sem_score
-        return (combined, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
+        combined = fts_score + SEMANTIC_RANK_WEIGHT * sem_score
+        ranking = (combined, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
+        scored[rid] = ranking
+        return ranking
 
     # relevance gate: keep units matching the FTS keyword channel OR the semantic
     # channel. Semantic recall catches paraphrases keyword search misses; FTS
@@ -277,25 +292,109 @@ def retrieve_units(
         if not goal_service.memory_content_duplicates_active_goal(str(r["content"]))
     ]
     ranked = sorted(kept, key=score, reverse=True)
+
+    if logging_service.is_enabled_for("DEBUG"):
+        _log_retrieval(
+            channel, reply_soul, query, semantic_query, keywords,
+            n_candidates=len(rows), fts=fts, semantic=semantic, sem_hits=sem_hits,
+            ranked=ranked, scored=scored, k=k, trace_context=trace_context,
+        )
     return [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
 
 
-def _semantic_unit_sims(query: str) -> dict[str, float]:
-    """unit_id -> cosine similarity (1 - distance) for the query, from the unit
-    vector docs, keeping only hits at or above SEMANTIC_SIM_FLOOR. Empty when the
-    query is blank or the vector index is unavailable / not query-ready, in which
-    case retrieval degrades to FTS-only. When a hit carries no distance (rare
-    Chroma fallback) it is kept fail-open with an ANN-order similarity rather than
-    floored. Scope is NOT applied here; the caller intersects these with its
-    scope-filtered SQL candidates."""
+def _log_retrieval(
+    channel: str,
+    reply_soul: str | None,
+    query: str,
+    semantic_query: str | None,
+    keywords: list[str] | None,
+    *,
+    n_candidates: int,
+    fts: dict[str, int],
+    semantic: dict[str, float],
+    sem_hits: list[SemanticHit],
+    ranked: list[sqlite3.Row],
+    scored: dict[str, tuple],
+    k: int,
+    trace_context: dict | None = None,
+) -> None:
+    """Emit one structured 'memory_retrieval' DEBUG event tracing the full unit
+    scoring: per-unit FTS rank, semantic similarity, which channel matched, the
+    blended score, what cleared the relevance gate, what the top-k cut dropped,
+    and the sub-floor ANN neighbours. Lets real-run recall quality and the
+    SEMANTIC_SIM_FLOOR / SEMANTIC_RANK_WEIGHT pair be audited and tuned offline.
+    DEBUG-gated, so it is silent under the default INFO level."""
+    top_ids = {str(r["id"]) for r in ranked[:k]}
+    units = []
+    for r in ranked:
+        rid = str(r["id"])
+        in_fts = rid in fts
+        in_sem = rid in semantic
+        units.append(
+            {
+                "unit_id": rid,
+                "type": str(r["type"]),
+                "via": "both" if (in_fts and in_sem) else "fts" if in_fts else "semantic",
+                "fts_rank": fts.get(rid),
+                "sem_sim": round(semantic[rid], 4) if in_sem else None,
+                "score": round(float(scored.get(rid, (0.0,))[0]), 4),
+                "in_top_k": rid in top_ids,
+            }
+        )
+    # ANN neighbours the floor rejected (related-but-cut) — the key tuning sample.
+    floored = [
+        {"unit_id": h.unit_id, "sim": round(h.sim, 4)}
+        for h in sem_hits
+        if not h.passed
+    ]
+    logging_service.log_event(
+        "memory_retrieval",
+        level="DEBUG",
+        channel=channel,
+        reply_soul=reply_soul,
+        raw_query=query,
+        semantic_query=semantic_query,
+        keywords=keywords,
+        sim_floor=SEMANTIC_SIM_FLOOR,
+        sem_weight=SEMANTIC_RANK_WEIGHT,
+        n_candidates=n_candidates,
+        n_fts_hits=len(fts),
+        n_semantic_neighbors=len(sem_hits),
+        k=k,
+        units=units,
+        floored_neighbors=floored,
+        trace=trace_context or {},
+    )
+
+
+@dataclass(frozen=True)
+class SemanticHit:
+    """One ANN neighbour of the query over the unit vector index, in ANN order."""
+    unit_id: str
+    sim: float           # cosine similarity = 1 - distance (ANN-order proxy if missing)
+    passed: bool         # cleared SEMANTIC_SIM_FLOOR (or kept fail-open)
+    distance_missing: bool
+
+
+def _semantic_unit_hits(query: str) -> list[SemanticHit]:
+    """All ANN neighbours for the query over the unit vector index, in ANN order,
+    each tagged with cosine similarity (1 - distance) and whether it cleared
+    SEMANTIC_SIM_FLOOR. Sub-floor neighbours are RETAINED here (passed=False) so
+    callers can audit/log the rejected-but-near band for tuning — the floor is
+    applied by _semantic_unit_sims, not here. A hit with no distance (rare Chroma
+    fallback) is kept fail-open (passed=True, distance_missing=True) with an
+    ANN-order proxy sim. Empty when the query is blank or the index is
+    unavailable / not query-ready. Scope is NOT applied here; the caller
+    intersects these with its scope-filtered SQL candidates."""
     if not str(query or "").strip():
-        return {}
+        return []
     try:
         from core import vectorstore
         hits = vectorstore.query_documents(query, n_results=RETRIEVE_DEFAULT_K * 3, where={"type": "unit"})
     except Exception:
-        return {}
-    sims: dict[str, float] = {}
+        return []
+    out: list[SemanticHit] = []
+    seen: set[str] = set()
     for hit in hits:
         meta = getattr(hit, "metadata", None) or {}
         uid = meta.get("unit_id")
@@ -305,15 +404,27 @@ def _semantic_unit_sims(query: str) -> dict[str, float]:
                 uid = doc_id[len("unit-"):]
         if not uid:
             continue
+        uid = str(uid)
+        if uid in seen:  # keep the nearest doc for a unit (ANN order), drop the rest
+            continue
+        seen.add(uid)
         distance = getattr(hit, "distance", None)
         if distance is None:
-            sim = 1.0 / (1 + int(getattr(hit, "rank", len(sims) + 1)))
+            sim = 1.0 / (1 + int(getattr(hit, "rank", len(out) + 1)))
+            out.append(SemanticHit(uid, sim, passed=True, distance_missing=True))
         else:
             sim = 1.0 - float(distance)
-            if sim < SEMANTIC_SIM_FLOOR:
-                continue
-        sims.setdefault(str(uid), sim)
-    return sims
+            out.append(SemanticHit(uid, sim, passed=sim >= SEMANTIC_SIM_FLOOR, distance_missing=False))
+    return out
+
+
+def _semantic_unit_sims(query: str) -> dict[str, float]:
+    """unit_id -> cosine similarity for the query's ANN neighbours at or above
+    SEMANTIC_SIM_FLOOR (fail-open hits with no distance kept too). Empty when the
+    query is blank or the vector index is unavailable, in which case retrieval
+    degrades to FTS-only. Scope is NOT applied here; the caller intersects these
+    with its scope-filtered SQL candidates."""
+    return {h.unit_id: h.sim for h in _semantic_unit_hits(query) if h.passed}
 
 
 def _is_short_cjk(term: str) -> bool:
@@ -506,7 +617,14 @@ def _recall_chat_block(soul: str, *, discreet: bool) -> str:
     return header + "\n" + "\n".join(f"  {line}" for line in dialogue)
 
 
-def _recall_conversations(hits: list[MemoryItem], channel: str, reply_soul: str | None, terms: list[str]) -> str:
+def _recall_conversations(
+    hits: list[MemoryItem],
+    channel: str,
+    reply_soul: str | None,
+    terms: list[str],
+    *,
+    trace_context: dict | None = None,
+) -> str:
     """Recall the full conversation(s) around the hit units' most-relevant
     evidence, deduped across hits, budgeted with smart truncation. Public posts
     and comment threads are public-scene (cross-soul readable); a private chat is
@@ -514,6 +632,7 @@ def _recall_conversations(hits: list[MemoryItem], channel: str, reply_soul: str 
     post_hit_souls: dict[str, list[str]] = {}
     chat_souls: list[str] = []
     order: list[tuple[str, str]] = []
+    links: list[dict] = []
     for item in hits:
         ev = _top_evidence_row(item.unit_id, terms)
         if ev is None:
@@ -523,16 +642,25 @@ def _recall_conversations(hits: list[MemoryItem], channel: str, reply_soul: str 
         if source_type in ("post", "post_vision"):
             # Post evidence: source_id is the post id.
             pid = str(ev["source_id"])
+            links.append({"unit_id": str(item.unit_id), "via": "post", "post_id": pid})
             if pid not in post_hit_souls:
                 post_hit_souls[pid] = []
                 order.append(("post", pid))
         elif source_type in mes.COMMENT_SOURCE_TYPES:
-            # Comment evidence: source_id is a comment id; resolve its post+soul.
+            # Comment evidence: source_id is a comment id; resolve its post+soul so
+            # the recall link records BOTH the comment and the post it hangs under.
             target = _comment_target(str(ev["source_id"]))
             if target is None:
                 continue
             pid = str(target["post_id"])
             soul = str(target["soul_name"])
+            links.append({
+                "unit_id": str(item.unit_id),
+                "via": "comment",
+                "comment_id": str(ev["source_id"]),
+                "post_id": pid,
+                "soul": soul,
+            })
             if pid not in post_hit_souls:
                 post_hit_souls[pid] = []
                 order.append(("post", pid))
@@ -542,13 +670,13 @@ def _recall_conversations(hits: list[MemoryItem], channel: str, reply_soul: str 
             soul = owner[len("soul:"):] if owner.startswith("soul:") else None
             # retrieve already restricts private hits to the reply soul; guard.
             if reply_soul and soul == reply_soul and soul not in chat_souls:
+                links.append({"unit_id": str(item.unit_id), "via": "chat", "soul": soul})
                 chat_souls.append(soul)
                 order.append(("chat", soul))
 
-    if not order:
-        return ""
     discreet = channel in policy.PUBLIC_CHANNELS
     blocks: list[str] = []
+    emitted: list[tuple[str, str]] = []
     used = 0
     truncated = False
     for kind, key in order:
@@ -563,12 +691,26 @@ def _recall_conversations(hits: list[MemoryItem], channel: str, reply_soul: str 
         if not block:
             continue
         blocks.append(block)
+        emitted.append((kind, key))
         used += len(block)
-    if not blocks:
-        return ""
-    text = "[相关对话原文]\n" + "\n\n".join(blocks)
-    if truncated:
-        text += "\n（更多相关对话已省略）"
+    if blocks:
+        text = "[相关对话原文]\n" + "\n\n".join(blocks)
+        if truncated:
+            text += "\n（更多相关对话已省略）"
+    else:
+        text = ""
+
+    if logging_service.is_enabled_for("DEBUG"):
+        logging_service.log_event(
+            "memory_recall",
+            level="DEBUG",
+            channel=channel,
+            reply_soul=reply_soul,
+            links=links,
+            emitted=[{"kind": kind, "key": key} for kind, key in emitted],
+            truncated=truncated,
+            trace=trace_context or {},
+        )
     return text
 
 
@@ -619,6 +761,7 @@ def freshness_seam(
     now: float | None = None,
     query: str = "",
     excluded_sources: set[tuple[str, str]] | None = None,
+    trace_context: dict | None = None,
 ) -> tuple[list[FreshnessItem], bool]:
     """Recent user evidence past each admissible bucket's reconcile cursor — raw
     facts not yet folded into units. Most-recent first, gated by an age window
@@ -694,6 +837,7 @@ def freshness_seam(
     )
     truncated = len(ordered) > FRESHNESS_MAX_EVENTS
     items: list[FreshnessItem] = []
+    kept_event_ids: set[int] = set()
     used_chars = 0
     for event, reviewing in ordered[:FRESHNESS_MAX_EVENTS]:
         snapshot = str(event["content_snapshot"]).strip()
@@ -701,6 +845,7 @@ def freshness_seam(
             truncated = True
             break
         used_chars += len(snapshot)
+        kept_event_ids.add(int(event["id"]))
         vis = str(event["visibility_scope"])
         items.append(FreshnessItem(
             content=snapshot,
@@ -713,7 +858,60 @@ def freshness_seam(
             source_type=str(event["source_type"]),
             source_id=str(event["source_id"]),
         ))
+
+    if logging_service.is_enabled_for("DEBUG"):
+        _log_freshness(
+            channel, reply_soul, query, ordered, terms, kept_event_ids,
+            n_candidates=len(candidates), truncated=truncated, trace_context=trace_context,
+        )
     return items, truncated
+
+
+def _log_freshness(
+    channel: str,
+    reply_soul: str | None,
+    query: str,
+    ordered: list[tuple[sqlite3.Row, bool]],
+    terms: list[str],
+    kept_event_ids: set[int],
+    *,
+    n_candidates: int,
+    truncated: bool,
+    trace_context: dict | None = None,
+) -> None:
+    """Emit one structured 'memory_freshness' DEBUG event for the raw-evidence seam.
+    Freshness is NOT vector retrieval: it ranks pending events past the reconcile
+    cursor by keyword overlap then recency, so the per-event signal here is the
+    overlap COUNT (not a distance), plus whether the event was under review and
+    whether the event/char budget kept it. Lets the seam's recall be audited
+    offline. DEBUG-gated, silent under the default INFO level."""
+    sample = []
+    for event, reviewing in ordered[: FRESHNESS_MAX_EVENTS * 2]:
+        eid = int(event["id"])
+        sample.append(
+            {
+                "event_id": eid,
+                "source_type": str(event["source_type"]),
+                "source_id": str(event["source_id"]),
+                "keyword_overlap": _keyword_overlap(str(event["content_snapshot"] or ""), terms),
+                "reviewing": bool(reviewing),
+                "occurred_at": float(event["occurred_at"]),
+                "in_budget": eid in kept_event_ids,
+            }
+        )
+    logging_service.log_event(
+        "memory_freshness",
+        level="DEBUG",
+        channel=channel,
+        reply_soul=reply_soul,
+        raw_query=query,
+        n_candidates=n_candidates,
+        max_events=FRESHNESS_MAX_EVENTS,
+        char_budget=FRESHNESS_CHAR_BUDGET,
+        truncated=truncated,
+        events=sample,
+        trace=trace_context or {},
+    )
 
 
 def _recency_weight(last_confirmed: float, now: float) -> float:
@@ -769,6 +967,7 @@ def build_memory_section(
     excluded_sources: set[tuple[str, str]] | None = None,
     semantic_query: str | None = None,
     keywords: list[str] | None = None,
+    trace_context: dict | None = None,
 ) -> MemoryPrompt:
     """Assemble the always-on + retrieved memory block for a reply prompt.
 
@@ -802,7 +1001,8 @@ def build_memory_section(
 
     # 3. query-relevant beliefs (de-noised topic anchors)
     hits = retrieve_units(
-        query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords
+        query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords,
+        trace_context=trace_context,
     )
     terms = _tokenize(query)
     if hits:
@@ -824,7 +1024,7 @@ def build_memory_section(
         # 3.5 faithful raw recall: the full conversation(s) around the hit units'
         #     most-relevant evidence (original post + relevant comment lines, or
         #     chat tail), deduped across hits, budgeted with smart truncation.
-        recall = _recall_conversations(hits, channel, reply_soul, terms)
+        recall = _recall_conversations(hits, channel, reply_soul, terms, trace_context=trace_context)
         if recall:
             sections.append(recall)
 
@@ -835,6 +1035,7 @@ def build_memory_section(
         reply_soul,
         query=query,
         excluded_sources=excluded_sources,
+        trace_context=trace_context,
     )
     if fresh_items:
         lines = []

@@ -290,6 +290,56 @@ class MemoryReadTest(unittest.TestCase):
             hits = memory_read.retrieve_units("zzz", "public_post", "gotoh")
         self.assertEqual([], [h.unit_id for h in hits])  # far semantic + no FTS -> dropped
 
+    # --- retrieval debug log (memory_retrieval) ---------------------------
+
+    def test_semantic_unit_hits_retains_sub_floor_neighbors(self) -> None:
+        hits = [
+            SimpleNamespace(doc_id="unit-near", metadata={"unit_id": "near"}, rank=1, distance=0.2),
+            SimpleNamespace(doc_id="unit-far", metadata={"unit_id": "far"}, rank=2, distance=0.95),
+        ]
+        with patch("core.vectorstore.query_documents", return_value=hits):
+            out = memory_read._semantic_unit_hits("随便问问")
+        by_id = {h.unit_id: h for h in out}
+        self.assertEqual(2, len(out))            # the sub-floor neighbour is retained
+        self.assertTrue(by_id["near"].passed)
+        self.assertFalse(by_id["far"].passed)    # below the floor but still present
+        self.assertAlmostEqual(0.05, by_id["far"].sim)
+
+    def test_memory_retrieval_log_emitted_at_debug(self) -> None:
+        hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")
+        far_uid = self._unit("global", "public", type="preference", content="完全无关")
+        sem = [
+            SimpleNamespace(doc_id=f"unit-{hit}", metadata={"unit_id": hit}, rank=1, distance=0.2),
+            SimpleNamespace(doc_id=f"unit-{far_uid}", metadata={"unit_id": far_uid}, rank=2, distance=0.95),
+        ]
+        events = []
+
+        def capture(event, level="INFO", **fields):
+            events.append((event, level, fields))
+
+        with patch("core.vectorstore.query_documents", return_value=sem), \
+             patch.object(memory_read.logging_service, "is_enabled_for", return_value=True), \
+             patch.object(memory_read.logging_service, "log_event", side_effect=capture):
+            memory_read.retrieve_units("爬山", "public_post", "gotoh")
+
+        logged = [(lvl, f) for (e, lvl, f) in events if e == "memory_retrieval"]
+        self.assertEqual(1, len(logged))
+        level, payload = logged[0]
+        self.assertEqual("DEBUG", level)                 # silent under the default INFO
+        near = next(u for u in payload["units"] if u["unit_id"] == hit)
+        self.assertAlmostEqual(0.8, near["sem_sim"])     # distance surfaced as similarity
+        self.assertTrue(near["in_top_k"])
+        floored_ids = {n["unit_id"] for n in payload["floored_neighbors"]}
+        self.assertIn(far_uid, floored_ids)              # rejected-but-near kept for tuning
+
+    def test_memory_retrieval_silent_when_logging_disabled(self) -> None:
+        self._unit("global", "public", type="preference", content="周末喜欢去爬山")
+        with patch("core.vectorstore.query_documents", return_value=[]), \
+             patch.object(memory_read.logging_service, "_enabled", False), \
+             patch.object(memory_read.logging_service, "log_event") as mock_log:
+            memory_read.retrieve_units("爬山", "public_post", "gotoh")
+        mock_log.assert_not_called()  # no debug payload built when logging is off
+
     # --- recall around comment-derived units (相关对话原文) ----------------
 
     def test_recall_resolves_comment_unit_to_its_post_and_thread(self) -> None:
@@ -342,6 +392,61 @@ class MemoryReadTest(unittest.TestCase):
         self.assertIn("与kita", recall)
         self.assertIn("我自学吉他三个月了", recall)  # user's comment
         self.assertIn("三个月能弹完整首很厉害", recall)  # soul's reply
+
+    def test_recall_log_records_comment_to_post_link(self) -> None:
+        now = 1000.0
+        db.execute(
+            "INSERT INTO souls(name, file_path, created_at, updated_at) VALUES(?, ?, ?, ?)",
+            ("kita", "souls/kita.md", now, now),
+        )
+        db.execute(
+            "INSERT INTO posts(id, ts, content, created_at, updated_at) VALUES(?, ?, ?, ?, ?)",
+            ("20260616-001", "2026-06-16", "今天练吉他", now, now),
+        )
+        db.execute(
+            "INSERT INTO comments(id, post_id, soul_name, role, content, seq, created_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (901, "20260616-001", "kita", "user", "我自学吉他三个月了", 0, now),
+        )
+        with db.transaction() as conn:
+            mes.record_post_mutation(
+                conn, post_id="20260616-001", op="create", content="今天练吉他", occurred_at=now,
+            )
+            ev = mes.record_comment_mutation(
+                conn, comment_id=901, post_id="20260616-001", soul_name="kita",
+                role="user", op="create", content="我自学吉他三个月了", occurred_at=now,
+            )
+        uid = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="comment",
+            type="preference", content="用户在自学吉他", confidence=0.8, importance=0.5,
+            evidence_event_ids=[ev.id],
+        )
+        hit = memory_read.MemoryItem(
+            unit_id=uid, type="preference", content="用户在自学吉他",
+            confidence=0.8, importance=0.5, owner_scope="global",
+            visibility_scope="public", needs_discretion=False,
+        )
+
+        events = []
+
+        def capture(event, level="INFO", **fields):
+            events.append((event, fields))
+
+        with patch.object(memory_read.logging_service, "is_enabled_for", return_value=True), \
+             patch.object(memory_read.logging_service, "log_event", side_effect=capture):
+            memory_read._recall_conversations(
+                [hit], "public_post", "kita", ["吉他"], trace_context={"post_id": "20260616-001"}
+            )
+
+        logged = [f for (e, f) in events if e == "memory_recall"]
+        self.assertEqual(1, len(logged))
+        payload = logged[0]
+        link = next(item for item in payload["links"] if item["unit_id"] == uid)
+        self.assertEqual("comment", link["via"])           # comment evidence resolved
+        self.assertEqual("901", link["comment_id"])        # the comment id, and
+        self.assertEqual("20260616-001", link["post_id"])  # the post it hangs under
+        self.assertEqual("kita", link["soul"])
+        self.assertEqual({"post_id": "20260616-001"}, payload["trace"])
 
     # --- provenance attribution keyed on source_type (post vs comment) -------
 

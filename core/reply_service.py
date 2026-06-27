@@ -105,6 +105,7 @@ def _call_one_soul(
         user_input,
         excluded_sources={("post", post_id), ("post_vision", post_id)},
         rewrite=rewrite,
+        trace_context={"post_id": post_id, "soul_name": soul.name},
     )
     data = reply_router.call_soul_post_reply(
         user_input,
@@ -157,6 +158,7 @@ def _with_memory_section(
     *,
     excluded_sources: set[tuple[str, str]] | None = None,
     rewrite: query_rewriter.RewrittenQuery | None = None,
+    trace_context: dict | None = None,
 ) -> tuple[str, list[dict]]:
     """Append the per-soul scope-filtered memory-v2 block, returning its citations."""
     memory = memory_read.memory_section_with_citations(
@@ -166,6 +168,7 @@ def _with_memory_section(
         excluded_sources=excluded_sources,
         semantic_query=rewrite.semantic_query if rewrite else None,
         keywords=rewrite.keywords if rewrite else None,
+        trace_context=trace_context,
     )
     if not memory.text:
         return base_context, memory.cited_memory

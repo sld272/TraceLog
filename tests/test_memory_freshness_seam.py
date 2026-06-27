@@ -74,6 +74,38 @@ class FreshnessSeamTest(unittest.TestCase):
         self.assertIn("尚未稳定沉淀的原始证据", text)
         self.assertIn("我刚开始学法语", text)
 
+    def test_freshness_log_records_keyword_overlap_and_budget(self) -> None:
+        now = db.now_ts()
+        self._post("我在准备考研", now - 100)   # overlaps the query
+        self._post("随便记点别的", now - 50)    # does not
+        events = []
+
+        def capture(event, level="INFO", **fields):
+            events.append((event, fields))
+
+        with patch.object(memory_read.logging_service, "is_enabled_for", return_value=True), \
+             patch.object(memory_read.logging_service, "log_event", side_effect=capture):
+            memory_read.freshness_seam(
+                "public_post", None, now=now, query="考研", trace_context={"post_id": "pX"}
+            )
+
+        logged = [f for (e, f) in events if e == "memory_freshness"]
+        self.assertEqual(1, len(logged))
+        payload = logged[0]
+        overlaps = {e["keyword_overlap"] for e in payload["events"]}
+        self.assertIn(1, overlaps)  # "考研" matched one event's snapshot
+        self.assertIn(0, overlaps)  # the other matched nothing — keyword count, not distance
+        self.assertTrue(all("in_budget" in e for e in payload["events"]))
+        self.assertEqual({"post_id": "pX"}, payload["trace"])
+
+    def test_freshness_log_silent_when_logging_disabled(self) -> None:
+        now = db.now_ts()
+        self._post("我在准备考研", now - 100)
+        with patch.object(memory_read.logging_service, "_enabled", False), \
+             patch.object(memory_read.logging_service, "log_event") as mock_log:
+            memory_read.freshness_seam("public_post", None, now=now, query="考研")
+        mock_log.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

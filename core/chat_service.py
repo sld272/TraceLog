@@ -231,6 +231,7 @@ def build_chat_context(
         },
         semantic_query=rewrite.semantic_query if rewrite else None,
         keywords=rewrite.keywords if rewrite else None,
+        trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
     )
     if memory.text:
         sections.append(f"# 记忆\n\n{memory.text}")

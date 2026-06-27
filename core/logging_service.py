@@ -112,6 +112,16 @@ def log_event(event: str, level: str = "INFO", **fields: Any) -> None:
     _write_jsonl(payload)
 
 
+def is_enabled_for(level: str = "DEBUG") -> bool:
+    """Whether an event at ``level`` would be written, so a caller can skip
+    building an expensive debug payload when logging is disabled or configured
+    above this level."""
+    if not _enabled:
+        return False
+    numeric_level = int(getattr(logging, level.upper(), logging.INFO))
+    return numeric_level >= _level
+
+
 def log_llm_call(
     *,
     call_id: str,

@@ -324,6 +324,7 @@ def build_comment_context(
         excluded_sources=excluded_comment_sources,
         semantic_query=rewrite.semantic_query if rewrite else None,
         keywords=rewrite.keywords if rewrite else None,
+        trace_context={"post_id": post_id, "soul_name": soul_name},
     )
     if memory.text:
         sections.append(f"# 记忆\n\n{memory.text}")
@@ -639,6 +640,7 @@ def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClie
         excluded_sources={("post", message.post_id), ("post_vision", message.post_id)},
         semantic_query=rewrite.semantic_query,
         keywords=rewrite.keywords,
+        trace_context={"post_id": message.post_id, "soul_name": message.soul_name},
     )
     shared_context = public_context.built_context.shared_context
     soul_context = (
