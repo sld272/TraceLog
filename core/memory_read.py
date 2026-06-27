@@ -440,7 +440,15 @@ def _fts_unit_ranks(query: str, keywords: list[str] | None = None) -> dict[str, 
     the caller intersects these with its scope-filtered SQL candidates."""
     keywords = keywords or []
     if keywords:
-        return _fts_ranks_for_terms(fts_query.keyword_candidates(keywords))
+        # Expand each keyword through match_candidates, same as the raw path: a
+        # keyword that packs several 2-char CJK words ("考研 规划") must be split so
+        # those short words reach the LIKE fallback, else the whole phrase goes to
+        # trigram MATCH (which tokenizes nothing under 3 chars) and recalls nothing.
+        terms: list[str] = []
+        for keyword in keywords:
+            clean_kw = fts_query.sanitize_fts5(keyword)
+            terms.extend(fts_query.match_candidates(clean_kw) or ([clean_kw] if clean_kw else []))
+        return _fts_ranks_for_terms(fts_query.ordered_unique(terms)) if terms else {}
     clean = fts_query.sanitize_fts5(query)
     if not clean:
         return {}

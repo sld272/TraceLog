@@ -257,6 +257,20 @@ class MemoryReadTest(unittest.TestCase):
         u = self._unit("global", "public", type="preference", content="喜欢画画")
         self.assertIn(u, memory_read._fts_unit_ranks("画"))  # no candidates -> LIKE whole query
 
+    def test_fts_keywords_split_multiword_cjk_phrase(self) -> None:
+        # rewriter packed two 2-char words into one keyword string; it must still
+        # recall what the raw query "考研 规划" would — the embedded 考研 via LIKE.
+        u = self._unit("global", "public", type="preference", content="用户在准备考研")
+        self.assertIn(u, memory_read._fts_unit_ranks("", ["考研 规划"]))
+
+    def test_fts_keywords_separate_short_cjk_no_regression(self) -> None:
+        u = self._unit("global", "public", type="preference", content="用户在准备考研")
+        self.assertIn(u, memory_read._fts_unit_ranks("", ["考研", "规划"]))
+
+    def test_fts_keywords_ascii_term_no_regression(self) -> None:
+        u = self._unit("global", "public", type="preference", content="正在学习 ChromaDB 向量库")
+        self.assertIn(u, memory_read._fts_unit_ranks("", ["ChromaDB"]))
+
     def test_retrieve_units_keeps_only_fts_or_semantic_matches(self) -> None:
         hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")
         self._unit("global", "public", type="preference", content="讨厌喝咖啡")
