@@ -77,6 +77,13 @@ def has_cjk(text: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in text)
 
 
+def is_short_cjk(term: str) -> bool:
+    """A CJK term under 3 chars: the trigram tokenizer emits no token for it, so it
+    can never MATCH and needs a LIKE fallback (2-char words like \u8003\u7814/\u590d\u4e60)."""
+    compact = term.replace(" ", "")
+    return bool(compact) and has_cjk(compact) and len(compact) < 3
+
+
 def _cjk_window_candidates(query: str, *, max_terms: int) -> list[str]:
     segments = re.findall(r"[\u4e00-\u9fff]+", query)
     by_size: dict[int, list[tuple[int, int, str]]] = {4: [], 3: [], 2: []}

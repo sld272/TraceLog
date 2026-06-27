@@ -83,51 +83,72 @@ def fts_search_scored(
 
     deterministic_candidates = fts_query.match_candidates(clean)
     match = fts_query.quote_match_candidates(deterministic_candidates)
-    if not match:
+    # Short CJK words (2-char, like 考研/复习) produce no trigram token, so a query
+    # made of several of them ("考研 复习") matches nothing through MATCH alone. Take
+    # the short CJK words the user actually typed (query_terms, NOT window
+    # fragments, so "图书馆" doesn't drag in 图书/书馆) and union a LIKE match for each.
+    short_cjk = [term for term in fts_query.query_terms(clean) if fts_query.is_short_cjk(term)]
+    if not match and not short_cjk:
         return []
-    sql = f"""
-        SELECT posts.id, rank AS raw_rank
-        FROM {table}
-        JOIN posts ON posts.rowid = {table}.rowid
-        WHERE {table} MATCH ?
-        ORDER BY rank
-        LIMIT ?
-    """
-    try:
-        hits = [
-            RetrievalHit(
-                post_id=row["id"],
+
+    seen: set[str] = set()
+    hits: list[RetrievalHit] = []
+
+    def _extend(candidates: list[RetrievalHit]) -> None:
+        for hit in candidates:
+            if len(hits) >= k or hit.post_id in seen:
+                continue
+            seen.add(hit.post_id)
+            hits.append(replace(hit, rank=len(hits) + 1))
+
+    if match:
+        sql = f"""
+            SELECT posts.id, rank AS raw_rank
+            FROM {table}
+            JOIN posts ON posts.rowid = {table}.rowid
+            WHERE {table} MATCH ?
+            ORDER BY rank
+            LIMIT ?
+        """
+        try:
+            _extend([
+                RetrievalHit(
+                    post_id=row["id"],
+                    source=source,
+                    rank=0,
+                    raw_score=float(row["raw_rank"]) if row["raw_rank"] is not None else None,
+                )
+                for row in db.query_all(sql, (match, k))
+            ])
+        except sqlite3.Error:
+            _log_fts_query_built(
+                query=query,
+                clean=clean,
+                deterministic_candidates=deterministic_candidates,
+                match=match,
+                table=table,
                 source=source,
-                rank=index + 1,
-                raw_score=float(row["raw_rank"]) if row["raw_rank"] is not None else None,
+                fallback_type="sqlite_error",
+                hit_count=0,
+                trace_context=trace_context,
             )
-            for index, row in enumerate(db.query_all(sql, (match, k)))
-        ]
-        _log_fts_query_built(
-            query=query,
-            clean=clean,
-            deterministic_candidates=deterministic_candidates,
-            match=match,
-            table=table,
-            source=source,
-            fallback_type=None,
-            hit_count=len(hits),
-            trace_context=trace_context,
-        )
-        return hits
-    except sqlite3.Error:
-        _log_fts_query_built(
-            query=query,
-            clean=clean,
-            deterministic_candidates=deterministic_candidates,
-            match=match,
-            table=table,
-            source=source,
-            fallback_type="sqlite_error",
-            hit_count=0,
-            trace_context=trace_context,
-        )
-        return []
+            return []
+
+    for term in short_cjk:
+        _extend(_like_search_scored(term, k))
+
+    _log_fts_query_built(
+        query=query,
+        clean=clean,
+        deterministic_candidates=deterministic_candidates,
+        match=match,
+        table=table,
+        source=source,
+        fallback_type="short_cjk_union" if short_cjk else None,
+        hit_count=len(hits),
+        trace_context=trace_context,
+    )
+    return hits
 
 
 def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:

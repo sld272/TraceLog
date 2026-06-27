@@ -345,6 +345,30 @@ class RetrievalDatabaseTest(unittest.TestCase):
         self.assertIn("图书馆", event["deterministic_candidates"])
         self.assertIn('"图书馆"', event["match"])
 
+    def test_multi_short_cjk_words_recall_via_like_union(self) -> None:
+        # both 2-char words appear, but not as one contiguous run -> trigram MATCH
+        # alone misses it; the per-word LIKE union recovers it.
+        self.insert_post("p-exam", "我在准备考研，最近很认真复习", 2.0)
+        self.insert_post("p-other", "今天随便散步", 1.0)
+
+        hits = [hit.post_id for hit in retrieval.fts_search_scored("考研 复习", k=5)]
+
+        self.assertIn("p-exam", hits)
+        self.assertNotIn("p-other", hits)
+        self.assertEqual("short_cjk_union", self._last_event("fts_query_built")["fallback_type"])
+
+    def test_typed_word_not_split_into_window_fragments(self) -> None:
+        # 图书馆 (3-char, typed) hits via trigram; it must NOT drag in a post that
+        # only has the 2-char fragment 图书 (a window candidate the user did not
+        # type), or search precision collapses.
+        self.insert_post("p-library", "晚上在图书馆学习", 2.0)
+        self.insert_post("p-bookmgmt", "图书管理系统上线了", 1.0)
+
+        hits = [hit.post_id for hit in retrieval.fts_search_scored("图书馆", k=5)]
+
+        self.assertIn("p-library", hits)
+        self.assertNotIn("p-bookmgmt", hits)
+
     def test_empty_or_symbol_only_fts_query_returns_empty(self) -> None:
         self.insert_post("p-1", "ChromaDB 和 FTS5。", 1.0)
 
