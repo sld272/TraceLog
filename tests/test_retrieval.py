@@ -9,7 +9,7 @@ from core import db, fts_query, logging_service, retrieval, vectorstore
 
 
 class FtsQueryTest(unittest.TestCase):
-    def test_long_cjk_query_builds_phrase_and_window_candidates(self) -> None:
+    def test_long_cjk_query_builds_phrase_and_word_candidates(self) -> None:
         query = "我之前是不是说过晚上图书馆学习效率更高"
 
         candidates = fts_query.match_candidates(query)
@@ -48,6 +48,14 @@ class FtsQueryTest(unittest.TestCase):
     def test_empty_or_symbol_only_query_returns_empty_match(self) -> None:
         self.assertEqual("", fts_query.build_match_query(""))
         self.assertEqual("", fts_query.build_match_query('"""()^{}[]'))
+
+    def test_jieba_segments_spaceless_multiword_keeps_single_word(self) -> None:
+        # the crux of the homepage spaceless-query fix
+        self.assertEqual(["考研", "复习"], fts_query.query_terms("考研复习"))
+        self.assertEqual(["图书馆"], fts_query.query_terms("图书馆"))  # one word, not split
+        regs = fts_query.query_terms("考研复习规划")
+        self.assertIn("考研", regs)
+        self.assertIn("规划", regs)
 
 
 class RetrievalFusionTest(unittest.TestCase):
@@ -331,7 +339,7 @@ class RetrievalDatabaseTest(unittest.TestCase):
         self.assertIn("like_fallback", like_hit.reasons)
         self.assertIn("low_trust", like_hit.reasons)
 
-    def test_long_cjk_fts_uses_window_candidates_to_hit_related_post(self) -> None:
+    def test_long_cjk_fts_uses_word_candidates_to_hit_related_post(self) -> None:
         self.insert_post("p-library", "晚上在图书馆学习时，我的效率确实更高。", 2.0)
         self.insert_post("p-other", "今天只是随便散步。", 1.0)
         retrieval.vector_search_scored = lambda query, k=20: []
@@ -357,10 +365,20 @@ class RetrievalDatabaseTest(unittest.TestCase):
         self.assertNotIn("p-other", hits)
         self.assertEqual("short_cjk_union", self._last_event("fts_query_built")["fallback_type"])
 
-    def test_typed_word_not_split_into_window_fragments(self) -> None:
-        # 图书馆 (3-char, typed) hits via trigram; it must NOT drag in a post that
-        # only has the 2-char fragment 图书 (a window candidate the user did not
-        # type), or search precision collapses.
+    def test_spaceless_multi_word_recalls_via_jieba(self) -> None:
+        # natural Chinese input omits spaces; jieba splits 考研复习 -> 考研/复习 so
+        # the LIKE fallback fires, matching what the spaced query already did.
+        self.insert_post("p-exam", "我在准备考研，最近很认真复习", 2.0)
+        self.insert_post("p-other", "今天随便散步", 1.0)
+
+        hits = [hit.post_id for hit in retrieval.fts_search_scored("考研复习", k=5)]
+
+        self.assertIn("p-exam", hits)
+        self.assertNotIn("p-other", hits)
+
+    def test_single_word_not_split_into_fragments(self) -> None:
+        # jieba keeps 图书馆 as one word, so it hits via trigram but must NOT drag
+        # in a post that only has the 2-char fragment 图书 — search precision holds.
         self.insert_post("p-library", "晚上在图书馆学习", 2.0)
         self.insert_post("p-bookmgmt", "图书管理系统上线了", 1.0)
 
