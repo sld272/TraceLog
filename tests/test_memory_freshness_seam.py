@@ -106,6 +106,15 @@ class FreshnessSeamTest(unittest.TestCase):
             memory_read.freshness_seam("public_post", None, now=now, query="考研")
         mock_log.assert_not_called()
 
+    def test_freshness_ranks_split_abbreviation_evidence_first(self) -> None:
+        # query 南大法语生 — jieba splits 南大 into single chars; the recovery lets
+        # the 南大 evidence outrank an unrelated but more recent post in ordering.
+        now = db.now_ts()
+        self._post("我在南大读书很开心", now - 100)   # older, mentions 南大
+        self._post("今天随便写点别的", now - 10)       # newer, unrelated
+        items, _ = memory_read.freshness_seam("public_post", None, now=now, query="南大法语生")
+        self.assertEqual("我在南大读书很开心", items[0].content)
+
 
 if __name__ == "__main__":
     unittest.main()

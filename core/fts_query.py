@@ -26,6 +26,11 @@ LOW_INFORMATION_CJK = {
     "那个",
 }
 
+# Single chars carrying no retrieval signal — skipped when rejoining jieba's split
+# single chars into 2-grams, so 我在南大读书 yields 南大 but not 我在/在南.
+SINGLE_CHAR_STOP = set("我你他她它这那哪什怎么是有没不吗呢吧啊呀的了过前在和与也都就把被让从对向很")
+
+
 def sanitize_fts5(query: str) -> str:
     text = re.sub(r'["\'`()*:^{}[\]]+', " ", query)
     return " ".join(text.split())
@@ -85,12 +90,16 @@ def search_terms(query: str) -> list[str]:
 
 def _segment(query: str, cut) -> list[str]:
     """Split into words via ``cut`` (a jieba cutter) for CJK runs and regex for
-    ASCII/number runs; drop single chars and low-information words. Order-preserving,
-    deduped."""
+    ASCII/number runs; drop single chars and low-information words. jieba may split
+    an unknown 2-char abbreviation (\u5357\u5927) into single chars that the filter would
+    then drop entirely, so adjacent non-stopword single chars are rejoined into
+    2-grams to recover such words. Order-preserving, deduped."""
     terms: list[str] = []
     for chunk in re.findall(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]+", str(query or "")):
         if has_cjk(chunk):
-            terms.extend(cut(chunk))
+            words = cut(chunk)
+            terms.extend(words)
+            terms.extend(_recover_split_words(words))
         else:
             terms.append(chunk)
     return ordered_unique([
@@ -98,6 +107,22 @@ def _segment(query: str, cut) -> list[str]:
         for term in terms
         if len(term.strip()) >= 2 and not _is_low_information_cjk(term)
     ])
+
+
+def _recover_split_words(words: list[str]) -> list[str]:
+    """Rejoin each run of adjacent CJK single chars (skipping stopword chars) into
+    2-grams, recovering 2-char words jieba split apart (\u5357/\u5927 -> \u5357\u5927) before the
+    single-char filter drops them."""
+    recovered: list[str] = []
+    run: list[str] = []
+    for word in words:
+        if len(word) == 1 and has_cjk(word) and word not in SINGLE_CHAR_STOP:
+            run.append(word)
+        else:
+            recovered.extend("".join(run[i:i + 2]) for i in range(len(run) - 1))
+            run = []
+    recovered.extend("".join(run[i:i + 2]) for i in range(len(run) - 1))
+    return recovered
 
 
 def has_cjk(text: str) -> bool:

@@ -64,6 +64,16 @@ class FtsQueryTest(unittest.TestCase):
         self.assertIn("南京", fts_query.search_terms("南京大学法语系"))
         self.assertNotIn("南京", fts_query.query_terms("南京大学法语系"))
 
+    def test_split_abbreviation_recovered_without_stopword_noise(self) -> None:
+        # jieba splits the unknown abbreviation 南大 into 南/大; _segment rejoins it,
+        # while stopword chars (我/在) are not rejoined into noise.
+        self.assertIn("南大", fts_query.query_terms("南大法语生"))
+        recovered = fts_query.query_terms("我在南大读书")
+        self.assertIn("南大", recovered)
+        self.assertNotIn("我在", recovered)
+        self.assertNotIn("在南", recovered)
+        self.assertEqual(["图书馆"], fts_query.query_terms("图书馆"))  # no spurious recovery
+
 
 class RetrievalFusionTest(unittest.TestCase):
     def setUp(self) -> None:
