@@ -825,7 +825,7 @@ def freshness_seam(
                     continue
                 candidates[int(event["id"])] = (event, True)
 
-    terms = _tokenize(query)
+    terms = fts_query.search_terms(query)
     ordered = sorted(
         candidates.values(),
         key=lambda item: (
@@ -921,21 +921,6 @@ def _recency_weight(last_confirmed: float, now: float) -> float:
     return 1.0 / (1.0 + age_days / 7.0)
 
 
-def _tokenize(query: str) -> list[str]:
-    raw = "".join(c if c.isalnum() else " " for c in str(query or "")).split()
-    # for CJK, also add 2-grams so substring-ish matches work without an FTS index
-    grams: list[str] = []
-    text = "".join(str(query or "").split())
-    for token in raw:
-        if len(token) >= 2:
-            grams.append(token)
-    for i in range(len(text) - 1):
-        bigram = text[i:i + 2]
-        if bigram.strip():
-            grams.append(bigram)
-    return list({g for g in grams if g})
-
-
 def _keyword_overlap(content: str, terms: list[str]) -> int:
     if not terms:
         return 0
@@ -1005,7 +990,7 @@ def build_memory_section(
         query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords,
         trace_context=trace_context,
     )
-    terms = _tokenize(query)
+    terms = fts_query.search_terms(query)
     if hits:
         lines = []
         for item in hits:

@@ -57,6 +57,13 @@ class FtsQueryTest(unittest.TestCase):
         self.assertIn("考研", regs)
         self.assertIn("规划", regs)
 
+    def test_search_terms_add_subwords_that_query_terms_omit(self) -> None:
+        # search mode (overlap scoring) keeps main words AND fine-grained sub-words;
+        # precise mode (FTS routing) keeps only the main words.
+        self.assertIn("南京大学", fts_query.search_terms("南京大学法语系"))
+        self.assertIn("南京", fts_query.search_terms("南京大学法语系"))
+        self.assertNotIn("南京", fts_query.query_terms("南京大学法语系"))
+
 
 class RetrievalFusionTest(unittest.TestCase):
     def setUp(self) -> None:

@@ -68,14 +68,29 @@ def match_candidates(query: str, *, max_terms: int = MAX_MATCH_TERMS) -> list[st
 
 
 def query_terms(query: str) -> list[str]:
-    """Segment a query into retrieval words: jieba (precise mode) for CJK runs,
-    regex for ASCII/number runs. Single chars and low-information words are
-    dropped. jieba keeps a real word like \u56fe\u4e66\u9986 whole but splits \u8003\u7814\u590d\u4e60 into
-    \u8003\u7814/\u590d\u4e60 \u2014 exactly what the short-CJK LIKE fallback needs to fire."""
+    """Retrieval words for FTS MATCH / LIKE routing: jieba PRECISE mode keeps a real
+    word like \u56fe\u4e66\u9986 whole but splits \u8003\u7814\u590d\u4e60 into \u8003\u7814/\u590d\u4e60 \u2014 exactly what the
+    short-CJK LIKE fallback needs, without over-recalling \u56fe\u4e66/\u4e66\u9986."""
+    return _segment(query, jieba.lcut)
+
+
+def search_terms(query: str) -> list[str]:
+    """Terms for keyword-overlap SCORING (freshness ordering / recall sentence
+    pick): jieba SEARCH mode adds fine-grained sub-words on top of the main words,
+    so a long term split across the content still overlaps. The extra granularity
+    only ranks candidates, never gates recall, so its noise is harmless here \u2014
+    unlike query_terms, which must stay precise for the LIKE routing."""
+    return _segment(query, jieba.lcut_for_search)
+
+
+def _segment(query: str, cut) -> list[str]:
+    """Split into words via ``cut`` (a jieba cutter) for CJK runs and regex for
+    ASCII/number runs; drop single chars and low-information words. Order-preserving,
+    deduped."""
     terms: list[str] = []
-    for chunk in re.findall(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]+", query):
+    for chunk in re.findall(r"[A-Za-z0-9_+-]+|[\u4e00-\u9fff]+", str(query or "")):
         if has_cjk(chunk):
-            terms.extend(jieba.lcut(chunk))
+            terms.extend(cut(chunk))
         else:
             terms.append(chunk)
     return ordered_unique([
