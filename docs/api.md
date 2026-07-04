@@ -12,7 +12,7 @@
 | POST | `/memory/units` | 创建 user-authored unit |
 | GET | `/memory/units/{id}` | unit 与 evidence 详情 |
 | PATCH | `/memory/units/{id}` | 编辑 unit 并排入 relink |
-| DELETE | `/memory/units/{id}` | 按 false/outdated 撤回 |
+| DELETE | `/memory/units/{id}` | 用户「忘记」：按 outdated（默认，可凭新证据重建）/ false（永久压制）撤回 |
 | POST | `/memory/units/{id}/prompt-policy` | allow/no_prompt |
 | POST | `/memory/units/{id}/portrait-policy` | auto/force_include/force_exclude |
 | GET | `/memory/views` | 列出画像视图 |

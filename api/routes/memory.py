@@ -242,10 +242,13 @@ async def update_unit(unit_id: str, request: UpdateUnitRequest):
 @router.delete("/units/{unit_id}")
 async def retract_unit(
     unit_id: str,
-    reason: Literal["false", "outdated"] = Query(default="false"),
+    reason: Literal["false", "outdated"] = Query(default="outdated"),
 ):
-    """User deletes a belief as wrong ('false') or outdated. To merely hide a
-    still-true memory ('不要提到'), use the prompt-policy endpoint instead."""
+    """User forgets a belief as outdated (default: reversible, may re-form on
+    new evidence) or wrong ('false': never regenerate). Defaults to 'outdated'
+    because the miscall costs are asymmetric — a wrong 'false' silently and
+    permanently suppresses the claim. To merely hide a still-true memory
+    ('不要提起'), use the prompt-policy endpoint instead."""
     if await run_sync(mus.get_unit, unit_id) is None:
         raise HTTPException(status_code=404, detail="unit not found")
     try:

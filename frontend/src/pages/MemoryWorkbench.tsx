@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import {
   type MemoryEvidenceRef,
   type MemoryPortraitPolicy,
+  type MemoryRetractReason,
   type MemoryUnit,
   type MemoryUnitDetail,
   type MemoryView,
@@ -308,7 +309,7 @@ export function MemoryWorkbench() {
     <div className={styles.workbench}>
       <header className={styles.pageHeader}>
         <h1>记忆</h1>
-        <p>拾迹记住的关于你的一切都在这里。每条记忆都能看到它从哪来，也可以随时修改或删除。</p>
+        <p>拾迹记住的关于你的一切都在这里。每条记忆都能看到它从哪来，也可以随时修改，或者让 TA 忘记。</p>
       </header>
 
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
@@ -546,14 +547,14 @@ function UnitCard({
     }
   }
 
-  const confirmRetract = async () => {
+  const confirmForget = async (reason: MemoryRetractReason) => {
     setConfirmDelete(false)
     setBusy(true)
     try {
-      await retractMemoryUnit(unit.id, 'false')
+      await retractMemoryUnit(unit.id, reason)
       await onChanged()
     } catch (err) {
-      onError(err instanceof Error ? err.message : '删除失败')
+      onError(err instanceof Error ? err.message : '操作失败')
     } finally {
       setBusy(false)
     }
@@ -586,23 +587,14 @@ function UnitCard({
         </div>
         <p className={styles.editNote}>内容与类型可手动订正；置信度、重要度由系统综合得出，不在此处修改。</p>
         <div className={styles.editActions}>
-          <button className={styles.dangerText} onClick={() => setConfirmDelete(true)} disabled={busy}>删除</button>
+          <button className={styles.dangerText} onClick={() => setConfirmDelete(true)} disabled={busy}>忘记</button>
           <div className={styles.editActionsRight}>
             <button className={styles.ghostButton} onClick={() => setEditing(false)} disabled={busy}>取消</button>
             <button className={styles.primaryButton} onClick={saveEdit} disabled={busy}>{busy ? '保存中...' : '保存'}</button>
           </div>
         </div>
         {confirmDelete && (
-          <ConfirmDialog
-            isOpen
-            title="删除这条记忆？"
-            message="删除后，这条记忆及其全部原始证据会被一并移除，且无法恢复。下次整理时，画像会在没有它的情况下重新生成。如果只是不希望 AI 主动提起，用「不要提起」即可。"
-            confirmText="确认删除"
-            cancelText="取消"
-            danger
-            onConfirm={confirmRetract}
-            onCancel={() => setConfirmDelete(false)}
-          />
+          <ForgetDialog onConfirm={confirmForget} onCancel={() => setConfirmDelete(false)} />
         )}
       </div>
     )
@@ -632,22 +624,61 @@ function UnitCard({
           {muted ? '恢复提及' : '不要提起'}
         </button>
         <button className={`${styles.unitAction} ${styles.unitActionDanger}`} onClick={() => setConfirmDelete(true)} disabled={busy}>
-          <TrashIcon /> 删除
+          <TrashIcon /> 忘记
         </button>
       </div>
       {confirmDelete && (
-        <ConfirmDialog
-          isOpen
-          title="删除这条记忆？"
-          message="删除后，这条记忆及其全部原始证据会被一并移除，且无法恢复。下次整理时，画像会在没有它的情况下重新生成。如果只是不希望 AI 主动提起，用「不要提起」即可。"
-          confirmText="确认删除"
-          cancelText="取消"
-          danger
-          onConfirm={confirmRetract}
-          onCancel={() => setConfirmDelete(false)}
-        />
+        <ForgetDialog onConfirm={confirmForget} onCancel={() => setConfirmDelete(false)} />
       )}
     </div>
+  )
+}
+
+/* 忘记 = 后端的用户撤回：只翻状态、更新画像，原始帖子/聊天记录都还在。
+ * 默认选"过时"：误标过时可逆（记忆可凭新证据重新长出），误标"没这回事"
+ * 会永久阻止这条信念再生，代价不对称。 */
+function ForgetDialog({
+  onConfirm,
+  onCancel,
+}: {
+  onConfirm: (reason: MemoryRetractReason) => void
+  onCancel: () => void
+}) {
+  const [reason, setReason] = useState<MemoryRetractReason>('outdated')
+  const radioGroup = useId()
+  return (
+    <ConfirmDialog
+      isOpen
+      title="忘记这条记忆？"
+      message="TA 会立刻不再相信、不再使用这条，画像随之更新。你的原始帖子和聊天记录不受影响。"
+      confirmText="忘记"
+      cancelText="取消"
+      danger
+      onConfirm={() => onConfirm(reason)}
+      onCancel={onCancel}
+    >
+      <div className={styles.forgetOptions}>
+        <label className={styles.forgetOption}>
+          <input
+            type="radio"
+            name={radioGroup}
+            checked={reason === 'outdated'}
+            onChange={() => setReason('outdated')}
+          />
+          <span>以前是这样，但已经过时了</span>
+        </label>
+        <label className={styles.forgetOption}>
+          <input
+            type="radio"
+            name={radioGroup}
+            checked={reason === 'false'}
+            onChange={() => setReason('false')}
+          />
+          <span>TA 理解错了，根本没这回事</span>
+        </label>
+      </div>
+      <p className={styles.forgetHint}>如果只是不想让 TA 主动提起，用「不要提起」就够了。</p>
+    </ConfirmDialog>
   )
 }
 

@@ -1067,9 +1067,12 @@ export function updateMemoryUnit(unitId: string, input: UpdateMemoryUnitInput): 
   })
 }
 
-/** Delete a belief as wrong ('false') or outdated ('outdated'). To merely
- *  stop mentioning a still-true memory, use setMemoryPromptPolicy('no_prompt'). */
-export function retractMemoryUnit(unitId: string, reason: 'false' | 'outdated' = 'false'): Promise<{ ok: boolean }> {
+export type MemoryRetractReason = 'false' | 'outdated'
+
+/** Forget a belief: 'outdated' (was true, no longer — may re-form on new
+ *  evidence) or 'false' (misunderstood, never regenerate). To merely stop
+ *  mentioning a still-true memory, use setMemoryPromptPolicy('no_prompt'). */
+export function retractMemoryUnit(unitId: string, reason: MemoryRetractReason = 'outdated'): Promise<{ ok: boolean }> {
   return request<{ ok: boolean }>(`/memory/units/${encodeURIComponent(unitId)}?reason=${reason}`, {
     method: 'DELETE',
   })

@@ -34,3 +34,8 @@ reconcile run。
 source edit/delete 会 challenge 所有引用该 source 当前版本的 units。下一轮必须为每个
 challenged unit 给出唯一决定。撤回后的 unit 保留 operation history 和 tombstone，
 防止错误信念被重复生成。
+
+用户侧的撤回叫「忘记」：只翻 unit 状态并更新画像，原始 post/chat 证据永不删除。
+两种原因语义不同——`outdated`（默认）表示"曾经成立、现在过时"，允许新证据重建同一
+信念；`false` 表示"从来不成立"，tombstone 永久阻止再生。UI 默认落在 outdated，
+因为误标代价不对称：误标过时可逆，误标 false 是静默且永久的封杀。

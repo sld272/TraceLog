@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, type ReactNode } from 'react'
 import styles from './ConfirmDialog.module.css'
 
 interface ConfirmDialogProps {
@@ -8,6 +8,7 @@ interface ConfirmDialogProps {
   confirmText?: string
   cancelText?: string
   danger?: boolean
+  children?: ReactNode
   onConfirm: () => void
   onCancel: () => void
 }
@@ -19,6 +20,7 @@ export function ConfirmDialog({
   confirmText = '确定',
   cancelText = '取消',
   danger = false,
+  children,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -49,7 +51,7 @@ export function ConfirmDialog({
       if (e.key !== 'Tab') return
       const dialog = dialogRef.current
       if (!dialog) return
-      const focusable = dialog.querySelectorAll<HTMLElement>('button:not([disabled])')
+      const focusable = dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
       if (!first || !last) return
@@ -87,6 +89,7 @@ export function ConfirmDialog({
         </div>
         <div className={styles.body}>
           <p id={messageId} className={styles.message}>{message}</p>
+          {children}
         </div>
         <div className={styles.footer}>
           <button ref={cancelButtonRef} className={styles.cancelButton} onClick={onCancel}>
