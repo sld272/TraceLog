@@ -169,13 +169,17 @@ class MemoryReconcilerTest(unittest.TestCase):
         self.assertEqual(summary.skipped, 1)
         self.assertIn("同义", summary.skipped_details[0]["reason"])
 
-    def test_tombstone_in_other_bucket_does_not_block(self) -> None:
-        dead = self._false_tombstone("用户讨厌咖啡", claim="用户讨厌咖啡")
+    def test_model_tombstone_in_other_bucket_does_not_block(self) -> None:
+        # cross-bucket suppression is a USER privilege ("别再记这件事"); a model
+        # retraction's judgment is bucket-scoped, so its vector twin elsewhere
+        # must not block.
+        dead = self._private_false_tombstone(
+            "咖啡这种东西我可太讨厌了", "用户讨厌咖啡", by="model"
+        )
         with db.transaction() as conn:
             new_ids = [mes.record_post_mutation(
                 conn, post_id="pz", op="create", content="再说一次", occurred_at=9.0
             ).id]
-        # same claim but the tombstone metadata points at a different bucket
         hit = SimpleNamespace(
             doc_id=f"tombstone-{dead}", rank=1, distance=0.05,
             metadata={"type": "tombstone", "unit_id": dead, "owner_scope": "soul:gotoh",
@@ -190,6 +194,26 @@ class MemoryReconcilerTest(unittest.TestCase):
             summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(summary.skipped, 0)
         self.assertEqual(summary.by_op.get("add"), 1)
+
+    def test_user_tombstone_in_other_bucket_blocks_paraphrase(self) -> None:
+        dead = self._private_false_tombstone("咖啡这种东西我可太讨厌了", "用户讨厌咖啡")
+        with db.transaction() as conn:
+            new_ids = [mes.record_post_mutation(
+                conn, post_id="pz", op="create", content="再说一次", occurred_at=9.0
+            ).id]
+        hit = SimpleNamespace(
+            doc_id=f"tombstone-{dead}", rank=1, distance=0.05,
+            metadata={"type": "tombstone", "unit_id": dead, "owner_scope": "soul:gotoh",
+                      "visibility_scope": "private:soul:gotoh", "reason": "false"},
+        )
+        producer = self._producer([
+            {"op": "add", "type": "preference", "content": "咖啡这种饮品用户不太喜欢",
+             "confidence": 0.7, "tier": "contextual", "importance": 0.5,
+             "evidence_event_ids": new_ids},
+        ])
+        with patch("core.vectorstore.query_documents", return_value=[hit]):
+            summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
+        self.assertEqual(summary.skipped, 1)
 
     def test_tombstone_vector_failure_fails_open(self) -> None:
         self._false_tombstone("用户讨厌咖啡", claim="用户讨厌咖啡")
@@ -207,6 +231,62 @@ class MemoryReconcilerTest(unittest.TestCase):
         # paraphrase slips through when the index is down (prompt-level
         # suppression is the remaining line) — but nothing crashes.
         self.assertEqual(summary.by_op.get("add"), 1)
+
+    # --- owner-level suppression & tombstone lifecycle ----------------------
+
+    def _private_false_tombstone(self, content: str, claim: str, *, by: str = "user") -> str:
+        with db.transaction() as conn:
+            ev = mes.record_chat_mutation(
+                conn, message_id=999, soul_name="gotoh", op="create",
+                content=content, occurred_at=9.0, role="user",
+            ).id
+        unit_id = mus.add_unit(
+            owner_scope="soul:gotoh", visibility_scope="private:soul:gotoh",
+            source_channel="chat", type="preference", content=content,
+            evidence_event_ids=[ev],
+        )
+        mus.retract_unit(unit_id, by=by, reason="false")
+        mus.set_normalized_claim(unit_id, claim)
+        return unit_id
+
+    def test_user_retract_suppresses_across_buckets_via_claim_only(self) -> None:
+        self._private_false_tombstone("咖啡这种东西我可太讨厌了", "用户讨厌咖啡")
+        tombs = recon._load_tombstones("global", "public")
+        contents = [t["content"] for t in tombs]
+        self.assertIn("用户讨厌咖啡", contents)          # the claim crosses buckets
+        self.assertNotIn("咖啡这种东西我可太讨厌了", contents)  # raw private wording never does
+
+    def test_model_retract_stays_bucket_local(self) -> None:
+        self._private_false_tombstone("咖啡这种东西我可太讨厌了", "用户讨厌咖啡", by="model")
+        self.assertEqual([], recon._load_tombstones("global", "public"))
+        self.assertEqual(1, len(recon._load_tombstones("soul:gotoh", "private:soul:gotoh")))
+
+    def test_cross_bucket_user_false_tombstone_blocks_exact_add(self) -> None:
+        self._private_false_tombstone("咖啡这种东西我可太讨厌了", "用户讨厌咖啡")
+        new_ids = self._emit_public_events(1)
+        producer = self._producer([
+            {"op": "add", "type": "preference", "content": "用户讨厌咖啡",
+             "confidence": 0.7, "tier": "contextual", "importance": 0.5,
+             "evidence_event_ids": new_ids},
+        ])
+        summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
+        self.assertEqual(summary.skipped, 1)
+
+    def test_outdated_tombstone_expires_when_belief_reforms(self) -> None:
+        ids = self._emit_public_events(2)
+        dead = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="state", content="用户在准备考研", evidence_event_ids=[ids[0]],
+        )
+        mus.retract_unit(dead, by="user", reason="outdated")
+        mus.set_normalized_claim(dead, "用户在准备考研")
+        self.assertEqual(1, len(recon._load_tombstones("global", "public")))
+        # the belief legitimately re-forms -> the gravestone retires
+        mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="state", content="用户在准备考研", evidence_event_ids=[ids[1]],
+        )
+        self.assertEqual([], recon._load_tombstones("global", "public"))
 
     def test_retract_via_reconcile(self) -> None:
         ids = self._emit_public_events(1)

@@ -44,6 +44,10 @@ class ChatContext:
     context: str
     messages: list[ChatMessage]
     cited_memory: list[dict] = field(default_factory=list)
+    # per-stage build durations (seconds) — reply latency instrumentation:
+    # the serial LLM legs (web gate -> query rewrite -> reply) are the
+    # suspected bottleneck; measure before parallelizing anything.
+    timings: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -197,6 +201,8 @@ def build_chat_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
+    timings: dict[str, float] = {}
+    stage_started = db.now_ts()
     web_section = reply_context.build_web_search_section(
         client,
         model,
@@ -205,9 +211,11 @@ def build_chat_context(
         context_hint="\n\n---\n\n".join(sections),
         trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
     )
+    timings["web_gate_s"] = round(db.now_ts() - stage_started, 3)
     if web_section:
         sections.append(web_section)
 
+    stage_started = db.now_ts()
     rewrite = (
         query_rewriter.rewrite_query(
             client,
@@ -220,6 +228,8 @@ def build_chat_context(
         if client and model
         else None
     )
+    timings["query_rewrite_s"] = round(db.now_ts() - stage_started, 3)
+    stage_started = db.now_ts()
     memory = memory_read.memory_section_with_citations(
         "chat",
         thread.soul_name,
@@ -233,6 +243,7 @@ def build_chat_context(
         keywords=rewrite.keywords if rewrite else None,
         trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
     )
+    timings["memory_read_s"] = round(db.now_ts() - stage_started, 3)
     if memory.text:
         sections.append(f"# 记忆\n\n{memory.text}")
 
@@ -253,6 +264,7 @@ def build_chat_context(
         context=context_text,
         messages=llm_messages,
         cited_memory=memory.cited_memory,
+        timings=timings,
     )
 
 
@@ -275,8 +287,10 @@ def _call_assistant_reply_for_user_message(
     model: str,
 ) -> ChatReplyResult:
     """Generate and append the assistant reply for an existing latest user message."""
+    total_started = db.now_ts()
     llm_user_message = vision_service.content_for_llm(user_message_row.content, user_message_row.attachments)
     chat_context = build_chat_context(user_message_row.thread_id, llm_user_message, client, model)
+    reply_started = db.now_ts()
     data = reply_router.call_soul_chat_reply(
         client,
         model,
@@ -287,6 +301,17 @@ def _call_assistant_reply_for_user_message(
             "soul_name": chat_context.thread.soul_name,
             "user_message_id": user_message_row.id,
         },
+    )
+    # latency breakdown across the serial legs (web gate -> rewrite -> memory
+    # read -> reply LLM): measure first, parallelize only what proves slow.
+    logging_service.log_event(
+        "reply_latency",
+        channel="chat",
+        thread_id=user_message_row.thread_id,
+        soul_name=chat_context.thread.soul_name,
+        **chat_context.timings,
+        reply_llm_s=round(db.now_ts() - reply_started, 3),
+        total_s=round(db.now_ts() - total_started, 3),
     )
     if data is None:
         error = "LLM call failed or returned invalid JSON"

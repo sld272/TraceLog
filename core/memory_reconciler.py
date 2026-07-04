@@ -84,16 +84,21 @@ def _tombstone_blocks_add(
     text = str(content or "").strip()
     if not text:
         return None
+    # exact leg: same-bucket false tombstones block regardless of retractor;
+    # user retractions block owner-wide ("别再记这件事" is not bucket-scoped)
     row = conn.execute(
         """
         SELECT id FROM memory_units
-        WHERE owner_scope = ? AND visibility_scope = ?
-          AND status IN ('retracted_by_user','retracted_by_model')
+        WHERE status IN ('retracted_by_user','retracted_by_model')
           AND retraction_reason = 'false'
           AND (TRIM(content) = ? OR TRIM(COALESCE(normalized_claim, '')) = ?)
+          AND (
+                (owner_scope = ? AND visibility_scope = ?)
+                OR status = 'retracted_by_user'
+              )
         LIMIT 1
         """,
-        (owner_scope, visibility_scope, text, text),
+        (text, text, owner_scope, visibility_scope),
     ).fetchone()
     if row is not None:
         return f"与已删除(false)的记忆完全同文，tombstone 拦截（{row['id']}）"
@@ -111,15 +116,23 @@ def _tombstone_blocks_add(
         if sim < TOMBSTONE_BLOCK_SIM:
             continue
         meta = getattr(hit, "metadata", None) or {}
-        if (
+        if str(meta.get("reason")) != "false":
+            continue
+        same_bucket = (
             str(meta.get("owner_scope")) == owner_scope
             and str(meta.get("visibility_scope")) == visibility_scope
-            and str(meta.get("reason")) == "false"
-        ):
-            return (
-                f"与已删除(false)的记忆同义（sim={sim:.2f}），tombstone 拦截"
-                f"（{meta.get('unit_id')}）"
-            )
+        )
+        if not same_bucket:
+            tomb = conn.execute(
+                "SELECT status FROM memory_units WHERE id = ?",
+                (str(meta.get("unit_id") or ""),),
+            ).fetchone()
+            if tomb is None or tomb["status"] != "retracted_by_user":
+                continue  # model retractions stay bucket-local
+        return (
+            f"与已删除(false)的记忆同义（sim={sim:.2f}），tombstone 拦截"
+            f"（{meta.get('unit_id')}）"
+        )
     return None
 
 
@@ -146,23 +159,66 @@ class ReconcileReviewError(RuntimeError):
 
 
 def _load_tombstones(owner_scope: str, visibility_scope: str) -> list[dict]:
-    """User/model retractions in this bucket, with reason — fed to the producer
-    so it can suppress zombie re-derivation (branch E1). normalized_claim, when
-    backfilled, replaces the raw content in the prompt (see the producer's
-    formatter): a canonical assertion suppresses paraphrases the original
-    wording would miss."""
+    """Retractions fed to the producer to suppress zombie re-derivation (E1).
+
+    Three refinements over the original "this bucket's last 200 rows":
+
+    * user retractions suppress EVERYWHERE — the user means "别再记这件事",
+      not "这个桶别记". Cross-bucket rows are fed by normalized_claim ONLY, so
+      a private bucket's raw wording never enters another bucket's prompt;
+      rows without a claim yet stay bucket-local until the backfill lands.
+      Model retractions remain bucket-local (the model's judgment is
+      bucket-scoped by construction).
+    * an outdated tombstone expires once a same-bucket ACTIVE unit re-states
+      the same claim — the belief legitimately re-formed, the gravestone is
+      done. false tombstones never expire.
+    * under the cap, false tombstones outrank outdated ones — permanence
+      matters more than recency when something must be cut."""
     rows = db.query_all(
         """
-        SELECT id, content, status, retraction_reason, normalized_claim
-        FROM memory_units
-        WHERE owner_scope = ? AND visibility_scope = ?
-          AND status IN ('retracted_by_user','retracted_by_model')
-        ORDER BY updated_at DESC
+        SELECT id, content, status, retraction_reason, normalized_claim,
+               owner_scope, visibility_scope
+        FROM memory_units AS tomb
+        WHERE status IN ('retracted_by_user','retracted_by_model')
+          AND (
+                (owner_scope = ? AND visibility_scope = ?)
+                OR (
+                    status = 'retracted_by_user'
+                    AND TRIM(COALESCE(normalized_claim, '')) != ''
+                )
+              )
+          AND NOT (
+                retraction_reason = 'outdated'
+                AND EXISTS (
+                    SELECT 1 FROM memory_units live
+                    WHERE live.status = 'active'
+                      AND live.owner_scope = tomb.owner_scope
+                      AND live.visibility_scope = tomb.visibility_scope
+                      AND (
+                            TRIM(live.content) = TRIM(COALESCE(tomb.normalized_claim, tomb.content))
+                         OR TRIM(COALESCE(live.normalized_claim, '')) != ''
+                            AND TRIM(live.normalized_claim) = TRIM(COALESCE(tomb.normalized_claim, tomb.content))
+                      )
+                )
+              )
+        ORDER BY (retraction_reason = 'false') DESC, updated_at DESC
         LIMIT 200
         """,
         (owner_scope, visibility_scope),
     )
-    return [dict(r) for r in rows]
+    out: list[dict] = []
+    for r in rows:
+        item = dict(r)
+        if not (
+            item["owner_scope"] == owner_scope
+            and item["visibility_scope"] == visibility_scope
+        ):
+            # cross-bucket row: expose the claim only, never the raw wording
+            item["content"] = item["normalized_claim"]
+        item.pop("owner_scope", None)
+        item.pop("visibility_scope", None)
+        out.append(item)
+    return out
 
 
 def _insert_reconcile_run(
