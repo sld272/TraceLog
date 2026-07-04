@@ -64,6 +64,65 @@ def _channel_for_visibility(visibility_scope: str) -> str:
     return "post"
 
 
+# P2 tombstone double-insurance: prompt-level suppression asks the model not to
+# re-derive a retracted-as-false belief; this code-side guard catches the ones
+# it re-derives anyway. Exact match compares against content AND
+# normalized_claim; the vector check catches paraphrases. Cosine similarity at
+# or above this bar to a false tombstone in the same bucket blocks the add.
+TOMBSTONE_BLOCK_SIM = 0.86
+
+
+def _tombstone_blocks_add(
+    conn: sqlite3.Connection,
+    owner_scope: str,
+    visibility_scope: str,
+    content: str,
+) -> str | None:
+    """Return a human-readable block reason if a false tombstone suppresses this
+    add, else None. The vector leg is best-effort/fail-open — prompt-level
+    suppression still applies when the index is unavailable."""
+    text = str(content or "").strip()
+    if not text:
+        return None
+    row = conn.execute(
+        """
+        SELECT id FROM memory_units
+        WHERE owner_scope = ? AND visibility_scope = ?
+          AND status IN ('retracted_by_user','retracted_by_model')
+          AND retraction_reason = 'false'
+          AND (TRIM(content) = ? OR TRIM(COALESCE(normalized_claim, '')) = ?)
+        LIMIT 1
+        """,
+        (owner_scope, visibility_scope, text, text),
+    ).fetchone()
+    if row is not None:
+        return f"与已删除(false)的记忆完全同文，tombstone 拦截（{row['id']}）"
+    try:
+        from core import vectorstore
+
+        hits = vectorstore.query_documents(text, n_results=3, where={"type": "tombstone"})
+    except Exception:
+        return None
+    for hit in hits:
+        distance = getattr(hit, "distance", None)
+        if distance is None:
+            continue
+        sim = 1.0 - float(distance)
+        if sim < TOMBSTONE_BLOCK_SIM:
+            continue
+        meta = getattr(hit, "metadata", None) or {}
+        if (
+            str(meta.get("owner_scope")) == owner_scope
+            and str(meta.get("visibility_scope")) == visibility_scope
+            and str(meta.get("reason")) == "false"
+        ):
+            return (
+                f"与已删除(false)的记忆同义（sim={sim:.2f}），tombstone 拦截"
+                f"（{meta.get('unit_id')}）"
+            )
+    return None
+
+
 @dataclass
 class ReconcileSummary:
     owner_scope: str
@@ -88,10 +147,13 @@ class ReconcileReviewError(RuntimeError):
 
 def _load_tombstones(owner_scope: str, visibility_scope: str) -> list[dict]:
     """User/model retractions in this bucket, with reason — fed to the producer
-    so it can suppress zombie re-derivation (branch E1)."""
+    so it can suppress zombie re-derivation (branch E1). normalized_claim, when
+    backfilled, replaces the raw content in the prompt (see the producer's
+    formatter): a canonical assertion suppresses paraphrases the original
+    wording would miss."""
     rows = db.query_all(
         """
-        SELECT id, content, status, retraction_reason
+        SELECT id, content, status, retraction_reason, normalized_claim
         FROM memory_units
         WHERE owner_scope = ? AND visibility_scope = ?
           AND status IN ('retracted_by_user','retracted_by_model')
@@ -190,6 +252,11 @@ def apply_ops(
                     raise ValueError(
                         f"importance {importance:.2f} 低于阈值 {MIN_ADD_IMPORTANCE}（瞬时琐碎信息，不值得记忆）"
                     )
+                block_reason = _tombstone_blocks_add(
+                    conn, owner_scope, visibility_scope, str(op_obj.get("content") or "")
+                )
+                if block_reason:
+                    raise ValueError(block_reason)
                 mus.add_unit(
                     owner_scope=owner_scope,
                     visibility_scope=visibility_scope,

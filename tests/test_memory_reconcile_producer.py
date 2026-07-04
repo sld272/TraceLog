@@ -16,6 +16,35 @@ from core import (
 from core.llm import memory_router
 
 
+class TombstoneFormatTest(unittest.TestCase):
+    def test_format_prefers_normalized_claim_over_raw_content(self) -> None:
+        text = producer_mod._format_tombstones([
+            {"retraction_reason": "false", "content": "咖啡这种东西我可太讨厌了",
+             "normalized_claim": "用户讨厌咖啡"},
+            {"retraction_reason": "outdated", "content": "在准备期末考", "normalized_claim": None},
+        ])
+        self.assertIn("用户讨厌咖啡", text)
+        self.assertNotIn("可太讨厌", text)      # raw wording replaced by the claim
+        self.assertIn("在准备期末考", text)      # claimless rows fall back to content
+        self.assertIn("reason=false", text)
+        self.assertIn("reason=outdated", text)
+
+
+class NormalizeClaimsParserTest(unittest.TestCase):
+    def test_parser_extracts_claims_and_drops_malformed(self) -> None:
+        raw = json.dumps({"claims": [
+            {"unit_id": "mu_1", "claim": "用户讨厌咖啡"},
+            {"unit_id": "", "claim": "无 id"},
+            {"unit_id": "mu_2", "claim": ""},
+            "not-a-dict",
+        ]})
+        parsed = memory_router._parse_normalize_claims_content(raw)
+        self.assertEqual(parsed, {"mu_1": "用户讨厌咖啡"})
+
+    def test_parser_rejects_non_json(self) -> None:
+        self.assertIsNone(memory_router._parse_normalize_claims_content("胡言乱语"))
+
+
 class ReconcileParserTest(unittest.TestCase):
     def test_parser_normalizes_ops(self) -> None:
         raw = json.dumps({

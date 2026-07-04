@@ -98,6 +98,44 @@ def run_pending_relinks(
     return RelinkRunResult(applied=applied, failures=failures)
 
 
+def backfill_tombstone_claims(
+    client: LLMClient,
+    model: str,
+    *,
+    normalizer=None,
+    trace_context: dict | None = None,
+) -> int:
+    """Best-effort: give retracted units lacking a normalized_claim one (P2).
+
+    One batched light LLM call canonicalizes up to 30 tombstones per run; the
+    claims feed the reconcile prompt (paraphrase-proof suppression) and, for
+    false tombstones, the vector index picks them up on its next declarative
+    rebuild (expected_docs_from_sqlite). Failures leave the rows for the next
+    run — never fails the reconcile job. Returns how many claims were stored."""
+    rows = mus.list_tombstones_missing_claim()
+    if not rows:
+        return 0
+    items = [{"unit_id": str(r["id"]), "content": str(r["content"])} for r in rows]
+    if normalizer is not None:
+        claims = normalizer(items)
+    else:
+        from core.llm import memory_router
+
+        claims = memory_router.call_memory_normalize_claims(
+            client, model, items=items, trace_context=trace_context
+        )
+    if not claims:
+        return 0
+    known_ids = {item["unit_id"] for item in items}
+    stored = 0
+    for unit_id, claim in claims.items():
+        if unit_id not in known_ids:
+            continue
+        mus.set_normalized_claim(unit_id, claim)
+        stored += 1
+    return stored
+
+
 @dataclass(frozen=True)
 class ReconcileRunResult:
     summaries: list[recon.ReconcileSummary]
@@ -200,6 +238,14 @@ def run_pending_reconcile(
                 logging_service.log_event(
                     "memory_reflection_failed", owner_scope=owner_scope, error=str(exc)
                 )
+    # Tombstone claim backfill also rides the live pass, best-effort: retracts
+    # from this run (and any older stragglers) get their canonical claim so the
+    # next reconcile's suppression is paraphrase-proof.
+    if not dry_run:
+        try:
+            backfill_tombstone_claims(client, model, trace_context=trace_context)
+        except Exception as exc:
+            logging_service.log_event("memory_tombstone_claim_backfill_failed", error=str(exc))
 
     pending_relinks = bool(mus.list_pending_relinks()) if not dry_run else False
     has_pending = (

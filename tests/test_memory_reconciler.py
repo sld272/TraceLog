@@ -3,6 +3,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from core import (
     db,
@@ -103,6 +105,108 @@ class MemoryReconcilerTest(unittest.TestCase):
         # LLM 0.8 snaps to the nearest anchored level (0.85): free floats are
         # not comparable across models, discrete anchors are.
         self.assertAlmostEqual(mus.get_unit(unit_id)["confidence"], 0.85, places=6)
+
+    # --- tombstone double-insurance (P2) -----------------------------------
+
+    def _false_tombstone(self, content: str, claim: str | None = None) -> str:
+        ids = self._emit_public_events(1)
+        unit_id = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="preference", content=content, evidence_event_ids=ids,
+        )
+        mus.retract_unit(unit_id, by="user", reason="false")
+        if claim:
+            mus.set_normalized_claim(unit_id, claim)
+        return unit_id
+
+    def test_add_blocked_by_false_tombstone_exact_content(self) -> None:
+        self._false_tombstone("用户讨厌咖啡")
+        with db.transaction() as conn:
+            new_ids = [mes.record_post_mutation(
+                conn, post_id="pz", op="create", content="再说一次", occurred_at=9.0
+            ).id]
+        producer = self._producer([
+            {"op": "add", "type": "preference", "content": "用户讨厌咖啡",
+             "confidence": 0.7, "tier": "contextual", "importance": 0.5,
+             "evidence_event_ids": new_ids},
+        ])
+        summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
+        self.assertEqual(summary.skipped, 1)
+        self.assertIn("tombstone", summary.skipped_details[0]["reason"])
+
+    def test_add_blocked_by_false_tombstone_claim_match(self) -> None:
+        self._false_tombstone("咖啡这种东西我可太讨厌了", claim="用户讨厌咖啡")
+        with db.transaction() as conn:
+            new_ids = [mes.record_post_mutation(
+                conn, post_id="pz", op="create", content="再说一次", occurred_at=9.0
+            ).id]
+        producer = self._producer([
+            {"op": "add", "type": "preference", "content": "用户讨厌咖啡",
+             "confidence": 0.7, "tier": "contextual", "importance": 0.5,
+             "evidence_event_ids": new_ids},
+        ])
+        summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
+        self.assertEqual(summary.skipped, 1)
+
+    def test_add_blocked_by_false_tombstone_vector_paraphrase(self) -> None:
+        dead = self._false_tombstone("用户讨厌咖啡", claim="用户讨厌咖啡")
+        with db.transaction() as conn:
+            new_ids = [mes.record_post_mutation(
+                conn, post_id="pz", op="create", content="再说一次", occurred_at=9.0
+            ).id]
+        hit = SimpleNamespace(
+            doc_id=f"tombstone-{dead}", rank=1, distance=0.05,
+            metadata={"type": "tombstone", "unit_id": dead, "owner_scope": "global",
+                      "visibility_scope": "public", "reason": "false"},
+        )
+        producer = self._producer([
+            {"op": "add", "type": "preference", "content": "咖啡这种饮品用户不太喜欢",
+             "confidence": 0.7, "tier": "contextual", "importance": 0.5,
+             "evidence_event_ids": new_ids},
+        ])
+        with patch("core.vectorstore.query_documents", return_value=[hit]):
+            summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
+        self.assertEqual(summary.skipped, 1)
+        self.assertIn("同义", summary.skipped_details[0]["reason"])
+
+    def test_tombstone_in_other_bucket_does_not_block(self) -> None:
+        dead = self._false_tombstone("用户讨厌咖啡", claim="用户讨厌咖啡")
+        with db.transaction() as conn:
+            new_ids = [mes.record_post_mutation(
+                conn, post_id="pz", op="create", content="再说一次", occurred_at=9.0
+            ).id]
+        # same claim but the tombstone metadata points at a different bucket
+        hit = SimpleNamespace(
+            doc_id=f"tombstone-{dead}", rank=1, distance=0.05,
+            metadata={"type": "tombstone", "unit_id": dead, "owner_scope": "soul:gotoh",
+                      "visibility_scope": "private:soul:gotoh", "reason": "false"},
+        )
+        producer = self._producer([
+            {"op": "add", "type": "preference", "content": "咖啡这种饮品用户不太喜欢",
+             "confidence": 0.7, "tier": "contextual", "importance": 0.5,
+             "evidence_event_ids": new_ids},
+        ])
+        with patch("core.vectorstore.query_documents", return_value=[hit]):
+            summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
+        self.assertEqual(summary.skipped, 0)
+        self.assertEqual(summary.by_op.get("add"), 1)
+
+    def test_tombstone_vector_failure_fails_open(self) -> None:
+        self._false_tombstone("用户讨厌咖啡", claim="用户讨厌咖啡")
+        with db.transaction() as conn:
+            new_ids = [mes.record_post_mutation(
+                conn, post_id="pz", op="create", content="再说一次", occurred_at=9.0
+            ).id]
+        producer = self._producer([
+            {"op": "add", "type": "preference", "content": "咖啡这种饮品用户不太喜欢",
+             "confidence": 0.7, "tier": "contextual", "importance": 0.5,
+             "evidence_event_ids": new_ids},
+        ])
+        with patch("core.vectorstore.query_documents", side_effect=RuntimeError("index down")):
+            summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
+        # paraphrase slips through when the index is down (prompt-level
+        # suppression is the remaining line) — but nothing crashes.
+        self.assertEqual(summary.by_op.get("add"), 1)
 
     def test_retract_via_reconcile(self) -> None:
         ids = self._emit_public_events(1)

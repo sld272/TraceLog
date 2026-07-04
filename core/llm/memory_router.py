@@ -62,6 +62,18 @@ confidence 和 importance 只能从五个档位里选，不要输出其他小数
 """
 
 
+MEMORY_NORMALIZE_CLAIM_PROMPT = """\
+把每条被撤回的记忆内容压成一条规范化断言（normalized claim），用于同义压制匹配。
+要求：
+- 主语统一为「用户」，一句话主谓宾，去掉修辞、语气和举例。
+- 相对时间换算成绝对表述（当前时间见下）。
+- 保留否定词——"不再考研"和"在考研"是两条不同断言。
+- 只压缩，不改写事实；无法理解的内容原样返回。
+只输出 JSON：{"claims":[{"unit_id":"mu_x","claim":"规范化断言"}]}
+当前时间：{current_datetime}
+"""
+
+
 MEMORY_RELINK_PROMPT = """\
 用户刚修改了一条关于自己的记忆。逐条判断旧证据是否仍支持新内容。
 每条证据必须恰好出现在 keep_event_ids 或 drop_event_ids 之一。
@@ -260,6 +272,58 @@ def _parse_memory_relink_content(content: str | None) -> dict | None:
         "keep_event_ids": _coerce_event_ids(data.get("keep_event_ids")),
         "drop_event_ids": _coerce_event_ids(data.get("drop_event_ids")),
     }
+
+
+def call_memory_normalize_claims(
+    client: LLMClient,
+    model: str,
+    *,
+    items: list[dict],
+    trace_context: dict | None = None,
+) -> dict[str, str] | None:
+    """Normalize retracted-unit contents into canonical claims (P2 tombstone
+    matching / P1 linker key). ``items``: [{"unit_id", "content"}]. Returns
+    {unit_id: claim} for the ids the model answered, None on call failure."""
+    if not items:
+        return {}
+    lines = [f"- unit_id={item['unit_id']}\n  {item['content']}" for item in items]
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="memory_normalize_claims",
+        timeout=30,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": MEMORY_NORMALIZE_CLAIM_PROMPT.replace(
+                    "{current_datetime}", now_str()
+                ),
+            },
+            {"role": "user", "content": "## 被撤回的记忆\n\n" + "\n".join(lines)},
+        ],
+        parser=_parse_normalize_claims_content,
+        trace_context=trace_context,
+    )
+
+
+def _parse_normalize_claims_content(content: str | None) -> dict[str, str] | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("claims"), list):
+        return None
+    claims: dict[str, str] = {}
+    for item in data["claims"]:
+        if not isinstance(item, dict):
+            continue
+        unit_id = str(item.get("unit_id") or "").strip()
+        claim = str(item.get("claim") or "").strip()
+        if unit_id and claim:
+            claims[unit_id] = claim
+    return claims
 
 
 MEMORY_CONSOLIDATION_PROMPT = """\

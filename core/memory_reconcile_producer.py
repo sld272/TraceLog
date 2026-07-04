@@ -116,7 +116,10 @@ def _format_tombstones(tombstones: list[dict]) -> str:
         return ""
     parts = []
     for tomb in tombstones:
-        parts.append(f"- reason={tomb.get('retraction_reason')} | {tomb.get('content')}")
+        # prefer the normalized claim: canonical phrasing suppresses paraphrases
+        # the original wording would miss.
+        text = str(tomb.get("normalized_claim") or "").strip() or tomb.get("content")
+        parts.append(f"- reason={tomb.get('retraction_reason')} | {text}")
     return "\n".join(parts)
 
 

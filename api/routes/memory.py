@@ -257,6 +257,12 @@ async def retract_unit(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # the background pass backfills the tombstone's normalized claim so the
+    # suppression is paraphrase-proof from the next reconcile on.
+    await run_sync(
+        job_service.enqueue_memory_reconcile_once,
+        {"trigger": "unit_retract", "unit_id": unit_id},
+    )
     return {"ok": True}
 
 

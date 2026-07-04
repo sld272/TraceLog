@@ -56,3 +56,10 @@ challenged unit 给出唯一决定。撤回后的 unit 保留 operation history 
 两种原因语义不同——`outdated`（默认）表示"曾经成立、现在过时"，允许新证据重建同一
 信念；`false` 表示"从来不成立"，tombstone 永久阻止再生。UI 默认落在 outdated，
 因为误标代价不对称：误标过时可逆，误标 false 是静默且永久的封杀。
+
+tombstone 压制是双保险（P2）：撤回后 reconcile runner 用轻量 LLM 批量把撤回内容
+规范化成 `normalized_claim`（主语统一、去修辞、绝对时间、保留否定词），喂 prompt
+时以断言替代原文（换措辞也压得住）；false tombstone 的 claim 同时作为声明式向量
+文档进索引（`tombstone-<unit_id>`，恢复后随重建自动退场），add 落库前做同桶相似度
+兜底拦截（≥0.86 阻断，向量不可用时 fail-open，prompt 压制仍在）。outdated tombstone
+不建向量——新证据本就允许它重新成立。claim 同时是 P1 linker 的匹配键。

@@ -536,6 +536,38 @@ def promote_unit_tier(
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
 
 
+def set_normalized_claim(
+    unit_id: str, claim: str, *, conn: sqlite3.Connection | None = None
+) -> None:
+    """Store the canonical assertion for a retracted unit (P2). The claim is the
+    tombstone's matching key: it feeds the reconcile prompt instead of the raw
+    content (wording changes can't dodge it) and backs the tombstone vector doc."""
+    claim = str(claim or "").strip()
+    if not claim:
+        return
+    with _conn_ctx(conn) as c:
+        c.execute(
+            "UPDATE memory_units SET normalized_claim = ?, updated_at = ? WHERE id = ?",
+            (claim, db.now_ts(), unit_id),
+        )
+
+
+def list_tombstones_missing_claim(limit: int = 30) -> list[sqlite3.Row]:
+    """Retracted units still lacking a normalized claim, oldest retract first —
+    the reconcile runner backfills these best-effort each run."""
+    return db.query_all(
+        """
+        SELECT id, content, owner_scope, visibility_scope, retraction_reason
+        FROM memory_units
+        WHERE status IN ('retracted_by_user', 'retracted_by_model')
+          AND (normalized_claim IS NULL OR TRIM(normalized_claim) = '')
+        ORDER BY updated_at ASC
+        LIMIT ?
+        """,
+        (int(limit),),
+    )
+
+
 def count_confirm_ops(unit_id: str, *, conn: sqlite3.Connection | None = None) -> int:
     """How many times reconcile re-evidenced this unit — the survival signal deep
     reflection uses to decide a contextual belief has sedimented into core."""

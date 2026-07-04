@@ -70,6 +70,60 @@ class DryRunTest(unittest.TestCase):
         self.assertEqual(mes.get_cursor("global", "public"), ids[-1])
 
 
+class TombstoneClaimBackfillTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name) / "workspace"
+        self.old_workspace = db.WORKSPACE_DIR
+        self.old_db_path = db.DB_PATH
+        db.WORKSPACE_DIR = self.workspace
+        db.DB_PATH = self.workspace / "state.db"
+        db.init_db()
+
+    def tearDown(self) -> None:
+        db.WORKSPACE_DIR = self.old_workspace
+        db.DB_PATH = self.old_db_path
+        self.tmp.cleanup()
+
+    def _retracted_unit(self, content: str, reason: str = "false") -> str:
+        with db.transaction() as conn:
+            ev = mes.record_post_mutation(
+                conn, post_id=f"p-{content}", op="create", content=content, occurred_at=1.0
+            ).id
+        unit_id = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="preference", content=content, evidence_event_ids=[ev],
+        )
+        mus.retract_unit(unit_id, by="user", reason=reason)
+        return unit_id
+
+    def test_backfill_stores_claims_from_injected_normalizer(self) -> None:
+        unit_id = self._retracted_unit("咖啡这种东西我可太讨厌了")
+        seen: dict = {}
+
+        def normalizer(items):
+            seen["items"] = items
+            return {items[0]["unit_id"]: "用户讨厌咖啡"}
+
+        stored = runner.backfill_tombstone_claims(None, "model", normalizer=normalizer)
+        self.assertEqual(stored, 1)
+        self.assertEqual(seen["items"][0]["unit_id"], unit_id)
+        self.assertEqual(mus.get_unit(unit_id)["normalized_claim"], "用户讨厌咖啡")
+        # backfilled rows are not re-selected next run
+        self.assertEqual(runner.backfill_tombstone_claims(None, "model", normalizer=normalizer), 0)
+
+    def test_backfill_ignores_unknown_ids_and_empty_result(self) -> None:
+        unit_id = self._retracted_unit("讨厌跑步")
+        stored = runner.backfill_tombstone_claims(
+            None, "model", normalizer=lambda items: {"mu_bogus": "编造", "": "空"}
+        )
+        self.assertEqual(stored, 0)
+        self.assertIsNone(mus.get_unit(unit_id)["normalized_claim"])
+        self.assertEqual(
+            runner.backfill_tombstone_claims(None, "model", normalizer=lambda items: None), 0
+        )
+
+
 class BucketDiscoveryTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

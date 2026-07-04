@@ -89,6 +89,60 @@ class VectorIndexServiceTest(unittest.TestCase):
             )
         )
 
+    def _retracted_with_claim(self, reason: str) -> str:
+        unit_id = memory_unit_service.add_unit(
+            owner_scope="global",
+            visibility_scope="public",
+            source_channel="user",
+            type="preference",
+            content="咖啡这种东西我可太讨厌了",
+            source="user_authored",
+            actor="user",
+        )
+        memory_unit_service.retract_unit(unit_id, by="user", reason=reason)
+        memory_unit_service.set_normalized_claim(unit_id, "用户讨厌咖啡")
+        return unit_id
+
+    def test_false_tombstone_claim_is_an_expected_vector_doc(self) -> None:
+        unit_id = self._retracted_with_claim("false")
+        vector_index_service.rebuild_expected_docs()
+        row = db.query_one(
+            "SELECT * FROM vector_docs WHERE doc_id = ?", (f"tombstone-{unit_id}",)
+        )
+        self.assertIsNotNone(row)
+        self.assertEqual("tombstone", row["doc_type"])
+        self.assertEqual("用户讨厌咖啡", row["content"])  # claim, not raw content
+
+    def test_outdated_tombstone_gets_no_vector_doc(self) -> None:
+        # outdated may legitimately re-form on new evidence — no blocking vector
+        unit_id = self._retracted_with_claim("outdated")
+        vector_index_service.rebuild_expected_docs()
+        self.assertIsNone(
+            db.query_one(
+                "SELECT 1 FROM vector_docs WHERE doc_id = ?", (f"tombstone-{unit_id}",)
+            )
+        )
+
+    def test_restored_unit_drops_its_tombstone_doc(self) -> None:
+        unit_id = self._retracted_with_claim("false")
+        vector_index_service.rebuild_expected_docs()
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE memory_units SET status='active', retraction_reason=NULL WHERE id=?",
+                (unit_id,),
+            )
+        vector_index_service.rebuild_expected_docs()
+        self.assertIsNone(
+            db.query_one(
+                "SELECT 1 FROM vector_docs WHERE doc_id = ?", (f"tombstone-{unit_id}",)
+            )
+        )
+        self.assertIsNotNone(
+            db.query_one(
+                "SELECT 1 FROM vector_docs WHERE doc_id = ?", (f"unit-{unit_id}",)
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
