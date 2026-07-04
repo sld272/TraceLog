@@ -235,3 +235,4 @@ frontend/tsconfig.node.tsbuildinfo
 AGENTS.md
 CLAUDE.md
 frontend/DESIGN.md
+.claude/
