@@ -474,6 +474,48 @@ def retain_unit(
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
 
 
+def restore_unit(
+    unit_id: str,
+    *,
+    actor: str = "user",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """User brings a forgotten (retracted_by_user) belief back (P5 「找回」).
+
+    The atomic-delivery counterpart of the 忘记 dialog's "随时可以找回" copy:
+    status flips back to active and every tombstone derivative dies in the SAME
+    transaction — retraction_reason cleared (the prompt tombstone set and the
+    declarative tombstone vector doc both key on status+reason, so suppression
+    lifts immediately / on the next index rebuild), portrait membership
+    recomputed. Model retractions are not restorable here: the reconciler owns
+    those and re-derives the belief itself if evidence still supports it."""
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        if row["status"] != "retracted_by_user":
+            raise ValueError(
+                f"只能找回你自己忘记的记忆（当前 status={row['status']}）"
+            )
+        before = _row_to_dict(row)
+        c.execute(
+            "UPDATE memory_units SET status = 'active', retraction_reason = NULL, "
+            "updated_at = ? WHERE id = ?",
+            (now, unit_id),
+        )
+        from core import memory_view_service as _mvs  # local import avoids cycle
+        _mvs.recompute_portrait_membership(
+            row["owner_scope"], row["visibility_scope"], conn=c
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+        after = _row_to_dict(_get_unit_row(c, unit_id))
+        _record_op(
+            c, unit_id=unit_id, op="restore", actor=actor,
+            before=before, after=after,
+        )
+
+
 # --- reflection (P2 deep-reflection) primitives ----------------------------
 
 def decay_unit(
@@ -908,6 +950,33 @@ def set_portrait_policy(
             c, unit_id=unit_id, op="user_edit", actor=actor,
             before=before, after=after,
         )
+
+
+def count_units_backed_by_source(source_type: str, source_id: str) -> int:
+    """How many live beliefs this source currently supports — the number the
+    edit/delete confirmation shows BEFORE the user commits ("这条内容支撑了
+    N 条记忆，保存后 TA 会重新核对"). Mirrors challenge_units_for_source's
+    matching, including the comment dual-lens grouping."""
+    source_types = (
+        mes.COMMENT_SOURCE_TYPES
+        if source_type in mes.COMMENT_SOURCE_TYPES
+        else (source_type,)
+    )
+    placeholders = ",".join("?" for _ in source_types)
+    row = db.query_one(
+        f"""
+        SELECT COUNT(DISTINCT u.id) AS n
+        FROM memory_units u
+        JOIN memory_unit_evidence ue ON ue.unit_id = u.id
+        JOIN memory_ingest_events e ON e.id = ue.event_id
+        WHERE e.source_type IN ({placeholders}) AND e.source_id = ?
+          AND ue.review_pending = 0
+          AND u.source IN ('reflected','user_authored')
+          AND u.status IN ('active','challenged')
+        """,
+        (*source_types, str(source_id)),
+    )
+    return int(row["n"]) if row else 0
 
 
 def challenge_units_for_source(

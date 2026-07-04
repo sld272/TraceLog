@@ -74,6 +74,18 @@ challenged unit 给出唯一决定。撤回后的 unit 保留 operation history 
 信念；`false` 表示"从来不成立"，tombstone 永久阻止再生。UI 默认落在 outdated，
 因为误标代价不对称：误标过时可逆，误标 false 是静默且永久的封杀。
 
+「忘记 → 找回」是一个原子交付（P5）：`restore_unit` 只对 retracted_by_user 开放，
+状态翻回 active 的同一事务里 retraction_reason 清空（prompt tombstone 集合与向量
+tombstone 文档都按 status+reason 取数，压制随之解除）、画像成员重算。模型自己的
+撤回不可找回——那是 reconciler 的地盘，证据仍支持时它会自己重建。
+
+用户可见状态收敛为 5 个：已记住 / 整理中（pending+challenged，附原因"你最近改了
+相关内容，正在重新核对"）/ 收起的（不要提起）/ 已忘记·可找回 / 淡出的。superseded
+和模型撤回是内部机制态，永不出卡片；动态流同样过滤它们，同一 reconcile run 的多条
+变更聚合成一条摘要（"新记住 2 件事，更新了 1 条"），文案不出现任何内部术语。
+源内容编辑/删除前，前端用 `GET /memory/source-impact` 预告"这条内容还支撑着 N 条
+记忆"；复核结果通过整理中状态与动态流回流给用户。
+
 tombstone 压制是双保险（P2）：撤回后 reconcile runner 用轻量 LLM 批量把撤回内容
 规范化成 `normalized_claim`（主语统一、去修辞、绝对时间、保留否定词），喂 prompt
 时以断言替代原文（换措辞也压得住）；false tombstone 的 claim 同时作为声明式向量

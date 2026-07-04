@@ -144,6 +144,43 @@ class ApiMemoryTest(unittest.TestCase):
         self.assertEqual(unit["status"], "retracted_by_user")
         self.assertEqual(unit["retraction_reason"], "false")
 
+    def test_forget_then_restore_round_trip(self) -> None:
+        unit_id, _ = self._seed_unit()
+        client = self._client()
+        resp = client.request("DELETE", f"/memory/units/{unit_id}", params={"reason": "outdated"})
+        self.assertEqual(200, resp.status_code)
+        resp = client.post(f"/memory/units/{unit_id}/restore")
+        self.assertEqual(200, resp.status_code)
+        unit = mus.get_unit(unit_id)
+        self.assertEqual(unit["status"], "active")
+        self.assertIsNone(unit["retraction_reason"])  # tombstone suppression lifted
+
+    def test_restore_rejects_non_forgotten_unit(self) -> None:
+        unit_id, _ = self._seed_unit()
+        client = self._client()
+        resp = client.post(f"/memory/units/{unit_id}/restore")
+        self.assertEqual(422, resp.status_code)
+
+    def test_source_impact_counts_backing_units(self) -> None:
+        unit_id, event_id = self._seed_unit()
+        del unit_id
+        source = db.query_one(
+            "SELECT source_type, source_id FROM memory_ingest_events WHERE id = ?",
+            (event_id,),
+        )
+        client = self._client()
+        resp = client.get(
+            "/memory/source-impact",
+            params={"source_type": source["source_type"], "source_id": source["source_id"]},
+        )
+        self.assertEqual(200, resp.status_code)
+        self.assertEqual(resp.json()["count"], 1)
+        none = client.get(
+            "/memory/source-impact",
+            params={"source_type": "post", "source_id": "no-such-post"},
+        )
+        self.assertEqual(none.json()["count"], 0)
+
     def test_type_filter_pushed_down_before_limit(self) -> None:
         # an identity unit (older) and a state unit (newer): type filter must run
         # in SQL, not after LIMIT, or ?type=identity&limit=1 wrongly returns empty.

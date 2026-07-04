@@ -605,6 +605,10 @@
   padding: 10px 13px;
 }
 
+.unitForgotten {
+  opacity: 0.72;
+}
+
 .forgetOptions {
   display: flex;
   flex-direction: column;

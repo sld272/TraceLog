@@ -266,6 +266,31 @@ async def retract_unit(
     return {"ok": True}
 
 
+@router.post("/units/{unit_id}/restore")
+async def restore_unit(unit_id: str):
+    """Bring a user-forgotten belief back: the 忘记 dialog's promised 找回.
+    Status flips to active and tombstone suppression lifts in the same
+    transaction (see memory_unit_service.restore_unit)."""
+    if await run_sync(mus.get_unit, unit_id) is None:
+        raise HTTPException(status_code=404, detail="unit not found")
+    try:
+        await run_sync(mus.restore_unit, unit_id, actor="user")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await run_sync(_unit_detail_or_404, unit_id)
+
+
+@router.get("/source-impact")
+async def source_impact(
+    source_type: str = Query(...),
+    source_id: str = Query(...),
+):
+    """How many live beliefs a source currently supports — lets edit/delete
+    dialogs forewarn '这条内容支撑了 N 条记忆，保存后 TA 会重新核对'."""
+    count = await run_sync(mus.count_units_backed_by_source, source_type, source_id)
+    return {"count": count}
+
+
 @router.post("/units/{unit_id}/prompt-policy")
 async def set_prompt_policy(unit_id: str, request: PromptPolicyRequest):
     if await run_sync(mus.get_unit, unit_id) is None:

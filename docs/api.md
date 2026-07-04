@@ -13,6 +13,8 @@
 | GET | `/memory/units/{id}` | unit 与 evidence 详情 |
 | PATCH | `/memory/units/{id}` | 编辑 unit 并排入 relink |
 | DELETE | `/memory/units/{id}` | 用户「忘记」：按 outdated（默认，可凭新证据重建）/ false（永久压制）撤回 |
+| POST | `/memory/units/{id}/restore` | 找回用户忘记的记忆（仅 retracted_by_user） |
+| GET | `/memory/source-impact` | 某条源内容当前支撑的记忆数（编辑/删除预告用） |
 | POST | `/memory/units/{id}/prompt-policy` | allow/no_prompt |
 | POST | `/memory/units/{id}/portrait-policy` | auto/force_include/force_exclude |
 | GET | `/memory/views` | 列出画像视图 |

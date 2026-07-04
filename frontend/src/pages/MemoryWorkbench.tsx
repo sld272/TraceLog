@@ -16,6 +16,7 @@ import {
   listMemoryUnits,
   listMemoryViews,
   listSouls,
+  restoreMemoryUnit,
   resynthesizeMemoryView,
   retractMemoryUnit,
   setMemoryPromptPolicy,
@@ -30,25 +31,31 @@ import { CheckIcon, PencilIcon, TrashIcon } from '@/components/icons'
 import { formatSmartTime } from '@/utils/date'
 import styles from './MemoryWorkbench.module.css'
 
-type UnitFilter = 'active' | 'pending' | 'all'
+type UnitFilter = 'active' | 'pending' | 'forgotten' | 'all'
 
 const UNIT_FILTERS: { value: UnitFilter; label: string }[] = [
-  { value: 'active', label: '进行中' },
-  { value: 'pending', label: '待确认' },
+  { value: 'active', label: '已记住' },
+  { value: 'pending', label: '整理中' },
+  { value: 'forgotten', label: '已忘记' },
   { value: 'all', label: '全部' },
 ]
 
-const RETRACTED_STATUSES = new Set(['retracted_by_model', 'retracted_by_user'])
+/* 用户可见状态收敛为 5 个：已记住 / 整理中 / 收起的（不要提起）/ 已忘记·可找回 /
+ * 淡出的。superseded 和模型自己的撤回是内部机制态，永不出卡片。 */
+const HIDDEN_STATUSES = new Set(['retracted_by_model', 'superseded'])
 const PENDING_STATUSES = new Set(['challenged', 'pending'])
 
-/** Retracted units are kept only as reconciler tombstones, never shown. */
-function isRetractedStatus(status: string): boolean {
-  return RETRACTED_STATUSES.has(status)
+function isHiddenStatus(status: string): boolean {
+  return HIDDEN_STATUSES.has(status)
 }
 
 /** Challenged/pending units still await a confirm-or-drop decision. */
 function isPendingStatus(status: string): boolean {
   return PENDING_STATUSES.has(status)
+}
+
+function isForgottenStatus(status: string): boolean {
+  return status === 'retracted_by_user'
 }
 
 /** Wrap 「…」 spans in an accent highlight, matching the prototype portrait prose. */
@@ -172,11 +179,12 @@ export function MemoryWorkbench() {
   )
 
   const filteredUnits = useMemo(() => {
-    // retracted units live on only as anti-duplication tombstones for the
-    // reconciler; they are never surfaced in the workbench
-    const visible = units.filter((unit) => !isRetractedStatus(unit.status))
+    // superseded / model-retracted units are internal mechanism states
+    // (tombstones, merge losers) and never surface in the workbench
+    const visible = units.filter((unit) => !isHiddenStatus(unit.status))
     if (filter === 'active') return visible.filter((unit) => unit.status === 'active')
     if (filter === 'pending') return visible.filter((unit) => isPendingStatus(unit.status))
+    if (filter === 'forgotten') return visible.filter((unit) => isForgottenStatus(unit.status))
     return visible
   }, [units, filter])
 
@@ -448,7 +456,11 @@ export function MemoryWorkbench() {
             <p className={styles.muted}>加载记忆条目...</p>
           ) : filteredUnits.length === 0 ? (
             <p className={styles.muted}>
-              {filter === 'pending' ? '没有待确认的记忆条目。' : '这里还没有记忆条目。'}
+              {filter === 'pending'
+                ? '没有正在整理的记忆条目。'
+                : filter === 'forgotten'
+                  ? '没有被忘记的记忆。让 TA 忘记的内容会保留在这里，随时可以找回。'
+                  : '这里还没有记忆条目。'}
             </p>
           ) : (
             filteredUnits.map((unit) => (
@@ -498,6 +510,8 @@ function UnitCard({
 
   const muted = unit.prompt_policy === 'no_prompt'
   const inPortrait = unit.in_portrait === 1
+  const forgotten = isForgottenStatus(unit.status)
+  const dormant = unit.status === 'dormant'
   const statusText = inPortrait
     ? unit.portrait_policy === 'force_include'
       ? '正在塑造你的核心画像 · 已强制纳入'
@@ -560,6 +574,39 @@ function UnitCard({
     }
   }
 
+  const restore = async () => {
+    setBusy(true)
+    try {
+      await restoreMemoryUnit(unit.id)
+      await onChanged()
+    } catch (err) {
+      onError(err instanceof Error ? err.message : '找回失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (forgotten) {
+    return (
+      <div className={`${styles.unit} ${styles.unitForgotten}`}>
+        <p className={styles.unitContent}>{unit.content}</p>
+        <div className={styles.unitMeta}>
+          <span className={styles.chip}>{typeLabel(unit.type)}</span>
+          <span className={styles.chipGhost}>已忘记 · 可找回</span>
+        </div>
+        <div className={`${styles.statusLine} ${styles.statusOut}`}>
+          <span className={styles.statusOutDot} />
+          <span>TA 已不再相信、不再使用这条。找回后会重新参与画像和回复。</span>
+        </div>
+        <div className={styles.unitActions} onClick={(e) => e.stopPropagation()}>
+          <button className={styles.unitAction} onClick={restore} disabled={busy}>
+            {busy ? '找回中...' : '找回'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   if (editing) {
     return (
       <div className={`${styles.unit} ${styles.unitEditing}`}>
@@ -606,7 +653,10 @@ function UnitCard({
       <div className={styles.unitMeta}>
         <span className={styles.chip}>{typeLabel(unit.type)}</span>
         <span className={styles.chipGhost}>{unit.source === 'user_authored' ? '用户编辑' : 'AI 整理'}</span>
-        {isPendingStatus(unit.status) && <span className={styles.chipPending}>待确认</span>}
+        {isPendingStatus(unit.status) && (
+          <span className={styles.chipPending} title="你最近改了相关内容，TA 正在重新核对这条">整理中</span>
+        )}
+        {dormant && <span className={styles.chipGhost} title="很久没提，TA 慢慢淡忘了；再提到会自然想起">淡出的</span>}
       </div>
       <div className={styles.bars}>
         <Bar label="置信度" value={unit.confidence} />
@@ -614,7 +664,11 @@ function UnitCard({
       </div>
       <div className={`${styles.statusLine} ${inPortrait ? styles.statusIn : styles.statusOut}`}>
         {inPortrait ? <CheckIcon width={14} height={14} /> : <span className={styles.statusOutDot} />}
-        <span>{statusText}</span>
+        <span>
+          {isPendingStatus(unit.status)
+            ? '你最近改了相关内容，TA 正在重新核对这条，核对期间暂不使用'
+            : statusText}
+        </span>
       </div>
       <div className={styles.unitActions} onClick={(e) => e.stopPropagation()}>
         <button className={styles.unitAction} onClick={openEdit} disabled={busy}>
@@ -650,7 +704,7 @@ function ForgetDialog({
     <ConfirmDialog
       isOpen
       title="忘记这条记忆？"
-      message="TA 会立刻不再相信、不再使用这条，画像随之更新。你的原始帖子和聊天记录不受影响。"
+      message="TA 会立刻不再相信、不再使用这条，画像随之更新。你的原始帖子和聊天记录不受影响，这条之后也随时可以在「已忘记」里找回。"
       confirmText="忘记"
       cancelText="取消"
       danger
@@ -754,19 +808,27 @@ function EvidenceDrawer({
   )
 }
 
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  post: '公开帖子',
+  post_vision: '帖子里的图片',
+  comment_message: '评论区',
+  comment_relationship: '评论区',
+  chat_message: '私聊',
+}
+
 function EvidenceRow({ ev }: { ev: MemoryEvidenceRef }) {
   const stateLabel = ev.review_pending
-    ? '待重新关联'
+    ? '核对中'
     : ev.state === 'superseded'
-      ? '已被取代'
+      ? '已有新版本'
       : ev.state === 'deleted'
-        ? '已删除'
+        ? '原文已删除'
         : '当前'
   const dim = ev.state === 'superseded' || ev.state === 'deleted'
   return (
     <div className={`${styles.ev} ${dim ? styles.evDim : ''}`}>
       <div className={styles.evSrc}>
-        <span>{ev.source_channel} · {ev.source_type}</span>
+        <span>{SOURCE_TYPE_LABELS[ev.source_type] ?? '记录'}</span>
         <span className={styles.evTag}>{stateLabel}</span>
       </div>
       <div className={styles.evText}>{ev.content}</div>

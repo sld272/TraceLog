@@ -1078,6 +1078,19 @@ export function retractMemoryUnit(unitId: string, reason: MemoryRetractReason = 
   })
 }
 
+/** Bring a user-forgotten belief back (「找回」). Only retracted_by_user units qualify. */
+export function restoreMemoryUnit(unitId: string): Promise<MemoryUnitDetail> {
+  return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}/restore`, {
+    method: 'POST',
+  })
+}
+
+/** How many live beliefs a source (post/comment/chat message) currently supports. */
+export function getMemorySourceImpact(sourceType: string, sourceId: string): Promise<{ count: number }> {
+  const params = new URLSearchParams({ source_type: sourceType, source_id: sourceId })
+  return request<{ count: number }>(`/memory/source-impact?${params.toString()}`)
+}
+
 export function setMemoryPromptPolicy(unitId: string, promptPolicy: MemoryPromptPolicy): Promise<MemoryUnitDetail> {
   return request<MemoryUnitDetail>(`/memory/units/${encodeURIComponent(unitId)}/prompt-policy`, {
     method: 'POST',
