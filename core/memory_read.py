@@ -160,6 +160,7 @@ class MemoryItem:
     owner_scope: str
     visibility_scope: str
     needs_discretion: bool  # own-private memory surfaced in a public scene
+    last_confirmed: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -727,6 +728,7 @@ def _row_to_item(row: sqlite3.Row, channel: str, reply_soul: str | None) -> Memo
         owner_scope=row["owner_scope"],
         visibility_scope=row["visibility_scope"],
         needs_discretion=_discretion_for(row["visibility_scope"], channel, reply_soul),
+        last_confirmed=float(row["last_confirmed"]),
     )
 
 
@@ -915,6 +917,35 @@ def _log_freshness(
     )
 
 
+def relative_time_tag(ts: float, now: float | None = None) -> str:
+    """Coarse relative age ('3 天前') for prompt time labels, '' if unknown.
+
+    Code-formatted on purpose: the model must never be asked to do date math,
+    only to interpret a ready-made label."""
+    if not ts or ts <= 0:
+        return ""
+    now = db.now_ts() if now is None else now
+    delta = max(0.0, now - ts)
+    if delta < 3600:
+        return "刚刚"
+    if delta < DAY_SECONDS:
+        return f"{int(delta // 3600)} 小时前"
+    days = int(delta // DAY_SECONDS)
+    if days <= 1:
+        return "昨天"
+    if days < 7:
+        return f"{days} 天前"
+    if days < 14:
+        return "上周"
+    if days < 30:
+        return f"{days // 7} 周前"
+    if days < 60:
+        return "上个月"
+    if days < 365:
+        return f"{days // 30} 个月前"
+    return "一年多前" if days < 730 else f"{days // 365} 年前"
+
+
 def _recency_weight(last_confirmed: float, now: float) -> float:
     age_days = max(0.0, (now - float(last_confirmed)) / DAY_SECONDS)
     # gentle exponential-ish decay; 1.0 fresh, ~0.5 at one week
@@ -969,11 +1000,19 @@ def build_memory_section(
     sections: list[str] = []
     used: list[str] = []
     has_discretion = False
+    now = db.now_ts()
 
     # 1. baseline identity portrait (always-on, query-independent)
     portrait = _portrait_text("global", "public", mvs.VIEW_USER_PORTRAIT)
     if portrait:
-        sections.append(f"[基线认知]\n{portrait}")
+        view = mvs.get_view("global", "public", mvs.VIEW_USER_PORTRAIT)
+        age = (
+            relative_time_tag(float(view["generated_at"]), now)
+            if view is not None and view["status"] == "fresh"
+            else ""
+        )
+        header = f"[基线认知]（整理于{age}）" if age else "[基线认知]"
+        sections.append(f"{header}\n{portrait}")
     # 2. current-state block (always-on)
     state_items = recent_state_block(channel, reply_soul)
     if state_items:
@@ -981,7 +1020,9 @@ def build_memory_section(
         for item in state_items:
             tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
             has_discretion = has_discretion or item.needs_discretion
-            lines.append(f"- 近期：{item.content}{tag}")
+            age = relative_time_tag(item.last_confirmed, now)
+            when = f"（{age}）" if age else ""
+            lines.append(f"- 近期{when}：{item.content}{tag}")
             used.append(item.unit_id)
         sections.append("[当前状态]\n" + "\n".join(lines))
 
@@ -1003,7 +1044,9 @@ def build_memory_section(
                 else ""
             )
             attr = f" {attribution}" if attribution else ""
-            lines.append(f"- [{item.type}|置信{item.confidence:.1f}] {item.content}{attr}{tag}")
+            age = relative_time_tag(item.last_confirmed, now)
+            when = f"|{age}" if age else ""
+            lines.append(f"- [{item.type}|置信{item.confidence:.1f}{when}] {item.content}{attr}{tag}")
             used.append(item.unit_id)
         sections.append("[相关记忆]\n" + "\n".join(lines))
 
@@ -1030,7 +1073,9 @@ def build_memory_section(
             has_discretion = has_discretion or fitem.needs_discretion
             attribution = _attribution_for_source(fitem.source_type, fitem.source_id, reply_soul)
             attr = f"{attribution} " if attribution else ""
-            state = "（unit 重判中）" if fitem.reviewing else "（新近未整理）"
+            age = relative_time_tag(fitem.occurred_at, now)
+            when = f"·{age}" if age else ""
+            state = f"（unit 重判中{when}）" if fitem.reviewing else f"（新近未整理{when}）"
             lines.append(f"- {state}{attr}{fitem.content}{tag}")
         note = "（仅最近部分）" if truncated else ""
         sections.append(f"[尚未稳定沉淀的原始证据]{note}\n" + "\n".join(lines))
@@ -1041,6 +1086,8 @@ def build_memory_section(
     rules = [
         "[记忆使用规则]",
         "讲事实/细节以最新动态为准；讲框架、倾向、关系用上述记忆，低置信的软着说。",
+        "时间标注（如「3 天前」）是这条记忆最后被确认的时间：越久远越可能已经变化，别当成刚发生的事；"
+        "记忆内容里的「今晚」「最近」等词以标注时间为基准理解，不是指现在。",
     ]
     if has_discretion:
         rules.append(

@@ -29,6 +29,11 @@ reconcile run。
 - 最新动态：cursor 之后的近期 user evidence
 - SOUL 关系：聚合当前 SOUL 的 thread/private relationship units
 
+注入的画像/状态/相关记忆/原始证据都带代码格式化的相对时间标（"3 天前"），按
+`last_confirmed`（证据按 `occurred_at`）计算，并附时间解读规则——模型只解读现成
+标签，不做日期运算。写侧对应铁律：unit 内容禁止"今晚/最近"等相对时间词，必须落成
+绝对表述，防止多天后读到时失真。
+
 ## 删除与修订
 
 source edit/delete 会 challenge 所有引用该 source 当前版本的 units。下一轮必须为每个

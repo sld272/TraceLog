@@ -215,6 +215,30 @@ class MemoryReadTest(unittest.TestCase):
         self.assertEqual(prompt.text, "")
         self.assertEqual(prompt.used_unit_ids, [])
 
+    # --- P3 time labels ----------------------------------------------------
+
+    def test_relative_time_tag_buckets(self) -> None:
+        now = db.now_ts()
+        day = 86400.0
+        self.assertEqual(memory_read.relative_time_tag(0, now), "")
+        self.assertEqual(memory_read.relative_time_tag(now - 60, now), "刚刚")
+        self.assertEqual(memory_read.relative_time_tag(now - 5 * 3600, now), "5 小时前")
+        self.assertEqual(memory_read.relative_time_tag(now - 1.5 * day, now), "昨天")
+        self.assertEqual(memory_read.relative_time_tag(now - 3 * day, now), "3 天前")
+        self.assertEqual(memory_read.relative_time_tag(now - 10 * day, now), "上周")
+        self.assertEqual(memory_read.relative_time_tag(now - 40 * day, now), "上个月")
+        self.assertEqual(memory_read.relative_time_tag(now - 400 * day, now), "一年多前")
+
+    def test_injected_lines_carry_time_labels_and_rule(self) -> None:
+        now = db.now_ts()
+        day = 86400.0
+        self._unit("global", "public", type="state", content="在准备答辩", importance=0.5, last_confirmed=now - 3 * day)
+        self._unit("global", "public", type="preference", content="喜欢安静咖啡馆", importance=0.5, last_confirmed=now - 10 * day)
+        prompt = memory_read.build_memory_section("public_post", "gotoh", "咖啡馆")
+        self.assertIn("- 近期（3 天前）：在准备答辩", prompt.text)
+        self.assertIn("|上周] 喜欢安静咖啡馆", prompt.text)
+        self.assertIn("时间标注", prompt.text)  # interpretation rule ships with the labels
+
     def test_relevant_memory_deduplicates_active_goal_topic(self) -> None:
         goal_service.create_goal("跨专业考研", None, "long")
         self._unit(
