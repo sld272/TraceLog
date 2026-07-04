@@ -29,6 +29,21 @@ from core import db, logging_service, memory_events_service as mes, memory_unit_
 # MIN_IMPORTANCE 0.70): 0.30 just to exist, 0.70 to enter the portrait.
 MIN_ADD_IMPORTANCE = 0.30
 
+# P4: LLM confidence/importance snap to five anchored levels. Free floats are
+# not comparable across models (one model's 0.8 is another's 0.6); the prompt
+# asks for a level pick and this snap enforces it even when the model
+# improvises. The MIN_ADD_IMPORTANCE floor is checked on the RAW value first so
+# trivia at 0.2 cannot ride the 0.3 anchor in.
+SCORE_ANCHORS = (0.3, 0.5, 0.7, 0.85, 0.95)
+
+
+def snap_score(value: float) -> float:
+    return min(SCORE_ANCHORS, key=lambda anchor: abs(anchor - float(value)))
+
+
+def _snap_optional(value) -> float | None:
+    return None if value is None else snap_score(float(value))
+
 # Run types per bucket kind (kept distinct for the workbench).
 RECONCILE_GLOBAL = "global_reconcile"
 RECONCILE_THREAD = "thread_reconcile"
@@ -181,10 +196,10 @@ def apply_ops(
                     source_channel=channel,
                     type=str(op_obj.get("type") or "insight"),
                     content=str(op_obj.get("content") or ""),
-                    confidence=float(op_obj.get("confidence", 0.6)),
+                    confidence=snap_score(float(op_obj.get("confidence", 0.6))),
                     evidence_event_ids=event_ids,
                     tier=str(op_obj.get("tier") or "contextual"),
-                    importance=importance,
+                    importance=snap_score(importance),
                     actor="reconciler",
                     reconcile_run_id=reconcile_run_id,
                     conn=conn,
@@ -207,7 +222,7 @@ def apply_ops(
                     mus.confirm_unit(
                         target_id,
                         evidence_event_ids=event_ids,
-                        confidence=op_obj.get("confidence"),
+                        confidence=_snap_optional(op_obj.get("confidence")),
                         reconcile_run_id=reconcile_run_id,
                         conn=conn,
                     )
@@ -218,10 +233,10 @@ def apply_ops(
                         target_id,
                         content=str(op_obj.get("content") or ""),
                         evidence_event_ids=event_ids,
-                        confidence=op_obj.get("confidence"),
+                        confidence=_snap_optional(op_obj.get("confidence")),
                         type=op_obj.get("type"),
                         tier=op_obj.get("tier"),
-                        importance=op_obj.get("importance"),
+                        importance=_snap_optional(op_obj.get("importance")),
                         reconcile_run_id=reconcile_run_id,
                         conn=conn,
                     )

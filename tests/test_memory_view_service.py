@@ -108,6 +108,31 @@ class MemoryViewServiceTest(unittest.TestCase):
         self.assertNotIn(low_conf, core)
         self.assertNotIn(low_imp, core)
 
+    def test_behavior_corroborated_confidence_enters_below_enter_bar(self) -> None:
+        # conf 0.7 < ENTER(0.82) misses the stated path, but one confirm + two
+        # independent evidence events earn BEHAVIOR_SCORE_MIN corroboration
+        # points, lowering the confidence bar to CONFIRMED_ENTER (0.55).
+        unit_id = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="insight", content="重复被证实的推断", confidence=0.7, tier="core",
+            importance=0.8, evidence_event_ids=[self._event()],
+        )
+        mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=0.7)
+        self.assertIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
+
+    def test_behavior_path_still_guarded_by_low_water_confidence(self) -> None:
+        # corroboration widens the gate but never below CONFIRMED_ENTER: an
+        # obviously shaky 0.5 stays out no matter how many confirms it has.
+        unit_id = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="insight", content="低置信推断", confidence=0.5, tier="core",
+            importance=0.8, evidence_event_ids=[self._event()],
+        )
+        mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=0.5)
+        mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=0.5)
+        mus.confirm_unit(unit_id, evidence_event_ids=[self._event()], confidence=0.5)
+        self.assertNotIn(unit_id, mvs.recompute_portrait_membership("global", "public"))
+
     def test_importance_below_portrait_floor_excluded(self) -> None:
         # importance 0.65 is above the unit floor (0.30) but below the portrait floor (0.70)
         unit_id = mus.add_unit(

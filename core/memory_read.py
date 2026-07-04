@@ -112,15 +112,22 @@ DAY_SECONDS = 86400.0
 
 # unit retrieval
 RETRIEVE_DEFAULT_K = 8
-# Cosine-similarity floor for a semantic (ANN) hit to count. Chroma always returns
-# the k nearest neighbours even when the nearest is barely related; without a floor
-# every one passes the relevance gate and fills [相关记忆] with noise. similarity =
-# 1 - cosine_distance; 0.30 (distance <= 0.70) is conservative — it drops clearly
-# unrelated units while keeping paraphrase recall. Tune against real distances.
-SEMANTIC_SIM_FLOOR = 0.30
+# Semantic (ANN) gate. Chroma always returns the k nearest neighbours even when
+# the nearest is barely related; ungated, every one passes the relevance gate
+# and fills [相关记忆] with noise. A single absolute floor is not a stable
+# yardstick either — cosine bands shift across embedding models and across
+# queries — so the gate is adaptive per query: cut at the largest significant
+# drop (gap) in the descending similarity sequence, keeping the head cluster
+# even when it sits below the legacy floor; with no clear drop, fall back to
+# the conservative legacy floor. A hard floor-of-floors always drops garbage.
+# FTS-corroborated hits additionally pass a wide gate for scoring (keyword
+# evidence vouches for them); only semantic-only hits face the strict gate.
+SEMANTIC_SIM_HARD_FLOOR = 0.20      # below this a neighbour is never relevant
+SEMANTIC_SIM_FALLBACK_FLOOR = 0.30  # no clear cluster boundary -> legacy floor
+SEMANTIC_GAP_MIN = 0.08             # smallest drop that counts as a boundary
 # Weight on the semantic similarity vs the FTS rank score in the blended unit
-# ranking. Coupled with SEMANTIC_SIM_FLOOR (which sets the floor of sem_score's
-# contribution); tune the pair together, not in isolation.
+# ranking. Coupled with the adaptive semantic gate above (which sets the floor
+# of sem_score's contribution); tune them together, not in isolation.
 SEMANTIC_RANK_WEIGHT = 2.0
 # states live in the state block; portrait members live in the portrait — both
 # excluded here so relevant-memory retrieval surfaces the mid-tier beliefs.
@@ -269,6 +276,13 @@ def retrieve_units(
     now = db.now_ts()
     sem_hits = _semantic_unit_hits(semantic_query or query)
     semantic = {h.unit_id: h.sim for h in sem_hits if h.passed}
+    # wide gate: an FTS-corroborated unit may still count its semantic sim for
+    # scoring when it failed the strict gate — keyword evidence vouches for it.
+    semantic_wide = {
+        h.unit_id: h.sim
+        for h in sem_hits
+        if not h.passed and h.sim >= SEMANTIC_SIM_HARD_FLOOR
+    }
     fts = _fts_unit_ranks(query, keywords)
 
     scored: dict[str, tuple] = {}
@@ -277,7 +291,9 @@ def retrieve_units(
         rid = str(r["id"])
         fts_rank = fts.get(rid)
         fts_score = (1.0 / (1 + fts_rank)) if fts_rank is not None else 0.0
-        sem_score = semantic.get(rid, 0.0)  # cosine similarity, already floored
+        sem_score = semantic.get(rid, 0.0)  # cosine similarity, already gated
+        if not sem_score and fts_rank is not None:
+            sem_score = semantic_wide.get(rid, 0.0)
         combined = fts_score + SEMANTIC_RANK_WEIGHT * sem_score
         ranking = (combined, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
         scored[rid] = ranking
@@ -322,8 +338,8 @@ def _log_retrieval(
     """Emit one structured 'memory_retrieval' DEBUG event tracing the full unit
     scoring: per-unit FTS rank, semantic similarity, which channel matched, the
     blended score, what cleared the relevance gate, what the top-k cut dropped,
-    and the sub-floor ANN neighbours. Lets real-run recall quality and the
-    SEMANTIC_SIM_FLOOR / SEMANTIC_RANK_WEIGHT pair be audited and tuned offline.
+    and the sub-gate ANN neighbours. Lets real-run recall quality and the
+    adaptive-gate / SEMANTIC_RANK_WEIGHT parameters be audited and tuned offline.
     DEBUG-gated, so it is silent under the default INFO level."""
     top_ids = {str(r["id"]) for r in ranked[:k]}
     units = []
@@ -356,7 +372,8 @@ def _log_retrieval(
         raw_query=query,
         semantic_query=semantic_query,
         keywords=keywords,
-        sim_floor=SEMANTIC_SIM_FLOOR,
+        sim_hard_floor=SEMANTIC_SIM_HARD_FLOOR,
+        sim_fallback_floor=SEMANTIC_SIM_FALLBACK_FLOOR,
         sem_weight=SEMANTIC_RANK_WEIGHT,
         n_candidates=n_candidates,
         n_fts_hits=len(fts),
@@ -373,20 +390,44 @@ class SemanticHit:
     """One ANN neighbour of the query over the unit vector index, in ANN order."""
     unit_id: str
     sim: float           # cosine similarity = 1 - distance (ANN-order proxy if missing)
-    passed: bool         # cleared SEMANTIC_SIM_FLOOR (or kept fail-open)
+    passed: bool         # cleared the adaptive strict gate (or kept fail-open)
     distance_missing: bool
+
+
+def adaptive_sim_cutoff(sims: list[float]) -> float:
+    """Per-query strict-gate cutoff over descending cosine similarities.
+
+    Cut at the largest drop (>= SEMANTIC_GAP_MIN) between consecutive sims above
+    the hard floor, so a coherent head cluster passes even when the whole band
+    sits below the legacy floor (a real cross-model failure mode of the fixed
+    0.30). With fewer than two eligible sims, or no significant drop, there is
+    no cluster structure to trust — fall back to the conservative legacy
+    floor."""
+    eligible = sorted((s for s in sims if s >= SEMANTIC_SIM_HARD_FLOOR), reverse=True)
+    if len(eligible) < 2:
+        return SEMANTIC_SIM_FALLBACK_FLOOR
+    best_gap = 0.0
+    cutoff = SEMANTIC_SIM_FALLBACK_FLOOR
+    for above, below in zip(eligible, eligible[1:]):
+        gap = above - below
+        if gap > best_gap:
+            best_gap = gap
+            cutoff = (above + below) / 2.0
+    if best_gap >= SEMANTIC_GAP_MIN:
+        return max(cutoff, SEMANTIC_SIM_HARD_FLOOR)
+    return SEMANTIC_SIM_FALLBACK_FLOOR
 
 
 def _semantic_unit_hits(query: str) -> list[SemanticHit]:
     """All ANN neighbours for the query over the unit vector index, in ANN order,
-    each tagged with cosine similarity (1 - distance) and whether it cleared
-    SEMANTIC_SIM_FLOOR. Sub-floor neighbours are RETAINED here (passed=False) so
-    callers can audit/log the rejected-but-near band for tuning — the floor is
-    applied by _semantic_unit_sims, not here. A hit with no distance (rare Chroma
-    fallback) is kept fail-open (passed=True, distance_missing=True) with an
-    ANN-order proxy sim. Empty when the query is blank or the index is
-    unavailable / not query-ready. Scope is NOT applied here; the caller
-    intersects these with its scope-filtered SQL candidates."""
+    each tagged with cosine similarity (1 - distance) and whether it cleared the
+    adaptive strict gate (adaptive_sim_cutoff). Sub-cutoff neighbours are
+    RETAINED here (passed=False) so callers can audit/log the rejected-but-near
+    band for tuning — the gate is applied by _semantic_unit_sims, not here. A
+    hit with no distance (rare Chroma fallback) is kept fail-open (passed=True,
+    distance_missing=True) with an ANN-order proxy sim. Empty when the query is
+    blank or the index is unavailable / not query-ready. Scope is NOT applied
+    here; the caller intersects these with its scope-filtered SQL candidates."""
     if not str(query or "").strip():
         return []
     try:
@@ -394,7 +435,7 @@ def _semantic_unit_hits(query: str) -> list[SemanticHit]:
         hits = vectorstore.query_documents(query, n_results=RETRIEVE_DEFAULT_K * 3, where={"type": "unit"})
     except Exception:
         return []
-    out: list[SemanticHit] = []
+    raw: list[tuple[str, float | None, int]] = []
     seen: set[str] = set()
     for hit in hits:
         meta = getattr(hit, "metadata", None) or {}
@@ -410,18 +451,24 @@ def _semantic_unit_hits(query: str) -> list[SemanticHit]:
             continue
         seen.add(uid)
         distance = getattr(hit, "distance", None)
+        rank = int(getattr(hit, "rank", len(raw) + 1))
+        raw.append((uid, None if distance is None else float(distance), rank))
+
+    cutoff = adaptive_sim_cutoff([1.0 - d for _, d, _ in raw if d is not None])
+    out: list[SemanticHit] = []
+    for uid, distance, rank in raw:
         if distance is None:
-            sim = 1.0 / (1 + int(getattr(hit, "rank", len(out) + 1)))
+            sim = 1.0 / (1 + rank)
             out.append(SemanticHit(uid, sim, passed=True, distance_missing=True))
         else:
-            sim = 1.0 - float(distance)
-            out.append(SemanticHit(uid, sim, passed=sim >= SEMANTIC_SIM_FLOOR, distance_missing=False))
+            sim = 1.0 - distance
+            out.append(SemanticHit(uid, sim, passed=sim >= cutoff, distance_missing=False))
     return out
 
 
 def _semantic_unit_sims(query: str) -> dict[str, float]:
     """unit_id -> cosine similarity for the query's ANN neighbours at or above
-    SEMANTIC_SIM_FLOOR (fail-open hits with no distance kept too). Empty when the
+    the adaptive strict gate (fail-open hits with no distance kept too). Empty when the
     query is blank or the vector index is unavailable, in which case retrieval
     degrades to FTS-only. Scope is NOT applied here; the caller intersects these
     with its scope-filtered SQL candidates."""

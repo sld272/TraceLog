@@ -33,6 +33,20 @@ ENTER = 0.82
 EXIT = 0.62
 MIN_IMPORTANCE = 0.70
 
+# P4 behavior-corroborated confidence path. ENTER/EXIT compare a raw LLM float
+# against a magic bar — but one model's 0.8 is another's 0.6, so a true,
+# repeatedly-evidenced belief can idle forever at 0.75. Objective counts
+# (confirm ops, independent evidence, survival time) do not drift across
+# models; BEHAVIOR_SCORE_MIN points lower the confidence bar to CONFIRMED_ENTER
+# for entry AND exit (drift stabilizer). Behavior is only ever additive — the
+# removed op-count "dwell" gate (see _passes_core_predicate) proved that a hard
+# behavioural requirement permanently blocks one-shot stated identities.
+# Importance keeps the strict 0.70 band: the portrait stays a floor of
+# *important* facts; corroboration says "true", not "identity-defining".
+CONFIRMED_ENTER = 0.55
+BEHAVIOR_SCORE_MIN = 2
+SURVIVAL_DAYS = 14
+
 RENDERER_VERSION = "baseline-v1"
 USER_PORTRAIT_CHAR_BUDGET = 1200
 SOUL_RELATIONSHIP_CHAR_BUDGET = 600
@@ -56,16 +70,18 @@ def _new_view_id() -> str:
     return f"mv_{int(time.time() * 1000):012x}{os.urandom(4).hex()}"
 
 
-def _passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bool:
+def _passes_core_predicate(
+    unit: sqlite3.Row, *, currently_in_slice: bool, behavior_score: int = 0
+) -> bool:
     """Design §3.2 core-subset predicate with confidence hysteresis.
 
-    The stability guard for the always-on portrait is the triple bar
-    tier=core AND confidence>=ENTER AND importance>=MIN_IMPORTANCE (plus
-    user/policy overrides) — strict enough that a single misjudgement rarely
-    clears all three. The earlier op-count "dwell" was removed: it permanently
-    blocked a clearly-stated, one-time identity from ever entering the portrait
-    (it never accrued a second confirm). A faithful "survived N reconcile passes"
-    buffer belongs in the later decay/consolidation phase, not here."""
+    Admission is multi-path: user-stated units (user_authored / force_include)
+    bypass the confidence bar outright; inferred units clear ENTER/EXIT on
+    their own, OR clear the lower CONFIRMED_ENTER low-water bar when backed by
+    ``behavior_score`` corroboration points. The earlier op-count "dwell" was
+    removed: it permanently blocked a clearly-stated, one-time identity from
+    ever entering the portrait (it never accrued a second confirm). Behavior
+    signals therefore only ever widen the gate — never a hard requirement."""
     if unit["status"] != "active":
         return False
     if unit["prompt_policy"] != "allow":
@@ -83,6 +99,8 @@ def _passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bo
     source = unit["source"]
     confidence = float(unit["confidence"])
     threshold = EXIT if currently_in_slice else ENTER
+    if behavior_score >= BEHAVIOR_SCORE_MIN:
+        threshold = min(threshold, CONFIRMED_ENTER)
     confidence_ok = source == "user_authored" or confidence >= threshold
     if not confidence_ok:
         return False
@@ -91,9 +109,49 @@ def _passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bo
     return True
 
 
-def passes_core_predicate(unit: sqlite3.Row, *, currently_in_slice: bool) -> bool:
+def behavior_score(
+    conn: sqlite3.Connection, unit: sqlite3.Row, *, now: float | None = None
+) -> int:
+    """Objective corroboration points for one unit (P4): confirm ops,
+    independent supporting evidence, survival time. Pure counts — stable across
+    model swaps, unlike raw LLM floats. Only ever additive (see
+    _passes_core_predicate)."""
+    now = db.now_ts() if now is None else now
+    confirms = int(
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM memory_unit_ops WHERE unit_id = ? AND op = 'confirm'",
+            (unit["id"],),
+        ).fetchone()["n"]
+    )
+    evidence = int(
+        conn.execute(
+            """
+            SELECT COUNT(DISTINCT event_id) AS n FROM memory_unit_evidence
+            WHERE unit_id = ? AND review_pending = 0
+              AND relation IN ('supports', 'source')
+            """,
+            (unit["id"],),
+        ).fetchone()["n"]
+    )
+    score = 0
+    if confirms >= 1:
+        score += 1
+    if confirms >= 3:
+        score += 1
+    if evidence >= 2:
+        score += 1
+    if now - float(unit["first_seen"]) >= SURVIVAL_DAYS * 86400.0:
+        score += 1
+    return score
+
+
+def passes_core_predicate(
+    unit: sqlite3.Row, *, currently_in_slice: bool, behavior_score: int = 0
+) -> bool:
     """Public selector seam for aggregate views that do not map to one bucket."""
-    return _passes_core_predicate(unit, currently_in_slice=currently_in_slice)
+    return _passes_core_predicate(
+        unit, currently_in_slice=currently_in_slice, behavior_score=behavior_score
+    )
 
 
 def recompute_portrait_membership(
@@ -112,10 +170,15 @@ def recompute_portrait_membership(
             """,
             (owner_scope, visibility_scope),
         ).fetchall()
+        now = db.now_ts()
         core_ids: list[str] = []
         for row in rows:
             currently = bool(row["in_portrait"])
-            keep = _passes_core_predicate(row, currently_in_slice=currently)
+            keep = _passes_core_predicate(
+                row,
+                currently_in_slice=currently,
+                behavior_score=behavior_score(c, row, now=now),
+            )
             if keep != currently:
                 c.execute(
                     "UPDATE memory_units SET in_portrait = ? WHERE id = ?",

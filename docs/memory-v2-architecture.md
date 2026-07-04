@@ -20,6 +20,18 @@ reconcile run。
 `tier=core`、重要度和置信度达到阈值的 units 才能进入画像。`portrait_policy` 可强制
 纳入或排除，`prompt_policy=no_prompt` 会从所有回复 prompt 中禁用该 unit。
 
+准入是多路的（P4）：用户亲述（user_authored / force_include）直通；推断类靠
+confidence 过 ENTER/EXIT 滞回，或者靠行为信号（confirm 次数、独立证据数、存活时长
+——纯客观计数，换模型不漂）攒够 corroboration 分后走更低的 CONFIRMED_ENTER 低水位。
+行为信号只加分、永不做硬门槛（前车之鉴：op-count dwell 门永久挡住一次性明确自述的
+身份，已移除）。importance 保持 0.70 硬地板——画像始终是"重要事实"的底座。
+
+打分本身也不再是自由浮点：reconcile prompt 给五个带例子的锚定档位
+（0.3/0.5/0.7/0.85/0.95），代码侧再吸附一次，离散档跨模型一致性远好于小数。
+检索的语义门也从固定 0.30 地板改为按查询自适应：在相似度序列的最大落差处截断
+（头部簇即使整体低于 0.30 也能进），无明显落差回退保守地板，0.20 兜底防垃圾；
+有 FTS 关键词佐证的命中走宽门计分，纯语义命中走严门。
+
 ## Read model
 
 - 用户基线画像：global/public `user_portrait`

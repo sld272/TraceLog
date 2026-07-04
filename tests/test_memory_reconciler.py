@@ -100,7 +100,9 @@ class MemoryReconcilerTest(unittest.TestCase):
         ])
         summary = recon.reconcile_bucket("global", "public", op_producer=producer, run_type=recon.RECONCILE_GLOBAL)
         self.assertEqual(summary.by_op, {"confirm": 1})
-        self.assertAlmostEqual(mus.get_unit(unit_id)["confidence"], 0.8, places=6)
+        # LLM 0.8 snaps to the nearest anchored level (0.85): free floats are
+        # not comparable across models, discrete anchors are.
+        self.assertAlmostEqual(mus.get_unit(unit_id)["confidence"], 0.85, places=6)
 
     def test_retract_via_reconcile(self) -> None:
         ids = self._emit_public_events(1)

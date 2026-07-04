@@ -302,6 +302,33 @@ class MemoryReadTest(unittest.TestCase):
         self.assertIn(hit, ids)
         self.assertEqual(1, len(ids))  # the unrelated unit is gated out
 
+    # --- adaptive semantic gate (P4) ---------------------------------------
+
+    def test_adaptive_cutoff_rescues_subfloor_head_cluster(self) -> None:
+        # coherent head cluster below the legacy 0.30 floor, clearly separated
+        # from the tail -> the gap wins and the cluster passes
+        cutoff = memory_read.adaptive_sim_cutoff([0.29, 0.28, 0.20])
+        self.assertAlmostEqual(cutoff, 0.24)
+        self.assertLess(cutoff, 0.28)
+
+    def test_adaptive_cutoff_flat_sequence_falls_back_to_legacy_floor(self) -> None:
+        self.assertEqual(
+            memory_read.adaptive_sim_cutoff([0.60, 0.58, 0.57]),
+            memory_read.SEMANTIC_SIM_FALLBACK_FLOOR,
+        )
+
+    def test_adaptive_cutoff_strong_winner_tightens_gate(self) -> None:
+        # a dominant top hit pushes the cutoff above the legacy floor, cutting
+        # the noise tail the fixed 0.30 used to admit
+        cutoff = memory_read.adaptive_sim_cutoff([0.80, 0.40])
+        self.assertAlmostEqual(cutoff, 0.60)
+
+    def test_adaptive_cutoff_single_hit_uses_legacy_floor(self) -> None:
+        self.assertEqual(
+            memory_read.adaptive_sim_cutoff([0.25]),
+            memory_read.SEMANTIC_SIM_FALLBACK_FLOOR,
+        )
+
     # --- semantic distance floor (R3) -------------------------------------
 
     def test_semantic_sims_apply_distance_floor(self) -> None:
