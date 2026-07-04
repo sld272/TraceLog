@@ -9,6 +9,20 @@ from core import attachment_service, context_builder, db, memory_events_service,
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
+# Memory reconcile is a global background job that merely carries the triggering
+# post_id in its payload. It runs after replies are generated and must not keep
+# the post's "正在回复 / TA 们正在思考" spinner up, so it is excluded from the
+# post's visible pipeline status. Its own failures are handled by the reconcile
+# requeue path (job_service.mark_memory_reconcile_failed_or_retry), not surfaced
+# as a post-level failure banner.
+_BACKGROUND_JOB_TYPES = frozenset({job_service.TYPE_RUN_MEMORY_RECONCILE})
+
+
+def _foreground_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reply-facing jobs whose progress the post's spinner should reflect."""
+    return [job for job in jobs if job["type"] not in _BACKGROUND_JOB_TYPES]
+
+
 @dataclass(frozen=True)
 class CreatedPost:
     post_id: str
@@ -217,8 +231,13 @@ def maybe_emit_pipeline_done_for_job(job: dict[str, Any]) -> None:
 
 
 def summarize_pipeline_status(post_id: str) -> dict[str, Any]:
-    """Summarize background pipeline state for one public post."""
-    jobs = job_service.list_jobs_for_post(post_id)
+    """Summarize the reply pipeline state for one public post.
+
+    Only reply-facing jobs count toward the visible state; the memory reconcile
+    job runs asynchronously as background bookkeeping and is excluded so the
+    spinner clears as soon as replies finish generating.
+    """
+    jobs = _foreground_jobs(job_service.list_jobs_for_post(post_id))
     pending_jobs = [job for job in jobs if job["status"] == job_service.STATUS_PENDING]
     running_jobs = [job for job in jobs if job["status"] == job_service.STATUS_RUNNING]
     retried_job_ids = {
@@ -256,8 +275,8 @@ def summarize_pipeline_status(post_id: str) -> dict[str, Any]:
 
 
 def _maybe_emit_pipeline_done(post_id: str) -> None:
-    """Emit pipeline_done when no pending/running jobs remain for this post."""
-    jobs = job_service.list_jobs_for_post(post_id)
+    """Emit pipeline_done when no pending/running reply jobs remain for this post."""
+    jobs = _foreground_jobs(job_service.list_jobs_for_post(post_id))
     if not jobs:
         return
     has_unfinished = any(

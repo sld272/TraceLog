@@ -129,6 +129,30 @@ class JobEventServiceTest(unittest.TestCase):
         self.assertEqual({"soul_name": "拾迹者"}, events[0]["payload"])
         self.assertEqual("reply_started", event_service.latest_event_type("p-1"))
 
+    def test_pipeline_status_ignores_background_reconcile_job(self) -> None:
+        from core.app_services import public_post_pipeline
+
+        replies = job_service.enqueue(
+            job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": "p-1", "content": "hi"}
+        )
+        job_service.enqueue_memory_reconcile_once({"trigger": "post", "post_id": "p-1"})
+
+        # Replies still generating -> post is running.
+        self.assertEqual("running", public_post_pipeline.summarize_pipeline_status("p-1")["state"])
+
+        job_service.mark_succeeded(replies)
+
+        # Reconcile still pending, but the reply pipeline is done -> spinner clears
+        # and pipeline_done fires.
+        status = public_post_pipeline.summarize_pipeline_status("p-1")
+        self.assertEqual("done", status["state"])
+        self.assertEqual(0, status["pending_count"])
+
+        public_post_pipeline.maybe_emit_pipeline_done_for_job(
+            {"payload": {"post_id": "p-1"}}
+        )
+        self.assertEqual("pipeline_done", event_service.latest_event_type("p-1"))
+
     def _insert_post(self, post_id: str) -> None:
         db.execute(
             """
