@@ -265,6 +265,27 @@ def retrieve_units(
     excluded_sources: set[tuple[str, str]] | None = None,
     trace_context: dict | None = None,
 ) -> list[MemoryItem]:
+    """retrieve_units_with_anchors without the anchor map — kept for callers
+    that only need the ranked beliefs."""
+    items, _ = retrieve_units_with_anchors(
+        query, channel, reply_soul, k=k, semantic_query=semantic_query,
+        keywords=keywords, excluded_sources=excluded_sources,
+        trace_context=trace_context,
+    )
+    return items
+
+
+def retrieve_units_with_anchors(
+    query: str,
+    channel: str,
+    reply_soul: str | None,
+    *,
+    k: int = RETRIEVE_DEFAULT_K,
+    semantic_query: str | None = None,
+    keywords: list[str] | None = None,
+    excluded_sources: set[tuple[str, str]] | None = None,
+    trace_context: dict | None = None,
+) -> tuple[list[MemoryItem], dict[str, sqlite3.Row]]:
     """Query-relevant beliefs in the admissible scopes, excluding state units
     (state block) and portrait members.
 
@@ -276,7 +297,12 @@ def retrieve_units(
     own words, so the unrewritten phrasing matches it best). A unit is kept iff
     it matches ANY channel; scored by a blend, then importance, then recency.
     Scope/discretion is enforced by the SQL candidate set, so no channel can
-    widen visibility."""
+    widen visibility.
+
+    Also returns unit_id -> the evidence event that matched (evidence channel
+    only): the recall/attribution anchor, so the conversation recalled for such
+    a unit is the one that actually matched the query rather than
+    _top_evidence_row's keyword guess."""
     plan = policy.admissible_visibility_filters(channel, reply_soul)
     vis_sql, params = _allowed_visibility_sql(plan)
     type_placeholders = ",".join("?" for _ in _RETRIEVE_EXCLUDED_TYPES)
@@ -351,7 +377,10 @@ def retrieve_units(
             evidence=evidence, ranked=ranked, scored=scored, k=k,
             trace_context=trace_context,
         )
-    return [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
+    items = [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
+    kept_ids = {item.unit_id for item in items}
+    anchors = {h.unit_id: h.event for h in evidence_hits if h.unit_id in kept_ids}
+    return items, anchors
 
 
 def _log_retrieval(
@@ -801,18 +830,27 @@ def _recall_conversations(
     reply_soul: str | None,
     terms: list[str],
     *,
+    anchors: dict[str, sqlite3.Row] | None = None,
     trace_context: dict | None = None,
 ) -> str:
     """Recall the full conversation(s) around the hit units' most-relevant
     evidence, deduped across hits, budgeted with smart truncation. Public posts
     and comment threads are public-scene (cross-soul readable); a private chat is
-    only recalled for the reply soul itself and discretion-flagged in public."""
+    only recalled for the reply soul itself and discretion-flagged in public.
+
+    ``anchors`` (unit_id -> evidence event from the retrieval evidence channel)
+    pins a unit's recall to the evidence that actually matched the query; units
+    without an anchor fall back to _top_evidence_row's keyword guess. Both kinds
+    land in the same conversation-level dedup, so a unit-derived and an
+    evidence-derived hit on the same thread emit one block."""
+    anchors = anchors or {}
     post_hit_souls: dict[str, list[str]] = {}
     chat_souls: list[str] = []
     order: list[tuple[str, str]] = []
     links: list[dict] = []
     for item in hits:
-        ev = _top_evidence_row(item.unit_id, terms)
+        anchored = item.unit_id in anchors
+        ev = anchors.get(item.unit_id) or _top_evidence_row(item.unit_id, terms)
         if ev is None:
             continue
         source_type = str(ev["source_type"])
@@ -820,7 +858,10 @@ def _recall_conversations(
         if source_type in ("post", "post_vision"):
             # Post evidence: source_id is the post id.
             pid = str(ev["source_id"])
-            links.append({"unit_id": str(item.unit_id), "via": "post", "post_id": pid})
+            links.append({
+                "unit_id": str(item.unit_id), "via": "post", "post_id": pid,
+                "anchored": anchored,
+            })
             if pid not in post_hit_souls:
                 post_hit_souls[pid] = []
                 order.append(("post", pid))
@@ -838,6 +879,7 @@ def _recall_conversations(
                 "comment_id": str(ev["source_id"]),
                 "post_id": pid,
                 "soul": soul,
+                "anchored": anchored,
             })
             if pid not in post_hit_souls:
                 post_hit_souls[pid] = []
@@ -848,7 +890,10 @@ def _recall_conversations(
             soul = owner[len("soul:"):] if owner.startswith("soul:") else None
             # retrieve already restricts private hits to the reply soul; guard.
             if reply_soul and soul == reply_soul and soul not in chat_souls:
-                links.append({"unit_id": str(item.unit_id), "via": "chat", "soul": soul})
+                links.append({
+                    "unit_id": str(item.unit_id), "via": "chat", "soul": soul,
+                    "anchored": anchored,
+                })
                 chat_souls.append(soul)
                 order.append(("chat", soul))
 
@@ -1251,10 +1296,11 @@ def build_memory_section(
         sections.append("[当前状态]\n" + "\n".join(lines))
 
     # 3. query-relevant beliefs (de-noised topic anchors)
-    hits = _fold_linked_items(retrieve_units(
+    retrieved, anchors = retrieve_units_with_anchors(
         query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords,
         excluded_sources=excluded_sources, trace_context=trace_context,
-    ))
+    )
+    hits = _fold_linked_items(retrieved)
     terms = fts_query.search_terms(query)
     if hits:
         lines = []
@@ -1263,7 +1309,7 @@ def build_memory_section(
             has_discretion = has_discretion or item.needs_discretion
             hedge = f" {_CONTESTED_TAG}" if item.contested else ""
             has_contested = has_contested or item.contested
-            ev = _top_evidence_row(item.unit_id, terms)
+            ev = anchors.get(item.unit_id) or _top_evidence_row(item.unit_id, terms)
             attribution = (
                 _attribution_for_source(str(ev["source_type"]), str(ev["source_id"]), reply_soul)
                 if ev is not None
@@ -1279,7 +1325,10 @@ def build_memory_section(
         # 3.5 faithful raw recall: the full conversation(s) around the hit units'
         #     most-relevant evidence (original post + relevant comment lines, or
         #     chat tail), deduped across hits, budgeted with smart truncation.
-        recall = _recall_conversations(hits, channel, reply_soul, terms, trace_context=trace_context)
+        #     Evidence-channel hits recall the conversation that matched the query.
+        recall = _recall_conversations(
+            hits, channel, reply_soul, terms, anchors=anchors, trace_context=trace_context,
+        )
         if recall:
             sections.append(recall)
 

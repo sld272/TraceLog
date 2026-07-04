@@ -549,6 +549,82 @@ class MemoryReadTest(unittest.TestCase):
             hits = memory_read.retrieve_units("我期末考了多少来着", "public_post", "gotoh")
         self.assertEqual([], hits)
 
+    # --- evidence anchors steer recall (相关对话原文锚点) --------------------
+
+    def test_recall_prefers_evidence_anchor_over_keyword_guess(self) -> None:
+        # A unit backed by two posts; the query terms favor the WRONG one by
+        # keyword overlap. The anchor from the evidence channel must win.
+        with db.transaction() as conn:
+            mes.record_post_mutation(
+                conn, post_id="p-guitar", op="create",
+                content="今天练吉他很开心", occurred_at=1000.0,
+            )
+            ev_score = mes.record_post_mutation(
+                conn, post_id="p-score", op="create",
+                content="期末考了92分", occurred_at=999.0,
+            )
+        ev_guitar = mes.latest_source_event("post", "p-guitar")
+        uid = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="insight", content="用户的大学生活丰富", confidence=0.8, importance=0.5,
+            evidence_event_ids=[int(ev_guitar["id"]), ev_score.id],
+        )
+        hit = memory_read.MemoryItem(
+            unit_id=uid, type="insight", content="用户的大学生活丰富",
+            confidence=0.8, importance=0.5, owner_scope="global",
+            visibility_scope="public", needs_discretion=False,
+        )
+        anchor = mes.current_effective_event("post", "p-score")
+
+        # terms overlap only the guitar post; without the anchor it would recall it
+        unanchored = memory_read._recall_conversations([hit], "public_post", "gotoh", ["吉他"])
+        self.assertIn("今天练吉他很开心", unanchored)
+
+        anchored = memory_read._recall_conversations(
+            [hit], "public_post", "gotoh", ["吉他"], anchors={uid: anchor},
+        )
+        self.assertIn("期末考了92分", anchored)
+        self.assertNotIn("今天练吉他很开心", anchored)
+
+    def test_build_section_surfaces_fact_reachable_only_via_evidence(self) -> None:
+        # End-to-end acceptance for the exam-score bug: broad unit, fact only in
+        # the raw post; query matches neither unit FTS nor unit semantics. The
+        # evidence channel must admit the unit AND recall the matching post.
+        uid = self._score_post_unit()
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            prompt = memory_read.build_memory_section(
+                "public_post", "gotoh", "我期末考了多少来着",
+            )
+        self.assertIn("[相关记忆]", prompt.text)
+        self.assertIn("用户在攻读大学学业", prompt.text)   # the admitted unit
+        self.assertIn("[相关对话原文]", prompt.text)
+        self.assertIn("期末考了92分", prompt.text)          # the fact itself
+        self.assertIn(uid, prompt.used_unit_ids)
+
+    def test_recall_log_marks_anchored_links(self) -> None:
+        uid = self._score_post_unit()
+        anchor = mes.current_effective_event("post", "p-score")
+        hit = memory_read.MemoryItem(
+            unit_id=uid, type="insight", content="用户在攻读大学学业",
+            confidence=0.8, importance=0.5, owner_scope="global",
+            visibility_scope="public", needs_discretion=False,
+        )
+        events = []
+
+        def capture(event, level="INFO", **fields):
+            events.append((event, fields))
+
+        with patch.object(memory_read.logging_service, "is_enabled_for", return_value=True), \
+             patch.object(memory_read.logging_service, "log_event", side_effect=capture):
+            memory_read._recall_conversations(
+                [hit], "public_post", "gotoh", [], anchors={uid: anchor},
+            )
+        payload = next(f for (e, f) in events if e == "memory_recall")
+        link = next(item for item in payload["links"] if item["unit_id"] == uid)
+        self.assertTrue(link["anchored"])
+        self.assertEqual("p-score", link["post_id"])
+
     # --- recall around comment-derived units (相关对话原文) ----------------
 
     def test_recall_resolves_comment_unit_to_its_post_and_thread(self) -> None:
