@@ -267,10 +267,13 @@ def confirm_unit(
             if confidence is not None
             else min(0.99, float(row["confidence"]) + confidence_delta)
         )
+        # fresh same-bucket evidence re-establishes the belief: a cross-bucket
+        # contested mark dissolves naturally (P1 "新鲜证据回流后矛盾自然消解").
         c.execute(
             "UPDATE memory_units SET confidence = ?, "
             "status = CASE WHEN status = 'challenged' THEN 'active' ELSE status END, "
             "retraction_reason = CASE WHEN status = 'challenged' THEN NULL ELSE retraction_reason END, "
+            "contested_at = NULL, "
             "last_confirmed = ?, updated_at = ? WHERE id = ?",
             (new_conf, now, now, unit_id),
         )
@@ -327,6 +330,7 @@ def revise_unit(
                     WHEN status = 'challenged' THEN NULL
                     ELSE retraction_reason
                 END,
+                contested_at = NULL,
                 last_confirmed = ?,
                 updated_at = ?
             WHERE id = ?
@@ -532,6 +536,125 @@ def promote_unit_tier(
         after = _row_to_dict(_get_unit_row(c, unit_id))
         _record_op(
             c, unit_id=unit_id, op="promote", actor=actor, before=before, after=after
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+
+
+# --- cross-bucket links & contested marks (P1: link, never merge) ----------
+
+LINK_RELATIONS = frozenset({"same_fact", "contradicts", "context_variant"})
+
+
+def add_unit_link(
+    a_unit_id: str,
+    b_unit_id: str,
+    relation: str,
+    *,
+    created_by: str = "linker",
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Record a relation between two units. Links are pure metadata: no content
+    moves, no bucket boundary weakens. Pair order is normalized (a < b) so the
+    UNIQUE constraint dedupes both directions."""
+    if relation not in LINK_RELATIONS:
+        raise ValueError(f"非法 link relation：{relation}")
+    if a_unit_id == b_unit_id:
+        raise ValueError("不能把 unit 链到自己")
+    a, b = sorted((a_unit_id, b_unit_id))
+    with _conn_ctx(conn) as c:
+        for uid in (a, b):
+            if _get_unit_row(c, uid) is None:
+                raise ValueError(f"unit 不存在：{uid}")
+        # a pair carries ONE relation: a later verdict (e.g. 回访把 contradicts
+        # 改判 context_variant) replaces the earlier one instead of stacking.
+        c.execute(
+            "DELETE FROM memory_unit_links WHERE a_unit_id = ? AND b_unit_id = ?",
+            (a, b),
+        )
+        c.execute(
+            """
+            INSERT INTO memory_unit_links(a_unit_id, b_unit_id, relation, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (a, b, relation, created_by, db.now_ts()),
+        )
+
+
+def links_for_units(
+    unit_ids: list[str], *, relations: tuple[str, ...] | None = None
+) -> list[sqlite3.Row]:
+    """Links where BOTH ends are in ``unit_ids`` (read-time folding operates on
+    what was actually retrieved together)."""
+    if not unit_ids:
+        return []
+    placeholders = ",".join("?" for _ in unit_ids)
+    relation_sql = ""
+    params: list = [*unit_ids, *unit_ids]
+    if relations:
+        relation_sql = f"AND relation IN ({','.join('?' for _ in relations)})"
+        params.extend(relations)
+    return db.query_all(
+        f"""
+        SELECT * FROM memory_unit_links
+        WHERE a_unit_id IN ({placeholders})
+          AND b_unit_id IN ({placeholders})
+          {relation_sql}
+        """,
+        params,
+    )
+
+
+def linked_pair_exists(a_unit_id: str, b_unit_id: str) -> bool:
+    a, b = sorted((a_unit_id, b_unit_id))
+    return (
+        db.query_one(
+            "SELECT 1 FROM memory_unit_links WHERE a_unit_id = ? AND b_unit_id = ?",
+            (a, b),
+        )
+        is not None
+    )
+
+
+def mark_contested(
+    unit_id: str, *, conn: sqlite3.Connection | None = None
+) -> None:
+    """Attribution-free cross-bucket contradiction mark (P1). The unit leaves
+    the assertive portrait and read paths hedge it; nothing records WHY on any
+    surface the model or user sees. Cleared by confirm/revise (fresh same-bucket
+    evidence) or an explicit clear (回访改判)."""
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        c.execute(
+            "UPDATE memory_units SET contested_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, unit_id),
+        )
+        # a contested belief leaves the assertive portrait immediately (it can
+        # still be retrieved, hedged); recompute so the change is not deferred.
+        from core import memory_view_service as _mvs  # local import avoids cycle
+        _mvs.recompute_portrait_membership(
+            row["owner_scope"], row["visibility_scope"], conn=c
+        )
+        _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
+
+
+def clear_contested(
+    unit_id: str, *, conn: sqlite3.Connection | None = None
+) -> None:
+    now = db.now_ts()
+    with _conn_ctx(conn) as c:
+        row = _get_unit_row(c, unit_id)
+        if row is None:
+            raise ValueError(f"unit 不存在：{unit_id}")
+        c.execute(
+            "UPDATE memory_units SET contested_at = NULL, updated_at = ? WHERE id = ?",
+            (now, unit_id),
+        )
+        from core import memory_view_service as _mvs  # local import avoids cycle
+        _mvs.recompute_portrait_membership(
+            row["owner_scope"], row["visibility_scope"], conn=c
         )
         _mark_bucket_view_stale(c, row["owner_scope"], row["visibility_scope"], now)
 

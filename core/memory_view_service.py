@@ -93,6 +93,11 @@ def _passes_core_predicate(
         return False
     if portrait_policy == "force_include":
         return True
+    # contested (cross-bucket contradiction mark): the always-assertive portrait
+    # cannot hedge, so the unit sits out until fresh evidence clears the mark.
+    # It stays retrievable — read paths inject it with an uncertainty tag.
+    if unit["contested_at"]:
+        return False
 
     if unit["tier"] != "core":
         return False

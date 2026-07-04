@@ -74,6 +74,20 @@ MEMORY_NORMALIZE_CLAIM_PROMPT = """\
 """
 
 
+MEMORY_LINK_JUDGE_PROMPT = """\
+判断每对记忆之间的关系。两条记忆来自不同的记忆桶（例如公开桶和某个人格的私聊桶）；
+桶永不合并，你只判断关系，不改写任何一边。
+关系只能是：
+- same_fact：同一事实的两次记录（措辞可以不同）。
+- contradicts：不能同时为真的直接矛盾（包括"新状态显示旧状态已不再成立"）。
+- context_variant：两边都成立，只是不同场合的不同说法或不同侧面——人在公开和私下
+  本来就可以说不一样的话，这不是矛盾。
+- unrelated：其余一切。拿不准就选 unrelated，宁缺毋滥。
+只输出 JSON：{"pairs":[{"a":"mu_x","b":"mu_y","relation":"same_fact|contradicts|context_variant|unrelated"}]}
+当前时间：{current_datetime}
+"""
+
+
 MEMORY_RELINK_PROMPT = """\
 用户刚修改了一条关于自己的记忆。逐条判断旧证据是否仍支持新内容。
 每条证据必须恰好出现在 keep_event_ids 或 drop_event_ids 之一。
@@ -272,6 +286,70 @@ def _parse_memory_relink_content(content: str | None) -> dict | None:
         "keep_event_ids": _coerce_event_ids(data.get("keep_event_ids")),
         "drop_event_ids": _coerce_event_ids(data.get("drop_event_ids")),
     }
+
+
+_LINK_RELATIONS = {"same_fact", "contradicts", "context_variant", "unrelated"}
+
+
+def call_memory_link_judge(
+    client: LLMClient,
+    model: str,
+    *,
+    pairs: list[dict],
+    trace_context: dict | None = None,
+) -> list[dict] | None:
+    """Judge cross-bucket unit pairs (P1 linker). ``pairs``:
+    [{"a": {"unit_id","content","layer"}, "b": {...}}] where layer is a coarse
+    公开/私聊 label — never the raw scope string, so no soul name leaks into the
+    judging context. Returns [{"a","b","relation"}] or None on call failure."""
+    if not pairs:
+        return []
+    blocks = []
+    for index, pair in enumerate(pairs, start=1):
+        a, b = pair["a"], pair["b"]
+        blocks.append(
+            f"### 对 {index}\n"
+            f"A（{a['unit_id']}，{a['layer']}）：{a['content']}\n"
+            f"B（{b['unit_id']}，{b['layer']}）：{b['content']}"
+        )
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="memory_link_judge",
+        timeout=30,
+        response_format={"type": "json_object"},
+        messages=[
+            {
+                "role": "system",
+                "content": MEMORY_LINK_JUDGE_PROMPT.replace(
+                    "{current_datetime}", now_str()
+                ),
+            },
+            {"role": "user", "content": "## 待判定的记忆对\n\n" + "\n\n".join(blocks)},
+        ],
+        parser=_parse_link_judge_content,
+        trace_context=trace_context,
+    )
+
+
+def _parse_link_judge_content(content: str | None) -> list[dict] | None:
+    content = clean_json_content(content)
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("pairs"), list):
+        return None
+    out: list[dict] = []
+    for item in data["pairs"]:
+        if not isinstance(item, dict):
+            continue
+        a = str(item.get("a") or "").strip()
+        b = str(item.get("b") or "").strip()
+        relation = str(item.get("relation") or "").strip()
+        if a and b and relation in _LINK_RELATIONS:
+            out.append({"a": a, "b": b, "relation": relation})
+    return out
 
 
 def call_memory_normalize_claims(

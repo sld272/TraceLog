@@ -239,6 +239,42 @@ class MemoryReadTest(unittest.TestCase):
         self.assertIn("|上周] 喜欢安静咖啡馆", prompt.text)
         self.assertIn("时间标注", prompt.text)  # interpretation rule ships with the labels
 
+    # --- P1 read-time folding & contested hedge ----------------------------
+
+    def test_same_fact_pair_folds_to_more_private_in_chat(self) -> None:
+        public = self._unit("global", "public", type="preference", content="喜欢安静咖啡馆")
+        ev = self._ev("soul:gotoh", "private:soul:gotoh", "chat")
+        private = mus.add_unit(
+            owner_scope="soul:gotoh", visibility_scope="private:soul:gotoh",
+            source_channel="chat", type="preference", content="喜欢清静的咖啡馆",
+            importance=0.5, evidence_event_ids=[ev],
+        )
+        mus.add_unit_link(public, private, "same_fact")
+        prompt = memory_read.build_memory_section("chat", "gotoh", "咖啡馆")
+        self.assertIn("喜欢清静的咖啡馆", prompt.text)   # the more-private copy
+        self.assertNotIn("喜欢安静咖啡馆", prompt.text)  # public twin folded away
+
+    def test_context_variant_pair_is_not_folded(self) -> None:
+        public = self._unit("global", "public", type="preference", content="喜欢热闹的咖啡馆")
+        ev = self._ev("soul:gotoh", "private:soul:gotoh", "chat")
+        private = mus.add_unit(
+            owner_scope="soul:gotoh", visibility_scope="private:soul:gotoh",
+            source_channel="chat", type="preference", content="其实喜欢安静的咖啡馆",
+            importance=0.5, evidence_event_ids=[ev],
+        )
+        mus.add_unit_link(public, private, "context_variant")
+        prompt = memory_read.build_memory_section("chat", "gotoh", "咖啡馆")
+        self.assertIn("喜欢热闹的咖啡馆", prompt.text)
+        self.assertIn("其实喜欢安静的咖啡馆", prompt.text)
+
+    def test_contested_unit_is_hedged_without_attribution(self) -> None:
+        contested = self._unit("global", "public", type="preference", content="在准备考研")
+        mus.mark_contested(contested)
+        prompt = memory_read.build_memory_section("public_post", "gotoh", "考研")
+        self.assertIn("「不太确定」", prompt.text)
+        self.assertIn("不要解释或猜测它为什么不确定", prompt.text)
+        self.assertNotIn("私聊", prompt.text.split("[记忆使用规则]")[0])  # no attribution on the line
+
     def test_relevant_memory_deduplicates_active_goal_topic(self) -> None:
         goal_service.create_goal("跨专业考研", None, "long")
         self._unit(

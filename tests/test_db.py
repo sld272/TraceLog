@@ -23,6 +23,42 @@ class DbTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
+    def test_legacy_table_gains_migrated_columns_on_init(self) -> None:
+        # a DB created before contested_at existed: CREATE IF NOT EXISTS skips
+        # the table, so only the column migration can add it.
+        legacy = Path(self.tmp.name) / "legacy-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            # the columns schema.sql's indexes/triggers reference must already
+            # exist, as they would in any real pre-migration DB
+            conn.execute(
+                """
+                CREATE TABLE memory_units (
+                    id TEXT PRIMARY KEY,
+                    owner_scope TEXT NOT NULL DEFAULT 'global',
+                    visibility_scope TEXT NOT NULL DEFAULT 'public',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    prompt_policy TEXT NOT NULL DEFAULT 'allow',
+                    in_portrait INTEGER NOT NULL DEFAULT 0,
+                    content TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+            db.init_db()
+            conn = db.connect()
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_units)")}
+            conn.close()
+            self.assertIn("contested_at", columns)
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
     def test_validate_fts5_trigram_uses_unique_probe_and_cleans_up(self) -> None:
         db.execute(
             """

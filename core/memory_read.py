@@ -168,6 +168,7 @@ class MemoryItem:
     visibility_scope: str
     needs_discretion: bool  # own-private memory surfaced in a public scene
     last_confirmed: float = 0.0
+    contested: bool = False  # cross-bucket contradiction mark — hedge, no reason
 
 
 @dataclass(frozen=True)
@@ -217,7 +218,7 @@ def recent_state_block(
     rows = db.query_all(
         f"""
         SELECT id, type, content, confidence, importance, owner_scope, visibility_scope,
-               last_confirmed
+               last_confirmed, contested_at
         FROM memory_units
         WHERE type = 'state'
           AND status = 'active'
@@ -262,7 +263,7 @@ def retrieve_units(
     rows = db.query_all(
         f"""
         SELECT id, type, content, confidence, importance, owner_scope, visibility_scope,
-               last_confirmed
+               last_confirmed, contested_at
         FROM memory_units
         WHERE status = 'active'
           AND prompt_policy = 'allow'
@@ -295,6 +296,8 @@ def retrieve_units(
         if not sem_score and fts_rank is not None:
             sem_score = semantic_wide.get(rid, 0.0)
         combined = fts_score + SEMANTIC_RANK_WEIGHT * sem_score
+        if r["contested_at"]:
+            combined *= 0.5  # attribution-free downweight, not exclusion
         ranking = (combined, float(r["importance"]), _recency_weight(r["last_confirmed"], now))
         scored[rid] = ranking
         return ranking
@@ -776,6 +779,7 @@ def _row_to_item(row: sqlite3.Row, channel: str, reply_soul: str | None) -> Memo
         visibility_scope=row["visibility_scope"],
         needs_discretion=_discretion_for(row["visibility_scope"], channel, reply_soul),
         last_confirmed=float(row["last_confirmed"]),
+        contested=bool(row["contested_at"]),
     )
 
 
@@ -964,6 +968,47 @@ def _log_freshness(
     )
 
 
+def _fold_linked_items(items: list[MemoryItem]) -> list[MemoryItem]:
+    """Read-time folding (P1): when BOTH ends of a same_fact/contradicts link
+    were retrieved together, inject only the more-private / fresher one. Buckets
+    keep their own copies — this only dedupes one prompt. In public scenes the
+    private end is never admitted, so folding is naturally a no-op there;
+    context_variant pairs are deliberately not folded (both sides are true)."""
+    if len(items) < 2:
+        return items
+    links = mus.links_for_units(
+        [item.unit_id for item in items], relations=("same_fact", "contradicts")
+    )
+    if not links:
+        return items
+
+    parent = {item.unit_id: item.unit_id for item in items}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for link in links:
+        a, b = find(str(link["a_unit_id"])), find(str(link["b_unit_id"]))
+        if a != b:
+            parent[a] = b
+
+    groups: dict[str, list[MemoryItem]] = {}
+    for item in items:
+        groups.setdefault(find(item.unit_id), []).append(item)
+
+    keep: set[str] = set()
+    for members in groups.values():
+        best = max(
+            members,
+            key=lambda m: (mus.visibility_rank(m.visibility_scope), m.last_confirmed),
+        )
+        keep.add(best.unit_id)
+    return [item for item in items if item.unit_id in keep]
+
+
 def relative_time_tag(ts: float, now: float | None = None) -> str:
     """Coarse relative age ('3 天前') for prompt time labels, '' if unknown.
 
@@ -1008,6 +1053,9 @@ def _keyword_overlap(content: str, terms: list[str]) -> int:
 # --- prompt section assembly -----------------------------------------------
 
 _DISCRETION_TAG = "「私密·谨慎」"
+# Attribution-free hedge for contested units (P1). Deliberately says only "this
+# is uncertain" — never why — so the model cannot blurt the cross-bucket reason.
+_CONTESTED_TAG = "「不太确定」"
 _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
@@ -1061,29 +1109,34 @@ def build_memory_section(
         header = f"[基线认知]（整理于{age}）" if age else "[基线认知]"
         sections.append(f"{header}\n{portrait}")
     # 2. current-state block (always-on)
-    state_items = recent_state_block(channel, reply_soul)
+    has_contested = False
+    state_items = _fold_linked_items(recent_state_block(channel, reply_soul))
     if state_items:
         lines = []
         for item in state_items:
             tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
             has_discretion = has_discretion or item.needs_discretion
+            hedge = f" {_CONTESTED_TAG}" if item.contested else ""
+            has_contested = has_contested or item.contested
             age = relative_time_tag(item.last_confirmed, now)
             when = f"（{age}）" if age else ""
-            lines.append(f"- 近期{when}：{item.content}{tag}")
+            lines.append(f"- 近期{when}：{item.content}{hedge}{tag}")
             used.append(item.unit_id)
         sections.append("[当前状态]\n" + "\n".join(lines))
 
     # 3. query-relevant beliefs (de-noised topic anchors)
-    hits = retrieve_units(
+    hits = _fold_linked_items(retrieve_units(
         query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords,
         trace_context=trace_context,
-    )
+    ))
     terms = fts_query.search_terms(query)
     if hits:
         lines = []
         for item in hits:
             tag = f" {_DISCRETION_TAG}" if item.needs_discretion else ""
             has_discretion = has_discretion or item.needs_discretion
+            hedge = f" {_CONTESTED_TAG}" if item.contested else ""
+            has_contested = has_contested or item.contested
             ev = _top_evidence_row(item.unit_id, terms)
             attribution = (
                 _attribution_for_source(str(ev["source_type"]), str(ev["source_id"]), reply_soul)
@@ -1093,7 +1146,7 @@ def build_memory_section(
             attr = f" {attribution}" if attribution else ""
             age = relative_time_tag(item.last_confirmed, now)
             when = f"|{age}" if age else ""
-            lines.append(f"- [{item.type}|置信{item.confidence:.1f}{when}] {item.content}{attr}{tag}")
+            lines.append(f"- [{item.type}|置信{item.confidence:.1f}{when}] {item.content}{hedge}{attr}{tag}")
             used.append(item.unit_id)
         sections.append("[相关记忆]\n" + "\n".join(lines))
 
@@ -1136,6 +1189,14 @@ def build_memory_section(
         "时间标注（如「3 天前」）是这条记忆最后被确认的时间：越久远越可能已经变化，别当成刚发生的事；"
         "记忆内容里的「今晚」「最近」等词以标注时间为基准理解，不是指现在。",
     ]
+    if has_contested:
+        # attribution-free by red line #1: the tag must never explain WHY the
+        # point is uncertain — the reason may only surface inside a private
+        # revisit, never in a public reply.
+        rules.append(
+            f"标记 {_CONTESTED_TAG} 的内容目前不太确定：用收敛、不确定的口吻提及，"
+            "不要当作确定事实断言，也不要解释或猜测它为什么不确定。"
+        )
     if has_discretion:
         rules.append(
             f"标记 {_DISCRETION_TAG} 的是只在私聊得知的内容：可参考，但公开场合需自行判断是否合适说出，默认不要主动透露。"

@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from core import (
     logging_service,
     memory_events_service as mes,
+    memory_linker,
     memory_reconciler as recon,
     memory_reflection,
     memory_unit_service as mus,
@@ -246,6 +247,15 @@ def run_pending_reconcile(
             backfill_tombstone_claims(client, model, trace_context=trace_context)
         except Exception as exc:
             logging_service.log_event("memory_tombstone_claim_backfill_failed", error=str(exc))
+    # Cross-bucket linker (P1) rides the tail too: units touched by this run get
+    # their same_fact/contradicts/context_variant links judged, and cross-bucket
+    # contradictions land an attribution-free contested mark on the more-public
+    # side. Best-effort — link metadata must never fail the reconcile job.
+    if not dry_run:
+        try:
+            memory_linker.run_linker_pass(client, model, trace_context=trace_context)
+        except Exception as exc:
+            logging_service.log_event("memory_linker_pass_failed", error=str(exc))
 
     pending_relinks = bool(mus.list_pending_relinks()) if not dry_run else False
     has_pending = (

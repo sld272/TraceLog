@@ -35,6 +35,7 @@ def init_db() -> None:
     sql = INIT_SQL_PATH.read_text(encoding="utf-8")
     conn = connect()
     try:
+        _migrate_columns(conn)
         conn.executescript(sql)
         conn.execute("PRAGMA foreign_keys = ON")
         mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
@@ -53,6 +54,29 @@ def init_db() -> None:
         raise
     finally:
         conn.close()
+
+
+# Columns added to existing tables after their initial release. schema.sql only
+# runs CREATE TABLE IF NOT EXISTS, so a pre-existing DB never picks up new
+# columns from it — each entry here is ALTER TABLEd in when missing. Keep the
+# ADD COLUMN definition identical to the schema.sql one (minus non-constant
+# defaults, which SQLite ADD COLUMN cannot take).
+_COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("memory_units", "contested_at", "REAL"),
+)
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    for table, column, ddl in _COLUMN_MIGRATIONS:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        if exists is None:
+            continue  # fresh DB: schema.sql creates the full table
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    conn.commit()
 
 
 def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:

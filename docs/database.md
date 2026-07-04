@@ -18,6 +18,7 @@ SQLite 是业务和 memory-v2 的唯一持久化真相源。
 - `memory_reconcile_cursors`：每个 bucket 的消费游标
 - `memory_units`：结构化长期信念
 - `memory_unit_evidence`：unit 到 evidence 的可追溯链接
+- `memory_unit_links`：跨桶 unit 关系（same_fact/contradicts/context_variant），只链接不合并
 - `memory_unit_reconcile_queue`：edit/delete 后的重判任务
 - `memory_unit_relink_queue`：用户编辑 unit 后的证据重关联任务
 - `memory_reconcile_runs`：每次 bucket 对账记录

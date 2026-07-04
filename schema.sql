@@ -430,8 +430,13 @@ CREATE TABLE IF NOT EXISTS memory_units (
                        CHECK(sensitivity IN ('high','normal','low')),
 
     in_portrait      INTEGER NOT NULL DEFAULT 0, -- selector result cache
-    normalized_claim TEXT,                        -- reserved: tombstone dedup, MVP may be null
+    normalized_claim TEXT,                        -- canonical assertion: tombstone dedup + linker key
     superseded_by    TEXT REFERENCES memory_units(id) ON DELETE SET NULL,
+    -- set when other-bucket evidence contradicts this unit (P1). The mark is
+    -- attribution-free by design: read paths hedge the unit ("不太确定") and the
+    -- portrait excludes it, but nothing user- or model-visible says WHY. Fresh
+    -- same-bucket evidence (confirm/revise) clears it.
+    contested_at     REAL,
 
     first_seen       REAL NOT NULL,
     last_confirmed   REAL NOT NULL,
@@ -480,6 +485,25 @@ CREATE TRIGGER IF NOT EXISTS memory_units_au AFTER UPDATE ON memory_units BEGIN
         VALUES ('delete', old.rowid, old.content);
     INSERT INTO memory_units_fts_trigram(rowid, content) VALUES (new.rowid, new.content);
 END;
+
+-- Cross-bucket relations between units (P1: link, never merge). Buckets stay
+-- isolated — a link is metadata about two beliefs, it never moves content or
+-- rewrites either side. same_fact drives read-time folding (inject one copy in
+-- private scenes); contradicts marks the more-public side contested (hedged,
+-- out of portrait); context_variant records "both true, different contexts" —
+-- deliberately NOT a contradiction. Pairs are stored with a_unit_id < b_unit_id.
+CREATE TABLE IF NOT EXISTS memory_unit_links (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    a_unit_id   TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
+    b_unit_id   TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
+    relation    TEXT NOT NULL
+                  CHECK(relation IN ('same_fact','contradicts','context_variant')),
+    created_by  TEXT NOT NULL DEFAULT 'linker',  -- 'linker' | 'user'
+    created_at  REAL NOT NULL,
+    UNIQUE(a_unit_id, b_unit_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_unit_links_a ON memory_unit_links(a_unit_id);
+CREATE INDEX IF NOT EXISTS idx_unit_links_b ON memory_unit_links(b_unit_id);
 
 CREATE TABLE IF NOT EXISTS memory_unit_evidence (
     unit_id     TEXT NOT NULL REFERENCES memory_units(id) ON DELETE CASCADE,
