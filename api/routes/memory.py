@@ -266,6 +266,26 @@ async def retract_unit(
     return {"ok": True}
 
 
+class RevisitPolicyRequest(BaseModel):
+    enabled: bool
+
+
+@router.get("/revisit-policy")
+async def get_revisit_policy():
+    from core import memory_revisit
+
+    return {"enabled": await run_sync(memory_revisit.revisit_enabled)}
+
+
+@router.post("/revisit-policy")
+async def set_revisit_policy(request: RevisitPolicyRequest):
+    """The「以后不用问这类差异」switch: disables every future proactive revisit."""
+    from core import memory_revisit
+
+    await run_sync(memory_revisit.set_revisit_enabled, request.enabled)
+    return {"enabled": request.enabled}
+
+
 @router.post("/units/{unit_id}/restore")
 async def restore_unit(unit_id: str):
     """Bring a user-forgotten belief back: the 忘记 dialog's promised 找回.

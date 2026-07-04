@@ -177,6 +177,66 @@ class MemoryLinkerTest(unittest.TestCase):
         self.assertEqual(layers, {"公开", "私聊"})
         self.assertNotIn("gotoh", str(captured["pairs"]))
 
+    # --- link maintenance (回访闭环) ------------------------------------------
+
+    def _contested_pair(self) -> tuple[str, str]:
+        public = self._public_unit("在准备考研")
+        private = self._private_unit("已经放弃考研了")
+        mus.add_unit_link(public, private, "contradicts")
+        mus.mark_contested(public)
+        return public, private
+
+    def test_dead_end_drops_link_and_clears_contested(self) -> None:
+        public, private = self._contested_pair()
+        mus.retract_unit(private, by="user", reason="outdated")
+        handled = memory_linker.maintain_links(lambda payload: [])
+        self.assertEqual(handled, 1)
+        self.assertFalse(mus.linked_pair_exists(public, private))
+        self.assertIsNone(mus.get_unit(public)["contested_at"])
+
+    def test_revisit_answer_dissolves_contradiction(self) -> None:
+        # the user's answer flowed back: reconcile revised the private unit,
+        # bumping last_confirmed past the link; the re-judge downgrades the pair
+        public, private = self._contested_pair()
+        self._seq += 1
+        with db.transaction() as conn:
+            ev = mes.record_chat_mutation(
+                conn, message_id=self._seq, soul_name="gotoh", op="create",
+                content="没有啦我还在考", occurred_at=float(self._seq), role="user",
+            ).id
+        mus.revise_unit(private, content="用户仍在考研", evidence_event_ids=[ev])
+
+        def judge(payload):
+            return [{"a": p["a"]["unit_id"], "b": p["b"]["unit_id"], "relation": "same_fact"}
+                    for p in payload]
+
+        handled = memory_linker.maintain_links(judge)
+        self.assertEqual(handled, 1)
+        links = mus.links_for_units([public, private])
+        self.assertEqual("same_fact", links[0]["relation"])
+        self.assertIsNone(mus.get_unit(public)["contested_at"])
+
+    def test_standing_contradiction_remarks_after_fresh_public_evidence(self) -> None:
+        # fresh public evidence clears the mark optimistically; if the private
+        # side still contradicts, the re-judge honestly re-marks it
+        public, private = self._contested_pair()
+        del private
+        self._seq += 1
+        with db.transaction() as conn:
+            ev = mes.record_post_mutation(
+                conn, post_id=f"p{self._seq}", op="create", content="考研冲刺中",
+                occurred_at=float(self._seq),
+            ).id
+        mus.confirm_unit(public, evidence_event_ids=[ev])
+        self.assertIsNone(mus.get_unit(public)["contested_at"])  # cleared by confirm
+
+        def judge(payload):
+            return [{"a": p["a"]["unit_id"], "b": p["b"]["unit_id"], "relation": "contradicts"}
+                    for p in payload]
+
+        memory_linker.maintain_links(judge)
+        self.assertTrue(mus.get_unit(public)["contested_at"])
+
     # --- contested lifecycle -------------------------------------------------
 
     def test_confirm_with_fresh_evidence_clears_contested(self) -> None:

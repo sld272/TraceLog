@@ -33,6 +33,7 @@ LINKER_CANDIDATE_SIM = 0.60
 LINKER_MAX_NEIGHBORS = 3       # per source unit
 LINKER_MAX_SOURCE_UNITS = 20   # per pass
 LINKER_MAX_PAIRS = 12          # per LLM call / pass
+LINKER_MAX_STALE_LINKS = 8     # re-judged per pass
 
 _META_KEY = "memory_linker_last_scan_ts"
 
@@ -143,6 +144,93 @@ def _more_public_side(a: sqlite3.Row, b: sqlite3.Row) -> sqlite3.Row:
     return a if float(a["last_confirmed"]) <= float(b["last_confirmed"]) else b
 
 
+def _clear_contested_ends(a: sqlite3.Row, b: sqlite3.Row) -> None:
+    for row in (a, b):
+        if row["contested_at"]:
+            mus.clear_contested(str(row["id"]))
+
+
+def maintain_links(judge) -> int:
+    """Re-judge links whose ends changed since the verdict (P1 closed loop).
+
+    This is how a revisit answer lands: the user's reply becomes chat evidence,
+    reconcile confirms/revises the unit (bumping last_confirmed past the link's
+    created_at), and this step re-judges the pair with the CURRENT contents —
+    a dissolved contradiction downgrades to same_fact/context_variant/unrelated
+    and the contested mark comes off; a still-standing one re-marks. Links with
+    a dead end (retracted/dormant/superseded) are dropped outright and their
+    contested marks cleared: the basis for hedging is gone."""
+    rows = db.query_all(
+        """
+        SELECT l.id AS link_id, l.a_unit_id, l.b_unit_id, l.relation, l.created_at
+        FROM memory_unit_links l
+        JOIN memory_units a ON a.id = l.a_unit_id
+        JOIN memory_units b ON b.id = l.b_unit_id
+        WHERE a.status != 'active' OR b.status != 'active'
+           OR MAX(a.last_confirmed, b.last_confirmed) > l.created_at
+        ORDER BY l.created_at ASC
+        LIMIT ?
+        """,
+        (LINKER_MAX_STALE_LINKS,),
+    )
+    if not rows:
+        return 0
+
+    handled = 0
+    to_judge: list[tuple[sqlite3.Row, sqlite3.Row]] = []
+    for link in rows:
+        a = db.query_one("SELECT * FROM memory_units WHERE id = ?", (link["a_unit_id"],))
+        b = db.query_one("SELECT * FROM memory_units WHERE id = ?", (link["b_unit_id"],))
+        if a is None or b is None:
+            continue
+        if a["status"] != "active" or b["status"] != "active":
+            db.execute("DELETE FROM memory_unit_links WHERE id = ?", (link["link_id"],))
+            _clear_contested_ends(a, b)
+            handled += 1
+            continue
+        to_judge.append((a, b))
+
+    if not to_judge:
+        return handled
+    payload = [
+        {
+            "a": {"unit_id": str(a["id"]), "content": str(a["content"]),
+                  "layer": _layer_label(a["visibility_scope"])},
+            "b": {"unit_id": str(b["id"]), "content": str(b["content"]),
+                  "layer": _layer_label(b["visibility_scope"])},
+        }
+        for a, b in to_judge
+    ]
+    verdicts = judge(payload)
+    if verdicts is None:
+        return handled  # links stay stale; retried next pass
+    rows_by_id = {str(r["id"]): r for pair in to_judge for r in pair}
+    judged_keys = {tuple(sorted((str(a["id"]), str(b["id"])))) for a, b in to_judge}
+    for verdict in verdicts:
+        a_id, b_id = str(verdict.get("a")), str(verdict.get("b"))
+        relation = str(verdict.get("relation"))
+        key = tuple(sorted((a_id, b_id)))
+        if key not in judged_keys:
+            continue
+        a, b = rows_by_id[a_id], rows_by_id[b_id]
+        if relation == "unrelated":
+            db.execute(
+                "DELETE FROM memory_unit_links WHERE a_unit_id = ? AND b_unit_id = ?",
+                (key[0], key[1]),
+            )
+            _clear_contested_ends(a, b)
+        elif relation == "contradicts":
+            mus.add_unit_link(a_id, b_id, relation)  # refreshes created_at
+            target = _more_public_side(a, b)
+            if not target["contested_at"]:
+                mus.mark_contested(str(target["id"]))
+        else:  # same_fact / context_variant — contradiction dissolved
+            mus.add_unit_link(a_id, b_id, relation)
+            _clear_contested_ends(a, b)
+        handled += 1
+    return handled
+
+
 def run_linker_pass(
     client,
     model: str,
@@ -154,6 +242,18 @@ def run_linker_pass(
     the pair payload and returns [{"a","b","relation"}] (see
     call_memory_link_judge). On judge failure the scan cursor stays put so the
     same units are retried next run."""
+    if judge is None:
+        from core.llm import memory_router
+
+        def judge(payload):  # noqa: A001 - deliberate shadow, single call path
+            return memory_router.call_memory_link_judge(
+                client, model, pairs=payload, trace_context=trace_context
+            )
+
+    # maintenance first: links whose ends changed (e.g. a revisit answer flowed
+    # back) get re-judged before any new discovery
+    maintain_links(judge)
+
     scan_started = db.now_ts()
     sources = _recent_units(_last_scan_ts())
     if not sources:
@@ -202,14 +302,7 @@ def run_linker_pass(
         }
         for a, b in pairs
     ]
-    if judge is not None:
-        verdicts = judge(payload)
-    else:
-        from core.llm import memory_router
-
-        verdicts = memory_router.call_memory_link_judge(
-            client, model, pairs=payload, trace_context=trace_context
-        )
+    verdicts = judge(payload)
     if verdicts is None:
         # leave the cursor: these units are re-scanned next run
         return LinkerResult(scanned=len(sources), judged_pairs=len(pairs), linked=0, contested=0)

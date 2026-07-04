@@ -1183,6 +1183,14 @@ def build_memory_section(
     if not sections:
         return MemoryPrompt(text="", used_unit_ids=[], has_discretion_items=False)
 
+    # 5. proactive revisit (P1 closed loop): private chat may carry ONE gentle
+    # follow-up directive when the conversation already touches a contested
+    # topic — the only sanctioned exit for cross-bucket contradictions.
+    from core import memory_revisit
+    directive = memory_revisit.revisit_directive(channel, reply_soul, used)
+    if directive:
+        sections.append(directive)
+
     rules = [
         "[记忆使用规则]",
         "讲事实/细节以最新动态为准；讲框架、倾向、关系用上述记忆，低置信的软着说。",
