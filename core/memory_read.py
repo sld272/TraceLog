@@ -137,6 +137,23 @@ SEMANTIC_RANK_WEIGHT = 2.0
 # (owner becomes the access boundary even though visibility is public).
 _RETRIEVE_EXCLUDED_TYPES = ("state", "relationship")
 
+# evidence channel: unit content is a lossy summary, so a specific fact
+# ("期末考了 92 分") often lives only in the evidence text under a broader unit
+# and can never be reached by keying on unit content alone. The raw evidence
+# documents (maintained for home search) are therefore a second retrieval key:
+# an ANN hit on them is resolved back to the active unit(s) it supports, which
+# only ever ADMITS/boosts those units — raw documents are never injected
+# directly, so scope policy, folding, tombstones and user retraction keep
+# working at the unit level. Evidence without a supporting unit is skipped
+# (reconcile judged it not worth remembering).
+_EVIDENCE_DOC_TYPES = ("post", "post_vision", "comment", "chat")
+_EVIDENCE_SOURCE_TYPE_BY_DOC = {
+    "post": "post",
+    "post_vision": "post_vision",
+    "comment": "comment_message",
+    "chat": "chat_message",
+}
+
 # freshness seam (units_and_freshness mode): the most recent raw evidence that
 # reconcile has NOT yet folded into units, so "just happened" facts are usable
 # immediately instead of waiting for the next reconcile pass.
@@ -245,17 +262,21 @@ def retrieve_units(
     k: int = RETRIEVE_DEFAULT_K,
     semantic_query: str | None = None,
     keywords: list[str] | None = None,
+    excluded_sources: set[tuple[str, str]] | None = None,
     trace_context: dict | None = None,
 ) -> list[MemoryItem]:
     """Query-relevant beliefs in the admissible scopes, excluding state units
     (state block) and portrait members.
 
-    Two parallel recall channels, intersected with a scope-filtered candidate set:
-    FTS5 over unit content (``keywords`` from query-rewrite, else the raw query)
-    and semantic ANN over the unit vector index (``semantic_query`` from rewrite,
-    else the raw query). A unit is kept iff it matches EITHER channel; scored by a
-    blend of both ranks, then importance, then recency. Scope/discretion is
-    enforced by the SQL candidate set, so neither channel can widen visibility."""
+    Three parallel recall channels, intersected with a scope-filtered candidate
+    set: FTS5 over unit content (``keywords`` from query-rewrite, else the raw
+    query), semantic ANN over the unit vector index (``semantic_query`` from
+    rewrite, else the raw query), and semantic ANN over raw evidence documents
+    resolved to their owning units (the raw ``query`` — evidence is the user's
+    own words, so the unrewritten phrasing matches it best). A unit is kept iff
+    it matches ANY channel; scored by a blend, then importance, then recency.
+    Scope/discretion is enforced by the SQL candidate set, so no channel can
+    widen visibility."""
     plan = policy.admissible_visibility_filters(channel, reply_soul)
     vis_sql, params = _allowed_visibility_sql(plan)
     type_placeholders = ",".join("?" for _ in _RETRIEVE_EXCLUDED_TYPES)
@@ -285,6 +306,8 @@ def retrieve_units(
         if not h.passed and h.sim >= SEMANTIC_SIM_HARD_FLOOR
     }
     fts = _fts_unit_ranks(query, keywords)
+    evidence_hits = _evidence_unit_hits(query, excluded_sources)
+    evidence = {h.unit_id: h.sim for h in evidence_hits}
 
     scored: dict[str, tuple] = {}
 
@@ -295,6 +318,9 @@ def retrieve_units(
         sem_score = semantic.get(rid, 0.0)  # cosine similarity, already gated
         if not sem_score and fts_rank is not None:
             sem_score = semantic_wide.get(rid, 0.0)
+        # an evidence-text match is as strong a semantic vouch as a unit-content
+        # match; max (not sum) so the same signal is never double counted.
+        sem_score = max(sem_score, evidence.get(rid, 0.0))
         combined = fts_score + SEMANTIC_RANK_WEIGHT * sem_score
         if r["contested_at"]:
             combined *= 0.5  # attribution-free downweight, not exclusion
@@ -302,11 +328,16 @@ def retrieve_units(
         scored[rid] = ranking
         return ranking
 
-    # relevance gate: keep units matching the FTS keyword channel OR the semantic
-    # channel. Semantic recall catches paraphrases keyword search misses; FTS
-    # catches exact terms the embedding blurs. Units matching neither are not
-    # injected as importance-ranked filler.
-    kept = [r for r in rows if str(r["id"]) in fts or str(r["id"]) in semantic]
+    # relevance gate: keep units matching the FTS keyword channel, the semantic
+    # channel, OR the evidence channel. Semantic recall catches paraphrases
+    # keyword search misses; FTS catches exact terms the embedding blurs; the
+    # evidence channel catches facts that live only in the raw evidence text
+    # under a broader unit. Units matching none are not injected as
+    # importance-ranked filler.
+    kept = [
+        r for r in rows
+        if str(r["id"]) in fts or str(r["id"]) in semantic or str(r["id"]) in evidence
+    ]
     kept = [
         r for r in kept
         if not goal_service.memory_content_duplicates_active_goal(str(r["content"]))
@@ -317,7 +348,8 @@ def retrieve_units(
         _log_retrieval(
             channel, reply_soul, query, semantic_query, keywords,
             n_candidates=len(rows), fts=fts, semantic=semantic, sem_hits=sem_hits,
-            ranked=ranked, scored=scored, k=k, trace_context=trace_context,
+            evidence=evidence, ranked=ranked, scored=scored, k=k,
+            trace_context=trace_context,
         )
     return [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
 
@@ -333,6 +365,7 @@ def _log_retrieval(
     fts: dict[str, int],
     semantic: dict[str, float],
     sem_hits: list[SemanticHit],
+    evidence: dict[str, float],
     ranked: list[sqlite3.Row],
     scored: dict[str, tuple],
     k: int,
@@ -350,13 +383,20 @@ def _log_retrieval(
         rid = str(r["id"])
         in_fts = rid in fts
         in_sem = rid in semantic
+        in_ev = rid in evidence
+        channels = [
+            name
+            for name, hit in (("fts", in_fts), ("semantic", in_sem), ("evidence", in_ev))
+            if hit
+        ]
         units.append(
             {
                 "unit_id": rid,
                 "type": str(r["type"]),
-                "via": "both" if (in_fts and in_sem) else "fts" if in_fts else "semantic",
+                "via": "+".join(channels) or "none",
                 "fts_rank": fts.get(rid),
                 "sem_sim": round(semantic[rid], 4) if in_sem else None,
+                "ev_sim": round(evidence[rid], 4) if in_ev else None,
                 "score": round(float(scored.get(rid, (0.0,))[0]), 4),
                 "in_top_k": rid in top_ids,
             }
@@ -381,6 +421,7 @@ def _log_retrieval(
         n_candidates=n_candidates,
         n_fts_hits=len(fts),
         n_semantic_neighbors=len(sem_hits),
+        n_evidence_hits=len(evidence),
         k=k,
         units=units,
         floored_neighbors=floored,
@@ -564,6 +605,91 @@ def _units_matching_like(term: str) -> list[str]:
         (pattern, RETRIEVE_DEFAULT_K * 3),
     )
     return [str(row["id"]) for row in rows]
+
+
+@dataclass(frozen=True)
+class EvidenceHit:
+    """One ANN evidence-document neighbour resolved to a unit it supports.
+
+    ``event`` is the current effective event of the matched source — it doubles
+    as the recall anchor, so the conversation recalled for the unit is the one
+    that actually matched the query, not whatever _top_evidence_row would guess."""
+
+    unit_id: str
+    sim: float
+    event: sqlite3.Row
+
+
+def _evidence_unit_hits(
+    query: str,
+    excluded_sources: set[tuple[str, str]] | None = None,
+) -> list[EvidenceHit]:
+    """ANN over raw evidence documents resolved to the active units they support.
+
+    Per-source dedup keeps the nearest doc; per-unit dedup keeps the nearest
+    evidence (ANN order). The same adaptive gate as the unit channel drops the
+    unrelated ANN tail. Assistant-authored lines, deleted/edited-away sources
+    (via current_effective_event) and the reply's own excluded sources are
+    skipped. Scope is NOT applied here; the caller intersects the unit ids with
+    its scope-filtered, status='active' SQL candidates — which is also what
+    keeps retracted units from resurfacing through their evidence."""
+    if not str(query or "").strip():
+        return []
+    excluded = excluded_sources or set()
+    try:
+        from core import vectorstore
+        hits = vectorstore.query_documents(
+            query,
+            n_results=RETRIEVE_DEFAULT_K * 3,
+            where={"type": {"$in": list(_EVIDENCE_DOC_TYPES)}},
+        )
+    except Exception:
+        return []
+    cutoff = adaptive_sim_cutoff(
+        [1.0 - float(h.distance) for h in hits if getattr(h, "distance", None) is not None]
+    )
+    out: list[EvidenceHit] = []
+    seen_units: set[str] = set()
+    seen_sources: set[tuple[str, str]] = set()
+    for hit in hits:
+        source_type = _EVIDENCE_SOURCE_TYPE_BY_DOC.get(str(getattr(hit, "type", "")))
+        if source_type is None:
+            continue
+        meta = getattr(hit, "metadata", None) or {}
+        if str(meta.get("role") or "user") != "user":
+            continue  # assistant lines are not user evidence
+        source_id = str(getattr(hit, "source_id", "") or "")
+        if not source_id:
+            continue
+        key = (source_type, source_id)
+        if key in excluded or key in seen_sources:
+            continue
+        seen_sources.add(key)
+        distance = getattr(hit, "distance", None)
+        if distance is None:
+            sim = 1.0 / (1 + int(getattr(hit, "rank", len(out) + 1)))  # fail-open proxy
+        else:
+            sim = 1.0 - float(distance)
+            if sim < cutoff:
+                continue
+        event = mes.current_effective_event(source_type, source_id)
+        if event is None:
+            continue  # deleted / superseded / not user-authored
+        for row in db.query_all(
+            """
+            SELECT DISTINCT ue.unit_id
+            FROM memory_unit_evidence ue
+            JOIN memory_ingest_events e ON e.id = ue.event_id
+            WHERE e.source_type = ? AND e.source_id = ? AND ue.review_pending = 0
+            """,
+            (source_type, source_id),
+        ):
+            uid = str(row["unit_id"])
+            if uid in seen_units:
+                continue
+            seen_units.add(uid)
+            out.append(EvidenceHit(unit_id=uid, sim=sim, event=event))
+    return out
 
 
 def _top_evidence_row(unit_id: str, terms: list[str]) -> sqlite3.Row | None:
@@ -1127,7 +1253,7 @@ def build_memory_section(
     # 3. query-relevant beliefs (de-noised topic anchors)
     hits = _fold_linked_items(retrieve_units(
         query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords,
-        trace_context=trace_context,
+        excluded_sources=excluded_sources, trace_context=trace_context,
     ))
     terms = fts_query.search_terms(query)
     if hits:

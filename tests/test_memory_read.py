@@ -441,6 +441,114 @@ class MemoryReadTest(unittest.TestCase):
             memory_read.retrieve_units("爬山", "public_post", "gotoh")
         mock_log.assert_not_called()  # no debug payload built when logging is off
 
+    # --- evidence retrieval channel (raw docs -> owning unit) ---------------
+
+    @staticmethod
+    def _vector_router(unit_hits, evidence_hits):
+        """Dispatch a patched query_documents on the `where` filter: the unit
+        channel queries type='unit', the evidence channel type $in raw docs."""
+        def fake(query, n_results=20, where=None):
+            if (where or {}).get("type") == "unit":
+                return unit_hits
+            return evidence_hits
+        return fake
+
+    def _score_post_unit(self, *, content="用户在攻读大学学业"):
+        """A broad unit whose only mention of the exam score lives in its
+        evidence text — the retrieval-key gap the evidence channel closes."""
+        with db.transaction() as conn:
+            ev = mes.record_post_mutation(
+                conn, post_id="p-score", op="create",
+                content="期末考了92分", occurred_at=1000.0,
+            ).id
+        return mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="insight", content=content, confidence=0.8, importance=0.5,
+            evidence_event_ids=[ev],
+        )
+
+    @staticmethod
+    def _post_doc_hit(post_id="p-score", distance=0.2):
+        return SimpleNamespace(
+            doc_id=f"post-{post_id}", type="post", source_id=post_id,
+            rank=1, distance=distance, metadata={"type": "post", "post_id": post_id},
+            document=None,
+        )
+
+    def test_retrieve_admits_unit_via_evidence_text_hit(self) -> None:
+        # Query matches only the raw post text, not the broad unit content —
+        # without the evidence channel this unit is unreachable.
+        uid = self._score_post_unit()
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            hits = memory_read.retrieve_units("我期末考了多少来着", "public_post", "gotoh")
+        self.assertIn(uid, [h.unit_id for h in hits])
+
+    def test_evidence_channel_respects_excluded_sources(self) -> None:
+        # Replying to the score post itself: its evidence must not self-retrieve.
+        uid = self._score_post_unit()
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            hits = memory_read.retrieve_units(
+                "我期末考了多少来着", "public_post", "gotoh",
+                excluded_sources={("post", "p-score")},
+            )
+        self.assertNotIn(uid, [h.unit_id for h in hits])
+
+    def test_evidence_channel_does_not_resurface_retracted_unit(self) -> None:
+        # User "forgot" the unit: its evidence must not bring it back.
+        uid = self._score_post_unit()
+        mus.retract_unit(uid, by="user")
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            hits = memory_read.retrieve_units("我期末考了多少来着", "public_post", "gotoh")
+        self.assertEqual([], [h.unit_id for h in hits])
+
+    def test_evidence_channel_skips_deleted_source(self) -> None:
+        uid = self._score_post_unit()
+        with db.transaction() as conn:
+            mes.record_post_mutation(
+                conn, post_id="p-score", op="delete", content=None, occurred_at=1001.0,
+            )
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            hits = memory_read.retrieve_units("我期末考了多少来着", "public_post", "gotoh")
+        self.assertEqual([], [h.unit_id for h in hits])
+
+    def test_evidence_channel_skips_assistant_lines(self) -> None:
+        # An AI comment matching the query is not user evidence.
+        uid = self._score_post_unit()
+        ai_doc = SimpleNamespace(
+            doc_id="comment-77", type="comment", source_id="77", rank=1, distance=0.1,
+            metadata={"type": "comment", "role": "assistant"}, document=None,
+        )
+        router = self._vector_router([], [ai_doc])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            hits = memory_read.retrieve_units("我期末考了多少来着", "public_post", "gotoh")
+        self.assertEqual([], [h.unit_id for h in hits])
+
+    def test_evidence_channel_cannot_leak_other_souls_private_chat(self) -> None:
+        # kita's private-chat evidence hit resolves to a private unit; the scoped
+        # candidate set must still keep it away from gotoh's public reply.
+        with db.transaction() as conn:
+            ev = mes.record_chat_mutation(
+                conn, message_id=501, soul_name="kita", op="create",
+                content="悄悄说：期末考了92分", occurred_at=1000.0, role="user",
+            ).id
+        mus.add_unit(
+            owner_scope="soul:kita", visibility_scope="private:soul:kita",
+            source_channel="chat", type="insight", content="用户在攻读大学学业",
+            confidence=0.8, importance=0.5, evidence_event_ids=[ev],
+        )
+        chat_doc = SimpleNamespace(
+            doc_id="chat-501", type="chat", source_id="501", rank=1, distance=0.1,
+            metadata={"type": "chat", "role": "user", "soul_name": "kita"}, document=None,
+        )
+        router = self._vector_router([], [chat_doc])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            hits = memory_read.retrieve_units("我期末考了多少来着", "public_post", "gotoh")
+        self.assertEqual([], hits)
+
     # --- recall around comment-derived units (相关对话原文) ----------------
 
     def test_recall_resolves_comment_unit_to_its_post_and_thread(self) -> None:
