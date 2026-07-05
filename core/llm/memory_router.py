@@ -27,8 +27,10 @@ MEMORY_RECONCILE_PROMPT = """\
 只有未来对理解用户仍有价值的信息才值得成为 unit。瞬时琐事（正在上课、刚吃饭、等公交）
 不应记录。身份、长期目标、稳定偏好、重要关系和持续数天以上的处境可以记录。
 可被回问的具体事实（成绩分数、日期、数字、决定、人名、结果）不是瞬时琐事——用户之后
-会问起（"我上次说我考了多少分？"），即使只出现一次也值得记录：落成 state 或 episodic
-unit，importance 取 0.5。判别标准：琐事过后无人再提，具体事实会被回问。
+会问起（"我上次说我考了多少分？"），即使只出现一次也值得记录：落成 tier=episodic 的
+insight 或 freeform unit，importance 取 0.5。state 只用于当前仍在持续、过期即失效的
+短期处境（备考中、生病、赶截止日期），不要用它承载一次性事实——state 过期后不再被读取，
+事实会永久丢失。判别标准：琐事过后无人再提，具体事实会被回问。
 
 ## 输出
 只输出 JSON：
@@ -214,12 +216,19 @@ def _parse_memory_reconcile_content(content: str | None) -> dict | None:
         }
         if op == "add":
             unit_type = item.get("type")
+            tier = item.get("tier")
+            if unit_type == "episodic":
+                # the prompt says one-shot facts become "episodic units"; a model
+                # echoing that as the type must keep the episodic-tier intent
+                # instead of falling through to insight/contextual
+                unit_type = "insight"
+                if tier not in _RECONCILE_TIERS:
+                    tier = "episodic"
             normalized["type"] = (
                 unit_type if unit_type in _RECONCILE_TYPES else "insight"
             )
             normalized["content"] = str(item.get("content") or "").strip()
             normalized["confidence"] = _coerce_float(item.get("confidence"), 0.6)
-            tier = item.get("tier")
             normalized["tier"] = (
                 tier if tier in _RECONCILE_TIERS else "contextual"
             )

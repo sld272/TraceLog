@@ -85,6 +85,26 @@ class ReconcileParserTest(unittest.TestCase):
         parsed = memory_router._parse_memory_reconcile_content(raw)
         self.assertEqual(parsed["ops"][0]["type"], "insight")
 
+    def test_parser_maps_episodic_type_to_insight_with_episodic_tier(self) -> None:
+        # the prompt sells one-shot facts as "episodic units"; a model echoing
+        # that as the type must keep the tier intent, not fall to contextual
+        raw = json.dumps({"ops": [
+            {"op": "add", "type": "episodic", "content": "期末考了92分",
+             "evidence_event_ids": [1]}
+        ]})
+        parsed = memory_router._parse_memory_reconcile_content(raw)
+        self.assertEqual(parsed["ops"][0]["type"], "insight")
+        self.assertEqual(parsed["ops"][0]["tier"], "episodic")
+
+    def test_parser_episodic_type_keeps_explicit_valid_tier(self) -> None:
+        raw = json.dumps({"ops": [
+            {"op": "add", "type": "episodic", "content": "x", "tier": "contextual",
+             "evidence_event_ids": [1]}
+        ]})
+        parsed = memory_router._parse_memory_reconcile_content(raw)
+        self.assertEqual(parsed["ops"][0]["type"], "insight")
+        self.assertEqual(parsed["ops"][0]["tier"], "contextual")
+
     def test_parser_rejects_non_json(self) -> None:
         self.assertIsNone(memory_router._parse_memory_reconcile_content("not json"))
 

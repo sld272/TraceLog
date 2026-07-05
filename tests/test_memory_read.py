@@ -632,6 +632,54 @@ class MemoryReadTest(unittest.TestCase):
         self.assertEqual([], hits)
         self.assertEqual([], orphans)
 
+    def _relationship_only_comment(self, comment_id=88, soul="gotoh"):
+        """A user comment reconcile condensed ONLY into the soul's relationship
+        unit — the global lens produced no ops, so its sole evidence link lives
+        under the comment_relationship event, not comment_message."""
+        with db.transaction() as conn:
+            mes.record_comment_mutation(
+                conn, comment_id=comment_id, post_id="p1", soul_name=soul,
+                role="user", op="create", content="我喜欢你直接点",
+                occurred_at=1000.0,
+            )
+        rel_ev = mes.latest_source_event("comment_relationship", str(comment_id))
+        return mus.add_unit(
+            owner_scope=f"soul:{soul}", visibility_scope="public",
+            source_channel="comment", type="relationship",
+            content="用户喜欢直接的回应", confidence=0.7, importance=0.5,
+            evidence_event_ids=[int(rel_ev["id"])],
+        )
+
+    @staticmethod
+    def _comment_doc_hit(comment_id=88, distance=0.2):
+        return SimpleNamespace(
+            doc_id=f"comment-{comment_id}", type="comment",
+            source_id=str(comment_id), rank=1, distance=distance,
+            metadata={"type": "comment", "role": "user"}, document=None,
+        )
+
+    def test_relationship_only_comment_is_not_orphan(self) -> None:
+        # The comment doc maps to comment_message, but its only link lives under
+        # the comment_relationship lens — the lookup must group both lenses.
+        self._relationship_only_comment()
+        router = self._vector_router([], [self._comment_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            _, orphans = memory_read._evidence_unit_hits("你喜欢什么样的回应")
+        self.assertEqual([], orphans)
+
+    def test_retracted_relationship_only_comment_does_not_resurface(self) -> None:
+        # User "forgot" the relationship unit; its raw comment must not come
+        # back through the orphan seam.
+        uid = self._relationship_only_comment()
+        mus.retract_unit(uid, by="user")
+        router = self._vector_router([], [self._comment_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            prompt = memory_read.build_memory_section(
+                "public_post", "gotoh", "你喜欢什么样的回应",
+            )
+        self.assertNotIn("我喜欢你直接点", prompt.text)
+        self.assertNotIn("[未整理成记忆的相关原文]", prompt.text)
+
     def test_orphan_evidence_capped_and_best_sim_first(self) -> None:
         docs = []
         for i in range(5):

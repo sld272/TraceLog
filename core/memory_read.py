@@ -752,14 +752,25 @@ def _evidence_unit_hits(
         event = mes.current_effective_event(source_type, source_id)
         if event is None:
             continue  # deleted / superseded / not user-authored
+        # a user comment fans out into two lens events (comment_message +
+        # comment_relationship) sharing one source_id, and the vector doc maps
+        # to comment_message only — so the link lookup must cover BOTH lenses,
+        # or a comment condensed solely into a relationship unit reads as an
+        # orphan and its raw text bypasses that unit's retraction.
+        link_types = (
+            mes.COMMENT_SOURCE_TYPES
+            if source_type in mes.COMMENT_SOURCE_TYPES
+            else (source_type,)
+        )
+        type_sql = ",".join("?" for _ in link_types)
         links = db.query_all(
-            """
+            f"""
             SELECT DISTINCT ue.unit_id, ue.review_pending
             FROM memory_unit_evidence ue
             JOIN memory_ingest_events e ON e.id = ue.event_id
-            WHERE e.source_type = ? AND e.source_id = ?
+            WHERE e.source_type IN ({type_sql}) AND e.source_id = ?
             """,
-            (source_type, source_id),
+            (*link_types, source_id),
         )
         if not links:
             # never condensed into a unit; pending-review links do NOT make an
