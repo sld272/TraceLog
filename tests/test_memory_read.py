@@ -549,6 +549,115 @@ class MemoryReadTest(unittest.TestCase):
             hits = memory_read.retrieve_units("我期末考了多少来着", "public_post", "gotoh")
         self.assertEqual([], hits)
 
+    # --- orphan evidence injection (未沉淀原文直接进上下文) ------------------
+
+    def _orphan_post(self, post_id="p-score", content="期末考了92分", occurred_at=1000.0):
+        """A raw post reconcile never condensed into any unit."""
+        with db.transaction() as conn:
+            mes.record_post_mutation(
+                conn, post_id=post_id, op="create",
+                content=content, occurred_at=occurred_at,
+            )
+
+    def test_orphan_evidence_injected_as_raw_context(self) -> None:
+        # No unit exists for the fact at all — unit retrieval can't reach it by
+        # construction, so the evidence hit must inject the raw line itself.
+        self._orphan_post()
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            prompt = memory_read.build_memory_section(
+                "public_post", "gotoh", "我期末考了多少来着",
+            )
+        self.assertIn("[未整理成记忆的相关原文]", prompt.text)
+        self.assertIn("期末考了92分", prompt.text)
+        # cited like freshness so the 引用记忆 panel shows what the reply leaned on
+        self.assertIn("期末考了92分", [f.content for f in prompt.used_freshness])
+
+    def test_orphan_evidence_respects_excluded_sources(self) -> None:
+        # Replying to the orphan post itself: its own text must not self-inject.
+        self._orphan_post()
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            prompt = memory_read.build_memory_section(
+                "public_post", "gotoh", "我期末考了多少来着",
+                excluded_sources={("post", "p-score")},
+            )
+        self.assertNotIn("[未整理成记忆的相关原文]", prompt.text)
+
+    def test_orphan_private_chat_not_leaked_to_public_reply(self) -> None:
+        # kita's private-chat line has no unit; direct injection must still be
+        # scope-filtered, never reaching gotoh's public reply.
+        with db.transaction() as conn:
+            mes.record_chat_mutation(
+                conn, message_id=601, soul_name="kita", op="create",
+                content="悄悄说：期末考了92分", occurred_at=1000.0, role="user",
+            )
+        chat_doc = SimpleNamespace(
+            doc_id="chat-601", type="chat", source_id="601", rank=1, distance=0.1,
+            metadata={"type": "chat", "role": "user", "soul_name": "kita"}, document=None,
+        )
+        router = self._vector_router([], [chat_doc])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            prompt = memory_read.build_memory_section(
+                "public_post", "gotoh", "我期末考了多少来着",
+            )
+        self.assertNotIn("92分", prompt.text)
+
+    def test_retracted_unit_evidence_is_not_orphan(self) -> None:
+        # Retraction keeps the memory_unit_evidence rows, so a retracted unit's
+        # evidence must not resurface as raw orphan text either.
+        uid = self._score_post_unit()
+        mus.retract_unit(uid, by="user")
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            prompt = memory_read.build_memory_section(
+                "public_post", "gotoh", "我期末考了多少来着",
+            )
+        self.assertNotIn("期末考了92分", prompt.text)
+        self.assertNotIn("[未整理成记忆的相关原文]", prompt.text)
+
+    def test_pending_review_link_is_not_orphan(self) -> None:
+        # Evidence mid-relink (review_pending=1) was condensed once: not an
+        # orphan, and not a confirmed unit vouch either — the freshness seam's
+        # review path owns surfacing it.
+        uid = self._score_post_unit()
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE memory_unit_evidence SET review_pending = 1 WHERE unit_id = ?",
+                (uid,),
+            )
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            hits, orphans = memory_read._evidence_unit_hits("我期末考了多少来着")
+        self.assertEqual([], hits)
+        self.assertEqual([], orphans)
+
+    def test_orphan_evidence_capped_and_best_sim_first(self) -> None:
+        docs = []
+        for i in range(5):
+            pid = f"p-orph{i}"
+            self._orphan_post(post_id=pid, content=f"孤儿事实{i}", occurred_at=1000.0 + i)
+            docs.append(self._post_doc_hit(post_id=pid, distance=0.2 + i * 0.01))
+        router = self._vector_router([], docs)
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            _, _, orphan_items = memory_read.retrieve_units_with_anchors(
+                "孤儿事实", "public_post", "gotoh",
+            )
+        self.assertEqual(memory_read.EVIDENCE_ORPHAN_MAX, len(orphan_items))
+        self.assertEqual("孤儿事实0", orphan_items[0].content)
+
+    def test_orphan_not_duplicated_in_freshness(self) -> None:
+        # A recent un-condensed post matched by the query would qualify for BOTH
+        # the orphan section and the freshness seam — it must appear only once.
+        self._orphan_post(occurred_at=db.now_ts())
+        router = self._vector_router([], [self._post_doc_hit()])
+        with patch("core.vectorstore.query_documents", side_effect=router):
+            prompt = memory_read.build_memory_section(
+                "public_post", "gotoh", "我期末考了多少来着",
+            )
+        self.assertIn("[未整理成记忆的相关原文]", prompt.text)
+        self.assertEqual(1, prompt.text.count("期末考了92分"))
+
     # --- evidence anchors steer recall (相关对话原文锚点) --------------------
 
     def test_recall_prefers_evidence_anchor_over_keyword_guess(self) -> None:

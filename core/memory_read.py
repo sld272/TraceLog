@@ -142,10 +142,13 @@ _RETRIEVE_EXCLUDED_TYPES = ("state", "relationship")
 # and can never be reached by keying on unit content alone. The raw evidence
 # documents (maintained for home search) are therefore a second retrieval key:
 # an ANN hit on them is resolved back to the active unit(s) it supports, which
-# only ever ADMITS/boosts those units — raw documents are never injected
-# directly, so scope policy, folding, tombstones and user retraction keep
-# working at the unit level. Evidence without a supporting unit is skipped
-# (reconcile judged it not worth remembering).
+# ADMITS/boosts those units — scope policy, folding, tombstones and user
+# retraction keep working at the unit level. A hit whose source was NEVER
+# condensed into any unit (no memory_unit_evidence row at all) is an ORPHAN:
+# unit retrieval cannot reach that fact by construction, so the raw line itself
+# is injected (scope-filtered, budgeted) instead of being dropped. Evidence of
+# a retracted unit still has its link rows, so it is NOT an orphan and user
+# retraction cannot be bypassed through this seam.
 _EVIDENCE_DOC_TYPES = ("post", "post_vision", "comment", "chat")
 _EVIDENCE_SOURCE_TYPE_BY_DOC = {
     "post": "post",
@@ -172,6 +175,13 @@ RECALL_CHAR_BUDGET = 1200
 RECALL_MSG_MAX_CHARS = 200
 RECALL_THREAD_EVENT_LIMIT = 50
 RECALL_CHAT_TAIL = 8
+
+# orphan raw-evidence injection: how many un-condensed evidence lines a single
+# prompt may carry, and their combined char budget (first item always fits, like
+# the freshness seam). Kept tight — orphans are a gap-filler for facts unit
+# retrieval cannot reach, not a parallel recall firehose.
+EVIDENCE_ORPHAN_MAX = 3
+EVIDENCE_ORPHAN_CHAR_BUDGET = 400
 
 
 @dataclass(frozen=True)
@@ -265,9 +275,9 @@ def retrieve_units(
     excluded_sources: set[tuple[str, str]] | None = None,
     trace_context: dict | None = None,
 ) -> list[MemoryItem]:
-    """retrieve_units_with_anchors without the anchor map — kept for callers
-    that only need the ranked beliefs."""
-    items, _ = retrieve_units_with_anchors(
+    """retrieve_units_with_anchors without the anchor map and orphan evidence —
+    kept for callers that only need the ranked beliefs."""
+    items, _, _ = retrieve_units_with_anchors(
         query, channel, reply_soul, k=k, semantic_query=semantic_query,
         keywords=keywords, excluded_sources=excluded_sources,
         trace_context=trace_context,
@@ -285,7 +295,7 @@ def retrieve_units_with_anchors(
     keywords: list[str] | None = None,
     excluded_sources: set[tuple[str, str]] | None = None,
     trace_context: dict | None = None,
-) -> tuple[list[MemoryItem], dict[str, sqlite3.Row]]:
+) -> tuple[list[MemoryItem], dict[str, sqlite3.Row], list[FreshnessItem]]:
     """Query-relevant beliefs in the admissible scopes, excluding state units
     (state block) and portrait members.
 
@@ -302,7 +312,11 @@ def retrieve_units_with_anchors(
     Also returns unit_id -> the evidence event that matched (evidence channel
     only): the recall/attribution anchor, so the conversation recalled for such
     a unit is the one that actually matched the query rather than
-    _top_evidence_row's keyword guess."""
+    _top_evidence_row's keyword guess.
+
+    Third element: orphan raw evidence — evidence-channel hits reconcile never
+    condensed into any unit, scope-filtered and budgeted here (the unit
+    candidate set cannot vouch for them), ready for direct injection."""
     plan = policy.admissible_visibility_filters(channel, reply_soul)
     vis_sql, params = _allowed_visibility_sql(plan)
     type_placeholders = ",".join("?" for _ in _RETRIEVE_EXCLUDED_TYPES)
@@ -332,8 +346,9 @@ def retrieve_units_with_anchors(
         if not h.passed and h.sim >= SEMANTIC_SIM_HARD_FLOOR
     }
     fts = _fts_unit_ranks(query, keywords)
-    evidence_hits = _evidence_unit_hits(query, excluded_sources)
+    evidence_hits, orphan_evidence = _evidence_unit_hits(query, excluded_sources)
     evidence = {h.unit_id: h.sim for h in evidence_hits}
+    orphan_items = _orphan_evidence_items(orphan_evidence, plan, channel, reply_soul)
 
     scored: dict[str, tuple] = {}
 
@@ -375,12 +390,13 @@ def retrieve_units_with_anchors(
             channel, reply_soul, query, semantic_query, keywords,
             n_candidates=len(rows), fts=fts, semantic=semantic, sem_hits=sem_hits,
             evidence=evidence, ranked=ranked, scored=scored, k=k,
+            orphans=orphan_evidence, orphan_items=orphan_items,
             trace_context=trace_context,
         )
     items = [_row_to_item(r, channel, reply_soul) for r in ranked[:k]]
     kept_ids = {item.unit_id for item in items}
     anchors = {h.unit_id: h.event for h in evidence_hits if h.unit_id in kept_ids}
-    return items, anchors
+    return items, anchors, orphan_items
 
 
 def _log_retrieval(
@@ -398,6 +414,8 @@ def _log_retrieval(
     ranked: list[sqlite3.Row],
     scored: dict[str, tuple],
     k: int,
+    orphans: list["OrphanEvidence"] | None = None,
+    orphan_items: list["FreshnessItem"] | None = None,
     trace_context: dict | None = None,
 ) -> None:
     """Emit one structured 'memory_retrieval' DEBUG event tracing the full unit
@@ -436,6 +454,19 @@ def _log_retrieval(
         for h in sem_hits
         if not h.passed
     ]
+    injected_sources = {
+        (item.source_type, item.source_id) for item in (orphan_items or [])
+    }
+    orphan_sample = [
+        {
+            "source_type": str(o.event["source_type"]),
+            "source_id": str(o.event["source_id"]),
+            "sim": round(o.sim, 4),
+            "injected": (str(o.event["source_type"]), str(o.event["source_id"]))
+            in injected_sources,
+        }
+        for o in (orphans or [])
+    ]
     logging_service.log_event(
         "memory_retrieval",
         level="DEBUG",
@@ -451,9 +482,11 @@ def _log_retrieval(
         n_fts_hits=len(fts),
         n_semantic_neighbors=len(sem_hits),
         n_evidence_hits=len(evidence),
+        n_evidence_orphans=len(orphans or []),
         k=k,
         units=units,
         floored_neighbors=floored,
+        orphan_evidence=orphan_sample,
         trace=trace_context or {},
     )
 
@@ -649,21 +682,35 @@ class EvidenceHit:
     event: sqlite3.Row
 
 
+@dataclass(frozen=True)
+class OrphanEvidence:
+    """One ANN evidence-document neighbour reconcile never condensed into any
+    unit — the fact exists only as this raw line, so unit retrieval can never
+    reach it. The caller scope-filters and budget-injects it directly."""
+
+    sim: float
+    event: sqlite3.Row
+
+
 def _evidence_unit_hits(
     query: str,
     excluded_sources: set[tuple[str, str]] | None = None,
-) -> list[EvidenceHit]:
-    """ANN over raw evidence documents resolved to the active units they support.
+) -> tuple[list[EvidenceHit], list[OrphanEvidence]]:
+    """ANN over raw evidence documents, resolved to the units they support.
 
-    Per-source dedup keeps the nearest doc; per-unit dedup keeps the nearest
-    evidence (ANN order). The same adaptive gate as the unit channel drops the
-    unrelated ANN tail. Assistant-authored lines, deleted/edited-away sources
-    (via current_effective_event) and the reply's own excluded sources are
-    skipped. Scope is NOT applied here; the caller intersects the unit ids with
-    its scope-filtered, status='active' SQL candidates — which is also what
-    keeps retracted units from resurfacing through their evidence."""
+    Returns (unit hits, orphans). Per-source dedup keeps the nearest doc;
+    per-unit dedup keeps the nearest evidence (ANN order). The same adaptive
+    gate as the unit channel drops the unrelated ANN tail. Assistant-authored
+    lines, deleted/edited-away sources (via current_effective_event) and the
+    reply's own excluded sources are skipped. A source with NO unit link at all
+    (reconcile never condensed it — pending-review links still count as linked)
+    comes back as an OrphanEvidence instead of being dropped. Scope is NOT
+    applied here; the caller intersects the unit ids with its scope-filtered,
+    status='active' SQL candidates — which is also what keeps retracted units
+    from resurfacing through their evidence — and scope-filters the orphans
+    itself before injecting them."""
     if not str(query or "").strip():
-        return []
+        return [], []
     excluded = excluded_sources or set()
     try:
         from core import vectorstore
@@ -673,11 +720,12 @@ def _evidence_unit_hits(
             where={"type": {"$in": list(_EVIDENCE_DOC_TYPES)}},
         )
     except Exception:
-        return []
+        return [], []
     cutoff = adaptive_sim_cutoff(
         [1.0 - float(h.distance) for h in hits if getattr(h, "distance", None) is not None]
     )
     out: list[EvidenceHit] = []
+    orphans: list[OrphanEvidence] = []
     seen_units: set[str] = set()
     seen_sources: set[tuple[str, str]] = set()
     for hit in hits:
@@ -704,21 +752,67 @@ def _evidence_unit_hits(
         event = mes.current_effective_event(source_type, source_id)
         if event is None:
             continue  # deleted / superseded / not user-authored
-        for row in db.query_all(
+        links = db.query_all(
             """
-            SELECT DISTINCT ue.unit_id
+            SELECT DISTINCT ue.unit_id, ue.review_pending
             FROM memory_unit_evidence ue
             JOIN memory_ingest_events e ON e.id = ue.event_id
-            WHERE e.source_type = ? AND e.source_id = ? AND ue.review_pending = 0
+            WHERE e.source_type = ? AND e.source_id = ?
             """,
             (source_type, source_id),
-        ):
+        )
+        if not links:
+            # never condensed into a unit; pending-review links do NOT make an
+            # orphan (the freshness seam already surfaces evidence under review)
+            orphans.append(OrphanEvidence(sim=sim, event=event))
+            continue
+        for row in links:
+            if int(row["review_pending"]):
+                continue
             uid = str(row["unit_id"])
             if uid in seen_units:
                 continue
             seen_units.add(uid)
             out.append(EvidenceHit(unit_id=uid, sim=sim, event=event))
-    return out
+    return out, orphans
+
+
+def _orphan_evidence_items(
+    orphans: list[OrphanEvidence],
+    plan: dict,
+    channel: str,
+    reply_soul: str | None,
+) -> list[FreshnessItem]:
+    """Scope-filter, rank and budget the orphan raw-evidence hits for direct
+    prompt injection. Best similarity first; the first admitted item always
+    fits, later ones must stay within the char budget (freshness-seam rule).
+    Rendered as FreshnessItem so the 引用记忆 panel cites them for free."""
+    items: list[FreshnessItem] = []
+    used_chars = 0
+    for orphan in sorted(orphans, key=lambda o: o.sim, reverse=True):
+        if len(items) >= EVIDENCE_ORPHAN_MAX:
+            break
+        event = orphan.event
+        vis = str(event["visibility_scope"])
+        if not _vis_admissible(vis, plan):
+            continue
+        snapshot = str(event["content_snapshot"] or "").strip()
+        if not snapshot:
+            continue
+        if items and used_chars + len(snapshot) > EVIDENCE_ORPHAN_CHAR_BUDGET:
+            break
+        used_chars += len(snapshot)
+        items.append(FreshnessItem(
+            content=snapshot,
+            source_channel=str(event["source_channel"]),
+            occurred_at=float(event["occurred_at"]),
+            owner_scope=str(event["owner_scope"]),
+            visibility_scope=vis,
+            needs_discretion=_discretion_for(vis, channel, reply_soul),
+            source_type=str(event["source_type"]),
+            source_id=str(event["source_id"]),
+        ))
+    return items
 
 
 def _top_evidence_row(unit_id: str, terms: list[str]) -> sqlite3.Row | None:
@@ -1296,7 +1390,7 @@ def build_memory_section(
         sections.append("[当前状态]\n" + "\n".join(lines))
 
     # 3. query-relevant beliefs (de-noised topic anchors)
-    retrieved, anchors = retrieve_units_with_anchors(
+    retrieved, anchors, orphan_items = retrieve_units_with_anchors(
         query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords,
         excluded_sources=excluded_sources, trace_context=trace_context,
     )
@@ -1332,13 +1426,30 @@ def build_memory_section(
         if recall:
             sections.append(recall)
 
+    # 3.6 orphan raw evidence: evidence-channel hits reconcile never condensed
+    # into any unit. The fact exists ONLY as the raw line, so it enters the
+    # context directly — independent of whether any unit matched.
+    if orphan_items:
+        lines = []
+        for oitem in orphan_items:
+            tag = f" {_DISCRETION_TAG}" if oitem.needs_discretion else ""
+            has_discretion = has_discretion or oitem.needs_discretion
+            attribution = _attribution_for_source(oitem.source_type, oitem.source_id, reply_soul)
+            attr = f"{attribution} " if attribution else ""
+            age = relative_time_tag(oitem.occurred_at, now)
+            when = f"·{age}" if age else ""
+            lines.append(f"- （原话{when}）{attr}{oitem.content}{tag}")
+        sections.append("[未整理成记忆的相关原文]\n" + "\n".join(lines))
+
     # 4. freshness seam: recent raw evidence not yet reconciled into units, so
-    # just-happened facts are available immediately.
+    # just-happened facts are available immediately. Sources already injected
+    # verbatim as orphan evidence are excluded — same line, higher-signal home.
+    orphan_sources = {(o.source_type, o.source_id) for o in orphan_items}
     fresh_items, truncated = freshness_seam(
         channel,
         reply_soul,
         query=query,
-        excluded_sources=excluded_sources,
+        excluded_sources=(excluded_sources or set()) | orphan_sources,
         trace_context=trace_context,
     )
     if fresh_items:
@@ -1389,7 +1500,9 @@ def build_memory_section(
     return MemoryPrompt(
         text="\n\n".join(sections),
         used_unit_ids=used,
-        used_freshness=list(fresh_items),
+        # orphan raw evidence is cited alongside freshness: both are raw user
+        # lines a reply leaned on that live under no unit (kind='fresh')
+        used_freshness=[*fresh_items, *orphan_items],
         has_discretion_items=has_discretion,
     )
 
