@@ -1,0 +1,19 @@
+{
+  "_comment": "语义门校准探针集：query 是检索查询，content 是候选记忆内容，relevant 标注这一对是否真相关。换 embedding 模型后跑 scripts/calibrate_embedding_gate.py。",
+  "probes": [
+    { "query": "咖啡馆", "content": "用户喜欢在安静的咖啡馆学习", "relevant": true },
+    { "query": "最近考研准备得怎么样", "content": "用户在准备跨专业考研", "relevant": true },
+    { "query": "跑步", "content": "用户每周去江边夜跑两三次", "relevant": true },
+    { "query": "养猫", "content": "用户养了一只叫团子的橘猫", "relevant": true },
+    { "query": "工作压力大", "content": "用户最近项目上线连续加班，情绪比较紧绷", "relevant": true },
+    { "query": "喜欢什么音乐", "content": "用户常听后摇和城市流行，讨厌电音", "relevant": true },
+    { "query": "期末周", "content": "用户是大三学生，六月中在赶期末论文", "relevant": true },
+    { "query": "吃辣", "content": "用户无辣不欢，最爱川菜", "relevant": true },
+    { "query": "咖啡馆", "content": "用户养了一只叫团子的橘猫", "relevant": false },
+    { "query": "考研", "content": "用户每周去江边夜跑两三次", "relevant": false },
+    { "query": "养猫", "content": "用户最近项目上线连续加班，情绪比较紧绷", "relevant": false },
+    { "query": "喜欢什么音乐", "content": "用户是大三学生，六月中在赶期末论文", "relevant": false },
+    { "query": "吃辣", "content": "用户在准备跨专业考研", "relevant": false },
+    { "query": "工作压力大", "content": "用户无辣不欢，最爱川菜", "relevant": false }
+  ]
+}

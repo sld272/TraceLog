@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { deletePost, type Attachment, type Post } from '@/api/client'
+import {
+  deletePost,
+  getMemorySourceImpact,
+  listPendingSuggestions,
+  postIdFromEvidenceRef,
+  type Attachment,
+  type Post,
+  type Suggestion,
+} from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Notice } from '@/components/Notice'
@@ -8,6 +16,16 @@ import { PostCard } from '@/components/PostCard'
 import { usePostDetail } from '@/hooks/usePostDetail'
 import { formatRoute } from '@/router'
 import styles from './PostDetailPage.module.css'
+
+/** 礼貌预告（P5）：源内容变更前，先说清它支撑着 TA 的几条记忆。拿不到就静默。 */
+async function memoryImpactNote(sourceType: string, sourceId: string): Promise<string> {
+  try {
+    const { count } = await getMemorySourceImpact(sourceType, sourceId)
+    return count > 0 ? `这条内容还支撑着 TA 记住你的 ${count} 条记忆，之后 TA 会重新核对它们。` : ''
+  } catch {
+    return ''
+  }
+}
 
 interface PostDetailPageProps {
   postId: string
@@ -29,7 +47,26 @@ export function PostDetailPage({
   const detail = usePostDetail(postId, onTodosChanged)
   const [deletingPost, setDeletingPost] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const highlightDoneRef = useRef(false)
+
+  /* Pending suggestions belong to the post itself; fetch them independently
+     so the prompt shows under the post regardless of comment state. */
+  const latestEventType = detail.post?.latest_event_type
+  useEffect(() => {
+    let cancelled = false
+    listPendingSuggestions()
+      .then((all) => {
+        if (cancelled) return
+        setSuggestions(all.filter((item) => postIdFromEvidenceRef(item.evidence_ref) === postId))
+      })
+      .catch(() => {
+        /* keep prior suggestions on a transient failure */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [postId, latestEventType])
   const [confirmDialog, setConfirmDialog] = useState<{
     title: string
     message: string
@@ -85,9 +122,11 @@ export function PostDetailPage({
   }
 
   const handleDeletePost = async () => {
+    // 礼貌预告（P5）：删除前先说清会牵动多少条 TA 的记忆
+    const impact = await memoryImpactNote('post', postId)
     setConfirmDialog({
       title: '删除记录',
-      message: '删除这条记录会同时删除 TA 们的所有回应和追问，关联待办会保留但不再指向来源记录，且不会自动恢复。确定删除吗？',
+      message: `删除这条记录会同时删除 TA 们的所有回应和追问，关联待办会保留但不再指向来源记录，且不会自动恢复。${impact}确定删除吗？`,
       onConfirm: async () => {
         setConfirmDialog(null)
         setDeletingPost(true)
@@ -107,9 +146,10 @@ export function PostDetailPage({
   }
 
   const handleDeleteComment = async (commentId: number) => {
+    const impact = await memoryImpactNote('comment_message', String(commentId))
     setConfirmDialog({
       title: '删除追问',
-      message: '删除这条追问会同时删除它之后的这段对话，且不会自动恢复。确定删除吗？',
+      message: `删除这条追问会同时删除它之后的这段对话，且不会自动恢复。${impact}确定删除吗？`,
       onConfirm: async () => {
         setConfirmDialog(null)
         setActionError(null)
@@ -193,6 +233,7 @@ export function PostDetailPage({
             post={postForCard}
             variant="detail"
             comments={detail.comments}
+            suggestions={suggestions}
             commentConversations={detail.conversations}
             busyCommentId={detail.busyCommentId}
             deletingPost={deletingPost}

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from api import deps
+from core import db, memory_events_service as mes, memory_reconcile_runner
+from core.app_services import job_service, public_post_pipeline
 from core.app_services.api_runtime import JobWorker
 
 
@@ -100,6 +104,103 @@ class JobWorkerCleanupTest(unittest.IsolatedAsyncioTestCase):
             await worker._run()
 
         reset.assert_not_called()
+
+    async def test_run_uses_reconcile_specific_retry_handler(self) -> None:
+        worker = JobWorker(client=object(), model="test")
+        job = {
+            "id": 7,
+            "type": "run_memory_reconcile",
+            "status": "running",
+            "payload": {},
+        }
+        claims = iter([job, None])
+
+        def claim():
+            item = next(claims)
+            if item is None:
+                worker._stop.set()
+            return item
+
+        async def sleep_noop(delay: float) -> None:
+            del delay
+
+        with (
+            patch("core.app_services.api_runtime.job_service.claim_next_pending", side_effect=claim),
+            patch(
+                "core.app_services.api_runtime.public_post_pipeline.execute_job",
+                side_effect=RuntimeError("memory reconcile failed"),
+            ),
+            patch(
+                "core.app_services.api_runtime.job_service.mark_memory_reconcile_failed_or_retry"
+            ) as reconcile_retry,
+            patch("core.app_services.api_runtime.job_service.mark_failed_or_retry") as generic_retry,
+            patch("core.app_services.api_runtime.public_post_pipeline.maybe_emit_pipeline_done_for_job"),
+            patch("core.app_services.api_runtime.asyncio.sleep", side_effect=sleep_noop),
+        ):
+            await worker._run()
+
+        reconcile_retry.assert_called_once_with(7, "memory reconcile failed")
+        generic_retry.assert_not_called()
+
+
+class MemoryReconcileWorkerStateTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name) / "workspace"
+        self.old_workspace = db.WORKSPACE_DIR
+        self.old_db_path = db.DB_PATH
+        db.WORKSPACE_DIR = self.workspace
+        db.DB_PATH = self.workspace / "state.db"
+        db.init_db()
+
+    async def asyncTearDown(self) -> None:
+        db.WORKSPACE_DIR = self.old_workspace
+        db.DB_PATH = self.old_db_path
+        self.tmp.cleanup()
+
+    async def test_failed_reconcile_is_requeued_without_advancing_cursor(self) -> None:
+        with db.transaction() as conn:
+            event_id = mes.record_post_mutation(
+                conn,
+                post_id="p1",
+                op="create",
+                content="待处理证据",
+                occurred_at=1.0,
+            ).id
+        job_id = job_service.enqueue_memory_reconcile_once()
+        worker = JobWorker(client=object(), model="test")
+        failure = public_post_pipeline.MemoryReconcileRunError(
+            [
+                memory_reconcile_runner.ReconcileBucketFailure(
+                    "global", "public", "llm timeout"
+                )
+            ]
+        )
+        original_mark = job_service.mark_memory_reconcile_failed_or_retry
+
+        def mark_and_stop(failed_job_id: int, error: str) -> None:
+            original_mark(failed_job_id, error)
+            worker._stop.set()
+
+        with (
+            patch(
+                "core.app_services.api_runtime.public_post_pipeline.execute_job",
+                side_effect=failure,
+            ),
+            patch(
+                "core.app_services.api_runtime.job_service.mark_memory_reconcile_failed_or_retry",
+                side_effect=mark_and_stop,
+            ),
+            patch("core.app_services.api_runtime.public_post_pipeline.maybe_emit_pipeline_done_for_job"),
+        ):
+            await worker._run()
+
+        job = job_service.get_job(int(job_id))
+        self.assertEqual(job_service.STATUS_PENDING, job["status"])
+        self.assertEqual(1, job["attempts"])
+        self.assertIn("global/public: llm timeout", job["error"])
+        self.assertEqual(0, mes.get_cursor("global", "public"))
+        self.assertGreater(event_id, 0)
 
 
 class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):

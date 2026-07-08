@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { type Attachment } from '@/api/client'
 import { ImageUploader } from './ImageUploader'
-import { LoadingDots, SendIcon } from '@/components/icons'
+import { LoadingDots } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import styles from './Composer.module.css'
 
@@ -59,7 +59,7 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
         value={content}
         onChange={(e) => setContent(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="写下你的想法..."
+        placeholder="此刻发生了什么？"
         rows={2}
         disabled={submitting || disabled}
         aria-label="发帖内容"
@@ -81,11 +81,9 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
         showControls={false}
       />
       <div className={styles.footer}>
-        {(content.length > 0 || attachments.length > 0) && (
-          <span className={styles.hint}>
-            {content.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
-          </span>
-        )}
+        <span className={styles.hint}>
+          {content.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
+        </span>
         <div className={styles.actions}>
           <ImageUploader
             attachments={attachments}
@@ -100,11 +98,7 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
               disabled={(!content.trim() && attachments.length === 0) || submitting || disabled}
               aria-label="发布"
             >
-              {submitting ? (
-                <LoadingDots />
-              ) : (
-                <SendIcon />
-              )}
+              {submitting ? <LoadingDots /> : '发布'}
             </button>
             <span className="kbdTipBubble" role="tooltip">
               发送 <span className="kbdTipKey">Enter</span>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { type Todo, createTodo, deleteTodo, listTodos, updateTodo } from '@/api/client'
+import { CollapsibleGroup } from '@/components/CollapsibleGroup'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Notice } from '@/components/Notice'
 import { CheckIcon, PlusIcon } from '@/components/icons'
@@ -52,9 +53,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
   const groups = useMemo(() => groupTodos(todos), [todos])
   const selectedTodo = selectedTodoId ? todos.find((todo) => todo.id === selectedTodoId) ?? null : null
   const activeCount = todos.filter((todo) => !isTodoDone(todo)).length
-  const todayCount = groups.find((group) => group.key === 'today')?.todos.length ?? 0
-  const undatedCount = groups.find((group) => group.key === 'undated')?.todos.length ?? 0
-  const completedCount = groups.find((group) => group.key === 'completed')?.todos.length ?? 0
   const drawerOpen = drawerMode !== null
 
   const fetchTodos = useCallback(async () => {
@@ -167,9 +165,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
           <p className={styles.subtitle}>{activeCount} 个未完成</p>
         </div>
         <div className={styles.headerActions}>
-          <button className={styles.ghostButton} onClick={fetchTodos} disabled={loading}>
-            刷新
-          </button>
           <button className={styles.button} onClick={openCreateDrawer}>
             <PlusIcon />
             新增待办
@@ -184,23 +179,30 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
       ) : (
         <div className={`${styles.todoWorkspace} ${drawerOpen ? styles.drawerOpen : ''}`}>
           <section className={styles.todoListPanel}>
-            <div className={styles.todoSummaryBar}>
-              <div>
-                <h2>{activeCount} 个待完成</h2>
-                <p>今天 {todayCount} · 无日期 {undatedCount}</p>
-              </div>
-              <span className={styles.meta}>{completedCount} 个已完成</span>
-            </div>
-
             <div className={styles.todoGroups}>
               {groups.map((group) => (
-                <TodoGroupSection
+                <CollapsibleGroup
                   key={group.key}
-                  group={group}
-                  savingId={savingId}
-                  onToggle={toggleTodo}
-                  onEdit={openEditDrawer}
-                />
+                  title={group.title}
+                  count={group.todos.length}
+                  defaultCollapsed={group.key === 'completed'}
+                >
+                  {group.todos.length > 0 ? (
+                    <div className={styles.col}>
+                      {group.todos.map((todo) => (
+                        <TodoRow
+                          key={todo.id}
+                          todo={todo}
+                          saving={savingId === todo.id}
+                          onToggle={() => toggleTodo(todo)}
+                          onEdit={() => openEditDrawer(todo)}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <p className={styles.groupEmpty}>{groupEmptyText(group.key)}</p>
+                  )}
+                </CollapsibleGroup>
               ))}
             </div>
           </section>
@@ -239,63 +241,6 @@ export function TodosPage({ onTodosChanged }: TodosPageProps) {
   )
 }
 
-function TodoGroupSection({
-  group,
-  savingId,
-  onToggle,
-  onEdit,
-}: {
-  group: TodoGroup
-  savingId: string | null
-  onToggle: (todo: Todo) => void
-  onEdit: (todo: Todo) => void
-}) {
-  const [expanded, setExpanded] = useState(group.key !== 'completed')
-  const isCollapsible = group.key === 'completed' && group.todos.length > 0
-
-  useEffect(() => {
-    if (group.key === 'completed' && group.todos.length === 0) setExpanded(false)
-  }, [group.key, group.todos.length])
-
-  return (
-    <section className={`${styles.todoGroup} ${group.key === 'today' ? styles.todayGroup : ''}`}>
-      <div className={styles.todoGroupHeader}>
-        <div>
-          <h2>{group.title}</h2>
-          {group.countLabel && <span>{group.countLabel}</span>}
-        </div>
-        {isCollapsible ? (
-          <button className={styles.textButton} onClick={() => setExpanded((value) => !value)}>
-            {expanded ? '折叠' : '展开'}
-          </button>
-        ) : group.key === 'completed' ? (
-          null
-        ) : (
-          <span className={styles.groupCount}>{group.todos.length}</span>
-        )}
-      </div>
-
-      {expanded && (
-        group.todos.length > 0 ? (
-          <div className={styles.todoRows}>
-            {group.todos.map((todo) => (
-              <TodoRow
-                key={todo.id}
-                todo={todo}
-                saving={savingId === todo.id}
-                onToggle={() => onToggle(todo)}
-                onEdit={() => onEdit(todo)}
-              />
-            ))}
-          </div>
-        ) : (
-          <p className={styles.groupEmpty}>{groupEmptyText(group.key)}</p>
-        )
-      )}
-    </section>
-  )
-}
-
 function TodoRow({
   todo,
   saving,
@@ -311,39 +256,44 @@ function TodoRow({
   const meta = todoMeta(todo)
 
   return (
-    <article className={styles.todoItem}>
-      <button
-        className={`${styles.todoCheckbox} ${done ? styles.done : ''}`}
-        onClick={onToggle}
-        disabled={saving}
-        aria-label={done ? '标记为未完成' : '标记为已完成'}
-      >
-        <CheckIcon />
-      </button>
-      <div className={styles.todoBody}>
-        <p className={`${styles.todoTask} ${done ? styles.done : ''}`}>{todo.task}</p>
-        <div className={styles.todoMeta}>
-          {meta.map((item) => (
-            <span key={item} className={item === '已过期' ? styles.overdueMeta : undefined}>
-              {item}
-            </span>
-          ))}
-          {todo.source_post ? (
-            <a
-              className={styles.todoSourceLink}
-              href={formatRoute({ kind: 'post', postId: todo.source_post })}
-              onClick={(event) => event.stopPropagation()}
-            >
-              来自记录
-            </a>
-          ) : (
-            <span>手动新增</span>
-          )}
+    <article className={styles.itemCard}>
+      <div className={styles.itemRow}>
+        <button
+          className={`${styles.todoCheckbox} ${done ? styles.done : ''}`}
+          onClick={onToggle}
+          disabled={saving}
+          aria-label={done ? '标记为未完成' : '标记为已完成'}
+        >
+          <CheckIcon />
+        </button>
+        <div className={styles.todoBody}>
+          <p className={`${styles.todoTask} ${done ? styles.done : ''}`}>{todo.task}</p>
+          <div className={styles.todoMeta}>
+            {meta.map((item) => (
+              <span
+                key={item}
+                className={`${styles.chip} ${item === '已过期' ? styles.chipOverdue : ''}`}
+              >
+                {item}
+              </span>
+            ))}
+            {todo.source_post ? (
+              <a
+                className={`${styles.chip} ${styles.todoSourceLink}`}
+                href={formatRoute({ kind: 'post', postId: todo.source_post })}
+                onClick={(event) => event.stopPropagation()}
+              >
+                来自记录
+              </a>
+            ) : (
+              <span className={styles.chip}>手动新增</span>
+            )}
+          </div>
+        </div>
+        <div className={styles.rowActs}>
+          <button onClick={onEdit}>编辑</button>
         </div>
       </div>
-      <button className={styles.todoEditButton} onClick={onEdit}>
-        编辑
-      </button>
     </article>
   )
 }
@@ -464,24 +414,16 @@ function TodoDrawer({
 }
 
 function groupEmptyText(key: string): string {
-  if (key === 'today') return '今天没有待办'
-  if (key === 'upcoming') return '之后暂无安排'
-  if (key === 'undated') return '没有未排期的待办'
+  if (key === 'open') return '没有未完成的待办'
   return '还没有已完成的待办'
 }
 
 function groupTodos(todos: Todo[]): TodoGroup[] {
-  const todayKey = getTodayKey()
-  const active = todos.filter((todo) => !isTodoDone(todo))
-  const today = sortTodos(active.filter((todo) => todo.date === todayKey))
-  const upcoming = sortTodos(active.filter((todo) => todo.date && todo.date !== todayKey), true)
-  const undated = sortTodos(active.filter((todo) => !todo.date))
+  const active = sortTodos(todos.filter((todo) => !isTodoDone(todo)))
   const completed = sortTodos(todos.filter(isTodoDone), true)
 
   return [
-    { key: 'today', title: '今天', todos: today },
-    { key: 'upcoming', title: '接下来', todos: upcoming },
-    { key: 'undated', title: '无日期', todos: undated },
+    { key: 'open', title: '未完成', todos: active },
     { key: 'completed', title: '已完成', countLabel: `${completed.length} 个`, todos: completed },
   ]
 }
@@ -525,14 +467,9 @@ function formToPayload(form: TodoForm): Partial<Todo> & { task: string } {
 function todoMeta(todo: Todo): string[] {
   const todayKey = getTodayKey()
   const items: string[] = []
-  if (todo.date) {
-    items.push(formatDateLabel(todo.date, todayKey))
-    if (!isTodoDone(todo) && todo.date < todayKey) items.push('已过期')
-  } else {
-    items.push('无日期')
-  }
+  if (!isTodoDone(todo) && todo.date && todo.date < todayKey) items.push('已过期')
+  if (todo.date) items.push(formatDateLabel(todo.date, todayKey))
   const time = [todo.start_time, todo.end_time].filter(Boolean).join(' - ')
   if (time) items.push(time)
-  items.push(isTodoDone(todo) ? '已完成' : todo.status)
   return items
 }

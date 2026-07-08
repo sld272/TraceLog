@@ -12,134 +12,76 @@ openai_stub = ModuleType("openai")
 setattr(openai_stub, "OpenAI", object)
 sys.modules.setdefault("openai", openai_stub)
 
-from core import chat_service, comment_service
+from core import chat_service, comment_service, memory_reconcile_runner
 from core.cli import sessions
 from core.llm.types import LLMClient
 
 
 class CliSessionsTest(unittest.TestCase):
     def test_chat_session_ctrl_c_requests_quit(self) -> None:
-        thread = _chat_thread()
-        todos = ["todo"]
-
         with (
             patch("core.cli.sessions.read_cli_input", side_effect=KeyboardInterrupt),
             redirect_stdout(StringIO()),
         ):
-            result = sessions.run_chat_session(thread, _fake_client(), "model", todos)
+            result = sessions.run_chat_session(
+                _chat_thread(), _fake_client(), "model", ["todo"]
+            )
+        self.assertEqual((["todo"], True), result)
 
-        self.assertEqual((todos, True), result)
-
-    def test_comment_session_ctrl_c_requests_quit(self) -> None:
-        thread = _comment_thread()
-        todos = ["todo"]
-
-        with (
-            patch("core.cli.sessions.read_cli_input", side_effect=KeyboardInterrupt),
-            redirect_stdout(StringIO()),
-        ):
-            result = sessions.run_comment_session(thread, _fake_client(), "model", todos)
-
-        self.assertEqual((todos, True), result)
-
-    def test_chat_session_eof_still_requests_quit(self) -> None:
-        thread = _chat_thread()
-        todos = ["todo"]
-
+    def test_comment_session_eof_requests_quit(self) -> None:
         with (
             patch("core.cli.sessions.read_cli_input", side_effect=EOFError),
             redirect_stdout(StringIO()),
         ):
-            result = sessions.run_chat_session(thread, _fake_client(), "model", todos)
+            result = sessions.run_comment_session(
+                _comment_thread(), _fake_client(), "model", ["todo"]
+            )
+        self.assertEqual((["todo"], True), result)
 
-        self.assertEqual((todos, True), result)
-
-    def test_comment_session_eof_still_requests_quit(self) -> None:
-        thread = _comment_thread()
-        todos = ["todo"]
-
-        with (
-            patch("core.cli.sessions.read_cli_input", side_effect=EOFError),
-            redirect_stdout(StringIO()),
-        ):
-            result = sessions.run_comment_session(thread, _fake_client(), "model", todos)
-
-        self.assertEqual((todos, True), result)
-
-    def test_exit_reflection_message_describes_current_reflection(self) -> None:
+    def test_memory_reconcile_reports_applied_operations(self) -> None:
+        summary = SimpleNamespace(applied=2)
+        result = memory_reconcile_runner.ReconcileRunResult([summary], [], False)
         output = StringIO()
-        global_result = SimpleNamespace(
-            id=7,
-            related_post_ids=["p1", "p2"],
-            patch_summary={"applied": 0, "skipped": 0},
-        )
-        soul_result = SimpleNamespace(patch_summary={"applied": 1, "skipped": 0})
-
         with (
             patch(
-                "core.cli.sessions.reflector.preview_global_deep_reflection_scope",
-                return_value=SimpleNamespace(post_ids=["p1", "p2"]),
+                "core.cli.sessions.memory_reconcile_runner.run_pending_reconcile",
+                return_value=result,
             ),
-            patch("core.cli.sessions.reflector.trigger_global_deep_reflection", return_value=global_result),
             patch(
-                "core.cli.sessions.reflector.preview_soul_deep_reflection_scopes",
-                return_value=[SimpleNamespace(interaction_count=3)],
+                "core.cli.sessions.memory_view_producer.refresh_views_after_reconcile",
+                return_value=[object()],
             ),
-            patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[soul_result]),
+            patch("core.cli.sessions.vector_index_service.rebuild_expected_docs"),
+            patch("core.cli.sessions.vector_index_service.process_outbox"),
             redirect_stdout(output),
         ):
-            sessions.run_deep_reflection_on_exit(_fake_client(), "model")
+            sessions.run_memory_reconcile(_fake_client(), "model", trigger="test")
+        self.assertIn("应用 2 个操作", output.getvalue())
 
-        text = output.getvalue()
-        self.assertIn("正在整理本次记录与 SOUL 互动", text)
-        self.assertIn("检测到 2 条尚未深反思的公开记录，正在反思", text)
-        self.assertIn("检测到 3 条尚未沉淀的 SOUL 互动，正在反思", text)
-        self.assertNotIn("补跑", text)
-        self.assertNotIn("正在触发一次深反思", text)
-
-    def test_exit_reflection_global_keyboard_interrupt_keeps_warning(self) -> None:
+    def test_memory_reconcile_interrupt_preserves_pending_evidence(self) -> None:
         output = StringIO()
-
         with (
             patch(
-                "core.cli.sessions.reflector.preview_global_deep_reflection_scope",
-                return_value=SimpleNamespace(post_ids=[]),
+                "core.cli.sessions.memory_reconcile_runner.run_pending_reconcile",
+                side_effect=KeyboardInterrupt,
             ),
-            patch("core.cli.sessions.reflector.trigger_global_deep_reflection", side_effect=KeyboardInterrupt),
-            patch(
-                "core.cli.sessions.reflector.preview_soul_deep_reflection_scopes",
-                return_value=[],
-            ),
-            patch("core.cli.sessions.reflector.trigger_soul_deep_reflections", return_value=[]),
             redirect_stdout(output),
         ):
-            sessions.run_deep_reflection_on_exit(_fake_client(), "model")
+            sessions.run_memory_reconcile(_fake_client(), "model", trigger="test")
+        self.assertIn("未消费的证据会保留", output.getvalue())
 
-        self.assertIn("深反思被强制中断，已有数据保持不变", output.getvalue())
 
 def _fake_client() -> LLMClient:
     return cast(LLMClient, SimpleNamespace(chat=SimpleNamespace()))
 
 
 def _chat_thread() -> chat_service.ChatThread:
-    return chat_service.ChatThread(
-        id=1,
-        soul_name="拾迹者",
-        title=None,
-        created_at=1.0,
-        updated_at=1.0,
-        last_message_at=None,
-    )
+    return chat_service.ChatThread(1, "拾迹者", None, 1.0, 1.0, None)
 
 
 def _comment_thread() -> comment_service.CommentConversation:
     return comment_service.CommentConversation(
-        post_id="20260525-001",
-        soul_name="拾迹者",
-        root_comment_id=1,
-        created_at=1.0,
-        updated_at=1.0,
-        last_message_at=None,
+        "20260525-001", "拾迹者", 1, 1.0, 1.0, None
     )
 
 

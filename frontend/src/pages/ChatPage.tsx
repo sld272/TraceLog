@@ -4,7 +4,9 @@ import {
   type ChatMessage,
   type ChatThread,
   getChatThread,
+  getMemorySourceImpact,
   listChatThreads,
+  parseMessageSuggestions,
   rerunChatMessage,
   sendChatMessage,
   streamChatMessages,
@@ -14,7 +16,9 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EvidencePanel } from '@/components/EvidencePanel'
 import { ImageGrid } from '@/components/ImageGrid'
 import { ImageUploader } from '@/components/ImageUploader'
+import { InlineSuggestions } from '@/components/InlineSuggestions'
 import { Notice } from '@/components/Notice'
+import { SoulAvatar } from '@/components/SoulAvatar'
 import { LoadingDots, PencilIcon, RefreshCwIcon, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
@@ -279,11 +283,21 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     const body = editDraft.trim()
     if (!body && (message.attachments ?? []).length === 0) return
     const hasLaterMessages = messages.some((item) => item.id > message.id)
-    if (hasLaterMessages) {
+    // 礼貌预告（P5）：这条消息支撑着 TA 的记忆时，编辑前先说清会触发重新核对
+    let impact = ''
+    try {
+      const { count } = await getMemorySourceImpact('chat_message', String(message.id))
+      if (count > 0) impact = `这条消息还支撑着 TA 记住你的 ${count} 条记忆，保存后 TA 会重新核对它们。`
+    } catch {
+      /* 拿不到影响数时静默，不阻塞编辑 */
+    }
+    if (hasLaterMessages || impact) {
       setConfirmDialog({
         isOpen: true,
         title: '编辑消息',
-        message: '保存后会删除这条消息之后的全部私聊内容，并根据修改后的消息重新生成一条回复。确定继续？',
+        message: hasLaterMessages
+          ? `保存后会删除这条消息之后的全部私聊内容，并根据修改后的消息重新生成一条回复。${impact}确定继续？`
+          : `${impact}确定继续？`,
         onConfirm: async () => {
           setConfirmDialog(null)
           await performSaveEdit(message, body)
@@ -434,14 +448,12 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
   return (
     <div className={styles.page}>
       <div className={styles.chatShell}>
-        <header className={styles.header}>
-          <div className={styles.titleGroup}>
-            <h1 className={styles.title}>{soulName}</h1>
-            {thread?.title && <p className={styles.subtitle}>{thread.title}</p>}
+        <header className={styles.chatHead}>
+          <SoulAvatar name={soulName} className={styles.chatHeadAvatar} />
+          <div className={styles.chatHeadInfo}>
+            <div className={styles.chatHeadName}>{soulName}</div>
+            <div className={styles.chatHeadStatus}>{thread?.title || '会记得你们的对话'}</div>
           </div>
-          <button className={styles.ghostButton} onClick={fetchThread} disabled={loading || chatBusy}>
-            刷新
-          </button>
         </header>
 
         {modelUnavailable && (
@@ -518,7 +530,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
               }}
               placeholder={`和 ${soulName} 说点什么...`}
               disabled={modelUnavailable}
-              rows={2}
+              rows={1}
               aria-label="私聊消息"
             />
             <ImageUploader
@@ -813,7 +825,10 @@ function MessageBubble({
       )}
       <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
       {!isUser && !isFailedAssistant && !isPendingAssistant && editDraft === null && (
-        <EvidencePanel metadata={message.metadata} channel="chat" messageId={message.id} />
+        <>
+          <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
+          <EvidencePanel metadata={message.metadata} channel="chat" messageId={message.id} />
+        </>
       )}
       {editDraft !== null && (
         <div className={styles.messageMetaRow}>

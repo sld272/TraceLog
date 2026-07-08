@@ -35,8 +35,8 @@ def init_db() -> None:
     sql = INIT_SQL_PATH.read_text(encoding="utf-8")
     conn = connect()
     try:
+        _migrate_columns(conn)
         conn.executescript(sql)
-        _migrate_schema(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         if str(mode).lower() != "wal":
@@ -56,99 +56,27 @@ def init_db() -> None:
         conn.close()
 
 
-def _migrate_schema(conn: sqlite3.Connection) -> None:
-    _ensure_column(conn, "comments", "edited_at", "REAL")
-    _ensure_column(conn, "comments", "rerun_at", "REAL")
-    _ensure_column(conn, "chat_messages", "edited_at", "REAL")
-    _ensure_column(conn, "chat_messages", "rerun_at", "REAL")
-    _ensure_column(conn, "chat_messages", "metadata", "TEXT")
-    _ensure_post_soul_orders(conn)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS evidence_feedback (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel    TEXT NOT NULL,
-            message_id INTEGER NOT NULL,
-            doc_id     TEXT NOT NULL,
-            verdict    TEXT NOT NULL DEFAULT 'irrelevant',
-            created_at REAL NOT NULL,
-            UNIQUE(channel, message_id, doc_id)
-        )
-        """
-    )
+# Columns added to existing tables after their initial release. schema.sql only
+# runs CREATE TABLE IF NOT EXISTS, so a pre-existing DB never picks up new
+# columns from it — each entry here is ALTER TABLEd in when missing. Keep the
+# ADD COLUMN definition identical to the schema.sql one (minus non-constant
+# defaults, which SQLite ADD COLUMN cannot take).
+_COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    ("memory_units", "contested_at", "REAL"),
+)
 
 
-def _ensure_post_soul_orders(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS post_soul_orders (
-            post_id    TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-            soul_name  TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
-            sort_order INTEGER NOT NULL DEFAULT 0,
-            created_at REAL NOT NULL,
-            PRIMARY KEY (post_id, soul_name)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_post_soul_orders_post_order
-            ON post_soul_orders(post_id, sort_order, soul_name)
-        """
-    )
-    _backfill_post_soul_orders(conn)
-
-
-def _backfill_post_soul_orders(conn: sqlite3.Connection) -> None:
-    rows = conn.execute(
-        """
-        SELECT comments.post_id, comments.soul_name, comments.created_at, comments.id
-        FROM comments
-        LEFT JOIN post_soul_orders
-          ON post_soul_orders.post_id = comments.post_id
-         AND post_soul_orders.soul_name = comments.soul_name
-        WHERE comments.seq = 0
-          AND post_soul_orders.post_id IS NULL
-        ORDER BY comments.post_id ASC, comments.created_at ASC, comments.id ASC
-        """
-    ).fetchall()
-    if not rows:
-        return
-
-    max_orders = {
-        row["post_id"]: int(row["max_sort_order"])
-        for row in conn.execute(
-            """
-            SELECT post_id, MAX(sort_order) AS max_sort_order
-            FROM post_soul_orders
-            GROUP BY post_id
-            """
-        ).fetchall()
-        if row["max_sort_order"] is not None
-    }
-    offsets: dict[str, int] = {}
-    inserts = []
-    for row in rows:
-        post_id = str(row["post_id"])
-        next_offset = offsets.get(post_id, 0)
-        offsets[post_id] = next_offset + 1
-        sort_order = max_orders.get(post_id, -1) + 1 + next_offset
-        inserts.append((post_id, row["soul_name"], sort_order, row["created_at"]))
-
-    conn.executemany(
-        """
-        INSERT OR IGNORE INTO post_soul_orders(post_id, soul_name, sort_order, created_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        inserts,
-    )
-
-
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    if any(row["name"] == column for row in rows):
-        return
-    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    for table, column, ddl in _COLUMN_MIGRATIONS:
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+        ).fetchone()
+        if exists is None:
+            continue  # fresh DB: schema.sql creates the full table
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    conn.commit()
 
 
 def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:

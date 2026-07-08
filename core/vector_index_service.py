@@ -147,6 +147,65 @@ def build_post_vision_doc(post_id: str, content: str, attachment_ids: list[str])
     )
 
 
+def build_unit_doc(
+    unit_id: str,
+    content: str,
+    owner_scope: str,
+    visibility_scope: str,
+    unit_type: str,
+) -> VectorDoc | None:
+    body = str(content or "").strip()
+    uid = str(unit_id or "").strip()
+    if not body or not uid:
+        return None
+    return VectorDoc(
+        doc_id=f"unit-{uid}",
+        doc_type="unit",
+        source_table="memory_units",
+        source_id=uid,
+        content=body,
+        metadata={
+            "type": "unit",
+            "unit_id": uid,
+            "owner_scope": str(owner_scope),
+            "visibility_scope": str(visibility_scope),
+            "unit_type": str(unit_type),
+        },
+    )
+
+
+def build_tombstone_doc(
+    unit_id: str,
+    claim: str,
+    owner_scope: str,
+    visibility_scope: str,
+    reason: str,
+) -> VectorDoc | None:
+    """Vector entry for a false-retracted belief's normalized claim (P2): the
+    reconciler's add-time similarity guard queries these to block zombie
+    re-derivation even when the model rephrases. Declarative like every other
+    doc: restoring the unit drops the row from expected_docs_from_sqlite and the
+    entry retires on the next rebuild."""
+    body = str(claim or "").strip()
+    uid = str(unit_id or "").strip()
+    if not body or not uid:
+        return None
+    return VectorDoc(
+        doc_id=f"tombstone-{uid}",
+        doc_type="tombstone",
+        source_table="memory_units",
+        source_id=uid,
+        content=body,
+        metadata={
+            "type": "tombstone",
+            "unit_id": uid,
+            "owner_scope": str(owner_scope),
+            "visibility_scope": str(visibility_scope),
+            "reason": str(reason),
+        },
+    )
+
+
 def upsert_doc(doc: VectorDoc, *, conn: sqlite3.Connection | None = None) -> int:
     if conn is None:
         with db.transaction() as tx:
@@ -420,37 +479,39 @@ def expected_docs_from_sqlite() -> list[VectorDoc]:
         doc = build_post_vision_doc(row["post_id"], content, attachment_ids)
         if doc is not None:
             docs.append(doc)
+    for row in db.query_all(
+        """
+        SELECT id, content, owner_scope, visibility_scope, type
+        FROM memory_units
+        WHERE status = 'active'
+        ORDER BY id ASC
+        """
+    ):
+        doc = build_unit_doc(
+            row["id"], row["content"], row["owner_scope"], row["visibility_scope"], row["type"]
+        )
+        if doc is not None:
+            docs.append(doc)
+    # false tombstones with a backfilled claim: the add-time zombie guard's
+    # search set. outdated tombstones are prompt-guidance only — new evidence
+    # may legitimately re-establish them, so they get no blocking vector.
+    for row in db.query_all(
+        """
+        SELECT id, normalized_claim, owner_scope, visibility_scope, retraction_reason
+        FROM memory_units
+        WHERE status IN ('retracted_by_user','retracted_by_model')
+          AND retraction_reason = 'false'
+          AND TRIM(COALESCE(normalized_claim, '')) != ''
+        ORDER BY id ASC
+        """
+    ):
+        doc = build_tombstone_doc(
+            row["id"], row["normalized_claim"], row["owner_scope"],
+            row["visibility_scope"], row["retraction_reason"],
+        )
+        if doc is not None:
+            docs.append(doc)
     return docs
-
-
-def migrate_legacy_pending_vector_docs() -> int:
-    rows = db.query_all(
-        """
-        SELECT key, value
-        FROM meta
-        WHERE key LIKE 'pending_vector_doc:%'
-        ORDER BY key
-        """
-    )
-    migrated = 0
-    with db.transaction() as conn:
-        for row in rows:
-            try:
-                payload = json.loads(row["value"])
-            except (TypeError, json.JSONDecodeError):
-                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-                continue
-            if not isinstance(payload, dict):
-                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-                continue
-            doc = _doc_from_payload(payload)
-            if doc is not None:
-                revision = _next_revision_conn(conn)
-                _upsert_doc_at_revision(conn, doc, revision)
-                _enqueue_doc_for_collections(conn, doc, revision)
-                migrated += 1
-            conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-    return migrated
 
 
 def _process_outbox_row(vectorstore, row) -> None:

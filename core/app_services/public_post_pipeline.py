@@ -5,11 +5,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from core import attachment_service, context_builder, db, query_rewriter, record_service, reflector, reply_service, retrieval, todo_service, tool_config_service, vision_service
+from core import attachment_service, context_builder, db, memory_events_service, memory_reconcile_runner, memory_view_producer, record_service, reply_service, suggestion_pipeline, vector_index_service, vision_service
 from core.app_services import event_service, job_service
 from core.llm.types import LLMClient
 
-DEEP_REFLECTION_POST_THRESHOLD = 5
+# Memory reconcile is a global background job that merely carries the triggering
+# post_id in its payload. It runs after replies are generated and must not keep
+# the post's "正在回复 / TA 们正在思考" spinner up, so it is excluded from the
+# post's visible pipeline status. Its own failures are handled by the reconcile
+# requeue path (job_service.mark_memory_reconcile_failed_or_retry), not surfaced
+# as a post-level failure banner.
+_BACKGROUND_JOB_TYPES = frozenset({job_service.TYPE_RUN_MEMORY_RECONCILE})
+
+
+def _foreground_jobs(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reply-facing jobs whose progress the post's spinner should reflect."""
+    return [job for job in jobs if job["type"] not in _BACKGROUND_JOB_TYPES]
 
 
 @dataclass(frozen=True)
@@ -21,8 +32,32 @@ class CreatedPost:
 @dataclass(frozen=True)
 class PublicPostReplyContext:
     llm_content: str
-    relevant_post_ids: list[str]
     built_context: context_builder.BuiltContext
+
+
+class MemoryReconcileRunError(RuntimeError):
+    """A bucket or post-edit re-link review failed, so the reconcile job is
+    retried instead of reported done."""
+
+    def __init__(
+        self,
+        failures: list[memory_reconcile_runner.ReconcileBucketFailure],
+        relink_failures: list[memory_reconcile_runner.RelinkFailure] | None = None,
+    ) -> None:
+        self.failures = list(failures)
+        self.relink_failures = list(relink_failures or [])
+        details = "; ".join(
+            f"{failure.owner_scope}/{failure.visibility_scope}: {failure.error}"
+            for failure in self.failures
+        )
+        relink_details = "; ".join(
+            f"unit {failure.unit_id}: {failure.error}" for failure in self.relink_failures
+        )
+        super().__init__(
+            f"memory reconcile failed for {len(self.failures)} bucket(s) "
+            f"and {len(self.relink_failures)} re-link(s): "
+            f"{'; '.join(part for part in (details, relink_details) if part)}"
+        )
 
 
 def create_post(content: str, attachment_ids: list[str] | None = None) -> CreatedPost:
@@ -42,15 +77,12 @@ def create_post(content: str, attachment_ids: list[str] | None = None) -> Create
     if body:
         job_ids.append(job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": post_id}))
     job_ids.append(job_service.enqueue(job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": post_id, "content": body}))
-    if body and tool_config_service.is_tool_enabled("todo"):
-        job_ids.append(job_service.enqueue(job_service.TYPE_RUN_TODO_TOOL, {"post_id": post_id}))
     if body or attachment_ids:
-        job_ids.extend(
-            [
-                job_service.enqueue(job_service.TYPE_RUN_LIGHT_REFLECTION, {"post_id": post_id}),
-                job_service.enqueue(job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION, {"post_id": post_id}),
-            ]
+        reconcile_id = job_service.enqueue_memory_reconcile_once(
+            {"trigger": "post", "post_id": post_id}
         )
+        if reconcile_id is not None:
+            job_ids.append(reconcile_id)
     return CreatedPost(post_id=post_id, job_ids=job_ids)
 
 
@@ -63,16 +95,12 @@ def execute_job(job: dict[str, Any], client: LLMClient, model: str) -> None:
         _run_index_post_embedding(job_id, payload)
     elif job_type == job_service.TYPE_GENERATE_POST_REPLIES:
         _run_generate_post_replies(job_id, payload, client, model)
+    elif job_type == job_service.TYPE_RUN_MEMORY_RECONCILE:
+        _run_memory_reconcile(job_id, client, model)
     elif job_type == job_service.TYPE_RUN_TODO_TOOL:
-        _run_todo_tool(job_id, payload, client, model)
-    elif job_type == job_service.TYPE_RUN_LIGHT_REFLECTION:
-        _run_light_reflection(job_id, payload, client, model)
-    elif job_type == job_service.TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION:
-        _run_maybe_global_deep_reflection(job_id, payload, client, model)
-    elif job_type == job_service.TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION:
-        _run_trigger_global_deep_reflection(payload, client, model)
-    elif job_type == job_service.TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS:
-        _run_trigger_soul_deep_reflections(payload, client, model)
+        # legacy auto-add todo job: todos now flow through the suggestion
+        # pipeline, so drain any still-queued jobs of this type as no-ops
+        pass
     else:
         raise ValueError(f"unsupported job type: {job_type}")
 
@@ -101,6 +129,22 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
             vision_context,
             [attachment.id for attachment in attachments],
         )
+        with db.transaction() as conn:
+            existing = conn.execute(
+                """
+                SELECT 1 FROM memory_ingest_events
+                WHERE source_type = 'post_vision' AND source_id = ?
+                LIMIT 1
+                """,
+                (post_id,),
+            ).fetchone()
+            if existing is None:
+                memory_events_service.record_post_vision(
+                    conn,
+                    post_id=post_id,
+                    content=vision_context,
+                    occurred_at=db.now_ts(),
+                )
     public_context = build_public_post_reply_context(
         post_id,
         llm_content,
@@ -117,8 +161,24 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
     for soul in public_context.built_context.enabled_souls:
         event_service.append_post_event(post_id, "reply_started", {"soul_name": soul.name}, job_id=job_id)
     results = reply_service.fanout(post_id, llm_content, client, model, public_context.built_context)
+    suggestions = suggestion_pipeline.collect_reply_suggestions(
+        user_input=content,
+        evidence_ref=f"post:{post_id}",
+        client=client,
+        model=model,
+        context="公开 post",
+        trace_context={"channel": "public_post", "post_id": post_id},
+    )
+    first_success = next((result for result in results if result.ok), None)
+    if first_success is not None:
+        reply_service.attach_suggestions_to_root_comment(
+            post_id,
+            first_success.soul_name,
+            suggestions,
+        )
     for result in results:
         event_type = "reply_succeeded" if result.ok else "reply_failed"
+        inline_suggestions = suggestions if first_success is not None and result.soul_name == first_success.soul_name else []
         event_service.append_post_event(
             post_id,
             event_type,
@@ -126,6 +186,7 @@ def _run_generate_post_replies(job_id: int, payload: dict[str, Any], client: LLM
                 "soul_name": result.soul_name,
                 "reply": result.reply,
                 "error": result.error,
+                "suggestions": inline_suggestions,
             },
             job_id=job_id,
         )
@@ -144,117 +205,19 @@ def build_public_post_reply_context(
     *,
     trace_context: dict[str, Any] | None = None,
 ) -> PublicPostReplyContext:
-    """Build the retrieval and shared context used by public post first replies."""
+    """Build the soul-agnostic shared context used by public post first replies.
+
+    Per-soul memory-v2 is appended downstream in reply_service."""
     effective_trace_context = trace_context or {"channel": "public_post", "post_id": post_id}
-    rewritten_query = query_rewriter.rewrite_query(
-        client,
-        model,
-        llm_content,
-        "public_post",
-        trace_context=effective_trace_context,
-    )
-    relevant_ids = retrieval.hybrid_search(
-        llm_content,
-        k=3,
-        semantic_query=rewritten_query.semantic_query,
-        fts_keywords=rewritten_query.keywords,
-        trace_context=effective_trace_context,
-        exclusion=retrieval.RetrievalExclusion(post_ids=frozenset({post_id})),
-    )
     built_context = context_builder.build_context(
-        relevant_post_ids=relevant_ids,
         query=llm_content,
-        fts_keywords=rewritten_query.keywords,
         client=client,
         model=model,
         trace_context=effective_trace_context,
     )
     return PublicPostReplyContext(
         llm_content=llm_content,
-        relevant_post_ids=built_context.relevant_post_ids,
         built_context=built_context,
-    )
-
-
-def _run_todo_tool(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    post_id = _required_post_id(payload)
-    event_service.append_post_event(post_id, "todo_started", {"post_id": post_id}, job_id=job_id)
-    result = todo_service.run_for_post_safely(post_id, client, model)
-    if result.error:
-        event_service.append_post_event(post_id, "todo_failed", {"error": result.error}, job_id=job_id)
-        raise RuntimeError(result.error)
-    event_service.append_post_event(
-        post_id,
-        "todo_succeeded",
-        {
-            "applied": result.applied,
-            "upserted": result.upserted,
-            "deleted": result.deleted,
-            "skipped": result.skipped,
-        },
-        job_id=job_id,
-    )
-
-
-def _run_light_reflection(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    post_id = _required_post_id(payload)
-    event_service.append_post_event(post_id, "light_reflection_started", {"post_id": post_id}, job_id=job_id)
-    result = reflector.run_light_reflection_safely(post_id, client, model)
-    if result is None:
-        event_service.append_post_event(post_id, "light_reflection_failed", {"pending_retry": True}, job_id=job_id)
-        raise RuntimeError("light reflection failed")
-    event_service.append_post_event(
-        post_id,
-        "light_reflection_succeeded",
-        {
-            "entities": len(result.entities),
-            "emotions": len(result.emotions),
-            "events": len(result.events),
-            "relations": len(result.relations),
-            "importance": result.importance,
-        },
-        job_id=job_id,
-    )
-
-
-def _run_maybe_global_deep_reflection(job_id: int, payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    post_id = _required_post_id(payload)
-    scope = reflector.preview_global_deep_reflection_scope(limit=DEEP_REFLECTION_POST_THRESHOLD)
-    if len(scope.post_ids) < DEEP_REFLECTION_POST_THRESHOLD:
-        event_service.append_post_event(
-            post_id,
-            "deep_reflection_succeeded",
-            {"skipped": True, "pending_post_count": len(scope.post_ids)},
-            job_id=job_id,
-        )
-        return
-
-    event_service.append_post_event(
-        post_id,
-        "deep_reflection_queued",
-        {"pending_post_count": len(scope.post_ids)},
-        job_id=job_id,
-    )
-    try:
-        result = reflector.trigger_global_deep_reflection(
-            client,
-            model,
-            trigger="api_threshold",
-            limit=100,
-        )
-    except Exception as exc:
-        event_service.append_post_event(post_id, "deep_reflection_failed", {"error": str(exc)}, job_id=job_id)
-        raise
-    event_service.append_post_event(
-        post_id,
-        "deep_reflection_succeeded",
-        {
-            "skipped": result is None,
-            "reflection_id": result.id if result is not None else None,
-            "related_post_ids": result.related_post_ids if result is not None else [],
-            "patch_summary": result.patch_summary if result is not None else None,
-        },
-        job_id=job_id,
     )
 
 
@@ -268,8 +231,13 @@ def maybe_emit_pipeline_done_for_job(job: dict[str, Any]) -> None:
 
 
 def summarize_pipeline_status(post_id: str) -> dict[str, Any]:
-    """Summarize background pipeline state for one public post."""
-    jobs = job_service.list_jobs_for_post(post_id)
+    """Summarize the reply pipeline state for one public post.
+
+    Only reply-facing jobs count toward the visible state; the memory reconcile
+    job runs asynchronously as background bookkeeping and is excluded so the
+    spinner clears as soon as replies finish generating.
+    """
+    jobs = _foreground_jobs(job_service.list_jobs_for_post(post_id))
     pending_jobs = [job for job in jobs if job["status"] == job_service.STATUS_PENDING]
     running_jobs = [job for job in jobs if job["status"] == job_service.STATUS_RUNNING]
     retried_job_ids = {
@@ -307,8 +275,8 @@ def summarize_pipeline_status(post_id: str) -> dict[str, Any]:
 
 
 def _maybe_emit_pipeline_done(post_id: str) -> None:
-    """Emit pipeline_done when no pending/running jobs remain for this post."""
-    jobs = job_service.list_jobs_for_post(post_id)
+    """Emit pipeline_done when no pending/running reply jobs remain for this post."""
+    jobs = _foreground_jobs(job_service.list_jobs_for_post(post_id))
     if not jobs:
         return
     has_unfinished = any(
@@ -337,26 +305,34 @@ def _job_summary(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _run_trigger_global_deep_reflection(payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    limit = _payload_int(payload, "limit", 100)
-    trigger = str(payload.get("trigger") or "api_manual")
-    reflector.trigger_global_deep_reflection(
+def _run_memory_reconcile(job_id: int, client: LLMClient, model: str) -> None:
+    """v2 write path: reconcile every bucket with unconsumed evidence into units,
+    then refresh any stale or missing identity views from the updated units.
+
+    Yields the (single) worker between buckets whenever an interactive job is
+    waiting — user posts and AI replies must never queue behind memory
+    maintenance. The continuation job enqueued below resumes the backlog."""
+    result = memory_reconcile_runner.run_pending_reconcile(
         client,
         model,
-        trigger=trigger,
-        limit=limit,
+        trigger="api",
+        should_yield=job_service.has_pending_interactive_jobs,
     )
-
-
-def _run_trigger_soul_deep_reflections(payload: dict[str, Any], client: LLMClient, model: str) -> None:
-    limit_per_soul = _payload_int(payload, "limit_per_soul", 100)
-    trigger = str(payload.get("trigger") or "api_manual")
-    reflector.trigger_soul_deep_reflections(
-        client,
-        model,
-        trigger=trigger,
-        limit_per_soul=limit_per_soul,
-    )
+    if not result.yielded:
+        memory_view_producer.refresh_views_after_reconcile(client, model)
+        # Keep the unit vector docs in sync with the new/retracted units so
+        # semantic retrieval sees them (hash-gated; unchanged docs are skipped).
+        vector_index_service.rebuild_expected_docs()
+        vector_index_service.process_outbox()
+    if result.failures or result.relink_failures:
+        raise MemoryReconcileRunError(
+            result.failures,
+            result.relink_failures,
+        )
+    if result.has_pending_after_run:
+        job_service.enqueue_memory_reconcile_once(
+            {"trigger": "continuation", "previous_job_id": job_id}
+        )
 
 
 def _required_post_id(payload: dict[str, Any]) -> str:
@@ -371,11 +347,3 @@ def _post_content(post_id: str) -> str:
     if row is None:
         raise ValueError(f"post 不存在：{post_id}")
     return str(row["content"])
-
-
-def _payload_int(payload: dict[str, Any], key: str, default: int) -> int:
-    try:
-        value = int(payload.get(key, default))
-    except (TypeError, ValueError):
-        return default
-    return max(1, min(value, 500))

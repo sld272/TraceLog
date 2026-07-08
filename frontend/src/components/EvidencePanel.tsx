@@ -2,7 +2,9 @@ import { useMemo, useState } from 'react'
 import {
   type EvidenceChannel,
   type EvidenceItem,
+  type MemoryCitation,
   parseMessageEvidence,
+  parseMessageMemoryCitations,
   submitEvidenceFeedback,
 } from '@/api/client'
 import { formatRoute } from '@/router'
@@ -16,11 +18,17 @@ interface EvidencePanelProps {
 }
 
 export function EvidencePanel({ metadata, channel, messageId, compact = false }: EvidencePanelProps) {
+  const citations = useMemo(() => parseMessageMemoryCitations(metadata), [metadata])
   const evidence = useMemo(() => parseMessageEvidence(metadata), [metadata])
   const [marked, setMarked] = useState<Set<string>>(() => new Set())
   const [pendingDocId, setPendingDocId] = useState<string | null>(null)
 
-  if (messageId <= 0 || evidence.length === 0) return null
+  // The reply's cited memory IS the memory it used — belief units plus raw
+  // freshness evidence; the raw-doc evidence is only a fallback for older replies
+  // that predate memory citations.
+  const showCitations = citations.length > 0
+  const count = showCitations ? citations.length : evidence.length
+  if (messageId <= 0 || count === 0) return null
 
   const markIrrelevant = async (docId: string) => {
     if (marked.has(docId) || pendingDocId) return
@@ -37,21 +45,54 @@ export function EvidencePanel({ metadata, channel, messageId, compact = false }:
     <details className={`${styles.panel} ${compact ? styles.compact : ''}`}>
       <summary className={styles.summary}>
         <span className={styles.summaryText}>引用记忆</span>
-        <span className={styles.count}>×{evidence.length}</span>
+        <span className={styles.count}>×{count}</span>
       </summary>
       <div className={styles.items}>
-        {evidence.map((item) => (
-          <EvidenceRow
-            key={item.doc_id}
-            item={item}
-            marked={marked.has(item.doc_id)}
-            pending={pendingDocId === item.doc_id}
-            onMarkIrrelevant={() => markIrrelevant(item.doc_id)}
-          />
-        ))}
+        {showCitations
+          ? citations.map((citation, index) => (
+              <CitationRow key={citation.unit_id ?? `fresh-${index}`} citation={citation} />
+            ))
+          : evidence.map((item) => (
+              <EvidenceRow
+                key={item.doc_id}
+                item={item}
+                marked={marked.has(item.doc_id)}
+                pending={pendingDocId === item.doc_id}
+                onMarkIrrelevant={() => markIrrelevant(item.doc_id)}
+              />
+            ))}
       </div>
     </details>
   )
+}
+
+function CitationRow({ citation }: { citation: MemoryCitation }) {
+  const isFresh = citation.kind === 'fresh'
+  const badge = isFresh ? '新近' : unitTypeLabel(citation.type ?? '')
+  // fresh evidence is raw + un-reconciled, so it carries no belief confidence
+  const meta = isFresh ? '未整理' : `置信 ${Math.round((citation.confidence ?? 0) * 100)}%`
+  return (
+    <div className={styles.item}>
+      <div className={styles.unitMain} title={citation.content}>
+        <span className={styles.badge}>{badge}</span>
+        <span className={styles.snippet}>{citation.content}</span>
+        <span className={styles.confidence}>{meta}</span>
+      </div>
+    </div>
+  )
+}
+
+function unitTypeLabel(type: string): string {
+  const labels: Record<string, string> = {
+    identity: '身份',
+    preference: '偏好',
+    state: '近况',
+    relationship: '关系',
+    insight: '感悟',
+    goal: '目标',
+    freeform: '其他',
+  }
+  return labels[type] ?? '记忆'
 }
 
 function EvidenceRow({

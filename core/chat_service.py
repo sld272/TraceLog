@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
-from core import attachment_service, db, evidence_service, logging_service, profile_service, record_service, reply_context, retrieval, soul_memory_service, soul_service, todo_service, tool_config_service, vision_service
+from dataclasses import dataclass, field, replace
+from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
+from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 CHAT_HISTORY_LIMIT = 20
-# 检索 k 必须覆盖配额总和,否则高分 post 会占满名额,chat/comment 配额永远填不上
-RELATED_POST_LIMIT = sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["chat"].values())
-RETRIEVAL_USER_MESSAGE_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -45,9 +43,11 @@ class ChatContext:
     soul: SoulContext
     context: str
     messages: list[ChatMessage]
-    retrieval_query: str
-    relevant_post_ids: list[str]
-    retrieval_hits: list
+    cited_memory: list[dict] = field(default_factory=list)
+    # per-stage build durations (seconds) — reply latency instrumentation:
+    # the serial LLM legs (web gate -> query rewrite -> reply) are the
+    # suspected bottleneck; measure before parallelizing anything.
+    timings: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,7 @@ class ChatReplyResult:
     user_message_id: int
     assistant_message_id: int | None
     error: str | None
+    suggestions: list[dict] = field(default_factory=list)
 
 
 FAILED_REPLY_CONTENT = ""
@@ -171,7 +172,10 @@ def append_user_message(thread_id: int, content: str, attachment_ids: list[str] 
     """Append a user message to a writable chat thread."""
     thread = get_thread(thread_id)
     _assert_soul_writable(thread.soul_name)
-    return _append_message(thread_id, "user", content, attachment_ids=attachment_ids)
+    message = _append_message(thread_id, "user", content, attachment_ids=attachment_ids)
+    if message.content.strip():
+        job_service.enqueue_memory_reconcile_once({"trigger": "chat", "soul_name": thread.soul_name})
+    return message
 
 
 def build_chat_context(
@@ -187,29 +191,9 @@ def build_chat_context(
     soul = _load_soul_context(thread.soul_name)
     messages = list_thread_messages(thread_id, limit=CHAT_HISTORY_LIMIT, before_message_id=before_message_id)
     llm_messages = [_message_for_llm(message) for message in messages]
-    retrieval_query = _build_retrieval_query(user_message, llm_messages)
     sections: list[str] = []
 
-    profile = profile_service.read_profile().strip()
-    if profile:
-        sections.append(f"# 用户档案\n\n{profile}")
-
-    rewritten_query = reply_context.rewrite_for_retrieval(client, model, retrieval_query, "chat", thread_id=thread_id, soul_name=thread.soul_name)
-    retrieval_hits = reply_context.hybrid_search_documents_with_rewrite(
-        retrieval_query,
-        rewritten_query,
-        k=RELATED_POST_LIMIT,
-        channel="chat",
-        soul_name=thread.soul_name,
-        trace_context={"channel": "chat", "thread_id": thread_id, "soul_name": thread.soul_name},
-        exclusion=retrieval.RetrievalExclusion(
-            chat_message_ids=frozenset(message.id for message in llm_messages if message.id > 0),
-        ),
-    )
-    relevant_post_ids = _post_ids_from_hits(retrieval_hits)
-    related_memory = evidence_service.format_retrieval_hits(retrieval_hits, current_soul=thread.soul_name)
-    if related_memory:
-        sections.append(f"# 相关记忆\n\n{related_memory}")
+    sections.extend(goal_service.prompt_sections())
 
     if tool_config_service.is_tool_enabled("todo"):
         pending = todo_service.list_active_todos()
@@ -217,6 +201,8 @@ def build_chat_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
+    timings: dict[str, float] = {}
+    stage_started = db.now_ts()
     web_section = reply_context.build_web_search_section(
         client,
         model,
@@ -225,8 +211,41 @@ def build_chat_context(
         context_hint="\n\n---\n\n".join(sections),
         trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
     )
+    timings["web_gate_s"] = round(db.now_ts() - stage_started, 3)
     if web_section:
         sections.append(web_section)
+
+    stage_started = db.now_ts()
+    rewrite = (
+        query_rewriter.rewrite_query(
+            client,
+            model,
+            user_message,
+            "chat",
+            recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
+            trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
+        )
+        if client and model
+        else None
+    )
+    timings["query_rewrite_s"] = round(db.now_ts() - stage_started, 3)
+    stage_started = db.now_ts()
+    memory = memory_read.memory_section_with_citations(
+        "chat",
+        thread.soul_name,
+        user_message,
+        excluded_sources={
+            ("chat_message", str(message.id))
+            for message in llm_messages
+            if message.id > 0
+        },
+        semantic_query=rewrite.semantic_query if rewrite else None,
+        keywords=rewrite.keywords if rewrite else None,
+        trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
+    )
+    timings["memory_read_s"] = round(db.now_ts() - stage_started, 3)
+    if memory.text:
+        sections.append(f"# 记忆\n\n{memory.text}")
 
     context_text = "\n\n---\n\n".join(sections)
     logging_service.log_event(
@@ -236,7 +255,6 @@ def build_chat_context(
         thread_id=thread_id,
         soul_name=thread.soul_name,
         sections=reply_context.section_summaries(sections),
-        relevant_post_ids=relevant_post_ids,
         context_length=len(context_text),
         message_count=len(messages),
     )
@@ -245,9 +263,8 @@ def build_chat_context(
         soul=soul,
         context=context_text,
         messages=llm_messages,
-        retrieval_query=retrieval_query,
-        relevant_post_ids=relevant_post_ids,
-        retrieval_hits=retrieval_hits,
+        cited_memory=memory.cited_memory,
+        timings=timings,
     )
 
 
@@ -270,8 +287,10 @@ def _call_assistant_reply_for_user_message(
     model: str,
 ) -> ChatReplyResult:
     """Generate and append the assistant reply for an existing latest user message."""
+    total_started = db.now_ts()
     llm_user_message = vision_service.content_for_llm(user_message_row.content, user_message_row.attachments)
     chat_context = build_chat_context(user_message_row.thread_id, llm_user_message, client, model)
+    reply_started = db.now_ts()
     data = reply_router.call_soul_chat_reply(
         client,
         model,
@@ -281,8 +300,18 @@ def _call_assistant_reply_for_user_message(
             "thread_id": user_message_row.thread_id,
             "soul_name": chat_context.thread.soul_name,
             "user_message_id": user_message_row.id,
-            "relevant_post_ids": chat_context.relevant_post_ids,
         },
+    )
+    # latency breakdown across the serial legs (web gate -> rewrite -> memory
+    # read -> reply LLM): measure first, parallelize only what proves slow.
+    logging_service.log_event(
+        "reply_latency",
+        channel="chat",
+        thread_id=user_message_row.thread_id,
+        soul_name=chat_context.thread.soul_name,
+        **chat_context.timings,
+        reply_llm_s=round(db.now_ts() - reply_started, 3),
+        total_s=round(db.now_ts() - total_started, 3),
     )
     if data is None:
         error = "LLM call failed or returned invalid JSON"
@@ -311,13 +340,27 @@ def _call_assistant_reply_for_user_message(
         )
         return _failed_result(chat_context.thread, user_message_row.id, error)
 
+    suggestions = suggestion_pipeline.collect_reply_suggestions(
+        user_input=user_message_row.content,
+        evidence_ref=f"chat:{user_message_row.id}",
+        client=client,
+        model=model,
+        context=f"与 {chat_context.thread.soul_name} 的私聊",
+        trace_context={
+            "channel": "chat",
+            "thread_id": user_message_row.thread_id,
+            "soul_name": chat_context.thread.soul_name,
+            "user_message_id": user_message_row.id,
+        },
+    )
     assistant_message = _append_message(
         user_message_row.thread_id,
         "assistant",
         reply.strip(),
         metadata={
             "status": "ok",
-            "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
+            "memory_citations": memory_read.cited_memory_metadata_from(chat_context.cited_memory),
+            "suggestions": suggestions,
         },
     )
     return ChatReplyResult(
@@ -328,6 +371,7 @@ def _call_assistant_reply_for_user_message(
         user_message_id=user_message_row.id,
         assistant_message_id=assistant_message.id,
         error=None,
+        suggestions=suggestions,
     )
 
 
@@ -354,6 +398,16 @@ def _append_message(
             (thread_id, role, body, now, json.dumps(metadata, ensure_ascii=False) if metadata else None),
         )
         message_id = db.require_lastrowid(cursor, "chat message insert")
+        if body:
+            memory_events_service.record_chat_mutation(
+                conn,
+                message_id=message_id,
+                soul_name=thread.soul_name,
+                op="create",
+                content=body,
+                occurred_at=now,
+                role=role,
+            )
         conn.execute(
             """
             UPDATE chat_threads
@@ -393,7 +447,9 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
     if not body and not attachment_ids:
         raise ValueError("私聊消息不能为空")
 
-    deleted_ids = _message_ids_after(message.thread_id, message.id)
+    deleted_rows = _messages_after(message.thread_id, message.id)
+    deleted_ids = [int(row["id"]) for row in deleted_rows]
+    soul_name = get_thread(message.thread_id).soul_name
     now = db.now_ts()
     with db.transaction() as conn:
         conn.execute(
@@ -404,6 +460,10 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
             """,
             (body, now, message.id),
         )
+        edit_event = memory_events_service.record_chat_mutation(
+            conn, message_id=message.id, soul_name=soul_name, op="edit", content=body, occurred_at=now, role="user",
+        )
+        memory_unit_service.challenge_units_for_source(conn, edit_event.id)
         conn.execute("DELETE FROM chat_message_attachments WHERE message_id = ?", (message.id,))
         conn.executemany(
             """
@@ -417,6 +477,17 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
             [(now, attachment_id) for attachment_id in attachment_ids],
         )
         if deleted_ids:
+            for deleted_row in deleted_rows:
+                delete_event = memory_events_service.record_chat_mutation(
+                    conn,
+                    message_id=int(deleted_row["id"]),
+                    soul_name=soul_name,
+                    op="delete",
+                    content=None,
+                    occurred_at=now,
+                    role=str(deleted_row["role"]),
+                )
+                memory_unit_service.challenge_units_for_source(conn, delete_event.id)
             conn.execute(
                 f"DELETE FROM chat_messages WHERE id IN ({','.join('?' for _ in deleted_ids)})",
                 tuple(deleted_ids),
@@ -428,6 +499,9 @@ def edit_user_message(message_id: int, content: str, attachment_ids: list[str] |
     updated = get_message(message.id)
     thread = get_thread(message.thread_id)
     record_service.index_chat_message_embedding(updated.id, updated.thread_id, thread.soul_name, updated.role, updated.content)
+    job_service.enqueue_memory_reconcile_once(
+        {"trigger": "chat_edit", "soul_name": soul_name}
+    )
     return {
         "thread": thread,
         "message": updated,
@@ -472,7 +546,6 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
             "thread_id": thread.id,
             "soul_name": thread.soul_name,
             "rerun_message_id": message.id,
-            "relevant_post_ids": chat_context.relevant_post_ids,
         },
     )
     if data is None:
@@ -481,13 +554,14 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
     if not isinstance(reply, str) or not reply.strip():
         raise RuntimeError("chat rerun returned empty reply")
 
-    deleted_ids = _message_ids_after(thread.id, message.id)
+    deleted_rows = _messages_after(thread.id, message.id)
+    deleted_ids = [int(row["id"]) for row in deleted_rows]
     now = db.now_ts()
     metadata = {
         "status": "ok",
         "model": model,
         "rerun": True,
-        "evidence": evidence_service.evidence_metadata(chat_context.retrieval_hits),
+        "memory_citations": memory_read.cited_memory_metadata_from(chat_context.cited_memory),
     }
     with db.transaction() as conn:
         conn.execute(
@@ -498,7 +572,21 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
             """,
             (reply.strip(), json.dumps(metadata, ensure_ascii=False), now, message.id),
         )
+        memory_events_service.record_chat_mutation(
+            conn, message_id=message.id, soul_name=thread.soul_name, op="rerun", content=reply.strip(), occurred_at=now, role="assistant",
+        )
         if deleted_ids:
+            for deleted_row in deleted_rows:
+                delete_event = memory_events_service.record_chat_mutation(
+                    conn,
+                    message_id=int(deleted_row["id"]),
+                    soul_name=thread.soul_name,
+                    op="delete",
+                    content=None,
+                    occurred_at=now,
+                    role=str(deleted_row["role"]),
+                )
+                memory_unit_service.challenge_units_for_source(conn, delete_event.id)
             conn.execute(
                 f"DELETE FROM chat_messages WHERE id IN ({','.join('?' for _ in deleted_ids)})",
                 tuple(deleted_ids),
@@ -510,6 +598,10 @@ def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> d
     updated = get_message(message.id)
     thread = get_thread(thread.id)
     record_service.index_chat_message_embedding(updated.id, updated.thread_id, thread.soul_name, updated.role, updated.content)
+    if any(str(row["role"]) == "user" for row in deleted_rows):
+        job_service.enqueue_memory_reconcile_once(
+            {"trigger": "chat_rerun_delete", "soul_name": thread.soul_name}
+        )
     return {
         "thread": thread,
         "message": updated,
@@ -528,31 +620,12 @@ def _assert_soul_writable(soul_name: str) -> None:
 def _load_soul_context(soul_name: str) -> SoulContext:
     record = soul_service.get_soul(soul_name)
     soul = (db.WORKSPACE_DIR / record.file_path).read_text(encoding="utf-8")
-    soul_memory = soul_memory_service.read_soul_memory(soul_name)
     return SoulContext(
         name=record.name,
         description=record.description,
         sort_order=record.sort_order,
         soul=soul,
-        soul_memory=soul_memory,
     )
-
-
-def _build_retrieval_query(user_message: str, messages: list[ChatMessage]) -> str:
-    """Return the search query for related posts; currently no LLM rewrite is applied."""
-    parts = _recent_user_message_contents(messages, limit=RETRIEVAL_USER_MESSAGE_LIMIT)
-    if parts:
-        return "\n".join(parts)
-    return user_message
-
-
-def _recent_user_message_contents(messages, limit: int) -> list[str]:
-    contents = [
-        message.content.strip()
-        for message in messages
-        if message.role == "user" and message.content.strip()
-    ]
-    return contents[-limit:]
 
 
 def _last_user_message_content(messages: list[ChatMessage]) -> str:
@@ -570,16 +643,19 @@ def _last_user_message_content_for_llm(messages: list[ChatMessage]) -> str:
 
 
 def _message_ids_after(thread_id: int, message_id: int) -> list[int]:
-    rows = db.query_all(
+    return [int(row["id"]) for row in _messages_after(thread_id, message_id)]
+
+
+def _messages_after(thread_id: int, message_id: int) -> list:
+    return db.query_all(
         """
-        SELECT id
+        SELECT id, role
         FROM chat_messages
         WHERE thread_id = ? AND id > ?
         ORDER BY id ASC
         """,
         (thread_id, message_id),
     )
-    return [int(row["id"]) for row in rows]
 
 
 def _refresh_thread_activity(conn, thread_id: int, now: float) -> None:
@@ -604,20 +680,6 @@ def _refresh_thread_activity(conn, thread_id: int, now: float) -> None:
     )
 
 
-def _post_ids_from_hits(hits: list) -> list[str]:
-    post_ids: list[str] = []
-    for hit in hits:
-        post_id = None
-        if getattr(hit, "type", None) == "post":
-            post_id = str(getattr(hit, "source_id", ""))
-        else:
-            metadata = getattr(hit, "metadata", {}) or {}
-            post_id = metadata.get("post_id")
-        if post_id and post_id not in post_ids:
-            post_ids.append(post_id)
-    return post_ids
-
-
 def _is_failed_reply_metadata(metadata: dict | None) -> bool:
     return isinstance(metadata, dict) and metadata.get("status") == "failed"
 
@@ -639,6 +701,7 @@ def _failed_result(thread: ChatThread, user_message_id: int, error: str) -> Chat
         user_message_id=user_message_id,
         assistant_message_id=assistant_message.id,
         error=error,
+        suggestions=[],
     )
 
 

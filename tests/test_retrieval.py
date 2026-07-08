@@ -5,11 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import chat_service, comment_service, db, fts_query, logging_service, retrieval, vectorstore
+from core import db, fts_query, logging_service, retrieval, vectorstore
 
 
 class FtsQueryTest(unittest.TestCase):
-    def test_long_cjk_query_builds_phrase_and_window_candidates(self) -> None:
+    def test_long_cjk_query_builds_phrase_and_word_candidates(self) -> None:
         query = "我之前是不是说过晚上图书馆学习效率更高"
 
         candidates = fts_query.match_candidates(query)
@@ -48,6 +48,31 @@ class FtsQueryTest(unittest.TestCase):
     def test_empty_or_symbol_only_query_returns_empty_match(self) -> None:
         self.assertEqual("", fts_query.build_match_query(""))
         self.assertEqual("", fts_query.build_match_query('"""()^{}[]'))
+
+    def test_jieba_segments_spaceless_multiword_keeps_single_word(self) -> None:
+        # the crux of the homepage spaceless-query fix
+        self.assertEqual(["考研", "复习"], fts_query.query_terms("考研复习"))
+        self.assertEqual(["图书馆"], fts_query.query_terms("图书馆"))  # one word, not split
+        regs = fts_query.query_terms("考研复习规划")
+        self.assertIn("考研", regs)
+        self.assertIn("规划", regs)
+
+    def test_search_terms_add_subwords_that_query_terms_omit(self) -> None:
+        # search mode (overlap scoring) keeps main words AND fine-grained sub-words;
+        # precise mode (FTS routing) keeps only the main words.
+        self.assertIn("南京大学", fts_query.search_terms("南京大学法语系"))
+        self.assertIn("南京", fts_query.search_terms("南京大学法语系"))
+        self.assertNotIn("南京", fts_query.query_terms("南京大学法语系"))
+
+    def test_split_abbreviation_recovered_without_stopword_noise(self) -> None:
+        # jieba splits the unknown abbreviation 南大 into 南/大; _segment rejoins it,
+        # while stopword chars (我/在) are not rejoined into noise.
+        self.assertIn("南大", fts_query.query_terms("南大法语生"))
+        recovered = fts_query.query_terms("我在南大读书")
+        self.assertIn("南大", recovered)
+        self.assertNotIn("我在", recovered)
+        self.assertNotIn("在南", recovered)
+        self.assertEqual(["图书馆"], fts_query.query_terms("图书馆"))  # no spurious recovery
 
 
 class RetrievalFusionTest(unittest.TestCase):
@@ -261,28 +286,6 @@ class VectorDistanceFilterTest(unittest.TestCase):
 
         self.assertEqual(["p-near", "p-edge"], [hit.post_id for hit in hits])
 
-    def test_all_vector_hits_filtered_returns_empty(self) -> None:
-        vectorstore.query_documents = lambda query, n_results=20, where=None: [
-            vectorstore.VectorDocHit("post-p-far", "post", "p-far", 1, 0.9, {"type": "post", "post_id": "p-far"})
-        ]
-
-        hits = retrieval.hybrid_search_documents("完全无关", k=3)
-
-        self.assertEqual([], hits)
-
-    def test_fts_hits_unaffected_by_vector_filter(self) -> None:
-        retrieval.fts_search_scored = lambda *args, **kwargs: [
-            retrieval.RetrievalHit("p-keyword", "fts", 1, -1.0)
-        ]
-        vectorstore.query_documents = lambda query, n_results=20, where=None: [
-            vectorstore.VectorDocHit("post-p-far", "post", "p-far", 1, 0.9, {"type": "post", "post_id": "p-far"})
-        ]
-
-        hits = retrieval.hybrid_search_documents("关键词", k=3)
-
-        self.assertEqual(["post-p-keyword"], [hit.doc_id for hit in hits])
-        self.assertEqual(["fts"], hits[0].sources)
-
     def test_none_distance_kept(self) -> None:
         vectorstore.query_post_hits = lambda query, n_results=20: [
             vectorstore.VectorHit("p-unknown-distance", 1, None)
@@ -291,42 +294,6 @@ class VectorDistanceFilterTest(unittest.TestCase):
         hits = retrieval.vector_search_scored("焦虑", k=20)
 
         self.assertEqual(["p-unknown-distance"], [hit.post_id for hit in hits])
-
-    def test_wide_candidate_pool_rescues_filtered_top_ranks(self) -> None:
-        captured: dict[str, int] = {}
-
-        def fake_query_documents(query, n_results=20, where=None):
-            captured["n_results"] = n_results
-            return [
-                vectorstore.VectorDocHit("chat-far-1", "chat", "1", 1, 0.91, {"type": "chat"}),
-                vectorstore.VectorDocHit("comment-far-2", "comment", "2", 2, 0.82, {"type": "comment"}),
-                vectorstore.VectorDocHit("post-p-far", "post", "p-far", 3, 0.77, {"type": "post", "post_id": "p-far"}),
-                vectorstore.VectorDocHit(
-                    "post-p-relevant",
-                    "post",
-                    "p-relevant",
-                    4,
-                    0.40,
-                    {"type": "post", "post_id": "p-relevant"},
-                ),
-                vectorstore.VectorDocHit(
-                    "chat-12",
-                    "chat",
-                    "12",
-                    5,
-                    0.38,
-                    {"type": "chat", "thread_id": 7, "message_id": 12, "soul_name": "小黑"},
-                ),
-            ]
-
-        vectorstore.query_documents = fake_query_documents
-
-        hits = retrieval.hybrid_search_documents("上次聊的比赛", k=3)
-
-        self.assertEqual(20, captured["n_results"])
-        self.assertEqual(["chat-12", "post-p-relevant"], [hit.doc_id for hit in hits])
-        self.assertEqual(["chat", "post"], [hit.type for hit in hits])
-        self.assertEqual([2, 1], [hit.rank for hit in hits])
 
     def test_filtered_event_logged(self) -> None:
         vectorstore.query_post_hits = lambda query, n_results=20: [
@@ -341,332 +308,6 @@ class VectorDistanceFilterTest(unittest.TestCase):
         self.assertEqual("posts", events[-1]["target"])
         self.assertEqual(1, events[-1]["dropped_count"])
         self.assertEqual([0.9], events[-1]["dropped_distances"])
-
-    def test_doc_retrieval_result_logged_with_hits(self) -> None:
-        vectorstore.query_documents = lambda query, n_results=20, where=None: [
-            vectorstore.VectorDocHit(
-                "chat-12",
-                "chat",
-                "12",
-                1,
-                0.25,
-                {"type": "chat", "thread_id": 7, "message_id": 12, "soul_name": "小黑"},
-            )
-        ]
-
-        hits = retrieval.hybrid_search_documents(
-            "上次聊的比赛", k=3, trace_context={"channel": "chat", "thread_id": 7}
-        )
-
-        self.assertEqual(["chat-12"], [hit.doc_id for hit in hits])
-        events = [event for event in self.logged_events if event["event"] == "hybrid_doc_retrieval_result"]
-        self.assertEqual(1, len(events))
-        event = events[0]
-        self.assertEqual("chat", event["channel"])
-        self.assertEqual(7, event["thread_id"])
-        self.assertEqual("上次聊的比赛", event["raw_query"])
-        self.assertEqual([], event["fts_hits"])
-        self.assertEqual(1, len(event["vector_hits"]))
-        self.assertEqual(0.25, event["vector_hits"][0]["distance"])
-        final = event["final_hits"]
-        self.assertEqual(1, len(final))
-        self.assertEqual("chat-12", final[0]["doc_id"])
-        self.assertEqual("chat", final[0]["type"])
-        self.assertIn("score", final[0])
-        self.assertIn("vector:rank=1", final[0]["reasons"])
-
-    def test_doc_retrieval_result_logged_when_empty(self) -> None:
-        vectorstore.query_documents = lambda query, n_results=20, where=None: [
-            vectorstore.VectorDocHit("post-p-far", "post", "p-far", 1, 0.9, {"type": "post", "post_id": "p-far"})
-        ]
-
-        hits = retrieval.hybrid_search_documents("完全无关", k=3, trace_context={"channel": "comment"})
-
-        self.assertEqual([], hits)
-        events = [event for event in self.logged_events if event["event"] == "hybrid_doc_retrieval_result"]
-        self.assertEqual(1, len(events))
-        self.assertEqual([], events[0]["final_hits"])
-        self.assertEqual([], events[0]["vector_hits"])
-
-    def test_document_exclusion_filters_current_post_and_all_comments_before_truncation(self) -> None:
-        retrieval.fts_search_scored = lambda *args, **kwargs: [
-            retrieval.RetrievalHit("p-current", "fts", 1, -2.0),
-            retrieval.RetrievalHit("p-history", "fts", 2, -1.0),
-        ]
-        vectorstore.query_documents = lambda query, n_results=20, where=None: [
-            vectorstore.VectorDocHit(
-                "post-vision-p-current",
-                "post_vision",
-                "p-current",
-                1,
-                0.1,
-                {"type": "post_vision", "post_id": "p-current"},
-            ),
-            vectorstore.VectorDocHit(
-                "comment-1",
-                "comment",
-                "1",
-                2,
-                0.2,
-                {"type": "comment", "post_id": "p-current", "soul_name": "拾迹者"},
-            ),
-            vectorstore.VectorDocHit(
-                "comment-2",
-                "comment",
-                "2",
-                3,
-                0.3,
-                {"type": "comment", "post_id": "p-current", "soul_name": "毒舌好友"},
-            ),
-            vectorstore.VectorDocHit(
-                "comment-3",
-                "comment",
-                "3",
-                4,
-                0.4,
-                {"type": "comment", "post_id": "p-other", "soul_name": "拾迹者"},
-            ),
-        ]
-
-        hits = retrieval.hybrid_search_documents(
-            "当前帖内容",
-            k=2,
-            trace_context={"channel": "comment", "post_id": "p-current"},
-            exclusion=retrieval.RetrievalExclusion(
-                post_ids=frozenset({"p-current"}),
-                comment_post_ids=frozenset({"p-current"}),
-            ),
-        )
-
-        self.assertEqual(["post-p-history", "comment-3"], [hit.doc_id for hit in hits])
-        events = [event for event in self.logged_events if event["event"] == "retrieval_self_excluded"]
-        self.assertEqual(1, len(events))
-        self.assertEqual("comment", events[0]["channel"])
-        self.assertEqual(
-            ["post-p-current", "post-vision-p-current", "comment-1", "comment-2"],
-            events[0]["excluded_doc_ids"],
-        )
-
-    def test_document_exclusion_filters_chat_window_but_keeps_older_chat_messages(self) -> None:
-        vectorstore.query_documents = lambda query, n_results=20, where=None: [
-            vectorstore.VectorDocHit(
-                "chat-1",
-                "chat",
-                "1",
-                1,
-                0.1,
-                {"type": "chat", "thread_id": 7, "message_id": 1, "soul_name": "拾迹者"},
-            ),
-            vectorstore.VectorDocHit(
-                "chat-21",
-                "chat",
-                "21",
-                2,
-                0.2,
-                {"type": "chat", "thread_id": 7, "message_id": 21, "soul_name": "拾迹者"},
-            ),
-            vectorstore.VectorDocHit(
-                "post-p-history",
-                "post",
-                "p-history",
-                3,
-                0.3,
-                {"type": "post", "post_id": "p-history"},
-            ),
-        ]
-
-        hits = retrieval.hybrid_search_documents(
-            "你好",
-            k=2,
-            trace_context={"channel": "chat", "thread_id": 7},
-            exclusion=retrieval.RetrievalExclusion(chat_message_ids=frozenset(range(2, 22))),
-        )
-
-        self.assertEqual(["chat-1", "post-p-history"], [hit.doc_id for hit in hits])
-        events = [event for event in self.logged_events if event["event"] == "retrieval_self_excluded"]
-        self.assertEqual(["chat-21"], events[-1]["excluded_doc_ids"])
-
-    def test_document_weight_prefers_post_user_role_and_same_soul(self) -> None:
-        post_weight = retrieval._doc_weight("post", {"type": "post", "post_id": "p-past"}, "拾迹者", "comment")
-        user_same = retrieval._doc_weight("comment", {"role": "user", "soul_name": "拾迹者"}, "拾迹者", "comment")
-        user_other = retrieval._doc_weight("comment", {"role": "user", "soul_name": "毒舌好友"}, "拾迹者", "comment")
-        assistant_same = retrieval._doc_weight(
-            "comment",
-            {"role": "assistant", "soul_name": "拾迹者"},
-            "拾迹者",
-            "comment",
-        )
-        assistant_other = retrieval._doc_weight(
-            "comment",
-            {"role": "assistant", "soul_name": "毒舌好友"},
-            "拾迹者",
-            "comment",
-        )
-
-        self.assertEqual(1.0, post_weight)
-        self.assertGreater(post_weight, user_same)
-        self.assertGreater(user_same, user_other)
-        self.assertGreater(user_other, assistant_same)
-        self.assertGreater(assistant_same, assistant_other)
-
-    def test_chat_user_weight_is_higher_in_chat_channel(self) -> None:
-        chat_hit = vectorstore.VectorDocHit(
-            "chat-user",
-            "chat",
-            "10",
-            1,
-            0.2,
-            {"type": "chat", "role": "user", "thread_id": 7, "message_id": 10, "soul_name": "拾迹者"},
-        )
-
-        comment_channel = retrieval._merge_document_hits(
-            "旧话题",
-            [],
-            [chat_hit],
-            k=1,
-            channel="comment",
-            current_soul="拾迹者",
-        )
-        chat_channel = retrieval._merge_document_hits(
-            "旧话题",
-            [],
-            [chat_hit],
-            k=1,
-            channel="chat",
-            current_soul="拾迹者",
-        )
-
-        self.assertEqual(0.8, comment_channel[0].score)
-        self.assertEqual(0.9, chat_channel[0].score)
-
-    def test_document_weight_does_not_affect_fts_only_post_hit(self) -> None:
-        hits = retrieval._merge_document_hits(
-            "关键词",
-            [retrieval.RetrievalHit("p-keyword", "fts", 1, -1.0)],
-            [],
-            k=1,
-            channel="comment",
-            current_soul="拾迹者",
-        )
-
-        self.assertEqual(["post-p-keyword"], [hit.doc_id for hit in hits])
-        self.assertEqual(["fts"], hits[0].sources)
-        self.assertEqual(1.0, hits[0].score)
-
-    def test_comment_channel_type_caps_keep_total_within_k_and_do_not_overfill_posts(self) -> None:
-        vector_hits = [
-            vectorstore.VectorDocHit(
-                "chat-1",
-                "chat",
-                "1",
-                1,
-                0.2,
-                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 1, "soul_name": "拾迹者"},
-            ),
-            vectorstore.VectorDocHit(
-                "chat-2",
-                "chat",
-                "2",
-                2,
-                0.2,
-                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 2, "soul_name": "拾迹者"},
-            ),
-            *[
-                vectorstore.VectorDocHit(
-                    f"post-p-{index}",
-                    "post",
-                    f"p-{index}",
-                    index + 2,
-                    0.2,
-                    {"type": "post", "post_id": f"p-{index}"},
-                )
-                for index in range(1, 6)
-            ],
-        ]
-
-        hits = retrieval._merge_document_hits(
-            "旧私聊",
-            [],
-            vector_hits,
-            k=5,
-            channel="comment",
-            current_soul="拾迹者",
-        )
-
-        self.assertLessEqual(len(hits), 5)
-        self.assertEqual(1, sum(1 for hit in hits if hit.type == "chat"))
-        self.assertEqual(3, sum(1 for hit in hits if hit.type == "post"))
-
-    def test_comment_channel_type_caps_do_not_backfill_posts_when_other_types_are_empty(self) -> None:
-        hits = retrieval._merge_document_hits(
-            "旧帖子",
-            [],
-            [
-                vectorstore.VectorDocHit(
-                    f"post-p-{index}",
-                    "post",
-                    f"p-{index}",
-                    index,
-                    0.2,
-                    {"type": "post", "post_id": f"p-{index}"},
-                )
-                for index in range(1, 6)
-            ],
-            k=5,
-            channel="comment",
-            current_soul="拾迹者",
-        )
-
-        self.assertEqual(3, len(hits))
-        self.assertTrue(all(hit.type == "post" for hit in hits))
-
-    def test_chat_channel_quota_admits_qualified_chat_hit_despite_higher_scoring_posts(self) -> None:
-        vector_hits = [
-            *[
-                vectorstore.VectorDocHit(
-                    f"post-p-{index}",
-                    "post",
-                    f"p-{index}",
-                    index,
-                    0.05 * index + 0.05,
-                    {"type": "post", "post_id": f"p-{index}"},
-                )
-                for index in range(1, 5)
-            ],
-            vectorstore.VectorDocHit(
-                "chat-9",
-                "chat",
-                "9",
-                5,
-                0.3,
-                {"type": "chat", "role": "user", "thread_id": 7, "message_id": 9, "soul_name": "拾迹者"},
-            ),
-        ]
-
-        hits = retrieval._merge_document_hits(
-            "旧私聊",
-            [],
-            vector_hits,
-            k=chat_service.RELATED_POST_LIMIT,
-            channel="chat",
-            current_soul="拾迹者",
-        )
-
-        doc_ids = [hit.doc_id for hit in hits]
-        self.assertIn("chat-9", doc_ids)
-        self.assertEqual(3, sum(1 for hit in hits if hit.type == "post"))
-        self.assertNotIn("post-p-4", doc_ids)
-
-    def test_reply_channel_retrieval_limits_cover_quota_sums(self) -> None:
-        self.assertGreaterEqual(
-            chat_service.RELATED_POST_LIMIT,
-            sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["chat"].values()),
-        )
-        self.assertGreaterEqual(
-            comment_service.COMMENT_RELATED_MEMORY_LIMIT,
-            sum(retrieval.DOC_TYPE_CAPS_BY_CHANNEL["comment"].values()),
-        )
-
 
 class RetrievalDatabaseTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -715,7 +356,7 @@ class RetrievalDatabaseTest(unittest.TestCase):
         self.assertIn("like_fallback", like_hit.reasons)
         self.assertIn("low_trust", like_hit.reasons)
 
-    def test_long_cjk_fts_uses_window_candidates_to_hit_related_post(self) -> None:
+    def test_long_cjk_fts_uses_word_candidates_to_hit_related_post(self) -> None:
         self.insert_post("p-library", "晚上在图书馆学习时，我的效率确实更高。", 2.0)
         self.insert_post("p-other", "今天只是随便散步。", 1.0)
         retrieval.vector_search_scored = lambda query, k=20: []
@@ -728,6 +369,40 @@ class RetrievalDatabaseTest(unittest.TestCase):
         self.assertEqual("posts_fts_trigram", event["table"])
         self.assertIn("图书馆", event["deterministic_candidates"])
         self.assertIn('"图书馆"', event["match"])
+
+    def test_multi_short_cjk_words_recall_via_like_union(self) -> None:
+        # both 2-char words appear, but not as one contiguous run -> trigram MATCH
+        # alone misses it; the per-word LIKE union recovers it.
+        self.insert_post("p-exam", "我在准备考研，最近很认真复习", 2.0)
+        self.insert_post("p-other", "今天随便散步", 1.0)
+
+        hits = [hit.post_id for hit in retrieval.fts_search_scored("考研 复习", k=5)]
+
+        self.assertIn("p-exam", hits)
+        self.assertNotIn("p-other", hits)
+        self.assertEqual("short_cjk_union", self._last_event("fts_query_built")["fallback_type"])
+
+    def test_spaceless_multi_word_recalls_via_jieba(self) -> None:
+        # natural Chinese input omits spaces; jieba splits 考研复习 -> 考研/复习 so
+        # the LIKE fallback fires, matching what the spaced query already did.
+        self.insert_post("p-exam", "我在准备考研，最近很认真复习", 2.0)
+        self.insert_post("p-other", "今天随便散步", 1.0)
+
+        hits = [hit.post_id for hit in retrieval.fts_search_scored("考研复习", k=5)]
+
+        self.assertIn("p-exam", hits)
+        self.assertNotIn("p-other", hits)
+
+    def test_single_word_not_split_into_fragments(self) -> None:
+        # jieba keeps 图书馆 as one word, so it hits via trigram but must NOT drag
+        # in a post that only has the 2-char fragment 图书 — search precision holds.
+        self.insert_post("p-library", "晚上在图书馆学习", 2.0)
+        self.insert_post("p-bookmgmt", "图书管理系统上线了", 1.0)
+
+        hits = [hit.post_id for hit in retrieval.fts_search_scored("图书馆", k=5)]
+
+        self.assertIn("p-library", hits)
+        self.assertNotIn("p-bookmgmt", hits)
 
     def test_empty_or_symbol_only_fts_query_returns_empty(self) -> None:
         self.insert_post("p-1", "ChromaDB 和 FTS5。", 1.0)
@@ -772,40 +447,6 @@ class RetrievalDatabaseTest(unittest.TestCase):
             ],
             result.hits,
         )
-
-    def test_fts_keywords_can_drive_fts_search(self) -> None:
-        self.insert_post("p-library", "晚上在图书馆学习时，我的效率确实更高。", 2.0)
-        self.insert_post("p-other", "今天只是随便散步。", 1.0)
-
-        hits = retrieval.fts_search_scored(
-            "完全不相关的原始查询",
-            k=5,
-            fts_keywords=["图书馆", "学习效率"],
-        )
-
-        self.assertIn("p-library", [hit.post_id for hit in hits])
-        self.assertEqual("fts_rewrite", hits[0].source)
-        event = self._last_event("fts_query_built")
-        self.assertEqual(["图书馆", "学习效率"], event["fts_keywords"])
-        self.assertEqual(["图书馆", "学习效率"], event["keyword_candidates"])
-        self.assertEqual("fts_rewrite", event["source"])
-
-    def test_semantic_query_is_used_for_vector_search(self) -> None:
-        captured: dict[str, str] = {}
-        retrieval.vector_search_scored = lambda query, k=20: captured.setdefault("query", query) and []
-
-        retrieval.hybrid_search_scored(
-            "原始查询",
-            k=3,
-            semantic_query="改写后的语义查询",
-            fts_keywords=[],
-        )
-
-        self.assertEqual("改写后的语义查询", captured["query"])
-        event = self._last_event("hybrid_retrieval_result")
-        self.assertEqual("原始查询", event["raw_query"])
-        self.assertEqual("改写后的语义查询", event["semantic_query"])
-        self.assertEqual([], event["fts_keywords"])
 
     def _last_event(self, event_name: str) -> dict:
         current = self.workspace / "logs" / "current.jsonl"

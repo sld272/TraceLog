@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from api.deps import require_configured_runtime_or_409, run_sync
-from core import memory_review_service, soul_service
+from core import soul_service
 from core.llm import soul_router
 
 router = APIRouter(prefix="/souls", tags=["souls"])
@@ -32,10 +32,6 @@ class UpdateSoulRequest(BaseModel):
     description: str | None = None
     enabled: bool | None = None
     order: list[str] | None = None
-
-
-class UpdateSoulMemoryRequest(BaseModel):
-    content: str = Field(min_length=1)
 
 
 @router.get("")
@@ -91,38 +87,6 @@ async def update_soul(name: str, request: UpdateSoulRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _record(record)
-
-
-@router.get("/{name}/memory")
-async def get_soul_memory(name: str):
-    try:
-        content = await run_sync(memory_review_service.read_soul_memory, name)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"soul_name": name, "content": content}
-
-
-@router.put("/{name}/memory")
-async def update_soul_memory(name: str, request: UpdateSoulMemoryRequest):
-    try:
-        await run_sync(memory_review_service.save_soul_memory, name, request.content)
-        content = await run_sync(memory_review_service.read_soul_memory, name)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"soul_name": name, "content": content}
-
-
-@router.get("/{name}/memory/revisions")
-async def list_soul_memory_revisions(name: str, limit: int = 20):
-    return await run_sync(memory_review_service.list_soul_revisions, name, limit)
-
-
-@router.get("/{name}/memory/revisions/{revision_id}")
-async def get_soul_memory_revision(name: str, revision_id: int):
-    revision = await run_sync(memory_review_service.get_soul_revision, revision_id)
-    if revision is None or revision.get("target_name") != name:
-        raise HTTPException(status_code=404, detail="soul memory revision not found")
-    return revision
 
 
 def _record(record: Any) -> dict[str, Any]:

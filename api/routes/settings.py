@@ -205,8 +205,6 @@ def _workspace_status() -> dict[str, Any]:
         "db_exists": db.DB_PATH.exists(),
         "db_size_bytes": _path_size(db.DB_PATH),
         "souls_dir": str(db.WORKSPACE_DIR / "souls"),
-        "soul_memories_dir": str(db.WORKSPACE_DIR / "soul_memories"),
-        "user_memory_path": str(db.WORKSPACE_DIR / "user.md"),
         "counts": {
             "posts": _count_table("posts"),
             "comments": _count_table("comments"),
@@ -215,6 +213,8 @@ def _workspace_status() -> dict[str, Any]:
             "todos": _count_table("todos"),
             "jobs": _count_table("jobs"),
             "vision_cache": _count_table("vision_cache"),
+            "memory_units": _count_table("memory_units"),
+            "memory_views": _count_table("memory_views"),
         },
         "web_search": web_search_service.configured_status(_load_config_file()),
         "vector_index": _vector_index_status(),

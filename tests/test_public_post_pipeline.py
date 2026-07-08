@@ -3,12 +3,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 import io
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
 from PIL import Image
 
-from core import attachment_service, db, query_rewriter, retrieval, tool_config_service, vector_index_service
+from core import attachment_service, db, reply_service, vector_index_service, vision_service
 from core.app_services import event_service, job_service, public_post_pipeline
 from tests.helpers import require_not_none
 
@@ -42,8 +43,6 @@ class PublicPostPipelineTest(unittest.TestCase):
         self.workspace = Path(self.tmp.name) / "workspace"
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
-        self.old_rewrite = query_rewriter.rewrite_query
-        self.old_search = retrieval.hybrid_search
         db.WORKSPACE_DIR = self.workspace
         db.DB_PATH = self.workspace / "state.db"
         db.init_db()
@@ -57,8 +56,6 @@ class PublicPostPipelineTest(unittest.TestCase):
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
-        query_rewriter.rewrite_query = self.old_rewrite
-        retrieval.hybrid_search = self.old_search
         self.tmp.cleanup()
 
     def test_create_post_returns_immediately_and_enqueues_jobs(self) -> None:
@@ -71,22 +68,12 @@ class PublicPostPipelineTest(unittest.TestCase):
             [
                 "index_post_embedding",
                 "generate_post_replies",
-                "run_todo_tool",
-                "run_light_reflection",
-                "maybe_trigger_global_deep_reflection",
+                "run_memory_reconcile",
             ],
             [row["type"] for row in jobs],
         )
         self.assertEqual([job["id"] for job in db.query_all("SELECT id FROM jobs ORDER BY id ASC")], created.job_ids)
         self.assertEqual(["post_created"], [event["event_type"] for event in events])
-
-    def test_create_post_omits_todo_job_when_tool_disabled(self) -> None:
-        tool_config_service.set_tool_enabled("todo", False)
-
-        created = public_post_pipeline.create_post("今天想练歌")
-        jobs = job_service.list_jobs_for_post(created.post_id)
-
-        self.assertNotIn("run_todo_tool", [job["type"] for job in jobs])
 
     def test_image_only_post_enqueues_reply_without_text_indexing_jobs(self) -> None:
         attachment = attachment_service.upload_image(_image_bytes(), content_type="image/png")
@@ -95,10 +82,56 @@ class PublicPostPipelineTest(unittest.TestCase):
         jobs = job_service.list_jobs_for_post(created.post_id)
 
         self.assertEqual(
-            ["generate_post_replies", "run_light_reflection", "maybe_trigger_global_deep_reflection"],
+            ["generate_post_replies", "run_memory_reconcile"],
             [job["type"] for job in jobs],
         )
-        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = ?", (f"pending_vector_doc:post-{created.post_id}",)))
+
+    def test_image_summary_becomes_post_vision_evidence(self) -> None:
+        attachment = attachment_service.upload_image(
+            _image_bytes(), content_type="image/png"
+        )
+        created = public_post_pipeline.create_post("", [attachment.id])
+        summary = vision_service.VisionSummary(
+            attachment_id=attachment.id,
+            status="ok",
+            description="图片里是一块学习计划看板。",
+            visible_text=["考研计划"],
+            uncertainties=[],
+        )
+        public_context = public_post_pipeline.PublicPostReplyContext(
+            llm_content="图片里是一块学习计划看板。",
+            built_context=SimpleNamespace(enabled_souls=[]),
+        )
+        with (
+            patch(
+                "core.app_services.public_post_pipeline.vision_service.describe_attachments",
+                return_value=[summary],
+            ),
+            patch(
+                "core.app_services.public_post_pipeline.record_service.index_post_vision_embedding"
+            ),
+            patch(
+                "core.app_services.public_post_pipeline.build_public_post_reply_context",
+                return_value=public_context,
+            ),
+        ):
+            public_post_pipeline._run_generate_post_replies(
+                1,
+                {"post_id": created.post_id},
+                client=object(),
+                model="m",
+            )
+
+        event = require_not_none(
+            db.query_one(
+                """
+                SELECT * FROM memory_ingest_events
+                WHERE source_type = 'post_vision' AND source_id = ?
+                """,
+                (created.post_id,),
+            )
+        )
+        self.assertIn("学习计划看板", event["content_snapshot"])
 
     def test_index_post_embedding_job_indexes_and_emits_events(self) -> None:
         fake_vectorstore = FakeVectorStore()
@@ -125,13 +158,6 @@ class PublicPostPipelineTest(unittest.TestCase):
         first = require_not_none(job_service.claim_next_pending())
         job_service.mark_succeeded(first["id"])
         job = require_not_none(job_service.claim_next_pending())
-        query_rewriter.rewrite_query = lambda *args, **kwargs: query_rewriter.RewrittenQuery(
-            raw_query="今天想练歌",
-            semantic_query="今天想练歌",
-            keywords=[],
-            used_rewrite=False,
-        )
-        retrieval.hybrid_search = lambda *args, **kwargs: []
 
         public_post_pipeline.execute_job(job, client=None, model="fake")  # type: ignore[arg-type]
         event_types = [event["event_type"] for event in event_service.list_post_events(created.post_id)]
@@ -139,30 +165,68 @@ class PublicPostPipelineTest(unittest.TestCase):
         self.assertIn("reply_started", event_types)
         self.assertIn("reply_succeeded", event_types)
 
-    def test_reply_job_excludes_current_post_from_retrieval(self) -> None:
-        created = public_post_pipeline.create_post("今天想练歌")
-        first = require_not_none(job_service.claim_next_pending())
-        job_service.mark_succeeded(first["id"])
-        job = require_not_none(job_service.claim_next_pending())
-        captured: dict[str, object] = {}
-        query_rewriter.rewrite_query = lambda *args, **kwargs: query_rewriter.RewrittenQuery(
-            raw_query="今天想练歌",
-            semantic_query="今天想练歌",
-            keywords=[],
-            used_rewrite=False,
+    def test_public_reply_event_and_root_metadata_receive_inline_suggestion(self) -> None:
+        created = public_post_pipeline.create_post("我决定准备考研")
+        job_id = require_not_none(
+            db.query_one(
+                "SELECT id FROM jobs WHERE type = ? AND json_extract(payload_json, '$.post_id') = ?",
+                (job_service.TYPE_GENERATE_POST_REPLIES, created.post_id),
+            )
+        )["id"]
+        built_context = SimpleNamespace(
+            enabled_souls=[SimpleNamespace(name="拾迹者")],
+        )
+        public_context = public_post_pipeline.PublicPostReplyContext(
+            llm_content="我决定准备考研",
+            built_context=built_context,
+        )
+        suggestion = {
+            "id": "s_1",
+            "kind": "goal",
+            "payload": {"title": "准备考研", "horizon": "long"},
+            "evidence_ref": f"post:{created.post_id}",
+            "confidence": 0.9,
+            "status": "pending",
+            "normalized_key": "sha256:x",
+            "created_at": 1.0,
+            "decided_at": None,
+        }
+        result = reply_service.SoulReplyResult(
+            soul_name="拾迹者",
+            sort_order=0,
+            ok=True,
+            reply="认真规划。",
+            error=None,
         )
 
-        def fake_search(*args, **kwargs):
-            captured["exclusion"] = kwargs.get("exclusion")
-            return []
+        with (
+            patch(
+                "core.app_services.public_post_pipeline.build_public_post_reply_context",
+                return_value=public_context,
+            ),
+            patch("core.app_services.public_post_pipeline.reply_service.fanout", return_value=[result]),
+            patch(
+                "core.app_services.public_post_pipeline.suggestion_pipeline.collect_goal_suggestions",
+                return_value=[suggestion],
+            ),
+            patch(
+                "core.app_services.public_post_pipeline.reply_service.attach_suggestions_to_root_comment"
+            ) as attach,
+        ):
+            public_post_pipeline._run_generate_post_replies(
+                int(job_id),
+                {"post_id": created.post_id},
+                client=object(),
+                model="m",
+            )
 
-        retrieval.hybrid_search = fake_search
-
-        public_post_pipeline.execute_job(job, client=None, model="fake")  # type: ignore[arg-type]
-
-        exclusion = captured["exclusion"]
-        self.assertIsInstance(exclusion, retrieval.RetrievalExclusion)
-        self.assertEqual(frozenset({created.post_id}), exclusion.post_ids)
+        reply_event = [
+            event
+            for event in event_service.list_post_events(created.post_id)
+            if event["event_type"] == "reply_succeeded" and event["payload"].get("soul_name")
+        ][-1]
+        self.assertEqual([suggestion], reply_event["payload"]["suggestions"])
+        attach.assert_called_once_with(created.post_id, "拾迹者", [suggestion])
 
     def test_reply_job_fails_when_soul_reply_fails(self) -> None:
         db.execute(
@@ -179,13 +243,6 @@ class PublicPostPipelineTest(unittest.TestCase):
         first = require_not_none(job_service.claim_next_pending())
         job_service.mark_succeeded(first["id"])
         job = require_not_none(job_service.claim_next_pending())
-        query_rewriter.rewrite_query = lambda *args, **kwargs: query_rewriter.RewrittenQuery(
-            raw_query="今天想练歌",
-            semantic_query="今天想练歌",
-            keywords=[],
-            used_rewrite=False,
-        )
-        retrieval.hybrid_search = lambda *args, **kwargs: []
 
         with self.assertRaisesRegex(RuntimeError, "reply generation failed"):
             public_post_pipeline.execute_job(job, client=None, model="bad-model")  # type: ignore[arg-type]

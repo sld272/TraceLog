@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 
-from core import db, logging_service, vector_index_service
+from core import db, logging_service, memory_events_service, vector_index_service
 
 
 def save_post(content: str, *, index_immediately: bool = True, track_embedding: bool = True) -> str:
@@ -23,6 +22,14 @@ def save_post(content: str, *, index_immediately: bool = True, track_embedding: 
             (post_id, now.isoformat(), body, now.timestamp(), now.timestamp()),
         )
         _snapshot_post_soul_order(conn, post_id, now.timestamp())
+        memory_events_service.record_post_mutation(
+            conn,
+            post_id=post_id,
+            op="create",
+            content=body,
+            occurred_at=now.timestamp(),
+            created_at=now.timestamp(),
+        )
         if track_embedding:
             doc = vector_index_service.build_post_doc(post_id, body)
             if doc is not None:
@@ -213,44 +220,8 @@ def format_post(row) -> str:
 
 
 def retry_pending_vector_docs(limit: int | None = None) -> int:
-    migrate_pending_embeddings()
-    vector_index_service.migrate_legacy_pending_vector_docs()
     vector_index_service.rebuild_expected_docs()
     return vector_index_service.process_outbox(limit=limit)
-
-
-def migrate_pending_embeddings() -> int:
-    """Convert legacy pending_embedding markers into the vector ledger."""
-    rows = db.query_all(
-        """
-        SELECT key, value
-        FROM meta
-        WHERE key LIKE 'pending_embedding:%'
-        ORDER BY key
-        """
-    )
-    migrated = 0
-    with db.transaction() as conn:
-        for row in rows:
-            try:
-                payload = json.loads(row["value"])
-            except (TypeError, json.JSONDecodeError):
-                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-                continue
-            if not isinstance(payload, dict):
-                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-                continue
-            post_id = str(payload.get("post_id") or str(row["key"])[len("pending_embedding:"):]).strip()
-            content = str(payload.get("content") or "")
-            if not post_id:
-                conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-                continue
-            doc = vector_index_service.build_post_doc(post_id, content)
-            if doc is not None:
-                vector_index_service.upsert_doc(doc, conn=conn)
-            conn.execute("DELETE FROM meta WHERE key = ?", (row["key"],))
-            migrated += 1
-    return migrated
 
 
 def reindex_all_vector_docs() -> int:

@@ -16,10 +16,7 @@ STATUS_CANCELLED = "cancelled"
 TYPE_INDEX_POST_EMBEDDING = "index_post_embedding"
 TYPE_GENERATE_POST_REPLIES = "generate_post_replies"
 TYPE_RUN_TODO_TOOL = "run_todo_tool"
-TYPE_RUN_LIGHT_REFLECTION = "run_light_reflection"
-TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION = "maybe_trigger_global_deep_reflection"
-TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION = "trigger_global_deep_reflection"
-TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS = "trigger_soul_deep_reflections"
+TYPE_RUN_MEMORY_RECONCILE = "run_memory_reconcile"
 
 DEFAULT_MAX_ATTEMPTS = 3
 
@@ -28,10 +25,7 @@ VALID_TYPES = {
     TYPE_INDEX_POST_EMBEDDING,
     TYPE_GENERATE_POST_REPLIES,
     TYPE_RUN_TODO_TOOL,
-    TYPE_RUN_LIGHT_REFLECTION,
-    TYPE_MAYBE_TRIGGER_GLOBAL_DEEP_REFLECTION,
-    TYPE_TRIGGER_GLOBAL_DEEP_REFLECTION,
-    TYPE_TRIGGER_SOUL_DEEP_REFLECTIONS,
+    TYPE_RUN_MEMORY_RECONCILE,
 }
 
 
@@ -51,8 +45,47 @@ def enqueue(job_type: str, payload: dict[str, Any], *, max_attempts: int = DEFAU
         return db.require_lastrowid(cur, "job insert")
 
 
+def enqueue_memory_reconcile_once(payload: dict[str, Any] | None = None) -> int | None:
+    """Enqueue a memory-reconcile job unless one is already pending (dedupe).
+
+    Reconcile scans every bucket with unconsumed evidence, so one pending job
+    already covers all writes that land before it runs; enqueuing one per write
+    would create a redundant storm. Returns the new job id, or None when a
+    pending reconcile job already exists. The dedupe check + insert share one
+    immediate transaction so concurrent writers can't both slip a job in.
+    """
+    now = db.now_ts()
+    with db.immediate_transaction() as conn:
+        existing = conn.execute(
+            "SELECT id FROM jobs WHERE type = ? AND status = ? LIMIT 1",
+            (TYPE_RUN_MEMORY_RECONCILE, STATUS_PENDING),
+        ).fetchone()
+        if existing is not None:
+            return None
+        cur = conn.execute(
+            """
+            INSERT INTO jobs(type, status, payload_json, attempts, max_attempts, created_at, updated_at)
+            VALUES (?, ?, ?, 0, ?, ?, ?)
+            """,
+            (
+                TYPE_RUN_MEMORY_RECONCILE,
+                STATUS_PENDING,
+                json.dumps(payload or {}, ensure_ascii=False),
+                DEFAULT_MAX_ATTEMPTS,
+                now,
+                now,
+            ),
+        )
+        return db.require_lastrowid(cur, "reconcile job insert")
+
+
 def claim_next_pending() -> dict[str, Any] | None:
-    """Atomically claim the oldest pending job."""
+    """Atomically claim the next pending job, interactive work first.
+
+    Memory reconcile is maintenance: with a single worker, letting it sit
+    ahead of a reply/embedding job would stall the user-visible pipeline
+    behind a multi-LLM-call background chain. It is only claimed when no
+    other job type is waiting; within each class, oldest first."""
     now = db.now_ts()
     with db.immediate_transaction() as conn:
         row = conn.execute(
@@ -60,10 +93,10 @@ def claim_next_pending() -> dict[str, Any] | None:
             SELECT *
             FROM jobs
             WHERE status = ?
-            ORDER BY created_at ASC, id ASC
+            ORDER BY (type = ?) ASC, created_at ASC, id ASC
             LIMIT 1
             """,
-            (STATUS_PENDING,),
+            (STATUS_PENDING, TYPE_RUN_MEMORY_RECONCILE),
         ).fetchone()
         if row is None:
             return None
@@ -77,6 +110,16 @@ def claim_next_pending() -> dict[str, Any] | None:
         )
         claimed = conn.execute("SELECT * FROM jobs WHERE id = ?", (row["id"],)).fetchone()
     return _row_to_dict(claimed) if claimed is not None else None
+
+
+def has_pending_interactive_jobs() -> bool:
+    """True when any non-maintenance job is waiting — the signal maintenance
+    passes use to yield the single worker back to user-visible work."""
+    row = db.query_one(
+        "SELECT 1 FROM jobs WHERE status = ? AND type != ? LIMIT 1",
+        (STATUS_PENDING, TYPE_RUN_MEMORY_RECONCILE),
+    )
+    return row is not None
 
 
 def mark_succeeded(job_id: int) -> None:
@@ -119,6 +162,51 @@ def mark_failed_or_retry(job_id: int, error: str) -> None:
         )
         return
     mark_failed(job_id, error)
+
+
+def mark_memory_reconcile_failed_or_retry(job_id: int, error: str) -> None:
+    """Retry one reconcile job without creating competing pending runners.
+
+    A write or a bounded-pass continuation may already have queued another
+    global reconcile while this job was running. In that case the existing
+    pending job owns all remaining evidence, so this failed job is finalized
+    instead of being re-queued alongside it.
+    """
+    now = db.now_ts()
+    with db.immediate_transaction() as conn:
+        job = conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if job is None:
+            return
+        retryable = is_retryable_error(error) and int(job["attempts"]) < int(job["max_attempts"])
+        if retryable:
+            existing = conn.execute(
+                """
+                SELECT id
+                FROM jobs
+                WHERE type = ? AND status = ? AND id != ?
+                LIMIT 1
+                """,
+                (TYPE_RUN_MEMORY_RECONCILE, STATUS_PENDING, job_id),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = ?, updated_at = ?, error = ?,
+                        started_at = NULL, finished_at = NULL
+                    WHERE id = ?
+                    """,
+                    (STATUS_PENDING, now, error, job_id),
+                )
+                return
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status = ?, updated_at = ?, finished_at = ?, error = ?
+            WHERE id = ?
+            """,
+            (STATUS_FAILED, now, now, error, job_id),
+        )
 
 
 def is_retryable_error(error: str | None) -> bool:

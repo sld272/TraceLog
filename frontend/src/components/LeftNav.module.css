@@ -5,6 +5,30 @@
   gap: var(--space-5);
 }
 
+.navLogo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-2) var(--space-2);
+}
+
+.navLogo .logoMark {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: #fff;
+  padding: 3px;
+  box-shadow: var(--shadow-sm);
+}
+
+.navLogo .logoWordmark {
+  height: 22px;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+
 .section {
   display: flex;
   flex-direction: column;
@@ -78,23 +102,68 @@
   font-weight: var(--weight-semibold);
 }
 
-.soulIcon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-full);
-  border: 2px solid rgba(255, 255, 255, 0.8);
-  font-size: 12px;
-  font-weight: var(--weight-semibold);
-  flex-shrink: 0;
-}
-
 .emptySoul {
   padding: var(--space-2) var(--space-3);
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
+}
+
+/* 私聊 entries — avatar + name + one-line persona preview */
+.dmItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  transition: background var(--transition-fast);
+}
+
+.dmItem:hover {
+  background: var(--color-bg-hover);
+}
+
+.dmItemActive {
+  background: var(--color-accent-subtle);
+}
+
+.dmAvatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+}
+
+.dmBody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dmName {
+  font-size: 13.5px;
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.dmItemActive .dmName {
+  color: var(--color-accent);
+}
+
+.dmPreview {
+  font-size: var(--text-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .bottomSection {

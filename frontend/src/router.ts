@@ -1,7 +1,8 @@
 export type Route =
   | { kind: 'home' }
   | { kind: 'todos' }
-  | { kind: 'reflections' }
+  | { kind: 'goals' }
+  | { kind: 'memory' }
   | { kind: 'settings' }
   | { kind: 'chat'; soulName: string }
   | { kind: 'post'; postId: string; highlight?: string }
@@ -11,7 +12,8 @@ export function parseRoute(hash: string): Route {
   const [path = '', query = ''] = raw.split('?')
   if (!path || path === 'home') return { kind: 'home' }
   if (path === 'todos') return { kind: 'todos' }
-  if (path === 'reflections') return { kind: 'reflections' }
+  if (path === 'goals') return { kind: 'goals' }
+  if (path === 'memory') return { kind: 'memory' }
   if (path === 'settings') return { kind: 'settings' }
   if (path.startsWith('chat/')) {
     const soulName = decodeRouteSegment(path.slice('chat/'.length))
@@ -32,8 +34,10 @@ export function formatRoute(route: Route): string {
       return '#/'
     case 'todos':
       return '#/todos'
-    case 'reflections':
-      return '#/reflections'
+    case 'goals':
+      return '#/goals'
+    case 'memory':
+      return '#/memory'
     case 'settings':
       return '#/settings'
     case 'chat':

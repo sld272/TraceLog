@@ -48,13 +48,18 @@ class ReplyRouterPromptTest(unittest.TestCase):
     def test_comment_reply_prompt_allows_public_other_soul_context_with_boundaries(self) -> None:
         prompt = reply_router.COMMENT_REPLY_TASK_PROMPT
 
-        self.assertIn("公开评论区边界", prompt)
-        self.assertIn("你可以看见同一公开 post 下用户和其他 SOUL 的评论对话", prompt)
-        self.assertIn("我看到你和 X 聊到", prompt)
+        # reply centers on the user's latest message in your OWN thread; other
+        # SOULs' threads are background you may reference only when DIRECTLY
+        # relevant (e.g. a contradiction), not gratuitously
+        self.assertIn("回复主体是你自己那条", prompt)
+        self.assertIn("对你说的最后一句话", prompt)
+        self.assertIn("用户对 X 说", prompt)
+        self.assertIn("默认不要把那边的话题扯进来", prompt)
+        self.assertIn("直接相关", prompt)
+        self.assertIn("自相矛盾", prompt)
+        self.assertIn("我看到你跟 X 说", prompt)
         self.assertIn("不要直接与其他 SOUL 对话", prompt)
         self.assertIn("不要替其他 SOUL 发言", prompt)
-        self.assertIn("不要大量评价其他 SOUL 的观点", prompt)
-        self.assertIn("不要让其他线程抢走当前追问的重心", prompt)
 
 
 if __name__ == "__main__":

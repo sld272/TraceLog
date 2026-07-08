@@ -88,9 +88,9 @@ class QueryRewriterTest(unittest.TestCase):
         self.assertEqual("我之前是不是说过图书馆学习效率更高", invalid.semantic_query)
         self.assertEqual("我之前是不是说过图书馆学习效率更高", api_error.semantic_query)
 
-    def test_gate_skips_low_value_queries_without_calling_llm(self) -> None:
-        cases = ["", "图书", "ChromaDB fts5", "/quit"]
-        for raw_query in cases:
+    def test_gate_skips_only_empty_and_slash_commands(self) -> None:
+        # Reply paths rewrite every turn; the only skips are empty and slash-commands.
+        for raw_query in ["", "   ", "/quit"]:
             with self.subTest(raw_query=raw_query):
                 client = FakeClient(json.dumps({"semantic_query": "should not call", "keywords": ["x"]}, ensure_ascii=False))
 
@@ -99,6 +99,37 @@ class QueryRewriterTest(unittest.TestCase):
                 self.assertFalse(result.used_rewrite)
                 self.assertTrue(result.rewrite_skipped_by_gate)
                 self.assertEqual([], client.calls)
+
+    def test_gate_rewrites_short_and_thin_queries(self) -> None:
+        # a short/anaphoric message is exactly what needs rewriting — no length gate
+        client = FakeClient(json.dumps({"semantic_query": "图书馆偏好", "keywords": ["图书"]}, ensure_ascii=False))
+
+        result = query_rewriter.rewrite_query(client, "fake-model", "图书", "chat")
+
+        self.assertTrue(result.used_rewrite)
+        self.assertEqual(1, len(client.calls))
+
+    def test_recent_turns_caps_and_clips(self) -> None:
+        messages = [
+            SimpleNamespace(role="user", content="第一轮"),
+            SimpleNamespace(role="assistant", content=""),  # empty dropped
+            SimpleNamespace(role="assistant", content="回应"),
+            SimpleNamespace(role="user", content="x" * 500),
+        ]
+        turns = query_rewriter.recent_turns(messages, limit=3)
+        self.assertEqual([{"role": "assistant", "content": "回应"},
+                          {"role": "user", "content": "x" * query_rewriter.MAX_TURN_CHARS}], turns)
+
+    def test_rewrite_hands_recent_turns_to_the_model(self) -> None:
+        client = FakeClient(json.dumps({"semantic_query": "考研备考进展", "keywords": ["考研"]}, ensure_ascii=False))
+        turns = [{"role": "user", "content": "我在准备考研"}, {"role": "assistant", "content": "加油"}]
+
+        result = query_rewriter.rewrite_query(client, "fake-model", "那件事怎么样了", "chat", recent_turns=turns)
+
+        self.assertTrue(result.used_rewrite)
+        user_content = client.calls[0]["messages"][1]["content"]
+        self.assertIn("我在准备考研", user_content)   # context handed to the model
+        self.assertIn("那件事怎么样了", user_content)  # raw query preserved
 
     def test_long_natural_query_calls_llm(self) -> None:
         payload = {

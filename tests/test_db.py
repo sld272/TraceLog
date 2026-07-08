@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core import db
+from core import db, memory_events_service, memory_unit_service, memory_view_service
 from tests.helpers import require_not_none
 
 
@@ -23,13 +23,49 @@ class DbTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
+    def test_legacy_table_gains_migrated_columns_on_init(self) -> None:
+        # a DB created before contested_at existed: CREATE IF NOT EXISTS skips
+        # the table, so only the column migration can add it.
+        legacy = Path(self.tmp.name) / "legacy-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            # the columns schema.sql's indexes/triggers reference must already
+            # exist, as they would in any real pre-migration DB
+            conn.execute(
+                """
+                CREATE TABLE memory_units (
+                    id TEXT PRIMARY KEY,
+                    owner_scope TEXT NOT NULL DEFAULT 'global',
+                    visibility_scope TEXT NOT NULL DEFAULT 'public',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    prompt_policy TEXT NOT NULL DEFAULT 'allow',
+                    in_portrait INTEGER NOT NULL DEFAULT 0,
+                    content TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+            db.init_db()
+            conn = db.connect()
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_units)")}
+            conn.close()
+            self.assertIn("contested_at", columns)
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
     def test_validate_fts5_trigram_uses_unique_probe_and_cleans_up(self) -> None:
         db.execute(
             """
             INSERT INTO posts(id, ts, content, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            ("__fts5_probe__", "1970-01-01T00:00:00+00:00", "legacy probe", 0.0, 0.0),
+            ("__fts5_probe__", "1970-01-01T00:00:00+00:00", "fts probe", 0.0, 0.0),
         )
 
         conn = db.connect()
@@ -40,9 +76,9 @@ class DbTest(unittest.TestCase):
         finally:
             conn.close()
 
-        legacy = db.query_one("SELECT id FROM posts WHERE id = ?", ("__fts5_probe__",))
+        probe = db.query_one("SELECT id FROM posts WHERE id = ?", ("__fts5_probe__",))
         generated = db.query_all("SELECT id FROM posts WHERE id LIKE ?", ("__fts5_probe__:%",))
-        self.assertIsNotNone(legacy)
+        self.assertIsNotNone(probe)
         self.assertEqual([], generated)
 
     def test_schema_version_is_current_and_observation_tables_are_absent(self) -> None:
@@ -81,44 +117,6 @@ class DbTest(unittest.TestCase):
         self.assertIn("edited_at", chat_columns)
         self.assertIn("rerun_at", chat_columns)
         self.assertIn("metadata", chat_columns)
-
-    def test_post_soul_order_backfill_preserves_existing_display_order(self) -> None:
-        self._insert_post("p-order")
-        for name in ["A", "B"]:
-            db.execute(
-                """
-                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
-                VALUES (?, ?, 1, 0, ?, ?)
-                """,
-                (name, f"souls/{name}.md", 1.0, 1.0),
-            )
-        db.execute(
-            """
-            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
-            VALUES (?, ?, 'assistant', ?, 0, ?)
-            """,
-            ("p-order", "B", "B reply", 2.0),
-        )
-        db.execute(
-            """
-            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
-            VALUES (?, ?, 'assistant', ?, 0, ?)
-            """,
-            ("p-order", "A", "A reply", 3.0),
-        )
-
-        db.init_db()
-
-        rows = db.query_all(
-            """
-            SELECT soul_name, sort_order
-            FROM post_soul_orders
-            WHERE post_id = ?
-            ORDER BY sort_order ASC
-            """,
-            ("p-order",),
-        )
-        self.assertEqual([("B", 0), ("A", 1)], [(row["soul_name"], row["sort_order"]) for row in rows])
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(

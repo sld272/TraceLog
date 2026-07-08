@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 
 from core.llm import query_rewrite_router
 from core.llm.types import LLMClient
@@ -13,7 +12,11 @@ MAX_KEYWORDS = 12
 MAX_KEYWORD_CHARS = 16
 MAX_SEMANTIC_QUERY_CHARS = 120
 MIN_SEMANTIC_QUERY_CHARS = 4
-MIN_REWRITE_COMPACT_CHARS = 6
+
+# How many recent conversation turns to hand the rewrite as anaphora context, and
+# the per-turn char clip.
+REWRITE_CONTEXT_TURNS = 6
+MAX_TURN_CHARS = 200
 
 
 @dataclass(frozen=True)
@@ -30,9 +33,14 @@ def rewrite_query(
     model: str,
     raw_query: str,
     channel: str,
+    *,
+    recent_turns: list[dict] | None = None,
     trace_context: dict | None = None,
 ) -> RewrittenQuery:
-    """Rewrite a retrieval query, falling back to raw query on any invalid result."""
+    """Rewrite a retrieval query, falling back to raw query on any invalid result.
+
+    ``recent_turns`` ([{role, content}]) gives the model the conversation context
+    it needs to resolve anaphora/ellipsis in ``raw_query``."""
     raw = str(raw_query or "").strip()
     fallback = RewrittenQuery(raw_query=raw, semantic_query=raw, keywords=[], used_rewrite=False)
     if not should_rewrite_query(raw, channel):
@@ -51,6 +59,7 @@ def rewrite_query(
         model=model,
         raw_query=raw,
         channel=channel,
+        recent_turns=recent_turns,
         trace_context=trace_context,
     )
     if data is None:
@@ -71,18 +80,27 @@ def rewrite_query(
 
 
 def should_rewrite_query(raw_query: str, channel: str) -> bool:
+    """Reply paths rewrite every turn (a thin/anaphoric message is exactly what
+    needs rewriting), so the only skips are an empty query and slash-commands."""
     del channel
     raw = str(raw_query or "").strip()
     if not raw:
         return False
     if raw.startswith("/"):
         return False
-    compact = "".join(raw.split())
-    if len(compact) < MIN_REWRITE_COMPACT_CHARS:
-        return False
-    if _is_short_ascii_token_query(raw):
-        return False
     return True
+
+
+def recent_turns(messages: list, *, limit: int = REWRITE_CONTEXT_TURNS) -> list[dict]:
+    """[{role, content}] for the last `limit` non-empty turns — the anaphora
+    context handed to the rewrite. Accepts any objects exposing .role/.content."""
+    turns: list[dict] = []
+    for message in messages[-limit:]:
+        content = str(getattr(message, "content", "") or "").strip()
+        if not content:
+            continue
+        turns.append({"role": getattr(message, "role", "user"), "content": content[:MAX_TURN_CHARS]})
+    return turns
 
 
 def _normalize_keywords(value) -> list[str]:
@@ -106,14 +124,3 @@ def _normalize_text(value, *, limit: int) -> str:
     text = "".join(char for char in value if ord(char) >= 32 and char != "\x7f")
     text = " ".join(text.split())
     return text[:limit].strip()
-
-
-def _is_short_ascii_token_query(query: str) -> bool:
-    tokens = re.findall(r"[A-Za-z0-9_+-]+", query)
-    if not tokens:
-        return False
-    joined = "".join(tokens)
-    compact = "".join(query.split())
-    if joined != compact:
-        return False
-    return len(tokens) <= 2

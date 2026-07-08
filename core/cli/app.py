@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from core import context_builder, logging_service, query_rewriter, record_service, reply_service, retrieval, todo_service, tool_config_service, vector_index_service
+from core import context_builder, logging_service, record_service, reply_service, todo_service, tool_config_service, vector_index_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
 from core.cli.config import load_config
 from core.cli_input import read_cli_input
-from core import reflector
 
 
 def main() -> None:
@@ -64,9 +63,7 @@ def main() -> None:
         fixed_vector_docs = record_service.retry_pending_vector_docs()
         if reindexed_vector_docs or fixed_vector_docs:
             print(f"[向量存储] 已同步 {reindexed_vector_docs + fixed_vector_docs} 条向量任务。")
-        fixed_reflections = reflector.retry_pending_light_reflections(client, model)
-        if fixed_reflections:
-            print(f"[反思] 已处理 {fixed_reflections} 条待反思记录。")
+        sessions.run_memory_reconcile(client, model, trigger="cli_startup")
         todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     except vectorstore.VectorStoreInitError as e:
         print(f"[向量存储] 初始化失败：{e}")
@@ -82,20 +79,23 @@ def main() -> None:
             if user_input.lower() == "/quit":
                 raise KeyboardInterrupt
         except (KeyboardInterrupt, EOFError):
-            sessions.run_deep_reflection_on_exit(client, model)
+            sessions.run_memory_reconcile(client, model, trigger="cli_exit")
+            print("再见！\n")
             break
 
         if not user_input:
             continue
         chat_handled, todos, quit_requested = commands.handle_chat_command(user_input, client, model, todos)
         if quit_requested:
-            sessions.run_deep_reflection_on_exit(client, model)
+            sessions.run_memory_reconcile(client, model, trigger="cli_exit")
+            print("再见！\n")
             break
         if chat_handled:
             continue
         comment_handled, todos, quit_requested = commands.handle_comment_command(user_input, client, model, todos)
         if quit_requested:
-            sessions.run_deep_reflection_on_exit(client, model)
+            sessions.run_memory_reconcile(client, model, trigger="cli_exit")
+            print("再见！\n")
             break
         if comment_handled:
             continue
@@ -105,38 +105,9 @@ def main() -> None:
         if commands.handle_soul_command(user_input):
             continue
 
-        rewritten_query = query_rewriter.rewrite_query(
-            client,
-            model,
-            user_input,
-            "public_post",
-            trace_context={"channel": "public_post"},
-        )
-        logging_service.log_event(
-            "query_rewrite_result",
-            channel="public_post",
-            raw_query=rewritten_query.raw_query,
-            semantic_query=rewritten_query.semantic_query,
-            keywords=rewritten_query.keywords,
-            used_rewrite=rewritten_query.used_rewrite,
-            keyword_count=len(rewritten_query.keywords),
-            semantic_query_length=len(rewritten_query.semantic_query),
-            raw_query_length=len(rewritten_query.raw_query),
-            rewrite_skipped_by_gate=rewritten_query.rewrite_skipped_by_gate,
-        )
-        relevant_ids = retrieval.hybrid_search(
-            user_input,
-            k=3,
-            semantic_query=rewritten_query.semantic_query,
-            fts_keywords=rewritten_query.keywords,
-            trace_context={"channel": "public_post"},
-        )
-
         print("\n[TraceLog 正在思考...]\n")
         built_context = context_builder.build_context(
-            relevant_post_ids=relevant_ids,
             query=user_input,
-            fts_keywords=rewritten_query.keywords,
             trace_context={"channel": "public_post"},
         )
 
@@ -147,7 +118,7 @@ def main() -> None:
         results = reply_service.fanout(post_id, user_input, client, model, built_context)
         if not results:
             print("[TraceLog] 当前没有启用 SOUL，未生成评论。\n")
-            sessions.run_light_reflection_for_post(post_id, client, model)
+            sessions.run_memory_reconcile(client, model, trigger="cli_post")
             continue
 
         for result in results:
@@ -156,7 +127,7 @@ def main() -> None:
             else:
                 print(f"[{result.soul_name}] {result.reply}（{result.error}）\n")
 
-        sessions.run_light_reflection_for_post(post_id, client, model)
+        sessions.run_memory_reconcile(client, model, trigger="cli_post")
 
         if not any(result.ok for result in results):
             print("[TraceLog] 所有 SOUL 本次都回复失败，post 已保存，可稍后重试。\n")

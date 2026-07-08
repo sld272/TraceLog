@@ -91,7 +91,10 @@ class JobWorker:
             try:
                 await asyncio.to_thread(public_post_pipeline.execute_job, job, self.client, self.model)
             except Exception as exc:
-                job_service.mark_failed_or_retry(int(job["id"]), str(exc))
+                if job["type"] == job_service.TYPE_RUN_MEMORY_RECONCILE:
+                    job_service.mark_memory_reconcile_failed_or_retry(int(job["id"]), str(exc))
+                else:
+                    job_service.mark_failed_or_retry(int(job["id"]), str(exc))
                 logging_service.log_event(
                     "api_job_failed",
                     level="WARNING",

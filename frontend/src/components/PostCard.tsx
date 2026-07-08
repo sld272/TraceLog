@@ -6,18 +6,24 @@ import {
   type CommentMessage,
   type PipelineJobSummary,
   type Post,
+  type Suggestion,
+  parseMessageSuggestions,
 } from '@/api/client'
 import { EvidencePanel } from './EvidencePanel'
 import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
+import { InlineSuggestions } from './InlineSuggestions'
 import { SoulAvatar } from './SoulAvatar'
-import { ChatIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
+import { ChatIcon, ChevronRightIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
 import { soulColors } from '@/utils/soulColor'
 import styles from './PostCard.module.css'
 
 const FEED_MAX_THREAD_MESSAGES = 4
+// Only fold the middle of a feed thread when it would hide at least this many
+// messages — collapsing to hide a single message isn't worth the detail-page trip.
+const FEED_MIN_COLLAPSED = 2
 
 export interface CommentConversationState {
   conversation?: CommentConversation
@@ -29,6 +35,7 @@ export interface CommentConversationState {
 interface PostCardProps {
   post: Post
   comments?: Comment[]
+  suggestions?: Suggestion[]
   commentConversations?: Record<string, CommentConversationState>
   busyCommentId?: number | null
   retryingJobId?: number | null
@@ -49,6 +56,7 @@ interface PostCardProps {
 export const PostCard = memo(function PostCard({
   post,
   comments = [],
+  suggestions = [],
   commentConversations = {},
   busyCommentId = null,
   retryingJobId = null,
@@ -66,6 +74,13 @@ export const PostCard = memo(function PostCard({
   onRetryFailedJobs,
 }: PostCardProps) {
   const timeAgo = formatSmartTime(post.ts)
+  // detail page opens with comments expanded; the feed stays collapsed
+  const [showComments, setShowComments] = useState(variant === 'detail')
+  const toggleComments = () => {
+    const next = !showComments
+    setShowComments(next)
+    if (next && comments.length === 0 && onExpand) onExpand()
+  }
 
   return (
     <article id={`post-${post.post_id}`} className={styles.card}>
@@ -73,7 +88,7 @@ export const PostCard = memo(function PostCard({
         <div className={styles.author}>
           <span className={styles.userAvatar}>我</span>
           <div>
-            <span className={styles.userName}>你</span>
+            <span className={styles.userName}>我</span>
             {detailHref ? (
               <a className={styles.timeLink} href={detailHref}>
                 <time className={styles.time} dateTime={formatDateTimeAttribute(post.ts)} title={formatAbsoluteTime(post.ts)}>
@@ -97,7 +112,26 @@ export const PostCard = memo(function PostCard({
       {post.content && <div id={`post-content-${post.post_id}`} className={styles.content}>{post.content}</div>}
       <ImageGrid attachments={post.attachments ?? []} />
 
-      {comments.length > 0 && (
+      <InlineSuggestions suggestions={suggestions} />
+
+      {post.comment_count > 0 && (
+        <div className={styles.commentBar}>
+          <button
+            className={`${styles.commentToggle} ${showComments ? styles.commentToggleOn : ''}`}
+            onClick={toggleComments}
+            disabled={expandLoading}
+            aria-expanded={showComments}
+          >
+            {expandLoading ? <LoadingDots /> : <ChatIcon />}
+            <span>评论 {post.comment_count}</span>
+            <span className={`${styles.commentToggleChevron} ${showComments ? styles.commentToggleChevronOpen : ''}`}>
+              <ChevronRightIcon width={14} height={14} />
+            </span>
+          </button>
+        </div>
+      )}
+
+      {showComments && comments.length > 0 && (
         <div className={styles.comments}>
           {comments.map((comment) => (
             <CommentPreview
@@ -116,18 +150,10 @@ export const PostCard = memo(function PostCard({
         </div>
       )}
 
-      {post.comment_count > 0 && comments.length === 0 && onExpand && (
-        <>
-          <button className={styles.expandBtn} onClick={onExpand} disabled={expandLoading}>
-            {expandLoading ? <LoadingDots /> : <ChatIcon />}
-            <span>{expandLoading ? '加载回应中...' : `查看 ${post.comment_count} 条回应`}</span>
-          </button>
-          {expandError && (
-            <p className={styles.expandError}>
-              加载失败，点击重试：{expandError}
-            </p>
-          )}
-        </>
+      {showComments && expandError && (
+        <p className={styles.expandError}>
+          加载失败，点击重试：{expandError}
+        </p>
       )}
 
       <PipelineNotice
@@ -238,6 +264,7 @@ function CommentPreview({
 }) {
   const [reply, setReply] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [replyOpen, setReplyOpen] = useState(false)
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const soulName = comment.soul_name
   const colors = soulColors(soulName)
@@ -262,6 +289,10 @@ function CommentPreview({
     }
   }, [reply])
 
+  useEffect(() => {
+    if (replyOpen) replyInputRef.current?.focus()
+  }, [replyOpen])
+
   const handleSubmit = async () => {
     if ((!trimmed && attachments.length === 0) || replySubmitDisabled) return
     const submittedReply = reply
@@ -285,11 +316,11 @@ function CommentPreview({
 
   return (
     <div id={`comment-${comment.id}`} className={styles.commentThread}>
-      <div className={styles.comment} style={{ backgroundColor: colors.tint }}>
+      <div className={styles.comment}>
         <SoulAvatar name={soulName} className={styles.soulBadge} />
         <div className={styles.commentBody}>
           <div className={styles.commentHeader}>
-            <span className={styles.soulName}>{soulName}</span>
+            <span className={styles.soulName} style={{ color: colors.badgeText }}>{soulName}</span>
             <time
               className={styles.commentTime}
               dateTime={formatDateTimeAttribute(comment.created_at)}
@@ -297,30 +328,51 @@ function CommentPreview({
             >
               {formatSmartTime(comment.created_at)}
             </time>
-            <div className={styles.messageActions}>
-              {!rootPending && <RerunMarker at={comment.rerun_at} className={styles.messageMarker} />}
-              {canRerunRoot && onRerun && (
-                <button className={styles.inlineAction} onClick={() => onRerun(comment.id)} disabled={rootBusy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
-                  <RefreshCwIcon />
-                </button>
-              )}
-            </div>
+            {!rootPending && comment.rerun_at && (
+              <RerunMarker at={comment.rerun_at} className={styles.messageMarker} />
+            )}
           </div>
           {rootPending ? (
             <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
               <LoadingDots />
             </div>
           ) : (
-            <>
+            <div className={styles.commentMain}>
               {comment.content && <p className={styles.commentText}>{comment.content}</p>}
               <ImageGrid attachments={comment.attachments ?? []} />
-              <EvidencePanel
-                metadata={comment.metadata}
-                channel="public_post"
-                messageId={comment.id}
-                compact
-              />
-            </>
+              <div className={styles.commentFooter}>
+                <EvidencePanel
+                  metadata={comment.metadata}
+                  channel="public_post"
+                  messageId={comment.id}
+                  compact
+                />
+                {canRerunRoot && onRerun && (
+                  <button
+                    type="button"
+                    className={`${styles.quietAction} ${styles.actHover}`}
+                    onClick={() => onRerun(comment.id)}
+                    disabled={rootBusy}
+                    title="重跑"
+                    aria-label={`重跑 ${soulName} 的回复`}
+                  >
+                    <RefreshCwIcon />
+                    重跑
+                  </button>
+                )}
+                {onReply && latestMessage?.id === comment.id && (
+                  <button
+                    type="button"
+                    className={`${styles.quietAction} ${styles.quietPrimary} ${styles.replyTrigger} ${replyOpen ? styles.quietOn : ''}`}
+                    onClick={() => setReplyOpen((open) => !open)}
+                    disabled={replyInputDisabled}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5M4 12h11a4 4 0 0 1 4 4v1" /></svg>
+                    回复
+                  </button>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>
@@ -329,7 +381,7 @@ function CommentPreview({
         <div className={styles.threadMessages}>
           {isThreadTruncated && detailHref && (
             <a className={styles.threadMoreLink} href={detailHref}>
-              在详情中查看完整对话（共 {threadMessages.length + 1} 条）→
+              省略 {threadMessages.length - visibleThreadMessages.length} 条评论 · 在详情页查看完整对话
             </a>
           )}
           {visibleThreadMessages.map((message) => (
@@ -341,13 +393,27 @@ function CommentPreview({
               busy={busyCommentId === message.id}
               onDelete={onDelete}
               onRerun={onRerun}
+              onReplyTrigger={onReply ? () => setReplyOpen((open) => !open) : undefined}
+              replyOpen={replyOpen}
+              replyDisabled={replyInputDisabled}
             />
           ))}
         </div>
       )}
 
-      <div className={styles.replyBox}>
-        <div className={styles.replyInputGroup}>
+      {onReply && replyOpen && (
+      <div className={styles.replyArea}>
+        <div className={styles.replyBox}>
+          {attachments.length > 0 && (
+            <ImageUploader
+              attachments={attachments}
+              compact
+              disabled={replyInputDisabled}
+              onChange={setAttachments}
+              showControls={false}
+            />
+          )}
+          <div className={styles.replyRow}>
           <textarea
             ref={replyInputRef}
             className={styles.replyInput}
@@ -364,39 +430,25 @@ function CommentPreview({
             compact
             disabled={replyInputDisabled}
             onChange={setAttachments}
-            showControls={false}
+            showPreview={false}
           />
-        </div>
-        <div className={styles.replyFooter}>
-          {(reply.length > 0 || attachments.length > 0) && (
-            <span className={styles.replyHint}>
-              {reply.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
+          <span className={`${styles.replyButtonWrap} kbdTip`}>
+            <button
+              className={styles.replyButton}
+              onClick={handleSubmit}
+              disabled={(!trimmed && attachments.length === 0) || replySubmitDisabled}
+              aria-label={`发送给 ${soulName}`}
+            >
+              {replyBusy ? <LoadingDots /> : <SendIcon width={14} height={14} />}
+            </button>
+            <span className="kbdTipBubble" role="tooltip">
+              发送 <span className="kbdTipKey">Enter</span>
             </span>
-          )}
-          <div className={styles.replyActions}>
-            <ImageUploader
-              attachments={attachments}
-              compact
-              disabled={replyInputDisabled}
-              onChange={setAttachments}
-              showPreview={false}
-            />
-            <span className={`${styles.replyButtonWrap} kbdTip`}>
-              <button
-                className={styles.replyButton}
-                onClick={handleSubmit}
-                disabled={(!trimmed && attachments.length === 0) || replySubmitDisabled}
-                aria-label={`发送给 ${soulName}`}
-              >
-                {replyBusy ? <LoadingDots /> : <SendIcon width={14} height={14} />}
-              </button>
-              <span className="kbdTipBubble" role="tooltip">
-                发送 <span className="kbdTipKey">Enter</span>
-              </span>
-            </span>
+          </span>
           </div>
         </div>
       </div>
+      )}
       {conversation?.error && (
         <ReplyFailureInline
           error={conversation.error}
@@ -412,8 +464,9 @@ function visibleMessagesForVariant(
   messages: CommentMessage[],
   variant: 'feed' | 'detail',
 ): CommentMessage[] {
-  if (variant === 'detail' || messages.length <= FEED_MAX_THREAD_MESSAGES - 1) return messages
-  const tail = messages.slice(-(FEED_MAX_THREAD_MESSAGES - 1))
+  const tailSize = FEED_MAX_THREAD_MESSAGES - 1
+  if (variant === 'detail' || messages.length - tailSize < FEED_MIN_COLLAPSED) return messages
+  const tail = messages.slice(-tailSize)
   const optimistic = messages.filter((message) => message.id < 0 && !tail.some((item) => item.id === message.id))
   const visibleIds = new Set([...tail, ...optimistic].map((message) => message.id))
   return messages.filter((message) => visibleIds.has(message.id))
@@ -458,6 +511,9 @@ function ThreadMessage({
   busy,
   onDelete,
   onRerun,
+  onReplyTrigger,
+  replyOpen = false,
+  replyDisabled = false,
 }: {
   message: CommentMessage
   soulName: string
@@ -465,6 +521,9 @@ function ThreadMessage({
   busy: boolean
   onDelete?: (commentId: number) => Promise<void>
   onRerun?: (commentId: number) => Promise<void>
+  onReplyTrigger?: () => void
+  replyOpen?: boolean
+  replyDisabled?: boolean
 }) {
   const isUser = message.role === 'user'
   const isPersisted = message.id > 0
@@ -472,47 +531,74 @@ function ThreadMessage({
   const isFailedAssistant = message.role === 'assistant' && Boolean(failure)
   const isPendingAssistant = message.role === 'assistant' && !failure && !message.content && (message.id < 0 || busy)
   return (
-    <div id={`comment-${message.id}`} className={`${styles.threadMessage} ${isUser ? styles.threadMessageUser : styles.threadMessageSoul}`}>
-      <div className={styles.threadHeader}>
-        <span className={styles.threadRole}>{isUser ? '你' : soulName}</span>
-        <time
-          className={styles.threadTime}
-          dateTime={formatDateTimeAttribute(message.created_at)}
-          title={formatAbsoluteTime(message.created_at)}
-        >
-          {formatSmartTime(message.created_at)}
-        </time>
-        <div className={styles.threadActionRow}>
-          {!isPendingAssistant && <RerunMarker at={message.rerun_at} className={styles.threadMarker} />}
-          {isPersisted && isLatest && message.role === 'assistant' && !isFailedAssistant && onRerun && (
-            <button className={styles.threadAction} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
-              <RefreshCwIcon />
-            </button>
-          )}
-          {isPersisted && isUser && onDelete && (
-            <button className={styles.threadDanger} onClick={() => onDelete(message.id)} disabled={busy} title="删除追问" aria-label="删除追问">
-              <TrashIcon />
-            </button>
-          )}
+    <div id={`comment-${message.id}`} className={`${styles.threadRow} ${isUser ? styles.threadRowUser : ''}`}>
+      {isUser ? (
+        <span className={`${styles.threadAvatar} ${styles.threadAvatarMe}`} aria-hidden="true">我</span>
+      ) : (
+        <SoulAvatar name={soulName} className={styles.threadAvatar} />
+      )}
+      <div className={styles.threadCol}>
+        <div className={styles.threadHeader}>
+          <span className={styles.threadRole}>{isUser ? '我' : soulName}</span>
+          <time
+            className={styles.threadTime}
+            dateTime={formatDateTimeAttribute(message.created_at)}
+            title={formatAbsoluteTime(message.created_at)}
+          >
+            {formatSmartTime(message.created_at)}
+          </time>
+          <div className={styles.threadActionRow}>
+            {!isPendingAssistant && <RerunMarker at={message.rerun_at} className={styles.threadMarker} />}
+            {isPersisted && isLatest && message.role === 'assistant' && !isFailedAssistant && onRerun && (
+              <button className={`${styles.quietAction} ${styles.iconOnly} ${styles.actHover}`} onClick={() => onRerun(message.id)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
+                <RefreshCwIcon />
+              </button>
+            )}
+            {isPersisted && isUser && onDelete && (
+              <button className={`${styles.quietAction} ${styles.quietDanger} ${styles.iconOnly} ${styles.actHover}`} onClick={() => onDelete(message.id)} disabled={busy} title="删除追问" aria-label="删除追问">
+                <TrashIcon />
+              </button>
+            )}
+          </div>
         </div>
+        {isPendingAssistant ? (
+          <div className={`${styles.threadBubble} ${styles.threadBubbleSoul}`}>
+            <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
+              <LoadingDots />
+            </div>
+          </div>
+        ) : isFailedAssistant ? (
+          <ReplyFailureBubble
+            error={failure}
+            onRetry={isPersisted && onRerun ? () => onRerun(message.id) : undefined}
+            busy={busy}
+          />
+        ) : message.content ? (
+          <div className={`${styles.threadBubble} ${isUser ? styles.threadBubbleUser : styles.threadBubbleSoul}`}>
+            <p>{message.content}</p>
+          </div>
+        ) : null}
+        <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
+        {!isUser && !isFailedAssistant && !isPendingAssistant && (
+          <>
+            <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
+            <div className={styles.commentFooter}>
+              <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
+              {isPersisted && isLatest && onReplyTrigger && (
+                <button
+                  type="button"
+                  className={`${styles.quietAction} ${styles.quietPrimary} ${styles.replyTrigger} ${replyOpen ? styles.quietOn : ''}`}
+                  onClick={onReplyTrigger}
+                  disabled={replyDisabled}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 17l-5-5 5-5M4 12h11a4 4 0 0 1 4 4v1" /></svg>
+                  回复
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
-      {message.content && <p>{message.content}</p>}
-      {isFailedAssistant && (
-        <ReplyFailureBubble
-          error={failure}
-          onRetry={isPersisted && onRerun ? () => onRerun(message.id) : undefined}
-          busy={busy}
-        />
-      )}
-      {isPendingAssistant && (
-        <div className={styles.threadPending} aria-label={`${soulName} 正在回复`}>
-          <LoadingDots />
-        </div>
-      )}
-      <ImageGrid attachments={message.attachments ?? []} />
-      {!isUser && !isFailedAssistant && !isPendingAssistant && (
-        <EvidencePanel metadata={message.metadata} channel="comment" messageId={message.id} compact />
-      )}
     </div>
   )
 }
