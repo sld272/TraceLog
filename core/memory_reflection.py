@@ -245,3 +245,31 @@ def reflect_all_personas(*, now: float | None = None) -> list[ReflectionSummary]
         )
     ]
     return [reflect_persona(owner, now=now) for owner in owners]
+
+
+# The per-reconcile reflect only covers owners touched by that run, so an owner
+# with no fresh evidence would never decay its stale states (the card list keeps
+# showing a months-old "current status" as remembered). This daily full sweep is
+# the safety net; it is pure SQL, so sweeping every owner costs a few queries.
+FULL_SWEEP_INTERVAL_DAYS = 1.0
+_FULL_SWEEP_META_KEY = "memory_reflection_full_sweep_ts"
+
+
+def reflect_all_personas_if_due(
+    *, now: float | None = None, interval_days: float = FULL_SWEEP_INTERVAL_DAYS
+) -> list[ReflectionSummary]:
+    """Run the full-owner reflect sweep at most once per interval (meta-gated)."""
+    now = db.now_ts() if now is None else now
+    row = db.query_one("SELECT value FROM meta WHERE key = ?", (_FULL_SWEEP_META_KEY,))
+    try:
+        last = float(row["value"]) if row is not None else 0.0
+    except (TypeError, ValueError):
+        last = 0.0
+    if now - last < interval_days * DAY_SECONDS:
+        return []
+    summaries = reflect_all_personas(now=now)
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+        (_FULL_SWEEP_META_KEY, str(now)),
+    )
+    return summaries

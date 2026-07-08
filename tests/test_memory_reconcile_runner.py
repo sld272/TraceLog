@@ -218,6 +218,35 @@ class BucketDiscoveryTest(unittest.TestCase):
         self.assertIn("global", {summary.owner_scope for summary in result.summaries})
         self.assertEqual(mus.get_unit(stale)["status"], "dormant")
 
+    def test_daily_sweep_reflects_owner_untouched_by_this_run(self) -> None:
+        # soul:luna has a stale state but NO pending evidence, so the per-run
+        # reflect never sees it; the meta-gated daily sweep must retire it.
+        with db.transaction() as conn:
+            luna_ev = mes.record_chat_mutation(
+                conn, message_id=1, soul_name="luna", op="create",
+                content="搬家中", occurred_at=1.0, role="user",
+            ).id
+        stale = mus.add_unit(
+            owner_scope="soul:luna", visibility_scope="private:soul:luna",
+            source_channel="chat", type="state", content="上周在搬家",
+            confidence=0.8, importance=0.5, tier="contextual",
+            source="reflected", evidence_event_ids=[luna_ev],
+        )
+        with db.transaction() as conn:
+            mes.advance_cursor(conn, "soul:luna", "private:soul:luna", 10_000)
+            conn.execute(
+                "UPDATE memory_units SET last_confirmed = ? WHERE id = ?",
+                (db.now_ts() - 40 * 86400.0, stale),
+            )
+            # only the public bucket has pending evidence for this run
+            mes.record_post_mutation(conn, post_id="p1", op="create", content="公开", occurred_at=2.0)
+
+        result = runner.run_pending_reconcile(
+            client=object(), model="m", op_producer=self._producer([])
+        )
+        self.assertNotIn("soul:luna", {s.owner_scope for s in result.summaries})
+        self.assertEqual(mus.get_unit(stale)["status"], "dormant")
+
     def test_yield_between_buckets_stops_early_and_reports_backlog(self) -> None:
         # Two buckets pending; an always-true should_yield still lets the first
         # bucket through (guaranteed progress) then hands the worker back.

@@ -279,6 +279,12 @@ def run_pending_reconcile(
                 logging_service.log_event(
                     "memory_reflection_failed", owner_scope=owner_scope, error=str(exc)
                 )
+        # Daily full sweep: owners with no fresh evidence never appear in
+        # summaries, so their stale states would otherwise never decay.
+        try:
+            memory_reflection.reflect_all_personas_if_due()
+        except Exception as exc:
+            logging_service.log_event("memory_reflection_sweep_failed", error=str(exc))
     # Tombstone claim backfill also rides the live pass, best-effort: retracts
     # from this run (and any older stragglers) get their canonical claim so the
     # next reconcile's suppression is paraphrase-proof.

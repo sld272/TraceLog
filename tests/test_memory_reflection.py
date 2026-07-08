@@ -53,6 +53,22 @@ class MemoryReflectionTest(unittest.TestCase):
     def _future(self) -> float:
         return db.now_ts() + 40 * refl.DAY_SECONDS
 
+    # --- daily full sweep ----------------------------------------------------
+
+    def test_full_sweep_runs_when_due_and_gates_within_interval(self) -> None:
+        stale_state = self._unit("上周在搬家", type="state", tier="contextual")
+        future = self._future()
+        # fresh meta -> due immediately; the stale state decays
+        summaries = refl.reflect_all_personas_if_due(now=future)
+        self.assertTrue(summaries)
+        self.assertEqual(mus.get_unit(stale_state)["status"], "dormant")
+        # a second call inside the interval is a no-op
+        self.assertEqual(refl.reflect_all_personas_if_due(now=future + 3600.0), [])
+        # past the interval it runs again
+        self.assertTrue(
+            refl.reflect_all_personas_if_due(now=future + 2 * refl.DAY_SECONDS)
+        )
+
     # --- decay -------------------------------------------------------------
 
     def test_decay_retires_only_stale_state(self) -> None:
