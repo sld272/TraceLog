@@ -9,12 +9,12 @@ from unittest.mock import patch
 from core import (
     db,
     memory_events_service as mes,
-    memory_linker,
+    memory_crosslink,
     memory_unit_service as mus,
 )
 
 
-class MemoryLinkerTest(unittest.TestCase):
+class MemoryCrosslinkTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.workspace = Path(self.tmp.name) / "workspace"
@@ -77,7 +77,7 @@ class MemoryLinkerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             mus.add_unit_link(a, b, "friends")
 
-    # --- linker pass ---------------------------------------------------------
+    # --- crosslink pass ---------------------------------------------------------
 
     def test_contradiction_marks_public_side_contested(self) -> None:
         public = self._public_unit("在准备考研", tier="core", importance=0.8, confidence=0.9)
@@ -95,7 +95,7 @@ class MemoryLinkerTest(unittest.TestCase):
                      "relation": "contradicts"}]
 
         with patch("core.vectorstore.query_documents", return_value=[neighbor]):
-            result = memory_linker.run_linker_pass(None, "m", judge=judge)
+            result = memory_crosslink.run_crosslink_pass(None, "m", judge=judge)
 
         self.assertEqual(result.linked, 1)
         self.assertEqual(result.contested, 1)
@@ -113,7 +113,7 @@ class MemoryLinkerTest(unittest.TestCase):
             return [{"a": pairs[0]["a"]["unit_id"], "b": pairs[0]["b"]["unit_id"],
                      "relation": "same_fact"}]
 
-        result = memory_linker.run_linker_pass(None, "m", judge=judge)
+        result = memory_crosslink.run_crosslink_pass(None, "m", judge=judge)
         self.assertEqual(result.linked, 1)
         self.assertEqual(result.contested, 0)
         self.assertTrue(mus.linked_pair_exists(public, private))
@@ -129,18 +129,18 @@ class MemoryLinkerTest(unittest.TestCase):
                 {"a": "mu_fake1", "b": "mu_fake2", "relation": "contradicts"},
             ]
 
-        result = memory_linker.run_linker_pass(None, "m", judge=judge)
+        result = memory_crosslink.run_crosslink_pass(None, "m", judge=judge)
         self.assertEqual(result.linked, 0)
         self.assertFalse(mus.linked_pair_exists(a, b))
 
     def test_judge_failure_keeps_cursor_for_retry(self) -> None:
         self._public_unit("喜欢安静的咖啡馆")
         self._private_unit("喜欢安静的咖啡馆")
-        result = memory_linker.run_linker_pass(None, "m", judge=lambda pairs: None)
+        result = memory_crosslink.run_crosslink_pass(None, "m", judge=lambda pairs: None)
         self.assertEqual(result.judged_pairs, 1)
         self.assertEqual(result.linked, 0)
         # cursor untouched -> the same pair is offered again next run
-        retry = memory_linker.run_linker_pass(
+        retry = memory_crosslink.run_crosslink_pass(
             None, "m",
             judge=lambda pairs: [{"a": pairs[0]["a"]["unit_id"],
                                   "b": pairs[0]["b"]["unit_id"],
@@ -156,9 +156,9 @@ class MemoryLinkerTest(unittest.TestCase):
             return [{"a": p["a"]["unit_id"], "b": p["b"]["unit_id"], "relation": "same_fact"}
                     for p in pairs]
 
-        first = memory_linker.run_linker_pass(None, "m", judge=judge)
+        first = memory_crosslink.run_crosslink_pass(None, "m", judge=judge)
         self.assertEqual(first.linked, 1)
-        second = memory_linker.run_linker_pass(None, "m", judge=judge)
+        second = memory_crosslink.run_crosslink_pass(None, "m", judge=judge)
         self.assertEqual(second.scanned, 0)  # cursor advanced, nothing re-scanned
 
     def test_layer_label_hides_soul_name_from_judge(self) -> None:
@@ -170,7 +170,7 @@ class MemoryLinkerTest(unittest.TestCase):
             captured["pairs"] = pairs
             return []
 
-        memory_linker.run_linker_pass(None, "m", judge=judge)
+        memory_crosslink.run_crosslink_pass(None, "m", judge=judge)
         layers = {p["a"]["layer"] for p in captured["pairs"]} | {
             p["b"]["layer"] for p in captured["pairs"]
         }
@@ -189,7 +189,7 @@ class MemoryLinkerTest(unittest.TestCase):
     def test_dead_end_drops_link_and_clears_contested(self) -> None:
         public, private = self._contested_pair()
         mus.retract_unit(private, by="user", reason="outdated")
-        handled = memory_linker.maintain_links(lambda payload: [])
+        handled = memory_crosslink.maintain_links(lambda payload: [])
         self.assertEqual(handled, 1)
         self.assertFalse(mus.linked_pair_exists(public, private))
         self.assertIsNone(mus.get_unit(public)["contested_at"])
@@ -210,7 +210,7 @@ class MemoryLinkerTest(unittest.TestCase):
             return [{"a": p["a"]["unit_id"], "b": p["b"]["unit_id"], "relation": "same_fact"}
                     for p in payload]
 
-        handled = memory_linker.maintain_links(judge)
+        handled = memory_crosslink.maintain_links(judge)
         self.assertEqual(handled, 1)
         links = mus.links_for_units([public, private])
         self.assertEqual("same_fact", links[0]["relation"])
@@ -234,7 +234,7 @@ class MemoryLinkerTest(unittest.TestCase):
             return [{"a": p["a"]["unit_id"], "b": p["b"]["unit_id"], "relation": "contradicts"}
                     for p in payload]
 
-        memory_linker.maintain_links(judge)
+        memory_crosslink.maintain_links(judge)
         self.assertTrue(mus.get_unit(public)["contested_at"])
 
     # --- contested lifecycle -------------------------------------------------

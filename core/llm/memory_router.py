@@ -313,7 +313,7 @@ def call_memory_link_judge(
     pairs: list[dict],
     trace_context: dict | None = None,
 ) -> list[dict] | None:
-    """Judge cross-bucket unit pairs (P1 linker). ``pairs``:
+    """Judge cross-bucket unit pairs (P1 crosslink). ``pairs``:
     [{"a": {"unit_id","content","layer"}, "b": {...}}] where layer is a coarse
     公开/私聊 label — never the raw scope string, so no soul name leaks into the
     judging context. Returns [{"a","b","relation"}] or None on call failure."""
@@ -375,7 +375,7 @@ def call_memory_normalize_claims(
     trace_context: dict | None = None,
 ) -> dict[str, str] | None:
     """Normalize retracted-unit contents into canonical claims (P2 tombstone
-    matching / P1 linker key). ``items``: [{"unit_id", "content"}]. Returns
+    matching / P1 crosslink key). ``items``: [{"unit_id", "content"}]. Returns
     {unit_id: claim} for the ids the model answered, None on call failure."""
     if not items:
         return {}

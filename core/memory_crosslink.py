@@ -1,4 +1,4 @@
-"""Cross-bucket duplicate/contradiction linker (P1: link, never merge).
+"""Cross-bucket duplicate/contradiction crosslink pass (P1: link, never merge).
 
 Buckets (owner × visibility) are the privacy backbone and stay isolated;
 consolidation/supersede refuse to cross them by design. But the same fact — or
@@ -29,17 +29,18 @@ from core import db, logging_service, memory_unit_service as mus
 
 # Candidate recall: cosine floor for a cross-bucket vector neighbour to be worth
 # judging. Deliberately loose — the LLM verdict is the precision stage.
-LINKER_CANDIDATE_SIM = 0.60
-LINKER_MAX_NEIGHBORS = 3       # per source unit
-LINKER_MAX_SOURCE_UNITS = 20   # per pass
-LINKER_MAX_PAIRS = 12          # per LLM call / pass
-LINKER_MAX_STALE_LINKS = 8     # re-judged per pass
+CROSSLINK_CANDIDATE_SIM = 0.60
+CROSSLINK_MAX_NEIGHBORS = 3       # per source unit
+CROSSLINK_MAX_SOURCE_UNITS = 20   # per pass
+CROSSLINK_MAX_PAIRS = 12          # per LLM call / pass
+CROSSLINK_MAX_STALE_LINKS = 8     # re-judged per pass
 
+# stored key string predates the crosslink rename; keep it so the scan cursor survives
 _META_KEY = "memory_linker_last_scan_ts"
 
 
 @dataclass(frozen=True)
-class LinkerResult:
+class CrosslinkResult:
     scanned: int
     judged_pairs: int
     linked: int
@@ -68,7 +69,7 @@ def _recent_units(since: float) -> list[sqlite3.Row]:
         ORDER BY updated_at ASC
         LIMIT ?
         """,
-        (since, LINKER_MAX_SOURCE_UNITS),
+        (since, CROSSLINK_MAX_SOURCE_UNITS),
     )
 
 
@@ -107,10 +108,10 @@ def _candidate_rows(source: sqlite3.Row) -> list[sqlite3.Row]:
         hits = []
     neighbors = 0
     for hit in hits:
-        if neighbors >= LINKER_MAX_NEIGHBORS:
+        if neighbors >= CROSSLINK_MAX_NEIGHBORS:
             break
         distance = getattr(hit, "distance", None)
-        if distance is None or (1.0 - float(distance)) < LINKER_CANDIDATE_SIM:
+        if distance is None or (1.0 - float(distance)) < CROSSLINK_CANDIDATE_SIM:
             continue
         meta = getattr(hit, "metadata", None) or {}
         uid = str(meta.get("unit_id") or "")
@@ -171,7 +172,7 @@ def maintain_links(judge) -> int:
         ORDER BY l.created_at ASC
         LIMIT ?
         """,
-        (LINKER_MAX_STALE_LINKS,),
+        (CROSSLINK_MAX_STALE_LINKS,),
     )
     if not rows:
         return 0
@@ -231,14 +232,14 @@ def maintain_links(judge) -> int:
     return handled
 
 
-def run_linker_pass(
+def run_crosslink_pass(
     client,
     model: str,
     *,
     judge=None,
     trace_context: dict | None = None,
-) -> LinkerResult:
-    """One bounded linker pass. ``judge`` may be injected for tests: it takes
+) -> CrosslinkResult:
+    """One bounded crosslink pass. ``judge`` may be injected for tests: it takes
     the pair payload and returns [{"a","b","relation"}] (see
     call_memory_link_judge). On judge failure the scan cursor stays put so the
     same units are retried next run."""
@@ -257,7 +258,7 @@ def run_linker_pass(
     scan_started = db.now_ts()
     sources = _recent_units(_last_scan_ts())
     if not sources:
-        return LinkerResult(scanned=0, judged_pairs=0, linked=0, contested=0)
+        return CrosslinkResult(scanned=0, judged_pairs=0, linked=0, contested=0)
 
     rows_by_id: dict[str, sqlite3.Row] = {}
     pairs: list[tuple[sqlite3.Row, sqlite3.Row]] = []
@@ -271,13 +272,13 @@ def run_linker_pass(
             rows_by_id[str(source["id"])] = source
             rows_by_id[str(candidate["id"])] = candidate
             pairs.append((source, candidate))
-            if len(pairs) >= LINKER_MAX_PAIRS:
+            if len(pairs) >= CROSSLINK_MAX_PAIRS:
                 break
-        if len(pairs) >= LINKER_MAX_PAIRS:
+        if len(pairs) >= CROSSLINK_MAX_PAIRS:
             break
 
     def _advance_cursor() -> None:
-        if len(sources) >= LINKER_MAX_SOURCE_UNITS:
+        if len(sources) >= CROSSLINK_MAX_SOURCE_UNITS:
             # bounded batch: continue from the last processed unit next run
             _set_last_scan_ts(max(float(r["updated_at"]) for r in sources))
         else:
@@ -285,7 +286,7 @@ def run_linker_pass(
 
     if not pairs:
         _advance_cursor()
-        return LinkerResult(scanned=len(sources), judged_pairs=0, linked=0, contested=0)
+        return CrosslinkResult(scanned=len(sources), judged_pairs=0, linked=0, contested=0)
 
     payload = [
         {
@@ -305,7 +306,7 @@ def run_linker_pass(
     verdicts = judge(payload)
     if verdicts is None:
         # leave the cursor: these units are re-scanned next run
-        return LinkerResult(scanned=len(sources), judged_pairs=len(pairs), linked=0, contested=0)
+        return CrosslinkResult(scanned=len(sources), judged_pairs=len(pairs), linked=0, contested=0)
 
     linked = 0
     contested = 0
@@ -329,11 +330,11 @@ def run_linker_pass(
                 contested += 1
 
     _advance_cursor()
-    result = LinkerResult(
+    result = CrosslinkResult(
         scanned=len(sources), judged_pairs=len(pairs), linked=linked, contested=contested
     )
     logging_service.log_event(
-        "memory_linker_pass",
+        "memory_crosslink_pass",
         level="DEBUG",
         scanned=result.scanned,
         judged_pairs=result.judged_pairs,
