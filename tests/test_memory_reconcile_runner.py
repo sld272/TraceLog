@@ -218,6 +218,58 @@ class BucketDiscoveryTest(unittest.TestCase):
         self.assertIn("global", {summary.owner_scope for summary in result.summaries})
         self.assertEqual(mus.get_unit(stale)["status"], "dormant")
 
+    def test_yield_between_buckets_stops_early_and_reports_backlog(self) -> None:
+        # Two buckets pending; an always-true should_yield still lets the first
+        # bucket through (guaranteed progress) then hands the worker back.
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="p1", op="create", content="公开", occurred_at=1.0)
+            mes.record_chat_mutation(conn, message_id=1, soul_name="luna", op="create", content="私聊", occurred_at=2.0, role="user")
+
+        result = runner.run_pending_reconcile(
+            client=object(), model="m", op_producer=self._producer([]),
+            should_yield=lambda: True,
+        )
+        self.assertTrue(result.yielded)
+        self.assertEqual(len(result.summaries), 1)
+        self.assertTrue(result.has_pending_after_run)  # continuation picks it up
+        self.assertEqual(len(mes.buckets_with_pending_events()), 1)
+
+    def test_yield_skips_maintenance_tail(self) -> None:
+        # With a single bucket the loop never yields, but the pre-tail poll
+        # does: the stale state that reflection would retire stays active.
+        with db.transaction() as conn:
+            ev = mes.record_post_mutation(
+                conn, post_id="seed", op="create", content="立个状态", occurred_at=1.0
+            ).id
+        stale = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="post",
+            type="state", content="上周在搬家", confidence=0.8, importance=0.5,
+            tier="contextual", source="reflected", evidence_event_ids=[ev],
+        )
+        with db.transaction() as conn:
+            conn.execute(
+                "UPDATE memory_units SET last_confirmed = ? WHERE id = ?",
+                (db.now_ts() - 40 * 86400.0, stale),
+            )
+
+        result = runner.run_pending_reconcile(
+            client=object(), model="m", op_producer=self._producer([]),
+            should_yield=lambda: True,
+        )
+        self.assertTrue(result.yielded)
+        self.assertTrue(result.has_pending_after_run)
+        self.assertEqual(mus.get_unit(stale)["status"], "active")
+
+    def test_should_yield_false_completes_run_normally(self) -> None:
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="p1", op="create", content="公开", occurred_at=1.0)
+        result = runner.run_pending_reconcile(
+            client=object(), model="m", op_producer=self._producer([]),
+            should_yield=lambda: False,
+        )
+        self.assertFalse(result.yielded)
+        self.assertFalse(result.has_pending_after_run)
+
     def test_runner_collects_failure_and_continues_other_buckets(self) -> None:
         with db.transaction() as conn:
             public_id = mes.record_post_mutation(

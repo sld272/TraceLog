@@ -143,6 +143,7 @@ class ReconcileRunResult:
     failures: list[ReconcileBucketFailure]
     has_pending_after_run: bool
     relink_failures: list[RelinkFailure] = field(default_factory=list)
+    yielded: bool = False
 
 
 def run_type_for_visibility(visibility_scope: str) -> str:
@@ -164,6 +165,7 @@ def run_pending_reconcile(
     limit_per_bucket: int = 200,
     op_producer=None,
     relink_judge=None,
+    should_yield=None,
     trace_context: dict | None = None,
 ) -> ReconcileRunResult:
     """Reconcile every bucket with pending events. ``op_producer`` may be
@@ -174,11 +176,37 @@ def run_pending_reconcile(
     buckets still make progress. Callers must treat a non-empty ``failures`` as
     a failed run. ``has_pending_after_run`` reports bounded-batch backlog for
     live runs; dry-runs intentionally leave every cursor untouched and
-    therefore always report False."""
+    therefore always report False.
+
+    ``should_yield`` (no-arg -> bool) lets a single-worker deployment hand the
+    worker back to user-visible jobs: it is polled between buckets (never
+    before the first, so every run makes progress) and once more before the
+    maintenance tail. On yield the run stops early, skips the tail, and
+    reports pending backlog so the caller's continuation job — claimed only
+    after the interactive queue drains — picks up exactly where this run left
+    off. Per-bucket cursors make the early stop lossless."""
     producer = op_producer or make_llm_op_producer(client, model, trace_context=trace_context)
     summaries: list[recon.ReconcileSummary] = []
     failures: list[ReconcileBucketFailure] = []
+
+    def _wants_yield() -> bool:
+        if dry_run or should_yield is None:
+            return False
+        try:
+            return bool(should_yield())
+        except Exception as exc:
+            logging_service.log_event(
+                "memory_reconcile_yield_check_failed", level="WARNING", error=str(exc)
+            )
+            return False
+
+    yielded = False
+    progressed = False
     for owner_scope, visibility_scope in mes.buckets_with_pending_events():
+        if progressed and _wants_yield():
+            yielded = True
+            break
+        progressed = True
         try:
             summary = recon.reconcile_bucket(
                 owner_scope,
@@ -209,13 +237,25 @@ def run_pending_reconcile(
             continue
         if summary is not None:
             summaries.append(summary)
+    # One more poll before the maintenance tail: the tail is all deferrable
+    # work, so an interactive job that arrived mid-run takes the worker now and
+    # the guaranteed continuation job runs the tail instead.
+    if not yielded and _wants_yield():
+        yielded = True
+    if yielded:
+        logging_service.log_event(
+            "memory_reconcile_yielded",
+            trigger=trigger,
+            reconciled_buckets=len(summaries),
+        )
+    run_tail = not dry_run and not yielded
     # Post-edit re-link runs in the same background pass (separate from the
     # bucket loop). Skipped in dry-run. Per-unit judge failures are reported so
     # the caller can fail/retry the job, and any still-pending re-link counts as
     # backlog so a continuation job is enqueued — a relink failure must never be
     # silently swallowed (the API promises this pass will run).
     relink_failures: list[RelinkFailure] = []
-    if not dry_run:
+    if run_tail:
         try:
             relink_failures = list(
                 run_pending_relinks(
@@ -231,7 +271,7 @@ def run_pending_reconcile(
     # level and best-effort — a reflection failure must never fail the reconcile
     # job. Skipped in dry-run (it mutates). Decay being time-based, riding the
     # reconcile trigger is fine: an owner with no activity injects nothing anyway.
-    if not dry_run:
+    if run_tail:
         for owner_scope in sorted({summary.owner_scope for summary in summaries}):
             try:
                 memory_reflection.reflect_persona(owner_scope)
@@ -242,7 +282,7 @@ def run_pending_reconcile(
     # Tombstone claim backfill also rides the live pass, best-effort: retracts
     # from this run (and any older stragglers) get their canonical claim so the
     # next reconcile's suppression is paraphrase-proof.
-    if not dry_run:
+    if run_tail:
         try:
             backfill_tombstone_claims(client, model, trace_context=trace_context)
         except Exception as exc:
@@ -251,7 +291,7 @@ def run_pending_reconcile(
     # their same_fact/contradicts/context_variant links judged, and cross-bucket
     # contradictions land an attribution-free contested mark on the more-public
     # side. Best-effort — link metadata must never fail the reconcile job.
-    if not dry_run:
+    if run_tail:
         try:
             memory_crosslink.run_crosslink_pass(client, model, trace_context=trace_context)
         except Exception as exc:
@@ -262,7 +302,8 @@ def run_pending_reconcile(
         False
         if dry_run
         else (
-            bool(mes.buckets_with_pending_events(limit_buckets=1))
+            yielded
+            or bool(mes.buckets_with_pending_events(limit_buckets=1))
             or pending_relinks
         )
     )
@@ -271,4 +312,5 @@ def run_pending_reconcile(
         failures=failures,
         has_pending_after_run=has_pending,
         relink_failures=relink_failures,
+        yielded=yielded,
     )

@@ -52,6 +52,25 @@ class MemoryReconcileJobTest(unittest.TestCase):
         second = job_service.enqueue_memory_reconcile_once()
         self.assertIsNotNone(second)
 
+    def test_claim_prefers_interactive_jobs_over_reconcile(self) -> None:
+        reconcile_id = job_service.enqueue_memory_reconcile_once({"trigger": "chat"})
+        reply_id = job_service.enqueue(
+            job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": "p1", "content": "x"}
+        )
+        first = job_service.claim_next_pending()
+        self.assertEqual(int(first["id"]), reply_id)  # enqueued later, claimed first
+        second = job_service.claim_next_pending()
+        self.assertEqual(int(second["id"]), int(reconcile_id))
+
+    def test_has_pending_interactive_jobs_ignores_reconcile(self) -> None:
+        self.assertFalse(job_service.has_pending_interactive_jobs())
+        job_service.enqueue_memory_reconcile_once()
+        self.assertFalse(job_service.has_pending_interactive_jobs())
+        job_service.enqueue(
+            job_service.TYPE_GENERATE_POST_REPLIES, {"post_id": "p", "content": "x"}
+        )
+        self.assertTrue(job_service.has_pending_interactive_jobs())
+
     def test_create_post_enqueues_reconcile(self) -> None:
         public_post_pipeline.create_post("今天在准备考研，压力有点大")
         types = self._job_types()

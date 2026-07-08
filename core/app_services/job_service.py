@@ -80,7 +80,12 @@ def enqueue_memory_reconcile_once(payload: dict[str, Any] | None = None) -> int 
 
 
 def claim_next_pending() -> dict[str, Any] | None:
-    """Atomically claim the oldest pending job."""
+    """Atomically claim the next pending job, interactive work first.
+
+    Memory reconcile is maintenance: with a single worker, letting it sit
+    ahead of a reply/embedding job would stall the user-visible pipeline
+    behind a multi-LLM-call background chain. It is only claimed when no
+    other job type is waiting; within each class, oldest first."""
     now = db.now_ts()
     with db.immediate_transaction() as conn:
         row = conn.execute(
@@ -88,10 +93,10 @@ def claim_next_pending() -> dict[str, Any] | None:
             SELECT *
             FROM jobs
             WHERE status = ?
-            ORDER BY created_at ASC, id ASC
+            ORDER BY (type = ?) ASC, created_at ASC, id ASC
             LIMIT 1
             """,
-            (STATUS_PENDING,),
+            (STATUS_PENDING, TYPE_RUN_MEMORY_RECONCILE),
         ).fetchone()
         if row is None:
             return None
@@ -105,6 +110,16 @@ def claim_next_pending() -> dict[str, Any] | None:
         )
         claimed = conn.execute("SELECT * FROM jobs WHERE id = ?", (row["id"],)).fetchone()
     return _row_to_dict(claimed) if claimed is not None else None
+
+
+def has_pending_interactive_jobs() -> bool:
+    """True when any non-maintenance job is waiting — the signal maintenance
+    passes use to yield the single worker back to user-visible work."""
+    row = db.query_one(
+        "SELECT 1 FROM jobs WHERE status = ? AND type != ? LIMIT 1",
+        (STATUS_PENDING, TYPE_RUN_MEMORY_RECONCILE),
+    )
+    return row is not None
 
 
 def mark_succeeded(job_id: int) -> None:

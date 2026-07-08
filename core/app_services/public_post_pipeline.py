@@ -307,13 +307,23 @@ def _job_summary(job: dict[str, Any]) -> dict[str, Any]:
 
 def _run_memory_reconcile(job_id: int, client: LLMClient, model: str) -> None:
     """v2 write path: reconcile every bucket with unconsumed evidence into units,
-    then refresh any stale or missing identity views from the updated units."""
-    result = memory_reconcile_runner.run_pending_reconcile(client, model, trigger="api")
-    memory_view_producer.refresh_views_after_reconcile(client, model)
-    # Keep the unit vector docs in sync with the new/retracted units so semantic
-    # retrieval sees them (hash-gated; unchanged docs are skipped).
-    vector_index_service.rebuild_expected_docs()
-    vector_index_service.process_outbox()
+    then refresh any stale or missing identity views from the updated units.
+
+    Yields the (single) worker between buckets whenever an interactive job is
+    waiting — user posts and AI replies must never queue behind memory
+    maintenance. The continuation job enqueued below resumes the backlog."""
+    result = memory_reconcile_runner.run_pending_reconcile(
+        client,
+        model,
+        trigger="api",
+        should_yield=job_service.has_pending_interactive_jobs,
+    )
+    if not result.yielded:
+        memory_view_producer.refresh_views_after_reconcile(client, model)
+        # Keep the unit vector docs in sync with the new/retracted units so
+        # semantic retrieval sees them (hash-gated; unchanged docs are skipped).
+        vector_index_service.rebuild_expected_docs()
+        vector_index_service.process_outbox()
     if result.failures or result.relink_failures:
         raise MemoryReconcileRunError(
             result.failures,
