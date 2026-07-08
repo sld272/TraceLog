@@ -1,34 +1,30 @@
 # TraceLog 拾迹
 
-TraceLog 是一个本地优先的个人成长 AI 伴侣。用户像发动态一样记录生活，多个
-SOUL 以不同人格回应；系统把公开 post、评论、私聊和图片理解统一沉淀为可追溯的
-memory-v2。
+**向内运行的 AI 社交媒体，也是一台陪你成长的记忆引擎。**
 
-## 核心能力
+TraceLog 是一个本地优先的陪伴型 AI 应用。你像发朋友圈一样记录生活，几个性格各异的 AI 人格（SOUL）会来评论、和你私聊；与此同时，一台 "成长记忆引擎"在后台安静运转，把这些零散的表达沉淀成关于你的长期记忆。
 
-- Web timeline、评论线程与 SOUL 私聊
-- JPEG/PNG 附件、Vision 图片摘要与网页搜索
-- SQLite FTS5 + ChromaDB 混合检索
-- TodoTool、GoalTool 与建议确认
-- memory-v2：evidence event → memory unit → portrait view
-- 记忆工作台：新增、编辑、撤回、禁用提示、画像纳入策略、证据追溯
-- SQLite job worker、向量 outbox 与 JSONL 运行日志
+## 出发与愿景
 
-## memory-v2
+很多人有表达欲，却越来越不敢在真实的社交媒体上说话——怕没人看，怕被评价，怕说错。于是那些细碎的心情、小小的进展、犹豫和决定，大多没有留下痕迹。
 
-所有用户输入都会在业务写入的同一事务中追加到
-`memory_ingest_events`。后台 `run_memory_reconcile` job 按
-`owner_scope + visibility_scope` 消费新 evidence，输出
-add / retain / confirm / revise / retract 操作并写入 `memory_units`。
+TraceLog 想提供另一个方向的出口：**向内表达**。这里没有陌生人围观，只有几个始终在场、始终善意的 AI 读者。你可以随手记录，不用组织语言成"值得发"的样子。
 
-稳定且重要的 core units 会综合成：
+而真正让陪伴成立的是记忆。一个每次都从零开始的 AI 只是工具；一个记得你在准备什么考试、上周搬了家、说过讨厌咖啡的 AI，才谈得上陪伴。所以 TraceLog 的核心不是聊天，而是那台记忆引擎——它让你的每一条随手记录都变成"拾迹"：被拾起、被记住、可回看的成长痕迹。
 
-- `user_portrait`：全局用户画像
-- `soul_relationship_memory`：每个 SOUL 与用户的关系叙事
+## 记忆引擎的三个承诺
 
-回复时按四层注入：基线画像、当前状态、相关 units、尚未对账的近期 evidence。
-当前消息会从 freshness 输入中排除，避免重复。公开内容可跨 SOUL 使用；私聊仅当前
-SOUL 可读，在公开场景使用自己的私密信息时会附带谨慎披露规则。
+1. **记得对**：每条记忆都能追溯到你的原话；矛盾不会被粗暴覆盖，而是在私聊里自然地向你求证。
+2. **有生命周期**：过期的状态会淡出，反复验证的认知沉淀为画像——记忆像人的记忆一样新陈代谢，而不是无限堆积。
+3. **由你掌控**：记忆全部可见、可编辑、可"忘记"、可找回；私聊内容永远不会泄露给其他人格或公开场景。所有数据都在你本地。
+
+## 功能一览
+
+- Web 时间线、评论线程与 SOUL 私聊，图片附件与图片理解
+- memory-v2 记忆引擎：证据 → 记忆单元 → 画像，全程可追溯
+- 记忆工作台：查看、编辑、忘记、找回、控制每条记忆的使用方式
+- 待办与目标抽取、混合检索（全文 + 语义）
+- 全部数据存本地 SQLite，向量索引可随时重建
 
 ## 安装
 
@@ -42,38 +38,21 @@ cd frontend && npm install
 ## 运行
 
 ```bash
-conda run -n tracelog python main.py
-conda run -n tracelog python main.py cli
+conda run -n tracelog python main.py        # Web（推荐）
+conda run -n tracelog python main.py cli    # 终端模式
 ```
 
-Web 默认从 `127.0.0.1:5173` 启动，API 默认从 `127.0.0.1:8000`
-启动；端口被占用时 launcher 会自动寻找下一个可用端口。
+Web 前端默认 `127.0.0.1:5173`，API 默认 `127.0.0.1:8000`；端口被占用时会自动换下一个可用端口。
 
-CLI 支持：
+CLI 常用命令：
 
 ```text
-/souls
-/soul create <name> [description]
-/soul enable <name>
-/soul disable <name>
-/soul reorder <name1> <name2> ...
-/soul resync
-/chat <soul>
-/comment <post_id> <soul>
-/tools
-/tool todo on|off
-/quit
+/souls                       列出人格
+/soul create <name> [描述]   创建人格
+/chat <soul>                 进入私聊
+/comment <post_id> <soul>    进入评论对话
+/quit                        退出
 ```
-
-CLI 启动、每次公开 post 后和退出时都会运行 memory-v2 对账。
-
-## 公开 post 全链路
-
-1. 保存 post、附件关系、SOUL 顺序快照和 evidence event。
-2. 排入 embedding、SOUL 回复、TodoTool、memory reconcile jobs。
-3. Vision 摘要写入 `vision_cache`、向量索引和 `post_vision` evidence。
-4. 回复前执行 query rewrite、FTS5/ChromaDB 检索和 memory-v2 读模型组装。
-5. reconcile 消费所有 pending buckets，刷新 portrait views，并同步 unit 向量。
 
 ## 测试
 
@@ -84,8 +63,7 @@ cd frontend && npm run build
 
 ## 文档
 
-- [系统概览](docs/overview.md)
-- [架构](docs/architecture.md)
-- [数据库](docs/database.md)
-- [API](docs/api.md)
-- [memory-v2 全链路](docs/memory-v2-architecture.md)
+- [系统概览](docs/overview.md)——一分钟建立整体图景
+- [架构](docs/architecture.md)——系统结构与记忆系统完整规格
+- [数据库](docs/database.md)——表结构与事务不变量
+- [API](docs/api.md)——记忆工作台与其他端点
