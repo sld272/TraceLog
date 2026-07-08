@@ -183,6 +183,61 @@ class MemoryReflectionTest(unittest.TestCase):
         self.assertEqual(mus.get_unit(dup)["status"], "superseded")
         self.assertEqual(mus.get_unit(dup)["superseded_by"], keep)
         self.assertEqual(mus.get_unit(keep)["status"], "active")
+        # consolidation attributes its own ops — not "reflection"
+        ops = [dict(r) for r in mus.list_unit_ops(unit_id=dup)]
+        supersedes = [o for o in ops if o["op"] == "supersede"]
+        self.assertTrue(supersedes)
+        self.assertEqual(supersedes[0]["actor"], "consolidation")
+
+    # --- consolidation scheduling (triple gate + one owner per run) ---------
+
+    def test_pick_owner_requires_min_units(self) -> None:
+        for i in range(3):
+            self._unit(f"事实{i}")
+        self.assertIsNone(refl.pick_consolidation_owner(min_units=4))
+        self.assertEqual(refl.pick_consolidation_owner(min_units=3), "global")
+
+    def test_consolidate_due_owner_cooldown_and_change_gates(self) -> None:
+        for i in range(3):
+            self._unit(f"事实{i}")
+        noop = lambda *, owner_scope, units: {"ops": []}
+        now = db.now_ts()
+
+        summary = refl.consolidate_due_owner(producer=noop, now=now, min_units=3)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary.owner_scope, "global")
+        # inside the cooldown: not due, even with changes
+        self._unit("新增事实")
+        self.assertIsNone(refl.consolidate_due_owner(producer=noop, now=now + 3600.0, min_units=3))
+        # past the cooldown with a change since the stamp: due again
+        after = now + (refl.CONSOLIDATION_COOLDOWN_DAYS + 1) * refl.DAY_SECONDS
+        self.assertIsNotNone(refl.consolidate_due_owner(producer=noop, now=after, min_units=3))
+        # past another cooldown but nothing changed since: not due
+        later = after + (refl.CONSOLIDATION_COOLDOWN_DAYS + 1) * refl.DAY_SECONDS
+        self.assertIsNone(refl.consolidate_due_owner(producer=noop, now=later, min_units=3))
+
+    def test_pick_owner_prefers_most_overdue(self) -> None:
+        for i in range(3):
+            self._unit(f"主记忆{i}")
+            self._soul_unit("luna", "private:soul:luna", f"相处{i}")
+        now = db.now_ts()
+        # consolidate global once: luna (never consolidated) becomes most overdue
+        refl.consolidate_due_owner(
+            producer=lambda *, owner_scope, units: {"ops": []}, now=now, min_units=3
+        )
+        self.assertEqual(refl.pick_consolidation_owner(now=now, min_units=3), "soul:luna")
+
+    def test_failed_consolidation_leaves_owner_due(self) -> None:
+        for i in range(3):
+            self._unit(f"事实{i}")
+
+        def boom(*, owner_scope, units):
+            raise RuntimeError("LLM down")
+
+        with self.assertRaises(RuntimeError):
+            refl.consolidate_due_owner(producer=boom, min_units=3)
+        # no cooldown stamp was written: still due for a later run
+        self.assertEqual(refl.pick_consolidation_owner(min_units=3), "global")
 
     def test_consolidate_iron_law_blocks_public_survivor(self) -> None:
         pub = self._soul_unit("luna", "public", "公开的相处默契")

@@ -206,9 +206,9 @@ def consolidate_persona(owner_scope: str, *, producer) -> ConsolidationSummary:
                         and content.strip()
                         and units_by_id[survivor]["source"] == "reflected"
                     ):
-                        mus.revise_unit(survivor, content=content.strip(), actor="reflection", conn=conn)
+                        mus.revise_unit(survivor, content=content.strip(), actor="consolidation", conn=conn)
                     for absorbed_id in targets:
-                        mus.supersede_unit(absorbed_id, survivor, actor="reflection", conn=conn)
+                        mus.supersede_unit(absorbed_id, survivor, actor="consolidation", conn=conn)
                         summary.merged.append(absorbed_id)
                 elif kind == "retract":
                     target = str(op.get("target_id") or "")
@@ -218,7 +218,7 @@ def consolidate_persona(owner_scope: str, *, producer) -> ConsolidationSummary:
                     mus.retract_unit(
                         target, by="model",
                         reason=reason if reason in {"false", "outdated"} else None,
-                        actor="reflection", conn=conn,
+                        actor="consolidation", conn=conn,
                     )
                     summary.retracted.append(target)
                 else:
@@ -273,3 +273,94 @@ def reflect_all_personas_if_due(
         (_FULL_SWEEP_META_KEY, str(now)),
     )
     return summaries
+
+
+# --- consolidation scheduling (P2b on a slow clock) --------------------------
+#
+# consolidate_persona feeds an owner's ENTIRE active unit set to one LLM call,
+# and its verdicts merge/retract live memories — expensive and user-visible if
+# wrong. So the automatic trigger is gated three ways (enough units to be worth
+# it / cooldown / something actually changed) and the runner consolidates at
+# most ONE most-overdue owner per reconcile job, hard-capping cost and latency.
+CONSOLIDATION_MIN_UNITS = 12
+CONSOLIDATION_COOLDOWN_DAYS = 3.0
+_CONSOLIDATION_META_PREFIX = "memory_consolidation_last_ts:"
+
+
+def _last_consolidated_ts(owner_scope: str) -> float:
+    row = db.query_one(
+        "SELECT value FROM meta WHERE key = ?",
+        (_CONSOLIDATION_META_PREFIX + owner_scope,),
+    )
+    try:
+        return float(row["value"]) if row is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _set_last_consolidated_ts(owner_scope: str, ts: float) -> None:
+    db.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+        (_CONSOLIDATION_META_PREFIX + owner_scope, str(ts)),
+    )
+
+
+def pick_consolidation_owner(
+    *,
+    now: float | None = None,
+    min_units: int = CONSOLIDATION_MIN_UNITS,
+    cooldown_days: float = CONSOLIDATION_COOLDOWN_DAYS,
+) -> str | None:
+    """The most-overdue owner passing all three gates, or None.
+
+    Gates: at least ``min_units`` active units (smaller sets hold no duplicates
+    worth an LLM call), cooldown elapsed since that owner's last consolidation
+    attempt, and at least one unit changed since then (no new material, no new
+    duplicates). Most-overdue = smallest last-consolidated timestamp, so
+    never-consolidated owners go first and attention rotates fairly."""
+    now = db.now_ts() if now is None else now
+    rows = db.query_all(
+        """
+        SELECT owner_scope, MAX(updated_at) AS last_change
+        FROM memory_units
+        WHERE status = 'active'
+        GROUP BY owner_scope
+        HAVING COUNT(*) >= ?
+        ORDER BY owner_scope
+        """,
+        (min_units,),
+    )
+    best: str | None = None
+    best_last = 0.0
+    for row in rows:
+        owner = str(row["owner_scope"])
+        last = _last_consolidated_ts(owner)
+        if now - last < cooldown_days * DAY_SECONDS:
+            continue
+        if float(row["last_change"]) <= last:
+            continue
+        if best is None or last < best_last:
+            best, best_last = owner, last
+    return best
+
+
+def consolidate_due_owner(
+    *,
+    producer,
+    now: float | None = None,
+    min_units: int = CONSOLIDATION_MIN_UNITS,
+    cooldown_days: float = CONSOLIDATION_COOLDOWN_DAYS,
+) -> ConsolidationSummary | None:
+    """Consolidate the one most-overdue owner, if any is due.
+
+    The cooldown stamp is written only after a successful pass: a producer
+    failure leaves the owner due, so it is retried on a later run instead of
+    silently skipping a whole cooldown window."""
+    owner_scope = pick_consolidation_owner(
+        now=now, min_units=min_units, cooldown_days=cooldown_days
+    )
+    if owner_scope is None:
+        return None
+    summary = consolidate_persona(owner_scope, producer=producer)
+    _set_last_consolidated_ts(owner_scope, db.now_ts() if now is None else now)
+    return summary

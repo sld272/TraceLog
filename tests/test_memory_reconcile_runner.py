@@ -218,6 +218,67 @@ class BucketDiscoveryTest(unittest.TestCase):
         self.assertIn("global", {summary.owner_scope for summary in result.summaries})
         self.assertEqual(mus.get_unit(stale)["status"], "dormant")
 
+    def _many_active_units(self, n: int) -> list[str]:
+        ids = []
+        with db.transaction() as conn:
+            evs = [
+                mes.record_post_mutation(
+                    conn, post_id=f"u{i}", op="create", content=f"事实{i}", occurred_at=float(i)
+                ).id
+                for i in range(n)
+            ]
+        for i, ev in enumerate(evs):
+            ids.append(
+                mus.add_unit(
+                    owner_scope="global", visibility_scope="public", source_channel="post",
+                    type="insight", content=f"事实{i}", confidence=0.8, importance=0.5,
+                    tier="contextual", source="reflected", evidence_event_ids=[ev],
+                )
+            )
+        with db.transaction() as conn:
+            mes.advance_cursor(conn, "global", "public", 10_000)
+        return ids
+
+    def test_consolidation_rides_tail_for_due_owner(self) -> None:
+        from core import memory_reflection as refl
+
+        self._many_active_units(refl.CONSOLIDATION_MIN_UNITS)
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="pnew", op="create", content="新帖", occurred_at=99.0)
+        seen = []
+
+        def consolidation_producer(*, owner_scope, units):
+            seen.append((owner_scope, len(units)))
+            return {"ops": []}
+
+        runner.run_pending_reconcile(
+            client=object(), model="m", op_producer=self._producer([]),
+            consolidation_producer=consolidation_producer,
+        )
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][0], "global")
+        # the cooldown stamp was written: the immediate next run is not due
+        runner.run_pending_reconcile(
+            client=object(), model="m", op_producer=self._producer([]),
+            consolidation_producer=consolidation_producer,
+        )
+        self.assertEqual(len(seen), 1)
+
+    def test_consolidation_skipped_when_yielding(self) -> None:
+        from core import memory_reflection as refl
+
+        self._many_active_units(refl.CONSOLIDATION_MIN_UNITS)
+        with db.transaction() as conn:
+            mes.record_post_mutation(conn, post_id="pnew", op="create", content="新帖", occurred_at=99.0)
+        seen = []
+
+        runner.run_pending_reconcile(
+            client=object(), model="m", op_producer=self._producer([]),
+            consolidation_producer=lambda *, owner_scope, units: seen.append(owner_scope),
+            should_yield=lambda: True,
+        )
+        self.assertEqual(seen, [])
+
     def test_daily_sweep_reflects_owner_untouched_by_this_run(self) -> None:
         # soul:luna has a stale state but NO pending evidence, so the per-run
         # reflect never sees it; the meta-gated daily sweep must retire it.

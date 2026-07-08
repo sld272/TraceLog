@@ -23,6 +23,7 @@ from core import (
     memory_unit_service as mus,
 )
 from core.memory_reconcile_producer import (
+    make_consolidation_producer,
     make_llm_op_producer,
     make_relink_judge,
 )
@@ -165,6 +166,7 @@ def run_pending_reconcile(
     limit_per_bucket: int = 200,
     op_producer=None,
     relink_judge=None,
+    consolidation_producer=None,
     should_yield=None,
     trace_context: dict | None = None,
 ) -> ReconcileRunResult:
@@ -293,6 +295,20 @@ def run_pending_reconcile(
             backfill_tombstone_claims(client, model, trace_context=trace_context)
         except Exception as exc:
             logging_service.log_event("memory_tombstone_claim_backfill_failed", error=str(exc))
+    # LLM consolidation (P2b) rides the tail on a slow clock: at most one
+    # most-overdue owner per run, triple-gated in memory_reflection (enough
+    # units / cooldown / new changes). It is the priciest tail pass, so it gets
+    # one more yield poll of its own — an interactive job that just arrived
+    # wins, and the owner simply stays due for a later run. Best-effort: a
+    # consolidation failure must never fail the reconcile job.
+    if run_tail and not _wants_yield():
+        try:
+            memory_reflection.consolidate_due_owner(
+                producer=consolidation_producer
+                or make_consolidation_producer(client, model, trace_context=trace_context)
+            )
+        except Exception as exc:
+            logging_service.log_event("memory_consolidation_failed", error=str(exc))
     # Cross-bucket crosslink pass (P1) rides the tail too: units touched by this run get
     # their same_fact/contradicts/context_variant links judged, and cross-bucket
     # contradictions land an attribution-free contested mark on the more-public
