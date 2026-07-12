@@ -21,6 +21,8 @@ JSON 格式：
   "soul": "完整 Markdown 文本"
 }
 
+soul 字段是 JSON 字符串：其中的换行必须转义为 \\n，不要输出未转义的真实换行。
+
 Markdown 必须满足：
 1. 以 YAML frontmatter 开头，包含 name、version、description、created_at、author、tags。
 2. frontmatter 后用中文写清楚这个 SOUL 是 TraceLog 中的 AI 好友。
@@ -257,10 +259,16 @@ def _decide_search(
 
 
 def _parse_soul(content: str | None) -> dict | None:
+    text = clean_json_content(content)
     try:
-        data = json.loads(clean_json_content(content))
+        data = json.loads(text)
     except json.JSONDecodeError:
-        return None
+        # 模型经常在 JSON 字符串里输出未转义的真实换行（Markdown 正文尤甚），
+        # strict=False 容忍字符串内的控制字符，能救回这类响应
+        try:
+            data = json.loads(text, strict=False)
+        except json.JSONDecodeError:
+            return None
     soul = data.get("soul")
     if not isinstance(soul, str) or not soul.strip():
         return None

@@ -230,6 +230,20 @@ class SoulRevisionTest(unittest.TestCase):
         self.assertIn("语气再毒舌一点", prompt)
         self.assertIn("BEGIN CURRENT SOUL", prompt)
 
+    def test_parse_soul_tolerates_unescaped_newlines_in_json_string(self) -> None:
+        # 回归：模型在 JSON 字符串里输出未转义的真实换行（frontmatter 转义了、
+        # 正文却是裸换行），严格模式解析失败导致 502
+        raw = '{\n  "soul": "---\\nname: 测试\\n---\n\n## 语气特征\n- 温柔\n\n## 边界\n- 无"\n}'
+        parsed = soul_router._parse_soul(raw)
+        self.assertIsNotNone(parsed)
+        self.assertIn("## 语气特征", parsed["soul"])
+        self.assertIn("name: 测试", parsed["soul"])
+
+    def test_parse_soul_still_rejects_garbage(self) -> None:
+        self.assertIsNone(soul_router._parse_soul("not json at all"))
+        self.assertIsNone(soul_router._parse_soul('{"soul": ""}'))
+        self.assertIsNone(soul_router._parse_soul(None))
+
     def test_revise_soul_returns_none_on_invalid_response(self) -> None:
         client = FakeClient(["not json"])
         result = soul_router.revise_soul(
