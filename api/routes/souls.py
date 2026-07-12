@@ -25,6 +25,9 @@ class CreateSoulRequest(BaseModel):
 class GenerateSoulRequest(BaseModel):
     name: str = Field(min_length=1)
     inspiration: str = Field(min_length=1)
+    # 两者同时非空时走修订模式：按反馈修订 current_soul，不触发网络搜索
+    current_soul: str | None = None
+    feedback: str | None = None
 
 
 class UpdateSoulRequest(BaseModel):
@@ -58,13 +61,25 @@ async def create_soul(request: CreateSoulRequest):
 @router.post("/generate-soul")
 async def generate_soul(request: GenerateSoulRequest):
     runtime = require_configured_runtime_or_409()
-    result = await run_sync(
-        soul_router.generate_soul,
-        name=request.name,
-        inspiration=request.inspiration,
-        client=runtime.client,
-        model=runtime.model,
-    )
+    current_soul = (request.current_soul or "").strip()
+    feedback = (request.feedback or "").strip()
+    if current_soul and feedback:
+        result = await run_sync(
+            soul_router.revise_soul,
+            name=request.name,
+            current_soul=current_soul,
+            feedback=feedback,
+            client=runtime.client,
+            model=runtime.model,
+        )
+    else:
+        result = await run_sync(
+            soul_router.generate_soul,
+            name=request.name,
+            inspiration=request.inspiration,
+            client=runtime.client,
+            model=runtime.model,
+        )
     if result is None:
         raise HTTPException(status_code=502, detail="SOUL Markdown 生成失败")
     return result

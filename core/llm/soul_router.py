@@ -47,6 +47,22 @@ SOUL 名称：{name}
 """
 
 
+REVISION_TEMPLATE = """\
+SOUL 名称：{name}
+
+当前 SOUL Markdown 文件：
+---BEGIN CURRENT SOUL---
+{current_soul}
+---END CURRENT SOUL---
+
+用户的修改反馈：
+{feedback}
+
+请在保留 frontmatter 结构、原有章节结构以及反馈未涉及内容的前提下，\
+按反馈修订并输出修订后的完整 SOUL Markdown 文件。
+"""
+
+
 SOUL_SEARCH_GATE_PROMPT = """\
 你是 TraceLog 的 SOUL 人格生成搜索判断器。用户正在用一段灵感描述创建 AI 人格文件。\
 你的任务不是生成人格，而是判断灵感是否引用了具名的公开角色、人物或作品，\
@@ -114,6 +130,44 @@ def generate_soul(
     if parsed is None:
         return None
     return {**parsed, "search_used": search_used, "sources": sources}
+
+
+def revise_soul(
+    *,
+    name: str,
+    current_soul: str,
+    feedback: str,
+    client: LLMClient,
+    model: str,
+) -> dict | None:
+    """Revise an existing SOUL Markdown file according to one round of feedback.
+
+    Revision rounds never trigger web search: first-round background is already
+    folded into the text, and re-searching every tweak would add ~10s per round."""
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": REVISION_TEMPLATE.format(
+                name=name,
+                current_soul=current_soul,
+                feedback=feedback,
+            ),
+        },
+    ]
+    parsed = call_json_completion(
+        client=client,
+        model=model,
+        operation="revise_soul",
+        messages=messages,
+        parser=_parse_soul,
+        timeout=45,
+        response_format={"type": "json_object"},
+        trace_context={"soul_name": name},
+    )
+    if parsed is None:
+        return None
+    return {**parsed, "search_used": False, "sources": []}
 
 
 def _build_reference_section(
