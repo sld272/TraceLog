@@ -17,6 +17,7 @@ import {
   updateSoul,
 } from '@/api/client'
 import { Notice } from '@/components/Notice'
+import { PencilIcon } from '@/components/icons'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
@@ -877,8 +878,9 @@ function SoulSettingsPanel({
                   onClick={() => onStartEditSoul(soul)}
                   disabled={savingSoul !== null || editing !== null}
                   title="编辑人格文件"
+                  aria-label="编辑人格文件"
                 >
-                  ✎
+                  <PencilIcon width={13} height={13} />
                 </button>
                 <button
                   className={styles.iconButton}
