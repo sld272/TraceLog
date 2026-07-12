@@ -250,7 +250,7 @@ class ApiManagementTest(unittest.TestCase):
 
     def test_generate_soul_route_returns_markdown(self) -> None:
         generated = {
-            "soul": "---\nname: 测试好友\nversion: 1\ndescription: 测试\n---\n\n你是 TraceLog 中名为「测试好友」的 AI 好友。\n\n## 语气特征\n测试\n\n## 怎么回应\n测试\n\n## 边界\n测试",
+            "soul": "---\nname: 测试好友\nversion: 1\ndescription: 测试\n---\n\n测试好友说话简短直接。\n\n## 语气特征\n测试\n\n## 怎么回应\n测试\n\n## 边界\n测试",
         }
 
         with patch("core.llm.soul_router.generate_soul", return_value=generated):

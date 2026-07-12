@@ -11,7 +11,7 @@ from core.llm import soul_router
 
 SOUL_MARKDOWN = (
     "---\nname: 测试好友\nversion: 1\ndescription: 测试\n---\n\n"
-    "你是 TraceLog 中名为「测试好友」的 AI 好友。\n\n"
+    "测试好友说话简短直接，「你」在这份档案里指用户。\n\n"
     "## 语气特征\n测试\n\n## 怎么回应\n测试\n\n## 边界\n测试"
 )
 

@@ -10,6 +10,24 @@ from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 
+def _persona_section(soul: SoulContext) -> str:
+    """Wrap the SOUL Markdown with an explicit pronoun mapping.
+
+    SOUL files describe the persona in third person (by name or 她/他) and
+    reserve 「你」 for the user. Without spelling out that mapping, the reply
+    model tends to read the profile as describing someone else and narrates
+    the character instead of embodying it."""
+    return (
+        "## SOUL 人格\n"
+        f"下面的人格档案定义了你要完全代入的角色「{soul.name}」。\n"
+        f"人称约定：档案中的「{soul.name}」（以及“她/他”）都是指你自己；"
+        "档案中的「你」指的是正在和你对话的用户。\n"
+        f"请把档案里对「{soul.name}」的所有描写当作你自己的性格、语气和行为方式，"
+        "以第一人称自然地和用户说话，不要用旁观者口吻转述档案内容。\n\n"
+        f"{soul.soul.strip()}"
+    )
+
+
 def _relationship_memory(soul: SoulContext, *, channel: str, query: str) -> str:
     """Return the relationship view derived from this SOUL's memory units."""
     del channel, query
@@ -140,7 +158,7 @@ def call_soul_post_reply(
     """Call one SOUL for a public post reply."""
     relationship = _relationship_memory(soul, channel="public_post", query=user_input)
     system_msg = (
-        f"## SOUL 人格\n{soul.soul.strip()}\n\n"
+        f"{_persona_section(soul)}\n\n"
         f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
         f"---\n\n{_post_reply_task_prompt()}"
     )
@@ -168,7 +186,7 @@ def call_soul_chat_reply(
         soul, channel="chat", query=_last_user_text(chat_context.messages)
     )
     system_msg = (
-        f"## SOUL 人格\n{soul.soul.strip()}\n\n"
+        f"{_persona_section(soul)}\n\n"
         f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
         f"---\n\n{_chat_reply_task_prompt()}"
     )
@@ -197,7 +215,7 @@ def call_soul_comment_reply(
         soul, channel="comment", query=_last_user_text(comment_context.messages)
     )
     system_msg = (
-        f"## SOUL 人格\n{soul.soul.strip()}\n\n"
+        f"{_persona_section(soul)}\n\n"
         f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
         f"---\n\n{_comment_reply_task_prompt()}"
     )

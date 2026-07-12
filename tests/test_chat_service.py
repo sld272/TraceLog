@@ -148,7 +148,7 @@ class ChatServiceTest(unittest.TestCase):
 
         context = chat_service.build_chat_context(thread.id, "考试怎么办")
 
-        self.assertIn("你是「拾迹者」", context.soul.soul)
+        self.assertIn("拾迹者像一个一直陪你翻旧相册的老朋友", context.soul.soul)
         self.assertIn("测试用户", context.context)       # portrait baseline
         self.assertIn("最近在准备期末考试", context.context)  # v2 memory in # 记忆
         self.assertIn("复习数学", context.context)         # todo
