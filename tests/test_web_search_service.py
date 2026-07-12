@@ -103,8 +103,8 @@ class WebSearchServiceTest(unittest.TestCase):
             cache_ttl_s=1800,
         )
 
-        def fake_search(provider, query, config, max_results):
-            del provider, query, config
+        def fake_search(provider, query, config, max_results, *, include_raw_content=False):
+            del provider, query, config, include_raw_content
             return [
                 web_search_service.WebSearchResult(
                     title=f"Result {index}",
@@ -122,6 +122,66 @@ class WebSearchServiceTest(unittest.TestCase):
         self.assertEqual(1, len(first.results))
         self.assertEqual(3, len(second.results))
         self.assertEqual(2, search_one.call_count)
+
+    def test_search_interleaves_results_across_queries_before_capping(self) -> None:
+        config = web_search_service.WebSearchConfig(
+            enabled=True,
+            provider="tavily",
+            tavily_api_key="tavily-key",
+            max_results=4,
+            timeout_s=8,
+            cache_ttl_s=0,
+        )
+
+        def fake_search(provider, query, config, max_results, *, include_raw_content=False):
+            del provider, config, max_results, include_raw_content
+            prefix = "a" if query == "性格" else "b"
+            return [
+                web_search_service.WebSearchResult(
+                    title=f"{prefix}{index}",
+                    url=f"https://example.com/{prefix}{index}",
+                    snippet="snippet",
+                    provider="tavily",
+                )
+                for index in range(4)
+            ]
+
+        with patch("core.web_search_service._search_one", side_effect=fake_search):
+            run = web_search_service.search(["性格", "台词"], config=config)
+
+        # 全局截断前按查询轮转合并，两个查询的结果各占一半，而不是第一个查询独占
+        self.assertEqual(["a0", "b0", "a1", "b1"], [item.title for item in run.results])
+
+    def test_search_cache_is_scoped_by_raw_content_flag(self) -> None:
+        config = web_search_service.WebSearchConfig(
+            enabled=True,
+            provider="tavily",
+            tavily_api_key="tavily-key",
+            max_results=1,
+            timeout_s=8,
+            cache_ttl_s=1800,
+        )
+
+        def fake_search(provider, query, config, max_results, *, include_raw_content=False):
+            del provider, query, config, max_results
+            return [
+                web_search_service.WebSearchResult(
+                    title="Result",
+                    url="https://example.com",
+                    snippet="snippet",
+                    content="正文" if include_raw_content else None,
+                    provider="tavily",
+                )
+            ]
+
+        with patch("core.web_search_service._search_one", side_effect=fake_search) as search_one:
+            plain = web_search_service.search(["query"], config=config)
+            rich = web_search_service.search(["query"], config=config, include_raw_content=True)
+
+        # snippet 版缓存不能顶替正文版，两次都必须真正发起搜索
+        self.assertEqual(2, search_one.call_count)
+        self.assertIsNone(plain.results[0].content)
+        self.assertEqual("正文", rich.results[0].content)
 
     def test_search_failure_returns_unused_run(self) -> None:
         config = web_search_service.WebSearchConfig(
@@ -192,10 +252,14 @@ class WebSearchServiceTest(unittest.TestCase):
         def fake_urlopen(request, timeout):
             captured["auth"] = request.headers.get("Authorization")
             captured["timeout"] = timeout
+            captured["body"] = json.loads(request.data.decode("utf-8"))
             return FakeResponse()
 
         with patch("core.web_search_service.urllib.request.urlopen", fake_urlopen):
             results = web_search_service._search_tavily("query", config, 2)
+            self.assertFalse(captured["body"]["include_raw_content"])
+            web_search_service._search_tavily("query", config, 2, include_raw_content=True)
+            self.assertTrue(captured["body"]["include_raw_content"])
 
         self.assertEqual("Bearer tavily-key", captured["auth"])
         self.assertEqual(8, captured["timeout"])

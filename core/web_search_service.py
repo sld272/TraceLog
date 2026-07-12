@@ -16,7 +16,7 @@ from core.cli.config import CONFIG_FILE, normalize_web_search_config
 PROVIDER_TAVILY = "tavily"
 PROVIDER_DUCKDUCKGO = "duckduckgo"
 
-_cache: dict[tuple[str, str, int], tuple[float, list["WebSearchResult"]]] = {}
+_cache: dict[tuple[str, str, int, bool], tuple[float, list["WebSearchResult"]]] = {}
 
 
 @dataclass(frozen=True)
@@ -95,6 +95,7 @@ def search(
     *,
     config: WebSearchConfig | None = None,
     trace_context: dict | None = None,
+    include_raw_content: bool = False,
 ) -> WebSearchRun:
     settings = config or effective_config()
     clean_queries = _normalize_queries(queries)
@@ -117,20 +118,22 @@ def search(
         max_results=settings.max_results,
     )
     try:
-        results: list[WebSearchResult] = []
+        per_query_results: list[list[WebSearchResult]] = []
         cache_hit = False
         per_query_limit = max(1, settings.max_results)
         for query in clean_queries:
-            cached = _cached(provider, query, per_query_limit, settings.cache_ttl_s)
+            cached = _cached(provider, query, per_query_limit, settings.cache_ttl_s, include_raw_content)
             if cached is not None:
                 cache_hit = True
                 query_results = cached
             else:
-                query_results = _search_one(provider, query, settings, per_query_limit)
-                _store_cache(provider, query, per_query_limit, query_results)
-            results.extend(query_results)
+                query_results = _search_one(
+                    provider, query, settings, per_query_limit, include_raw_content=include_raw_content
+                )
+                _store_cache(provider, query, per_query_limit, query_results, include_raw_content)
+            per_query_results.append(query_results)
 
-        deduped = _dedupe_results(results)[: settings.max_results]
+        deduped = _dedupe_results(_interleave(per_query_results))[: settings.max_results]
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logging_service.log_event(
             "web_search_succeeded",
@@ -172,7 +175,7 @@ def search(
         )
 
 
-def format_results_for_context(run: WebSearchRun) -> str:
+def format_results_for_context(run: WebSearchRun, *, max_chars_per_result: int = 900) -> str:
     if not run.used or not run.results:
         return ""
     parts = [
@@ -192,7 +195,7 @@ def format_results_for_context(run: WebSearchRun) -> str:
             lines.append(f"发布时间: {result.published_at}")
         summary = result.content or result.snippet
         if summary:
-            lines.append(f"摘要: {_compact(summary, 900)}")
+            lines.append(f"摘要: {_compact(summary, max_chars_per_result)}")
         parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
@@ -201,15 +204,29 @@ def clear_cache() -> None:
     _cache.clear()
 
 
-def _search_one(provider: str, query: str, config: WebSearchConfig, max_results: int) -> list[WebSearchResult]:
+def _search_one(
+    provider: str,
+    query: str,
+    config: WebSearchConfig,
+    max_results: int,
+    *,
+    include_raw_content: bool = False,
+) -> list[WebSearchResult]:
     if provider == PROVIDER_TAVILY:
-        return _search_tavily(query, config, max_results)
+        return _search_tavily(query, config, max_results, include_raw_content=include_raw_content)
     if provider == PROVIDER_DUCKDUCKGO:
+        # DuckDuckGo 只有 snippet，没有页面正文可取
         return _search_duckduckgo(query, config, max_results)
     raise ValueError(f"unsupported web search provider: {provider}")
 
 
-def _search_tavily(query: str, config: WebSearchConfig, max_results: int) -> list[WebSearchResult]:
+def _search_tavily(
+    query: str,
+    config: WebSearchConfig,
+    max_results: int,
+    *,
+    include_raw_content: bool = False,
+) -> list[WebSearchResult]:
     if not config.tavily_api_key:
         raise RuntimeError("Tavily API Key 未配置")
     payload = json.dumps(
@@ -217,7 +234,7 @@ def _search_tavily(query: str, config: WebSearchConfig, max_results: int) -> lis
             "query": query,
             "max_results": max_results,
             "include_answer": False,
-            "include_raw_content": False,
+            "include_raw_content": include_raw_content,
         }
     ).encode("utf-8")
     request = urllib.request.Request(
@@ -286,10 +303,12 @@ def _search_duckduckgo(query: str, config: WebSearchConfig, max_results: int) ->
     return results
 
 
-def _cached(provider: str, query: str, max_results: int, ttl_s: int) -> list[WebSearchResult] | None:
+def _cached(
+    provider: str, query: str, max_results: int, ttl_s: int, include_raw_content: bool
+) -> list[WebSearchResult] | None:
     if ttl_s <= 0:
         return None
-    key = (provider, query, max_results)
+    key = (provider, query, max_results, include_raw_content)
     cached = _cache.get(key)
     if cached is None:
         return None
@@ -300,8 +319,22 @@ def _cached(provider: str, query: str, max_results: int, ttl_s: int) -> list[Web
     return list(results)
 
 
-def _store_cache(provider: str, query: str, max_results: int, results: list[WebSearchResult]) -> None:
-    _cache[(provider, query, max_results)] = (time.time(), list(results))
+def _store_cache(
+    provider: str, query: str, max_results: int, results: list[WebSearchResult], include_raw_content: bool
+) -> None:
+    _cache[(provider, query, max_results, include_raw_content)] = (time.time(), list(results))
+
+
+def _interleave(per_query_results: list[list[WebSearchResult]]) -> list[WebSearchResult]:
+    """Round-robin merge across queries so the global result cap keeps hits
+    from every query, instead of letting the first query's results crowd out
+    the rest (each query typically covers a different facet of the topic)."""
+    merged: list[WebSearchResult] = []
+    for rank in range(max((len(items) for items in per_query_results), default=0)):
+        for items in per_query_results:
+            if rank < len(items):
+                merged.append(items[rank])
+    return merged
 
 
 def _dedupe_results(results: list[WebSearchResult]) -> list[WebSearchResult]:
