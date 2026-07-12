@@ -128,6 +128,68 @@ class ApiManagementTest(unittest.TestCase):
         self.assertFalse(patch_response.json()["enabled"])
         self.assertIn("测试好友", [item["name"] for item in list_response.json()])
 
+    def test_soul_content_route_returns_markdown_and_404_when_missing(self) -> None:
+        name = quote("测试好友")
+
+        with self._client() as client:
+            create_response = client.post(
+                "/souls", json={"name": "测试好友", "soul": "# 自定义人格内容"}
+            )
+            content_response = client.get(f"/souls/{name}/content")
+            missing_response = client.get(f"/souls/{quote('不存在的人格')}/content")
+
+        self.assertEqual(200, create_response.status_code)
+        self.assertEqual(200, content_response.status_code)
+        self.assertEqual("测试好友", content_response.json()["name"])
+        self.assertEqual("# 自定义人格内容", content_response.json()["soul"])
+        self.assertEqual(404, missing_response.status_code)
+
+    def test_generate_soul_route_revision_mode_dispatches_to_revise(self) -> None:
+        revised = {"soul": "# 修订后的内容", "search_used": False, "sources": []}
+
+        with (
+            patch("core.llm.soul_router.revise_soul", return_value=revised) as revise_mock,
+            patch("core.llm.soul_router.generate_soul") as generate_mock,
+        ):
+            with self._client() as client:
+                response = client.post(
+                    "/souls/generate-soul",
+                    json={
+                        "name": "测试好友",
+                        "inspiration": "语气再毒舌一点",
+                        "current_soul": "# 现有内容",
+                        "feedback": "语气再毒舌一点",
+                    },
+                )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("# 修订后的内容", response.json()["soul"])
+        self.assertFalse(response.json()["search_used"])
+        revise_mock.assert_called_once()
+        generate_mock.assert_not_called()
+
+    def test_generate_soul_route_blank_feedback_falls_back_to_generate(self) -> None:
+        generated = {"soul": "# 新生成", "search_used": False, "sources": []}
+
+        with (
+            patch("core.llm.soul_router.generate_soul", return_value=generated) as generate_mock,
+            patch("core.llm.soul_router.revise_soul") as revise_mock,
+        ):
+            with self._client() as client:
+                response = client.post(
+                    "/souls/generate-soul",
+                    json={
+                        "name": "测试好友",
+                        "inspiration": "温柔但不纵容",
+                        "current_soul": "  ",
+                        "feedback": "",
+                    },
+                )
+
+        self.assertEqual(200, response.status_code)
+        generate_mock.assert_called_once()
+        revise_mock.assert_not_called()
+
     def test_upload_attachment_and_create_image_only_post(self) -> None:
         with self._client() as client:
             upload_response = client.post(
