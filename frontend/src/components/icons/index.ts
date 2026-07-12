@@ -1,3 +1,5 @@
+export { ArrowDownIcon } from './ArrowDownIcon'
+export { ArrowUpIcon } from './ArrowUpIcon'
 export { SendIcon } from './SendIcon'
 export { LoadingDots } from './LoadingDots'
 export { StarIcon } from './StarIcon'

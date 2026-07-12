@@ -17,7 +17,7 @@ import {
   updateSoul,
 } from '@/api/client'
 import { Notice } from '@/components/Notice'
-import { PencilIcon } from '@/components/icons'
+import { ArrowDownIcon, ArrowUpIcon, PencilIcon } from '@/components/icons'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
@@ -888,8 +888,9 @@ function SoulSettingsPanel({
                   onClick={() => onMoveSoul(index, -1)}
                   disabled={index === 0 || savingSoul !== null}
                   title="上移"
+                  aria-label="上移"
                 >
-                  ↑
+                  <ArrowUpIcon />
                 </button>
                 <button
                   className={styles.iconButton}
@@ -897,8 +898,9 @@ function SoulSettingsPanel({
                   onClick={() => onMoveSoul(index, 1)}
                   disabled={index === souls.length - 1 || savingSoul !== null}
                   title="下移"
+                  aria-label="下移"
                 >
-                  ↓
+                  <ArrowDownIcon />
                 </button>
                 <label className={styles.switch}>
                   <input
