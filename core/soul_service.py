@@ -239,6 +239,15 @@ def list_enabled_souls() -> list[SoulContext]:
     return souls
 
 
+def read_soul_content(name: str) -> str:
+    """Return the Markdown content of one SOUL personality file."""
+    record = get_soul(name)
+    content = _read_optional_text(db.WORKSPACE_DIR / record.file_path)
+    if content is None:
+        raise ValueError(f"SOUL 人格文件不存在：{name}")
+    return content
+
+
 def create_soul(
     name: str,
     soul: str | None = None,

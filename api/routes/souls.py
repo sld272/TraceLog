@@ -85,6 +85,15 @@ async def generate_soul(request: GenerateSoulRequest):
     return result
 
 
+@router.get("/{name}/content")
+async def get_soul_content(name: str):
+    try:
+        content = await run_sync(soul_service.read_soul_content, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"name": name, "soul": content}
+
+
 @router.patch("/{name}")
 async def update_soul(name: str, request: UpdateSoulRequest):
     try:

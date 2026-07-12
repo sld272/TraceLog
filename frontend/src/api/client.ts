@@ -678,14 +678,33 @@ export function createSoul(name: string, description: string | null, enabled = t
   })
 }
 
-export function generateSoul(name: string, inspiration: string) {
-  return request<{ soul: string }>('/souls/generate-soul', {
+export interface GenerateSoulResult {
+  soul: string
+  search_used: boolean
+  sources: { title: string; url: string }[]
+}
+
+export function generateSoul(
+  name: string,
+  inspiration: string,
+  revision?: { currentSoul: string; feedback: string },
+) {
+  return request<GenerateSoulResult>('/souls/generate-soul', {
     method: 'POST',
-    body: JSON.stringify({ name, inspiration }),
+    body: JSON.stringify({
+      name,
+      inspiration,
+      current_soul: revision?.currentSoul,
+      feedback: revision?.feedback,
+    }),
   })
 }
 
-export function updateSoul(name: string, changes: { enabled?: boolean; description?: string }) {
+export function getSoulContent(name: string) {
+  return request<{ name: string; soul: string }>(`/souls/${encodeURIComponent(name)}/content`)
+}
+
+export function updateSoul(name: string, changes: { enabled?: boolean; description?: string; soul?: string }) {
   return request<Soul>(`/souls/${encodeURIComponent(name)}`, {
     method: 'PATCH',
     body: JSON.stringify(changes),
