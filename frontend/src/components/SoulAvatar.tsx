@@ -1,8 +1,8 @@
-import { soulColors } from '@/utils/soulColor'
+import { useSoulColors } from './SoulColorContext'
 
 /** SOUL 首字母头像。尺寸与形状由调用方的 className 决定，颜色统一从色板取。 */
 export function SoulAvatar({ name, className }: { name: string; className?: string }) {
-  const colors = soulColors(name)
+  const colors = useSoulColors(name)
   return (
     <span
       className={className}

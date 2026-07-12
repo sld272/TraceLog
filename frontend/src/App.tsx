@@ -12,6 +12,7 @@ import {
 } from '@/api/client'
 import { AppShell } from '@/components/AppShell'
 import { LeftNav } from '@/components/LeftNav'
+import { SoulColorProvider } from '@/components/SoulColorContext'
 import { RightPanel } from '@/components/RightPanel'
 import { ChatPage } from '@/pages/ChatPage'
 import { GoalsPage } from '@/pages/GoalsPage'
@@ -273,6 +274,7 @@ export function App() {
   }
 
   return (
+    <SoulColorProvider soulNames={souls.map((soul) => soul.name)}>
     <AppShell
       nav={(closeMobileNav) => (
         <LeftNav
@@ -298,6 +300,7 @@ export function App() {
         />
       ) : undefined}
     />
+    </SoulColorProvider>
   )
 }
 

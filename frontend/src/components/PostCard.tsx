@@ -17,7 +17,7 @@ import { SoulAvatar } from './SoulAvatar'
 import { ChatIcon, ChevronRightIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
-import { soulColors } from '@/utils/soulColor'
+import { useSoulColors } from './SoulColorContext'
 import styles from './PostCard.module.css'
 
 const FEED_MAX_THREAD_MESSAGES = 4
@@ -267,7 +267,7 @@ function CommentPreview({
   const [replyOpen, setReplyOpen] = useState(false)
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const soulName = comment.soul_name
-  const colors = soulColors(soulName)
+  const colors = useSoulColors(soulName)
   const trimmed = reply.trim()
   const messages = conversation?.messages ?? []
   const threadMessages = messages.filter((message) => message.seq > 0)
