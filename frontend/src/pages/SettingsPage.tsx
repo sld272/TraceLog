@@ -7,6 +7,7 @@ import {
   createSoul,
   generateSoul,
   getModelSettings,
+  getSoulContent,
   getWorkspaceStatus,
   listSouls,
   reconcileVectorIndex,
@@ -32,6 +33,20 @@ interface AiSoulDraft {
 interface MarkdownSoulDraft {
   name: string
   content: string
+}
+
+interface SoulPreview {
+  name: string
+  inspiration: string
+  content: string
+  searchUsed: boolean
+  sources: { title: string; url: string }[]
+}
+
+interface SoulEditing {
+  name: string
+  content: string
+  original: string
 }
 
 interface SettingsPageProps {
@@ -112,6 +127,10 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const [createSoulMode, setCreateSoulMode] = useState<CreateSoulMode>('ai')
   const [aiSoulDraft, setAiSoulDraft] = useState<AiSoulDraft>({ name: '', inspiration: '' })
   const [markdownSoulDraft, setMarkdownSoulDraft] = useState<MarkdownSoulDraft>({ name: '', content: '' })
+  const [soulPreview, setSoulPreview] = useState<SoulPreview | null>(null)
+  const [previewFeedback, setPreviewFeedback] = useState('')
+  const [editingSoul, setEditingSoul] = useState<SoulEditing | null>(null)
+  const [editFeedback, setEditFeedback] = useState('')
   const [loading, setLoading] = useState(true)
   const [savingModel, setSavingModel] = useState(false)
   const [savingSoul, setSavingSoul] = useState<string | null>(null)
@@ -221,20 +240,35 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
     const name = draft.name.trim()
     const content = (createSoulMode === 'ai' ? aiSoulDraft.inspiration : markdownSoulDraft.content).trim()
     if (!name || !content) return
+    if (createSoulMode === 'ai') {
+      // AI 模式：先生成预览，用户确认后才真正创建
+      setSavingSoul('generate')
+      setNotice(null)
+      setError(null)
+      try {
+        const result = await generateSoul(name, content)
+        setSoulPreview({
+          name,
+          inspiration: content,
+          content: result.soul,
+          searchUsed: result.search_used,
+          sources: result.sources ?? [],
+        })
+        setPreviewFeedback('')
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '生成人格失败')
+      } finally {
+        setSavingSoul(null)
+      }
+      return
+    }
     setSavingSoul('new')
     setNotice(null)
     setError(null)
     try {
-      const soul = createSoulMode === 'ai'
-        ? (await generateSoul(name, content)).soul
-        : content
-      const created = await createSoul(name, null, true, soul)
+      const created = await createSoul(name, null, true, content)
       setSouls((items) => [...items, created].sort((a, b) => a.sort_order - b.sort_order))
-      if (createSoulMode === 'ai') {
-        setAiSoulDraft({ name: '', inspiration: '' })
-      } else {
-        setMarkdownSoulDraft({ name: '', content: '' })
-      }
+      setMarkdownSoulDraft({ name: '', content: '' })
       setNotice(`已创建 ${created.name}`)
       onSoulsChanged?.()
     } catch (err) {
@@ -242,6 +276,149 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
     } finally {
       setSavingSoul(null)
     }
+  }
+
+  const handleRegeneratePreview = async () => {
+    if (!soulPreview) return
+    setSavingSoul('generate')
+    setNotice(null)
+    setError(null)
+    try {
+      const result = await generateSoul(soulPreview.name, soulPreview.inspiration)
+      setSoulPreview({
+        ...soulPreview,
+        content: result.soul,
+        searchUsed: result.search_used,
+        sources: result.sources ?? [],
+      })
+      setPreviewFeedback('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重新生成失败')
+    } finally {
+      setSavingSoul(null)
+    }
+  }
+
+  const handleRefinePreview = async () => {
+    if (!soulPreview) return
+    const feedback = previewFeedback.trim()
+    if (!feedback || !soulPreview.content.trim()) return
+    setSavingSoul('refine')
+    setNotice(null)
+    setError(null)
+    try {
+      const result = await generateSoul(soulPreview.name, soulPreview.inspiration, {
+        currentSoul: soulPreview.content,
+        feedback,
+      })
+      // 修订轮不重新搜索，保留首轮的参考来源展示
+      setSoulPreview({ ...soulPreview, content: result.soul })
+      setPreviewFeedback('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AI 调整失败')
+    } finally {
+      setSavingSoul(null)
+    }
+  }
+
+  const handlePreviewContentChange = (content: string) => {
+    setSoulPreview((preview) => (preview ? { ...preview, content } : preview))
+  }
+
+  const handleConfirmCreateSoul = async () => {
+    if (!soulPreview || !soulPreview.content.trim()) return
+    setSavingSoul('new')
+    setNotice(null)
+    setError(null)
+    try {
+      const created = await createSoul(soulPreview.name, null, true, soulPreview.content)
+      setSouls((items) => [...items, created].sort((a, b) => a.sort_order - b.sort_order))
+      setSoulPreview(null)
+      setPreviewFeedback('')
+      setAiSoulDraft({ name: '', inspiration: '' })
+      setNotice(`已创建 ${created.name}`)
+      onSoulsChanged?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建人格失败')
+    } finally {
+      setSavingSoul(null)
+    }
+  }
+
+  const handleDiscardPreview = () => {
+    setSoulPreview(null)
+    setPreviewFeedback('')
+  }
+
+  const handleStartEditSoul = async (soul: Soul) => {
+    setSavingSoul('edit-load')
+    setNotice(null)
+    setError(null)
+    try {
+      const { soul: content } = await getSoulContent(soul.name)
+      setEditingSoul({ name: soul.name, content, original: content })
+      setEditFeedback('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '读取人格文件失败')
+    } finally {
+      setSavingSoul(null)
+    }
+  }
+
+  const handleEditContentChange = (content: string) => {
+    setEditingSoul((editing) => (editing ? { ...editing, content } : editing))
+  }
+
+  const handleRefineEditingSoul = async () => {
+    if (!editingSoul) return
+    const feedback = editFeedback.trim()
+    if (!feedback || !editingSoul.content.trim()) return
+    setSavingSoul('edit-refine')
+    setNotice(null)
+    setError(null)
+    try {
+      const result = await generateSoul(editingSoul.name, feedback, {
+        currentSoul: editingSoul.content,
+        feedback,
+      })
+      setEditingSoul({ ...editingSoul, content: result.soul })
+      setEditFeedback('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'AI 调整失败')
+    } finally {
+      setSavingSoul(null)
+    }
+  }
+
+  const handleSaveEditingSoul = async () => {
+    if (!editingSoul || !editingSoul.content.trim()) return
+    setSavingSoul('edit-save')
+    setNotice(null)
+    setError(null)
+    try {
+      const updated = await updateSoul(editingSoul.name, { soul: editingSoul.content })
+      setSouls((items) => items.map((item) => (item.name === updated.name ? updated : item)))
+      setEditingSoul(null)
+      setEditFeedback('')
+      setNotice(`已保存 ${updated.name}`)
+      onSoulsChanged?.()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存人格失败')
+    } finally {
+      setSavingSoul(null)
+    }
+  }
+
+  const handleCancelEditSoul = () => {
+    if (
+      editingSoul &&
+      editingSoul.content !== editingSoul.original &&
+      !window.confirm('有未保存的修改，确定放弃吗？')
+    ) {
+      return
+    }
+    setEditingSoul(null)
+    setEditFeedback('')
   }
 
   const handleCreateSoulModeChange = (mode: CreateSoulMode) => {
@@ -346,12 +523,28 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
                   createSoulMode={createSoulMode}
                   newSoulName={createSoulMode === 'ai' ? aiSoulDraft.name : markdownSoulDraft.name}
                   newSoulContent={createSoulMode === 'ai' ? aiSoulDraft.inspiration : markdownSoulDraft.content}
+                  preview={soulPreview}
+                  previewFeedback={previewFeedback}
+                  editing={editingSoul}
+                  editFeedback={editFeedback}
                   onCreateSoulModeChange={handleCreateSoulModeChange}
                   onNewSoulNameChange={handleNewSoulNameChange}
                   onNewSoulContentChange={handleNewSoulContentChange}
                   onCreateSoul={handleCreateSoul}
                   onToggleSoul={handleToggleSoul}
                   onMoveSoul={handleMoveSoul}
+                  onPreviewContentChange={handlePreviewContentChange}
+                  onPreviewFeedbackChange={setPreviewFeedback}
+                  onRegeneratePreview={handleRegeneratePreview}
+                  onRefinePreview={handleRefinePreview}
+                  onConfirmCreateSoul={handleConfirmCreateSoul}
+                  onDiscardPreview={handleDiscardPreview}
+                  onStartEditSoul={handleStartEditSoul}
+                  onEditContentChange={handleEditContentChange}
+                  onEditFeedbackChange={setEditFeedback}
+                  onRefineEditingSoul={handleRefineEditingSoul}
+                  onSaveEditingSoul={handleSaveEditingSoul}
+                  onCancelEditSoul={handleCancelEditSoul}
                 />
               )}
               {activeTab === 'data' && (
@@ -603,24 +796,56 @@ function SoulSettingsPanel({
   createSoulMode,
   newSoulName,
   newSoulContent,
+  preview,
+  previewFeedback,
+  editing,
+  editFeedback,
   onCreateSoulModeChange,
   onNewSoulNameChange,
   onNewSoulContentChange,
   onCreateSoul,
   onToggleSoul,
   onMoveSoul,
+  onPreviewContentChange,
+  onPreviewFeedbackChange,
+  onRegeneratePreview,
+  onRefinePreview,
+  onConfirmCreateSoul,
+  onDiscardPreview,
+  onStartEditSoul,
+  onEditContentChange,
+  onEditFeedbackChange,
+  onRefineEditingSoul,
+  onSaveEditingSoul,
+  onCancelEditSoul,
 }: {
   souls: Soul[]
   savingSoul: string | null
   createSoulMode: CreateSoulMode
   newSoulName: string
   newSoulContent: string
+  preview: SoulPreview | null
+  previewFeedback: string
+  editing: SoulEditing | null
+  editFeedback: string
   onCreateSoulModeChange: (value: CreateSoulMode) => void
   onNewSoulNameChange: (value: string) => void
   onNewSoulContentChange: (value: string) => void
   onCreateSoul: (event: FormEvent) => void
   onToggleSoul: (soul: Soul) => void
   onMoveSoul: (index: number, direction: -1 | 1) => void
+  onPreviewContentChange: (value: string) => void
+  onPreviewFeedbackChange: (value: string) => void
+  onRegeneratePreview: () => void
+  onRefinePreview: () => void
+  onConfirmCreateSoul: () => void
+  onDiscardPreview: () => void
+  onStartEditSoul: (soul: Soul) => void
+  onEditContentChange: (value: string) => void
+  onEditFeedbackChange: (value: string) => void
+  onRefineEditingSoul: () => void
+  onSaveEditingSoul: () => void
+  onCancelEditSoul: () => void
 }) {
   const isAiMode = createSoulMode === 'ai'
 
@@ -646,6 +871,15 @@ function SoulSettingsPanel({
                 <p className={styles.soulDescription}>{soul.description || '暂无描述'}</p>
               </div>
               <div className={styles.rowActions}>
+                <button
+                  className={styles.iconButton}
+                  type="button"
+                  onClick={() => onStartEditSoul(soul)}
+                  disabled={savingSoul !== null || editing !== null}
+                  title="编辑人格文件"
+                >
+                  ✎
+                </button>
                 <button
                   className={styles.iconButton}
                   type="button"
@@ -680,58 +914,198 @@ function SoulSettingsPanel({
         </div>
       </section>
 
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <h2 className={styles.sectionTitle}>新建人格</h2>
-            <p className={styles.sectionMeta}>用 AI 整理成 Markdown，或自己写完整 Markdown。</p>
+      {editing && (
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <div>
+              <h2 className={styles.sectionTitle}>编辑人格：{editing.name}</h2>
+              <p className={styles.sectionMeta}>直接修改 Markdown，或让 AI 按一句话反馈调整。保存后立即生效。</p>
+            </div>
           </div>
-        </div>
-        <form className={styles.createSoulForm} onSubmit={onCreateSoul}>
-          <div className={styles.modeTabs} role="tablist" aria-label="新建人格方式">
-            <button
-              className={`${styles.modeTab} ${isAiMode ? styles.modeTabActive : ''}`}
-              type="button"
-              role="tab"
-              aria-selected={isAiMode}
-              onClick={() => onCreateSoulModeChange('ai')}
-            >
-              AI 生成 Markdown
-            </button>
-            <button
-              className={`${styles.modeTab} ${!isAiMode ? styles.modeTabActive : ''}`}
-              type="button"
-              role="tab"
-              aria-selected={!isAiMode}
-              onClick={() => onCreateSoulModeChange('markdown')}
-            >
-              手写 Markdown
-            </button>
-          </div>
-          <TextField label="名称" value={newSoulName} onChange={onNewSoulNameChange} />
-          <label className={styles.textareaField}>
-            <span>{isAiMode ? '灵感描述' : 'Markdown 全文'}</span>
-            <textarea
-              value={newSoulContent}
-              onChange={(event) => onNewSoulContentChange(event.target.value)}
-              placeholder={isAiMode ? AI_SOUL_PLACEHOLDER : newSoulMarkdownTemplate(newSoulName)}
-              rows={isAiMode ? 7 : 11}
+          <div className={styles.createSoulForm}>
+            <label className={styles.textareaField}>
+              <span>Markdown 全文</span>
+              <textarea
+                value={editing.content}
+                onChange={(event) => onEditContentChange(event.target.value)}
+                rows={14}
+              />
+            </label>
+            <TextField
+              label="AI 反馈微调（可选）"
+              value={editFeedback}
+              onChange={onEditFeedbackChange}
+              placeholder="一句话反馈，例如：语气再温柔一点，回应更简短"
             />
-          </label>
-          <div className={styles.formActions}>
-            <span className={styles.saveHint}>
-              {isAiMode ? '系统会把你的描述整理成完整人格 Markdown 文件。' : '内容会直接保存为人格 Markdown 文件。'}
-            </span>
-            <button
-              className={workspaceStyles.button}
-              type="submit"
-              disabled={!newSoulName.trim() || !newSoulContent.trim() || savingSoul !== null}
-            >
-              {savingSoul === 'new' ? (isAiMode ? '生成中...' : '创建中...') : (isAiMode ? '生成并创建' : '创建人格')}
-            </button>
+            <div className={styles.formActions}>
+              <span className={styles.saveHint}>
+                {editing.content !== editing.original ? '有未保存的修改。' : '尚无改动。'}
+              </span>
+              <div className={styles.actionRow}>
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={onCancelEditSoul}
+                  disabled={savingSoul !== null}
+                >
+                  取消
+                </button>
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={onRefineEditingSoul}
+                  disabled={savingSoul !== null || !editFeedback.trim() || !editing.content.trim()}
+                >
+                  {savingSoul === 'edit-refine' ? 'AI 调整中...' : 'AI 按反馈调整'}
+                </button>
+                <button
+                  className={workspaceStyles.button}
+                  type="button"
+                  onClick={onSaveEditingSoul}
+                  disabled={savingSoul !== null || !editing.content.trim() || editing.content === editing.original}
+                >
+                  {savingSoul === 'edit-save' ? '保存中...' : '保存修改'}
+                </button>
+              </div>
+            </div>
           </div>
-        </form>
-      </section>
+        </section>
+      )}
+
+      {preview ? (
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <div>
+              <h2 className={styles.sectionTitle}>预览：{preview.name}</h2>
+              <p className={styles.sectionMeta}>确认或修改后再创建。也可以重新生成，或让 AI 按一句话反馈调整。</p>
+            </div>
+          </div>
+          <div className={styles.createSoulForm}>
+            {preview.searchUsed && preview.sources.length > 0 && (
+              <details className={styles.inlineDetails}>
+                <summary>已参考 {preview.sources.length} 条网络资料</summary>
+                {preview.sources.map((source) => (
+                  <p key={source.url}>
+                    <a href={source.url} target="_blank" rel="noreferrer">{source.title || source.url}</a>
+                  </p>
+                ))}
+              </details>
+            )}
+            <label className={styles.textareaField}>
+              <span>生成的 Markdown（可直接编辑）</span>
+              <textarea
+                value={preview.content}
+                onChange={(event) => onPreviewContentChange(event.target.value)}
+                rows={14}
+              />
+            </label>
+            <TextField
+              label="AI 反馈微调（可选）"
+              value={previewFeedback}
+              onChange={onPreviewFeedbackChange}
+              placeholder="一句话反馈，例如：语气再毒舌一点，边界更严格"
+            />
+            <div className={styles.formActions}>
+              <span className={styles.saveHint}>满意后点「创建人格」，文件才会真正保存。</span>
+              <div className={styles.actionRow}>
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={onDiscardPreview}
+                  disabled={savingSoul !== null}
+                >
+                  放弃预览
+                </button>
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={onRegeneratePreview}
+                  disabled={savingSoul !== null}
+                >
+                  {savingSoul === 'generate' ? '生成中...' : '重新生成'}
+                </button>
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={onRefinePreview}
+                  disabled={savingSoul !== null || !previewFeedback.trim() || !preview.content.trim()}
+                >
+                  {savingSoul === 'refine' ? 'AI 调整中...' : 'AI 按反馈调整'}
+                </button>
+                <button
+                  className={workspaceStyles.button}
+                  type="button"
+                  onClick={onConfirmCreateSoul}
+                  disabled={savingSoul !== null || !preview.content.trim()}
+                >
+                  {savingSoul === 'new' ? '创建中...' : '创建人格'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className={styles.section}>
+          <div className={styles.sectionHeader}>
+            <div>
+              <h2 className={styles.sectionTitle}>新建人格</h2>
+              <p className={styles.sectionMeta}>用 AI 整理成 Markdown，或自己写完整 Markdown。</p>
+            </div>
+          </div>
+          <form className={styles.createSoulForm} onSubmit={onCreateSoul}>
+            <div className={styles.modeTabs} role="tablist" aria-label="新建人格方式">
+              <button
+                className={`${styles.modeTab} ${isAiMode ? styles.modeTabActive : ''}`}
+                type="button"
+                role="tab"
+                aria-selected={isAiMode}
+                onClick={() => onCreateSoulModeChange('ai')}
+              >
+                AI 生成 Markdown
+              </button>
+              <button
+                className={`${styles.modeTab} ${!isAiMode ? styles.modeTabActive : ''}`}
+                type="button"
+                role="tab"
+                aria-selected={!isAiMode}
+                onClick={() => onCreateSoulModeChange('markdown')}
+              >
+                手写 Markdown
+              </button>
+            </div>
+            <TextField label="名称" value={newSoulName} onChange={onNewSoulNameChange} />
+            <label className={styles.textareaField}>
+              <span>{isAiMode ? '灵感描述' : 'Markdown 全文'}</span>
+              <textarea
+                value={newSoulContent}
+                onChange={(event) => onNewSoulContentChange(event.target.value)}
+                placeholder={isAiMode ? AI_SOUL_PLACEHOLDER : newSoulMarkdownTemplate(newSoulName)}
+                rows={isAiMode ? 7 : 11}
+              />
+            </label>
+            <div className={styles.formActions}>
+              <span className={styles.saveHint}>
+                {isAiMode
+                  ? '生成后会先进入预览，确认或修改后才会创建。提到公开角色/人物时会自动联网参考。'
+                  : '内容会直接保存为人格 Markdown 文件。'}
+              </span>
+              <button
+                className={workspaceStyles.button}
+                type="submit"
+                disabled={!newSoulName.trim() || !newSoulContent.trim() || savingSoul !== null}
+              >
+                {savingSoul === 'generate'
+                  ? '生成中...'
+                  : savingSoul === 'new' && !isAiMode
+                    ? '创建中...'
+                    : isAiMode
+                      ? '生成预览'
+                      : '创建人格'}
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
     </div>
   )
 }
