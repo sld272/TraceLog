@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+from core.llm import secondary_model
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 
@@ -51,6 +52,7 @@ def call_goal_router(
     context: str = "",
     trace_context: dict | None = None,
 ) -> list[dict]:
+    client, model = secondary_model.resolve(client, model)
     content = (
         f"## 场景上下文\n\n{context.strip() or '（无）'}\n\n"
         "---\n\n"

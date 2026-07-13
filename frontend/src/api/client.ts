@@ -310,6 +310,12 @@ export interface ModelSettings {
   embedding_api_key_masked: string | null
   embedding_base_url: string | null
   reuse_embedding_config: boolean
+  secondary_model: string | null
+  secondary_configured: boolean
+  has_secondary_api_key: boolean
+  secondary_api_key_masked: string | null
+  secondary_base_url: string | null
+  reuse_secondary_config: boolean
   logging: {
     enabled: boolean
     level: string
@@ -354,6 +360,10 @@ export interface ModelSettingsUpdate {
   embedding_api_key?: string
   embedding_base_url?: string | null
   reuse_embedding_config: boolean
+  secondary_model?: string | null
+  secondary_api_key?: string
+  secondary_base_url?: string | null
+  reuse_secondary_config: boolean
   logging: ModelSettings['logging']
   vision: {
     enabled: boolean

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core import logging_service
+from core.llm import secondary_model
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 
@@ -68,6 +69,7 @@ def decide(
     trace_context: dict | None = None,
 ) -> WebSearchDecision:
     """Return an LLM decision, defaulting to no search on any failure."""
+    client, model = secondary_model.resolve(client, model)
     if client is None or model is None:
         decision = default_decision("missing_llm_client")
         _log_decision(decision, channel=channel, trace_context=trace_context, skipped=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from core.llm import secondary_model
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 
@@ -56,6 +57,7 @@ def call_query_rewrite(
     recent_turns: list[dict] | None = None,
     trace_context: dict | None = None,
 ) -> dict | None:
+    client, model = secondary_model.resolve(client, model)
     user_content = (
         f"channel: {channel}\n\n"
         "---\n\n"

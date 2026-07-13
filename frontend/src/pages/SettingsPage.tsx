@@ -64,6 +64,10 @@ interface ModelForm {
   embedding_api_key: string
   embedding_base_url: string
   reuse_embedding_config: boolean
+  secondary_model: string
+  secondary_api_key: string
+  secondary_base_url: string
+  reuse_secondary_config: boolean
   logging: ModelSettings['logging']
   vision: {
     enabled: boolean
@@ -89,6 +93,10 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   embedding_api_key: '',
   embedding_base_url: '',
   reuse_embedding_config: true,
+  secondary_model: '',
+  secondary_api_key: '',
+  secondary_base_url: '',
+  reuse_secondary_config: true,
   logging: {
     enabled: true,
     level: 'INFO',
@@ -620,7 +628,7 @@ function ModelSettingsPanel({
         <div className={styles.sectionHeader}>
           <div>
             <h2 className={styles.sectionTitle}>主模型</h2>
-            <p className={styles.sectionMeta}>用于公开回应、追问、私聊和整理。</p>
+            <p className={styles.sectionMeta}>用于人格回复、评论追问、私聊和记忆整理——决定 TA 们的回复质量。</p>
           </div>
           <StatusPill ok={settings?.configured ?? false} label={settings?.configured ? '已配置' : '未完成'} />
         </div>
@@ -642,6 +650,54 @@ function ModelSettingsPanel({
             placeholder={settings?.api_key_masked ?? '输入新的 API Key'}
             onChange={(value) => setField('api_key', value)}
           />
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>副模型（可选）</h2>
+            <p className={styles.sectionMeta}>用于搜索判断、查询改写、待办与目标抽取等轻量任务；留空时由主模型承担。配置一个更快的小模型可以缩短回复等待。</p>
+          </div>
+          <div className={styles.headerControls}>
+            <StatusPill
+              ok={settings?.secondary_configured ?? false}
+              label={settings?.secondary_configured ? '已配置' : '使用主模型'}
+            />
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={form.reuse_secondary_config}
+                onChange={(event) => setField('reuse_secondary_config', event.target.checked)}
+              />
+              <span>复用主模型密钥</span>
+            </label>
+          </div>
+        </div>
+        <div className={styles.formGrid}>
+          <TextField
+            label="Model"
+            value={form.secondary_model}
+            placeholder="留空则使用主模型"
+            onChange={(value) => setField('secondary_model', value)}
+          />
+          {!form.reuse_secondary_config && (
+            <>
+              <TextField
+                label="Base URL"
+                value={form.secondary_base_url}
+                placeholder={form.base_url || '留空复用主 Base URL'}
+                onChange={(value) => setField('secondary_base_url', value)}
+              />
+              <TextField
+                label="API Key"
+                type="password"
+                value={form.secondary_api_key}
+                placeholder={settings?.secondary_api_key_masked ?? '留空复用主 Key'}
+                onChange={(value) => setField('secondary_api_key', value)}
+              />
+            </>
+          )}
         </div>
       </section>
 
@@ -1360,6 +1416,10 @@ function formFromModelSettings(settings: ModelSettings): ModelForm {
     embedding_api_key: '',
     embedding_base_url: settings.embedding_base_url ?? '',
     reuse_embedding_config: settings.reuse_embedding_config,
+    secondary_model: settings.secondary_model ?? '',
+    secondary_api_key: '',
+    secondary_base_url: settings.secondary_base_url ?? '',
+    reuse_secondary_config: settings.reuse_secondary_config ?? true,
     logging: settings.logging,
     vision: {
       enabled: settings.vision?.enabled ?? false,
@@ -1387,6 +1447,10 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
     embedding_api_key: form.embedding_api_key.trim() || undefined,
     embedding_base_url: form.reuse_embedding_config ? null : form.embedding_base_url.trim() || null,
     reuse_embedding_config: form.reuse_embedding_config,
+    secondary_model: form.secondary_model.trim() || null,
+    secondary_api_key: form.reuse_secondary_config ? undefined : form.secondary_api_key.trim() || undefined,
+    secondary_base_url: form.reuse_secondary_config ? null : form.secondary_base_url.trim() || null,
+    reuse_secondary_config: form.reuse_secondary_config,
     logging: form.logging,
     vision: {
       enabled: form.vision.enabled,

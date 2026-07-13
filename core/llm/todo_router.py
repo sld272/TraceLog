@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from core.llm import secondary_model
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 
@@ -58,6 +59,7 @@ def call_todo_tool(
     trace_context: dict | None = None,
 ) -> dict | None:
     """Extract todo changes from one public post."""
+    client, model = secondary_model.resolve(client, model)
     user_content = (
         f"## 当前待办\n\n{active_todos or '（暂无）'}\n\n"
         "---\n\n"

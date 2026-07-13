@@ -331,6 +331,52 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("vector_index", status)
         self.assertIn("source_revision", status["vector_index"])
 
+    def test_settings_secondary_model_roundtrip_and_clear(self) -> None:
+        base_payload = {
+            "api_key": "",
+            "base_url": "https://updated.invalid/v1",
+            "model": "updated-model",
+            "embedding_model": "updated-embedding",
+            "reuse_embedding_config": True,
+            "logging": {"enabled": False, "level": "INFO", "history_retention": 3},
+        }
+
+        with self._client() as client:
+            save_response = client.put(
+                "/settings/model",
+                json={
+                    **base_payload,
+                    "secondary_model": "fast-mini",
+                    "reuse_secondary_config": False,
+                    "secondary_api_key": "sk-secondary-secret",
+                    "secondary_base_url": "https://fast.invalid/v1",
+                },
+            )
+            saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+            get_response = client.get("/settings/model")
+            clear_response = client.put("/settings/model", json=base_payload)
+
+        self.assertEqual(200, save_response.status_code)
+        self.assertEqual("fast-mini", saved["secondary_model"])
+        self.assertEqual("sk-secondary-secret", saved["secondary_api_key"])
+        self.assertEqual("https://fast.invalid/v1", saved["secondary_base_url"])
+
+        self.assertEqual(200, get_response.status_code)
+        payload = get_response.json()
+        self.assertTrue(payload["secondary_configured"])
+        self.assertEqual("fast-mini", payload["secondary_model"])
+        self.assertTrue(payload["has_secondary_api_key"])
+        self.assertFalse(payload["reuse_secondary_config"])
+        self.assertNotIn("sk-secondary-secret", json.dumps(payload))
+        self.assertNotIn("sk-secondary-secret", json.dumps(save_response.json()))
+
+        self.assertEqual(200, clear_response.status_code)
+        cleared = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertIsNone(cleared["secondary_model"])
+        self.assertIsNone(cleared["secondary_api_key"])
+        self.assertIsNone(cleared["secondary_base_url"])
+        self.assertFalse(clear_response.json()["secondary_configured"])
+
     def test_settings_save_reports_reload_failure_without_requiring_restart(self) -> None:
         with self._client() as client:
             with patch("api.deps.reload_runtime", side_effect=RuntimeError("reload boom")):

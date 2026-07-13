@@ -7,6 +7,7 @@ from openai import OpenAI
 from core import context_builder, logging_service, record_service, reply_service, todo_service, tool_config_service, vector_index_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
+from core.llm import secondary_model
 from core.cli.config import load_config
 from core.cli_input import read_cli_input
 
@@ -32,6 +33,11 @@ def main() -> None:
     client = OpenAI(
         api_key=config["api_key"],
         base_url=config.get("base_url", "https://api.openai.com/v1"),
+    )
+    secondary_model.install_from_config(
+        config,
+        main_client=client,
+        client_factory=lambda api_key, base_url: OpenAI(api_key=api_key, base_url=base_url),
     )
     model = config["model"]
     print(f"模型: {model}  |  Base URL: {config.get('base_url')}\n")

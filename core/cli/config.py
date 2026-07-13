@@ -39,6 +39,9 @@ def load_config() -> dict:
         if not missing:
             config.setdefault("embedding_api_key", None)
             config.setdefault("embedding_base_url", None)
+            config.setdefault("secondary_model", None)
+            config.setdefault("secondary_api_key", None)
+            config.setdefault("secondary_base_url", None)
             config["logging"] = _normalize_logging_config(config.get("logging"))
             config["vision"] = normalize_vision_config(config.get("vision"))
             config["web_search"] = normalize_web_search_config(config.get("web_search"))
@@ -83,6 +86,9 @@ def load_config() -> dict:
         "embedding_model": embedding_model,
         "embedding_api_key": embedding_api_key,
         "embedding_base_url": embedding_base_url,
+        "secondary_model": None,
+        "secondary_api_key": None,
+        "secondary_base_url": None,
         "logging": default_logging_config(),
         "vision": default_vision_config(),
         "web_search": default_web_search_config(),

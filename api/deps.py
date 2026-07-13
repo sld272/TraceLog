@@ -14,6 +14,7 @@ from core import db, logging_service, memory_events_service, memory_unit_service
 from core.app_services import job_service
 from core.app_services.api_runtime import ApiRuntime, JobWorker
 from core.cli.config import CONFIG_FILE, normalize_vision_config, normalize_web_search_config
+from core.llm import secondary_model
 from core.logging_service import normalize_config as normalize_logging_settings
 
 T = TypeVar("T")
@@ -91,6 +92,7 @@ async def reload_runtime() -> ApiRuntime:
 
 
 def _unconfigured_runtime(config: dict) -> ApiRuntime:
+    secondary_model.reset()
     return ApiRuntime(
         config=config,
         client=None,
@@ -124,6 +126,11 @@ def _build_configured_runtime(config: dict) -> ApiRuntime:
         logging_service.log_event("vectorstore_init_failed", level="ERROR", error=str(exc))
 
     client = OpenAI(api_key=config["api_key"], base_url=config.get("base_url", "https://api.openai.com/v1"))
+    secondary_model.install_from_config(
+        config,
+        main_client=client,
+        client_factory=lambda api_key, base_url: OpenAI(api_key=api_key, base_url=base_url),
+    )
     worker = JobWorker(client, config["model"], concurrency=_job_worker_concurrency(config))
     runtime = ApiRuntime(
         config=config,
@@ -158,6 +165,7 @@ async def shutdown_runtime() -> None:
     if _runtime is not None and _runtime.worker is not None:
         await _runtime.worker.stop()
     _runtime = None
+    secondary_model.reset()
 
 
 def _load_api_config(*, strict: bool = True) -> dict:
@@ -175,6 +183,9 @@ def _load_api_config(*, strict: bool = True) -> dict:
         raise RuntimeError(f"{CONFIG_FILE} 缺少必要配置：{', '.join(missing)}")
     config.setdefault("embedding_api_key", None)
     config.setdefault("embedding_base_url", None)
+    config.setdefault("secondary_model", None)
+    config.setdefault("secondary_api_key", None)
+    config.setdefault("secondary_base_url", None)
     config["logging"] = normalize_logging_settings(config.get("logging"))
     config["vision"] = normalize_vision_config(config.get("vision"))
     config["web_search"] = normalize_web_search_config(config.get("web_search"))

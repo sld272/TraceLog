@@ -51,6 +51,10 @@ class ModelSettingsRequest(BaseModel):
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
     reuse_embedding_config: bool = False
+    secondary_model: str | None = None
+    secondary_api_key: str | None = None
+    secondary_base_url: str | None = None
+    reuse_secondary_config: bool = True
     logging: LoggingSettings | None = None
     vision: VisionSettings | None = None
     web_search: WebSearchSettings | None = None
@@ -115,6 +119,12 @@ def _read_model_settings() -> dict[str, Any]:
         "embedding_api_key_masked": _mask_secret(config.get("embedding_api_key")),
         "embedding_base_url": config.get("embedding_base_url"),
         "reuse_embedding_config": not bool(config.get("embedding_api_key") or config.get("embedding_base_url")),
+        "secondary_model": _clean_optional(config.get("secondary_model")),
+        "secondary_configured": bool(_clean_optional(config.get("secondary_model"))),
+        "has_secondary_api_key": bool(config.get("secondary_api_key")),
+        "secondary_api_key_masked": _mask_secret(config.get("secondary_api_key")),
+        "secondary_base_url": config.get("secondary_base_url"),
+        "reuse_secondary_config": not bool(config.get("secondary_api_key") or config.get("secondary_base_url")),
         "logging": logging_config,
         "vision": {
             "enabled": bool(vision.get("enabled")),
@@ -160,6 +170,17 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
             embedding_api_key = existing.get("embedding_api_key")
         embedding_base_url = _clean_optional(payload.get("embedding_base_url"))
 
+    secondary_model = _clean_optional(payload.get("secondary_model"))
+    if secondary_model is None or payload.get("reuse_secondary_config", True):
+        # 未配置副模型，或选择复用主模型密钥：不保留独立凭据。
+        secondary_api_key = None
+        secondary_base_url = None
+    else:
+        secondary_api_key = _clean_optional(payload.get("secondary_api_key"))
+        if secondary_api_key is None:
+            secondary_api_key = existing.get("secondary_api_key")
+        secondary_base_url = _clean_optional(payload.get("secondary_base_url"))
+
     incoming_vision = normalize_vision_config(payload.get("vision"))
     existing_vision = normalize_vision_config(existing.get("vision"))
     if incoming_vision.get("api_key") is None:
@@ -178,6 +199,9 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "embedding_model": str(payload["embedding_model"]).strip(),
         "embedding_api_key": embedding_api_key,
         "embedding_base_url": embedding_base_url,
+        "secondary_model": secondary_model,
+        "secondary_api_key": secondary_api_key,
+        "secondary_base_url": secondary_base_url,
         "logging": normalize_logging_config(payload.get("logging")),
         "vision": incoming_vision,
         "web_search": incoming_web_search,
