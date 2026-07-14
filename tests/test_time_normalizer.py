@@ -31,6 +31,7 @@ class ExtractMatrixTest(unittest.TestCase):
         self.assertEqual("2026-07-13", _first("今晚加班", MON).date)
         self.assertEqual("2026-07-12", _first("昨天下雨", MON).date)
         self.assertEqual("2026-07-11", _first("前天开会", MON).date)
+        self.assertEqual("2026-07-10", _first("大前天见过他", MON).date)
 
     def test_this_week(self) -> None:
         self.assertEqual("2026-07-15", _first("这周三要交报告", MON).date)
@@ -106,6 +107,11 @@ class NegativeGuardTest(unittest.TestCase):
     def test_empty_and_plain_text(self) -> None:
         self.assertEqual([], extract("", anchor=MON))
         self.assertEqual([], extract("今天天气不错但没有具体安排", anchor=MON)[1:])  # 只命中一个“今天”
+
+    def test_compound_words_do_not_leak_day_substrings(self) -> None:
+        self.assertEqual([], extract("今后天气会转冷", anchor=MON))
+        self.assertEqual([], extract("明后天来找我", anchor=MON))
+        self.assertEqual([], extract("史前天气很热", anchor=MON))
 
 
 class AnnotationNoteTest(unittest.TestCase):
