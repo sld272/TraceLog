@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import queue
+import sqlite3
 import threading
 from collections.abc import Iterator
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
 from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
@@ -15,6 +17,7 @@ from core.llm.types import LLMClient
 from core.soul_service import SoulContext
 
 CHAT_HISTORY_LIMIT = 20
+_REQUEST_LOCKS = tuple(threading.Lock() for _ in range(64))
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ class ChatMessage:
     edited_at: float | None
     rerun_at: float | None
     metadata: str | None
+    client_request_id: str | None
     attachments: list[Attachment]
 
 
@@ -143,7 +147,8 @@ def list_thread_messages(thread_id: int, limit: int = 30, *, before_message_id: 
     params.append(limit)
     rows = db.query_all(
         f"""
-        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata,
+               client_request_id
         FROM chat_messages
         WHERE thread_id = ?
         {before_clause}
@@ -160,7 +165,8 @@ def list_thread_messages_after(thread_id: int, after_id: int, limit: int = 100) 
     get_thread(thread_id)
     rows = db.query_all(
         """
-        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata,
+               client_request_id
         FROM chat_messages
         WHERE thread_id = ? AND id > ?
         ORDER BY id ASC
@@ -171,11 +177,122 @@ def list_thread_messages_after(thread_id: int, after_id: int, limit: int = 100) 
     return [_message_from_row(row) for row in rows]
 
 
-def append_user_message(thread_id: int, content: str, attachment_ids: list[str] | None = None) -> ChatMessage:
+def _normalize_client_request_id(request_id: str | None) -> str | None:
+    if request_id is None:
+        return None
+    normalized = str(request_id).strip()
+    if not normalized:
+        raise ValueError("request_id 不能为空")
+    if len(normalized) > 128:
+        raise ValueError("request_id 过长")
+    return normalized
+
+
+def _request_lock(request_id: str | None):
+    """Serialize one idempotent turn in the local desktop process.
+
+    A fixed lock stripe avoids an unbounded request-id lock registry. SQLite's
+    unique index remains the final guard if separate workers race."""
+    if request_id is None:
+        return nullcontext()
+    return _REQUEST_LOCKS[hash(request_id) % len(_REQUEST_LOCKS)]
+
+
+def _message_for_client_request(
+    thread_id: int,
+    request_id: str,
+    role: str,
+) -> ChatMessage | None:
+    row = db.query_one(
+        """
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata,
+               client_request_id
+        FROM chat_messages
+        WHERE thread_id = ? AND client_request_id = ? AND role = ?
+        LIMIT 1
+        """,
+        (thread_id, request_id, role),
+    )
+    return _message_from_row(row) if row is not None else None
+
+
+def _assert_same_idempotent_input(
+    existing: ChatMessage,
+    content: str,
+    attachment_ids: list[str],
+) -> None:
+    existing_attachment_ids = [attachment.id for attachment in existing.attachments]
+    if existing.content != content.strip() or existing_attachment_ids != attachment_ids:
+        raise ValueError("同一 request_id 不能用于不同的私聊内容或附件")
+
+
+def _reply_result_for_request(user_message: ChatMessage) -> ChatReplyResult | None:
+    request_id = user_message.client_request_id
+    if request_id is None:
+        return None
+    assistant = _message_for_client_request(user_message.thread_id, request_id, "assistant")
+    if assistant is None:
+        return None
+    try:
+        metadata = json.loads(assistant.metadata or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    status = metadata.get("status")
+    ok = status == "ok"
+    suggestions = metadata.get("suggestions")
+    if not isinstance(suggestions, list):
+        suggestions = []
+    error = metadata.get("error")
+    if not isinstance(error, str):
+        error = None
+    thread = get_thread(user_message.thread_id)
+    return ChatReplyResult(
+        thread_id=thread.id,
+        soul_name=thread.soul_name,
+        ok=ok,
+        reply=assistant.content if ok else FAILED_REPLY_CONTENT,
+        user_message_id=user_message.id,
+        assistant_message_id=assistant.id,
+        error=error,
+        suggestions=suggestions,
+    )
+
+
+def append_user_message(
+    thread_id: int,
+    content: str,
+    attachment_ids: list[str] | None = None,
+    *,
+    client_request_id: str | None = None,
+) -> ChatMessage:
     """Append a user message to a writable chat thread."""
     thread = get_thread(thread_id)
     _assert_soul_writable(thread.soul_name)
-    message = _append_message(thread_id, "user", content, attachment_ids=attachment_ids)
+    request_id = _normalize_client_request_id(client_request_id)
+    attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    if request_id is not None:
+        existing = _message_for_client_request(thread_id, request_id, "user")
+        if existing is not None:
+            _assert_same_idempotent_input(existing, content, attachment_ids)
+            return existing
+    try:
+        message = _append_message(
+            thread_id,
+            "user",
+            content,
+            attachment_ids=attachment_ids,
+            client_request_id=request_id,
+        )
+    except sqlite3.IntegrityError:
+        # The unique index is the cross-worker source of truth if two requests
+        # race between the lookup and INSERT.
+        if request_id is None:
+            raise
+        existing = _message_for_client_request(thread_id, request_id, "user")
+        if existing is None:
+            raise
+        _assert_same_idempotent_input(existing, content, attachment_ids)
+        return existing
     if message.content.strip():
         job_service.enqueue_memory_reconcile_once({"trigger": "chat", "soul_name": thread.soul_name})
     return message
@@ -287,11 +404,26 @@ def call_chat_reply(
     client: LLMClient,
     model: str,
     attachment_ids: list[str] | None = None,
+    *,
+    request_id: str | None = None,
 ) -> ChatReplyResult:
-    """Append user input, call one SOUL, and persist the assistant reply."""
+    """Append user input, call one SOUL, and persist the assistant reply.
+
+    A repeated ``request_id`` returns the already-persisted turn instead of
+    appending or billing it twice."""
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
-    user_message_row = append_user_message(thread_id, user_message, attachment_ids=attachment_ids)
-    return _call_assistant_reply_for_user_message(user_message_row, client, model)
+    normalized_request_id = _normalize_client_request_id(request_id)
+    with _request_lock(normalized_request_id):
+        user_message_row = append_user_message(
+            thread_id,
+            user_message,
+            attachment_ids=attachment_ids,
+            client_request_id=normalized_request_id,
+        )
+        existing = _reply_result_for_request(user_message_row)
+        if existing is not None:
+            return existing
+        return _call_assistant_reply_for_user_message(user_message_row, client, model)
 
 
 def _call_assistant_reply_for_user_message(
@@ -315,7 +447,7 @@ def _call_assistant_reply_for_user_message(
     reply, error = _valid_reply_or_error(data)
     if error is not None:
         _log_reply_failed(chat_context, user_message_row, error)
-        return _failed_result(chat_context.thread, user_message_row.id, error)
+        return _failed_result(chat_context.thread, user_message_row, error)
     return _finalize_chat_reply(chat_context, user_message_row, reply, client, model)
 
 
@@ -325,14 +457,27 @@ def stream_chat_reply(
     client: LLMClient,
     model: str,
     attachment_ids: list[str] | None = None,
+    *,
+    request_id: str | None = None,
 ) -> Iterator[dict]:
     """Append user input and stream the assistant reply as a sequence of event
     dicts: ``{"type": "delta", "text": ...}`` per incremental chunk, then a final
     ``{"type": "done", "result": <ChatReplyResult dict>}`` emitted only after all
     post-processing (persist, suggestions, memory accounting) has finished."""
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
-    user_message_row = append_user_message(thread_id, content, attachment_ids=attachment_ids)
-    yield from _stream_assistant_reply_for_user_message(user_message_row, client, model)
+    normalized_request_id = _normalize_client_request_id(request_id)
+    with _request_lock(normalized_request_id):
+        user_message_row = append_user_message(
+            thread_id,
+            content,
+            attachment_ids=attachment_ids,
+            client_request_id=normalized_request_id,
+        )
+        existing = _reply_result_for_request(user_message_row)
+        if existing is not None:
+            yield {"type": "done", "result": asdict(existing)}
+            return
+        yield from _stream_assistant_reply_for_user_message(user_message_row, client, model)
 
 
 def _stream_assistant_reply_for_user_message(
@@ -406,7 +551,7 @@ def _stream_assistant_reply_for_user_message(
     reply, error = _valid_reply_or_error(data)
     if error is not None:
         _log_reply_failed(chat_context, user_message_row, error)
-        result = _failed_result(chat_context.thread, user_message_row.id, error)
+        result = _failed_result(chat_context.thread, user_message_row, error)
     else:
         result = _finalize_chat_reply(chat_context, user_message_row, reply, client, model)
     yield {"type": "done", "result": asdict(result)}
@@ -495,6 +640,7 @@ def _finalize_chat_reply(
             "memory_citations": memory_read.cited_memory_metadata_from(chat_context.cited_memory),
             "suggestions": suggestions,
         },
+        client_request_id=user_message_row.client_request_id,
     )
     return ChatReplyResult(
         thread_id=user_message_row.thread_id,
@@ -515,6 +661,7 @@ def _append_message(
     *,
     attachment_ids: list[str] | None = None,
     metadata: dict | None = None,
+    client_request_id: str | None = None,
 ) -> ChatMessage:
     thread = get_thread(thread_id)
     body = content.strip()
@@ -525,10 +672,19 @@ def _append_message(
     with db.transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO chat_messages(thread_id, role, content, created_at, metadata)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO chat_messages(
+                thread_id, role, content, created_at, metadata, client_request_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (thread_id, role, body, now, json.dumps(metadata, ensure_ascii=False) if metadata else None),
+            (
+                thread_id,
+                role,
+                body,
+                now,
+                json.dumps(metadata, ensure_ascii=False) if metadata else None,
+                client_request_id,
+            ),
         )
         message_id = db.require_lastrowid(cursor, "chat message insert")
         if body:
@@ -560,7 +716,8 @@ def _append_message(
 def get_message(message_id: int) -> ChatMessage:
     row = db.query_one(
         """
-        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata
+        SELECT id, thread_id, role, content, created_at, edited_at, rerun_at, metadata,
+               client_request_id
         FROM chat_messages
         WHERE id = ?
         """,
@@ -819,19 +976,20 @@ def _is_failed_reply_metadata(metadata: dict | None) -> bool:
 
 
 
-def _failed_result(thread: ChatThread, user_message_id: int, error: str) -> ChatReplyResult:
+def _failed_result(thread: ChatThread, user_message: ChatMessage, error: str) -> ChatReplyResult:
     assistant_message = _append_message(
         thread.id,
         "assistant",
         FAILED_REPLY_CONTENT,
         metadata={"status": "failed", "error": error},
+        client_request_id=user_message.client_request_id,
     )
     return ChatReplyResult(
         thread_id=thread.id,
         soul_name=thread.soul_name,
         ok=False,
         reply=FAILED_REPLY_CONTENT,
-        user_message_id=user_message_id,
+        user_message_id=user_message.id,
         assistant_message_id=assistant_message.id,
         error=error,
         suggestions=[],
@@ -860,6 +1018,7 @@ def _message_from_row(row) -> ChatMessage:
         edited_at=float(row["edited_at"]) if row["edited_at"] is not None else None,
         rerun_at=float(row["rerun_at"]) if row["rerun_at"] is not None else None,
         metadata=row["metadata"],
+        client_request_id=row["client_request_id"],
         attachments=attachment_service.list_chat_message_attachments(message_id),
     )
 

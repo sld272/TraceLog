@@ -833,10 +833,18 @@ export function getChatThread(threadId: number, limit = DEFAULT_MESSAGE_LIMIT, b
   )
 }
 
-export function sendChatMessage(soulName: string, content: string, attachmentIds: string[] = []) {
+export function sendChatMessage(
+  soulName: string,
+  content: string,
+  attachmentIds: string[] = [],
+  requestId = crypto.randomUUID(),
+) {
   return request<{ thread: ChatThread; result: ChatReplyResult; messages: ChatMessage[] }>(
     `/chat/${soulName}/messages`,
-    { method: 'POST', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
+    {
+      method: 'POST',
+      body: JSON.stringify({ content, attachment_ids: attachmentIds, request_id: requestId }),
+    },
   )
 }
 
@@ -850,12 +858,13 @@ export async function sendChatMessageStream(
   soulName: string,
   content: string,
   attachmentIds: string[],
+  requestId: string,
   onDelta: (text: string) => void,
 ): Promise<ChatReplyResult> {
   const res = await fetch(`${BASE}/chat/${soulName}/messages/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, attachment_ids: attachmentIds }),
+    body: JSON.stringify({ content, attachment_ids: attachmentIds, request_id: requestId }),
   })
   if (!res.ok || !res.body) {
     const body = await res.json().catch(() => ({}))

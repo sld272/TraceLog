@@ -96,6 +96,25 @@ class ApiChatStreamTest(unittest.TestCase):
         self.assertLess(body.index("event: delta"), body.index("event: done"))
         self.assertTrue(body.rstrip().endswith("\n\n") or body.endswith("\n\n"))
 
+    def test_non_stream_fallback_reuses_completed_stream_request(self) -> None:
+        with self._temp_db():
+            stub = FakeStreamingClient(["你好", "呀"])
+            payload = {"content": "在吗", "request_id": "browser-turn-1"}
+            with self._client(stub) as client:
+                with client.stream(
+                    "POST", "/chat/拾迹者/messages/stream", json=payload
+                ) as response:
+                    self.assertEqual(200, response.status_code)
+                    self.assertIn("event: done", "".join(response.iter_text()))
+                calls_after_stream = len(stub.calls)
+                fallback = client.post("/chat/拾迹者/messages", json=payload)
+
+        self.assertEqual(200, fallback.status_code)
+        data = fallback.json()
+        self.assertEqual(calls_after_stream, len(stub.calls))
+        self.assertEqual(["user", "assistant"], [item["role"] for item in data["messages"]])
+        self.assertEqual("你好呀", data["result"]["reply"])
+
     def test_stream_endpoint_rejects_blank_content(self) -> None:
         with self._temp_db():
             with self._client(FakeStreamingClient()) as client:

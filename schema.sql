@@ -183,10 +183,14 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at  REAL NOT NULL,
     edited_at   REAL,
     rerun_at    REAL,
-    metadata    TEXT
+    metadata    TEXT,
+    client_request_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_request_role
+    ON chat_messages(thread_id, client_request_id, role)
+    WHERE client_request_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS todos (
     id           TEXT PRIMARY KEY,

@@ -63,6 +63,7 @@ def init_db() -> None:
 # defaults, which SQLite ADD COLUMN cannot take).
 _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("memory_units", "contested_at", "REAL"),
+    ("chat_messages", "client_request_id", "TEXT"),
 )
 
 

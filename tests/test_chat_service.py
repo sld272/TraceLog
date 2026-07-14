@@ -431,6 +431,56 @@ class ChatServiceTest(unittest.TestCase):
             0,
         )
 
+    def test_non_stream_retry_reuses_completed_stream_request(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeStreamingClient(["第一", "次回复"])
+        request_id = "chat-turn-1"
+
+        events = list(chat_service.stream_chat_reply(
+            thread.id,
+            "在吗",
+            client,
+            "fake-model",
+            request_id=request_id,
+        ))
+        streamed = events[-1]["result"]
+        calls_after_stream = len(client.calls)
+        retried = chat_service.call_chat_reply(
+            thread.id,
+            "在吗",
+            client,
+            "fake-model",
+            request_id=request_id,
+        )
+
+        self.assertEqual(streamed["user_message_id"], retried.user_message_id)
+        self.assertEqual(streamed["assistant_message_id"], retried.assistant_message_id)
+        self.assertEqual(calls_after_stream, len(client.calls))
+        self.assertEqual(
+            ["user", "assistant"],
+            [message.role for message in chat_service.list_thread_messages(thread.id)],
+        )
+
+    def test_request_id_cannot_be_reused_for_different_content(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeClient({"reply": "第一次回复"})
+        chat_service.call_chat_reply(
+            thread.id,
+            "第一句",
+            client,
+            "fake-model",
+            request_id="same-request",
+        )
+
+        with self.assertRaisesRegex(ValueError, "同一 request_id"):
+            chat_service.call_chat_reply(
+                thread.id,
+                "第二句",
+                client,
+                "fake-model",
+                request_id="same-request",
+            )
+
     def test_stream_chat_reply_attaches_suggestions_in_done(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
         candidate = {"title": "准备考研", "detail": None, "horizon": "long", "confidence": 0.92}

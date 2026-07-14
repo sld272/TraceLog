@@ -223,6 +223,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     setAttachments([])
     setSending(true)
     const attachmentIds = submittedAttachments.map((attachment) => attachment.id)
+    const requestId = crypto.randomUUID()
     const applyNonStreamResponse = (response: {
       thread: ChatThread
       result: ChatReplyResult
@@ -244,7 +245,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     }
     try {
       try {
-        const result = await sendChatMessageStream(soulName, body, attachmentIds, (delta) => {
+        const result = await sendChatMessageStream(soulName, body, attachmentIds, requestId, (delta) => {
           setMessages((prev) =>
             prev.map((message) =>
               message.id === optimisticAssistantId
@@ -269,7 +270,7 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
               : message,
           ),
         )
-        applyNonStreamResponse(await sendChatMessage(soulName, body, attachmentIds))
+        applyNonStreamResponse(await sendChatMessage(soulName, body, attachmentIds, requestId))
       }
       setError(null)
     } catch (err) {

@@ -117,6 +117,7 @@ class DbTest(unittest.TestCase):
         self.assertIn("edited_at", chat_columns)
         self.assertIn("rerun_at", chat_columns)
         self.assertIn("metadata", chat_columns)
+        self.assertIn("client_request_id", chat_columns)
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(
