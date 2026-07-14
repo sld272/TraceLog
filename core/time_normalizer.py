@@ -86,6 +86,24 @@ def _upcoming(anchor_day: date, weekday: int, *, include_today: bool) -> date:
     return anchor_day + timedelta(days=delta)
 
 
+def _upcoming_month_day(anchor_day: date, month: int, day: int) -> date | None:
+    """Nearest valid occurrence of an unqualified month/day on or after anchor.
+
+    Chinese scheduling phrases normally omit the year, so a January date spoken
+    at the end of December belongs to the next year. Leap-day searches may need
+    to advance more than one year; impossible dates return None."""
+    if not 1 <= month <= 12 or not 1 <= day <= 31:
+        return None
+    for year in range(anchor_day.year, anchor_day.year + 9):
+        try:
+            candidate = date(year, month, day)
+        except ValueError:
+            continue
+        if candidate >= anchor_day:
+            return candidate
+    return None
+
+
 def _parse_day_count(token: str) -> int | None:
     """Parse "3" / "三" / "十" / "二十一" (1..99). None when unsure."""
     if token.isdigit():
@@ -153,10 +171,12 @@ def extract(text: str, *, anchor: datetime) -> list[TimeAnnotation]:
         elif match.group("day_word"):
             annotations.append(_annotation(span, anchor_day + timedelta(days=_DAY_WORDS[span])))
         elif match.group("month_day"):
-            # Anchor's year, no cross-year guessing; impossible dates skipped.
-            try:
-                target = date(anchor_day.year, int(match.group("md_month")), int(match.group("md_day")))
-            except ValueError:
+            target = _upcoming_month_day(
+                anchor_day,
+                int(match.group("md_month")),
+                int(match.group("md_day")),
+            )
+            if target is None:
                 continue
             annotations.append(_annotation(span, target))
         elif match.group("days_later"):
@@ -178,7 +198,7 @@ def extract(text: str, *, anchor: datetime) -> list[TimeAnnotation]:
 
 def annotation_note(text: str, *, anchor: datetime) -> str | None:
     """Format extract() results as a single annotation line, e.g.
-    ``下周三＝2026-07-22（周三；口语中也可能指 2026-07-15）；月底＝2026-07-31（周五）``.
+    ``下周三＝2026-07-22（周三；口语中也可能指 2026-07-15）；月底≈2026年7月末（模糊时间，未指定具体日期）``.
     Duplicate spans collapse to their first resolution; None when nothing hits."""
     annotations = extract(text, anchor=anchor)
     if not annotations:
@@ -191,6 +211,13 @@ def annotation_note(text: str, *, anchor: datetime) -> str | None:
         seen.add(item.span)
         if item.alternative:
             parts.append(f"{item.span}＝{item.date}（{item.weekday_label}；口语中也可能指 {item.alternative}）")
+        elif item.ambiguous:
+            target = date.fromisoformat(item.date)
+            part_label = {"底": "末", "初": "初", "中": "中"}.get(item.span[-1], "")
+            parts.append(
+                f"{item.span}≈{target.year}年{target.month}月{part_label}"
+                "（模糊时间，未指定具体日期）"
+            )
         else:
             parts.append(f"{item.span}＝{item.date}（{item.weekday_label}）")
     return "；".join(parts)

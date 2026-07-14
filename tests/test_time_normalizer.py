@@ -63,6 +63,9 @@ class ExtractMatrixTest(unittest.TestCase):
         self.assertEqual("2026-07-20", _first("7月20日", MON).date)
         self.assertEqual("2026-07-20", _first("7月20号", MON).date)
 
+    def test_month_day_rolls_into_next_year_when_current_year_passed(self) -> None:
+        self.assertEqual("2027-01-05", _first("1月5日交报告", EOY).date)
+
     def test_days_later(self) -> None:
         self.assertEqual("2026-07-16", _first("3天后", MON).date)
         self.assertEqual("2026-07-16", _first("三天之后", MON).date)
@@ -110,7 +113,10 @@ class AnnotationNoteTest(unittest.TestCase):
         self.assertIsNone(annotation_note("随便聊聊没有时间", anchor=MON))
 
     def test_plain_single_annotation_format(self) -> None:
-        self.assertEqual("月底＝2026-07-31（周五）", annotation_note("月底前交", anchor=MON))
+        self.assertEqual(
+            "月底≈2026年7月末（模糊时间，未指定具体日期）",
+            annotation_note("月底前交", anchor=MON),
+        )
 
     def test_ambiguous_annotation_shows_colloquial_reading(self) -> None:
         self.assertEqual(
@@ -121,7 +127,8 @@ class AnnotationNoteTest(unittest.TestCase):
     def test_multiple_annotations_joined(self) -> None:
         note = annotation_note("下周三要交报告，月底前全部搞定", anchor=MON)
         self.assertEqual(
-            "下周三＝2026-07-22（周三；口语中也可能指 2026-07-15）；月底＝2026-07-31（周五）",
+            "下周三＝2026-07-22（周三；口语中也可能指 2026-07-15）；"
+            "月底≈2026年7月末（模糊时间，未指定具体日期）",
             note,
         )
 

@@ -48,7 +48,7 @@ TODO_TOOL_PROMPT = """\
 
 ## 当前时间
 {current_datetime}
-若下方提供了「时间标注」，date 必须采用标注给出的主日期（＝号后的第一个日期），禁止自行推算；无标注的相对时间才以当前时间为基准换算。
+若下方提供了「时间标注」：带「＝」的精确标注，date 必须采用其主日期（＝号后的第一个日期），禁止自行推算；带「≈」的模糊标注必须保留在 task 文本中，date 填 null，不得擅自精确到某一天。无标注的相对时间才以当前时间为基准换算。
 """
 
 
@@ -137,4 +137,3 @@ def _normalize_todo_deletes(value) -> list[dict]:
         if isinstance(item, dict) and item.get("id"):
             normalized.append({"id": item.get("id")})
     return normalized
-
