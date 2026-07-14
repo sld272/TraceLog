@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, replace
+import queue
+import threading
+from collections.abc import Iterator
+from dataclasses import asdict, dataclass, field, replace
 from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
@@ -306,14 +309,137 @@ def _call_assistant_reply_for_user_message(
         model,
         chat_context,
         chat_context.soul,
-        trace_context={
-            "thread_id": user_message_row.thread_id,
-            "soul_name": chat_context.thread.soul_name,
-            "user_message_id": user_message_row.id,
-        },
+        trace_context=_reply_trace_context(user_message_row, chat_context),
     )
+    _log_reply_latency(chat_context, user_message_row, reply_started, total_started)
+    reply, error = _valid_reply_or_error(data)
+    if error is not None:
+        _log_reply_failed(chat_context, user_message_row, error)
+        return _failed_result(chat_context.thread, user_message_row.id, error)
+    return _finalize_chat_reply(chat_context, user_message_row, reply, client, model)
+
+
+def stream_chat_reply(
+    thread_id: int,
+    content: str,
+    client: LLMClient,
+    model: str,
+    attachment_ids: list[str] | None = None,
+) -> Iterator[dict]:
+    """Append user input and stream the assistant reply as a sequence of event
+    dicts: ``{"type": "delta", "text": ...}`` per incremental chunk, then a final
+    ``{"type": "done", "result": <ChatReplyResult dict>}`` emitted only after all
+    post-processing (persist, suggestions, memory accounting) has finished."""
+    attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    user_message_row = append_user_message(thread_id, content, attachment_ids=attachment_ids)
+    yield from _stream_assistant_reply_for_user_message(user_message_row, client, model)
+
+
+def _stream_assistant_reply_for_user_message(
+    user_message_row: ChatMessage,
+    client: LLMClient,
+    model: str,
+) -> Iterator[dict]:
+    total_started = db.now_ts()
+    llm_user_message = vision_service.content_for_llm(user_message_row.content, user_message_row.attachments)
+    chat_context = build_chat_context(user_message_row.thread_id, llm_user_message, client, model)
+    trace_context = _reply_trace_context(user_message_row, chat_context)
+    reply_started = db.now_ts()
+
+    # The router streams via an on_delta callback (blocking until done); bridge
+    # that push-model into this pull-model generator with a queue + worker thread
+    # so deltas reach the client incrementally. Only the LLM call runs on the
+    # worker; every DB write stays on this thread, after the join.
+    delta_queue: queue.Queue = queue.Queue()
+    sentinel = object()
+    outcome: dict = {}
+
+    def on_delta(text: str) -> None:
+        delta_queue.put(text)
+
+    def run_stream() -> None:
+        try:
+            outcome["data"] = reply_router.call_soul_chat_reply_stream(
+                client,
+                model,
+                chat_context,
+                chat_context.soul,
+                on_delta=on_delta,
+                trace_context=trace_context,
+            )
+        except reply_router.ChatReplyStreamError as exc:
+            outcome["data"] = None
+            outcome["stream_error"] = str(exc)
+        except Exception as exc:  # defensive: never let a worker crash strand the queue
+            outcome["data"] = None
+            outcome["stream_error"] = str(exc)
+        finally:
+            delta_queue.put(sentinel)
+
+    worker = threading.Thread(target=run_stream, daemon=True)
+    worker.start()
+    while True:
+        item = delta_queue.get()
+        if item is sentinel:
+            break
+        yield {"type": "delta", "text": item}
+    worker.join()
+
+    data = outcome.get("data")
+    if data is None:
+        # Stream failed (transport error) or produced nothing: fall back to a
+        # single non-streaming call, then run the shared post-processing.
+        logging_service.log_event(
+            "reply_stream_fallback",
+            level="WARNING",
+            channel="chat",
+            thread_id=user_message_row.thread_id,
+            soul_name=chat_context.thread.soul_name,
+            user_message_id=user_message_row.id,
+            reason="stream_error" if "stream_error" in outcome else "empty_stream",
+        )
+        data = reply_router.call_soul_chat_reply(
+            client, model, chat_context, chat_context.soul, trace_context=trace_context
+        )
+
+    _log_reply_latency(chat_context, user_message_row, reply_started, total_started)
+    reply, error = _valid_reply_or_error(data)
+    if error is not None:
+        _log_reply_failed(chat_context, user_message_row, error)
+        result = _failed_result(chat_context.thread, user_message_row.id, error)
+    else:
+        result = _finalize_chat_reply(chat_context, user_message_row, reply, client, model)
+    yield {"type": "done", "result": asdict(result)}
+
+
+def _reply_trace_context(user_message_row: ChatMessage, chat_context: ChatContext) -> dict:
+    return {
+        "thread_id": user_message_row.thread_id,
+        "soul_name": chat_context.thread.soul_name,
+        "user_message_id": user_message_row.id,
+    }
+
+
+def _valid_reply_or_error(data: dict | None) -> tuple[str | None, str | None]:
+    """Validate a reply payload; return (reply, None) or (None, error message)."""
+    if data is None:
+        return None, "LLM call failed or returned invalid JSON"
+    reply = data.get("reply")
+    if not isinstance(reply, str) or not reply.strip():
+        return None, "LLM response missing non-empty reply"
+    return reply, None
+
+
+def _log_reply_latency(
+    chat_context: ChatContext,
+    user_message_row: ChatMessage,
+    reply_started: float,
+    total_started: float,
+) -> None:
     # latency breakdown across the serial legs (web gate -> rewrite -> memory
     # read -> reply LLM): measure first, parallelize only what proves slow.
+    # For the streaming path reply_llm_s spans the first stream call through the
+    # full text (extending across the non-streaming fallback when one runs).
     logging_service.log_event(
         "reply_latency",
         channel="chat",
@@ -323,33 +449,30 @@ def _call_assistant_reply_for_user_message(
         reply_llm_s=round(db.now_ts() - reply_started, 3),
         total_s=round(db.now_ts() - total_started, 3),
     )
-    if data is None:
-        error = "LLM call failed or returned invalid JSON"
-        logging_service.log_event(
-            "reply_failed",
-            level="WARNING",
-            channel="chat",
-            thread_id=user_message_row.thread_id,
-            soul_name=chat_context.thread.soul_name,
-            user_message_id=user_message_row.id,
-            error=error,
-        )
-        return _failed_result(chat_context.thread, user_message_row.id, error)
 
-    reply = data.get("reply")
-    if not isinstance(reply, str) or not reply.strip():
-        error = "LLM response missing non-empty reply"
-        logging_service.log_event(
-            "reply_failed",
-            level="WARNING",
-            channel="chat",
-            thread_id=user_message_row.thread_id,
-            soul_name=chat_context.thread.soul_name,
-            user_message_id=user_message_row.id,
-            error=error,
-        )
-        return _failed_result(chat_context.thread, user_message_row.id, error)
 
+def _log_reply_failed(chat_context: ChatContext, user_message_row: ChatMessage, error: str) -> None:
+    logging_service.log_event(
+        "reply_failed",
+        level="WARNING",
+        channel="chat",
+        thread_id=user_message_row.thread_id,
+        soul_name=chat_context.thread.soul_name,
+        user_message_id=user_message_row.id,
+        error=error,
+    )
+
+
+def _finalize_chat_reply(
+    chat_context: ChatContext,
+    user_message_row: ChatMessage,
+    reply: str,
+    client: LLMClient,
+    model: str,
+) -> ChatReplyResult:
+    """Shared post-reply pipeline (streaming + non-streaming): collect
+    suggestions, persist the assistant message, and build the success result."""
+    body = reply.strip()
     suggestions = suggestion_pipeline.collect_reply_suggestions(
         user_input=user_message_row.content,
         evidence_ref=f"chat:{user_message_row.id}",
@@ -366,7 +489,7 @@ def _call_assistant_reply_for_user_message(
     assistant_message = _append_message(
         user_message_row.thread_id,
         "assistant",
-        reply.strip(),
+        body,
         metadata={
             "status": "ok",
             "memory_citations": memory_read.cited_memory_metadata_from(chat_context.cited_memory),
@@ -377,7 +500,7 @@ def _call_assistant_reply_for_user_message(
         thread_id=user_message_row.thread_id,
         soul_name=chat_context.thread.soul_name,
         ok=True,
-        reply=reply.strip(),
+        reply=body,
         user_message_id=user_message_row.id,
         assistant_message_id=assistant_message.id,
         error=None,

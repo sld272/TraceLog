@@ -5,9 +5,26 @@ from __future__ import annotations
 import json
 
 from core import logging_service, memory_read
-from core.llm.common import call_json_completion, clean_json_content, now_str
+from core.llm.common import (
+    StreamCompletionError,
+    call_json_completion,
+    clean_json_content,
+    now_str,
+    stream_completion,
+)
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext
+
+
+class ChatReplyStreamError(Exception):
+    """A private-chat streaming reply failed mid-flight.
+
+    Carries the accumulated length (never the partial text) so the caller can
+    log how far it got before falling back to a non-streaming retry."""
+
+    def __init__(self, message: str, *, accumulated_length: int = 0) -> None:
+        super().__init__(message)
+        self.accumulated_length = accumulated_length
 
 
 def _relationship_memory(soul: SoulContext, *, channel: str, query: str) -> str:
@@ -74,15 +91,10 @@ CHAT_REPLY_TASK_PROMPT = """\
 ## 核心任务
 **回复 (reply)**：你正在和用户进行一对一私聊。结合上下文给出自然、真诚、贴近该 SOUL 人格的中文回应，字数控制在 2-5 句话。
 
-## JSON 输出格式强制要求
-你必须且只能输出一个标准 JSON 对象，绝对不要包含任何 Markdown 代码块格式，也不要有任何前置或后置说明文字。
+## 输出格式
+直接输出回复正文：不要 JSON、不要代码块、不要任何前后缀说明或角色名前缀。
 
-{
-  "reply": "你的回复文字"
-}
-
-对话历史中的 assistant 消息可能以 {"reply": "..."} 形式保存过去已展示给用户的自然语言回复；这只是历史包装格式。
-只有你本次生成的新回复必须输出 JSON 对象。
+对话历史中的 assistant 消息可能以 {"reply": "..."} 形式保存过去已展示给用户的自然语言回复；这只是历史包装格式，不是你本次要遵循的输出格式，不要模仿它输出 JSON。
 
 ## 严格执行规则
 1. **私聊边界**：私聊是你和用户的单独频道，不要假装其他 SOUL 看得见这段对话。
@@ -163,7 +175,64 @@ def call_soul_chat_reply(
     *,
     trace_context: dict | None = None,
 ) -> dict | None:
-    """Call one SOUL for a private chat reply."""
+    """Call one SOUL for a private chat reply (non-streaming, plain text).
+
+    Private chat carries a single ``reply`` field, so it drops the JSON wrapper
+    and ``response_format`` (whose cross-provider support is weaker than plain
+    streaming) and outputs the reply body directly."""
+    messages = _chat_reply_messages(chat_context, soul)
+    if messages is None:
+        return None
+    return call_json_completion(
+        client=client,
+        model=model,
+        operation="soul_chat_reply",
+        timeout=30,
+        messages=messages,
+        parser=_parse_chat_reply_text,
+        trace_context=trace_context,
+    )
+
+
+def call_soul_chat_reply_stream(
+    client: LLMClient,
+    model: str,
+    chat_context,
+    soul: SoulContext,
+    *,
+    on_delta,
+    trace_context: dict | None = None,
+) -> dict | None:
+    """Stream one SOUL's private chat reply, invoking ``on_delta(text)`` per
+    non-empty delta and returning ``{"reply": full_text}`` once complete.
+
+    Returns None when the message assembly has no current user turn or the model
+    streams nothing. Raises ``ChatReplyStreamError`` on a transport failure
+    (partial text discarded), so the caller can fall back to a non-streaming
+    retry."""
+    messages = _chat_reply_messages(chat_context, soul)
+    if messages is None:
+        return None
+    try:
+        full = stream_completion(
+            client=client,
+            model=model,
+            operation="soul_chat_reply_stream",
+            messages=messages,
+            on_delta=on_delta,
+            timeout=30,
+            trace_context=trace_context,
+        )
+    except StreamCompletionError as exc:
+        raise ChatReplyStreamError(str(exc), accumulated_length=exc.accumulated_length) from exc
+    if not full.strip():
+        return None
+    return {"reply": full}
+
+
+def _chat_reply_messages(chat_context, soul: SoulContext) -> list[dict[str, str]] | None:
+    """Assemble the shared system + multi-turn messages for a private chat reply
+    (used by both the streaming and non-streaming paths)."""
     relationship = _relationship_memory(
         soul, channel="chat", query=_last_user_text(chat_context.messages)
     )
@@ -172,16 +241,7 @@ def call_soul_chat_reply(
         f"---\n\n## SOUL 相处记忆\n{relationship}\n\n"
         f"---\n\n{_chat_reply_task_prompt()}"
     )
-    messages = _build_multi_turn_messages(system_msg, chat_context.context, chat_context.messages)
-    if messages is None:
-        return None
-    return _call_reply_json(
-        client,
-        model,
-        messages,
-        operation="soul_chat_reply",
-        trace_context=trace_context,
-    )
+    return _build_multi_turn_messages(system_msg, chat_context.context, chat_context.messages)
 
 
 def call_soul_comment_reply(
@@ -369,3 +429,29 @@ def _parse_post_reply_content(content: str | None) -> dict | None:
 
     reply = data.get("reply")
     return {"reply": reply}
+
+
+def _parse_chat_reply_text(content: str | None) -> dict | None:
+    """Parse a plain-text private-chat reply into ``{"reply": text}``.
+
+    The contract is plain text, but out of model inertia the reply may still
+    arrive fenced (```...```) or wrapped as ``{"reply": "..."}``. Strip the fence
+    (clean_json_content) and peel one lenient JSON wrapper if present; otherwise
+    keep the text verbatim. Empty text -> None."""
+    text = clean_json_content(content)
+    if not text:
+        return None
+    unwrapped = _unwrap_reply_json(text)
+    reply = (unwrapped if unwrapped is not None else text).strip()
+    return {"reply": reply} if reply else None
+
+
+def _unwrap_reply_json(text: str) -> str | None:
+    """Return the inner reply if ``text`` is a ``{"reply": "..."}`` object, else None."""
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get("reply"), str):
+        return data["reply"]
+    return None

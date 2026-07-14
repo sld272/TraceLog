@@ -840,6 +840,77 @@ export function sendChatMessage(soulName: string, content: string, attachmentIds
   )
 }
 
+/**
+ * Stream a private-chat reply. Calls onDelta with each incremental text chunk,
+ * resolving with the final ChatReplyResult (the SSE `done` frame). Rejects on an
+ * `error` frame, a non-OK response, or a missing `done` — the caller can then
+ * fall back to the non-streaming sendChatMessage.
+ */
+export async function sendChatMessageStream(
+  soulName: string,
+  content: string,
+  attachmentIds: string[],
+  onDelta: (text: string) => void,
+): Promise<ChatReplyResult> {
+  const res = await fetch(`${BASE}/chat/${soulName}/messages/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, attachment_ids: attachmentIds }),
+  })
+  if (!res.ok || !res.body) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(body.detail || `HTTP ${res.status}`, res.status)
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: ChatReplyResult | null = null
+  let errorMessage: string | null = null
+
+  const handleFrame = (frame: string) => {
+    const { event, data } = parseSseFrame(frame)
+    if (!data) return
+    if (event === 'delta') {
+      const parsed = parseSseJson<{ text?: string }>(data, 'chat delta')
+      if (parsed?.text) onDelta(parsed.text)
+    } else if (event === 'done') {
+      result = parseSseJson<ChatReplyResult>(data, 'chat done')
+    } else if (event === 'error') {
+      const parsed = parseSseJson<{ message?: string }>(data, 'chat error')
+      errorMessage = parsed?.message || '流式回复失败'
+    }
+  }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary !== -1) {
+      handleFrame(buffer.slice(0, boundary))
+      buffer = buffer.slice(boundary + 2)
+      boundary = buffer.indexOf('\n\n')
+    }
+  }
+  if (buffer.trim()) handleFrame(buffer)
+
+  if (errorMessage !== null) throw new Error(errorMessage)
+  if (!result) throw new Error('流式回复未完成')
+  return result
+}
+
+/** Parse one SSE frame (its `event:` and joined `data:` lines). */
+function parseSseFrame(frame: string): { event: string; data: string } {
+  let event = 'message'
+  const dataLines: string[] = []
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
+  }
+  return { event, data: dataLines.join('\n') }
+}
+
 export function updateChatMessage(messageId: number, content: string, attachmentIds: string[] = []) {
   return request<{ thread: ChatThread; message: ChatMessage; result: ChatReplyResult; messages: ChatMessage[] }>(
     `/chat/messages/${messageId}`,

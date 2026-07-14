@@ -98,6 +98,41 @@ async def send_chat_message(soul_name: str, request: SendChatMessageRequest):
     }
 
 
+@router.post("/{soul_name}/messages/stream")
+async def send_chat_message_stream(soul_name: str, request: SendChatMessageRequest):
+    body = request.content.strip()
+    if not body and not request.attachment_ids:
+        raise HTTPException(status_code=422, detail="content 不能为空")
+    runtime = require_configured_runtime_or_409()
+    try:
+        thread = await run_sync(chat_service.get_or_create_thread, soul_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return StreamingResponse(
+        _chat_reply_stream(thread.id, body, runtime.client, runtime.model, request.attachment_ids),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+def _chat_reply_stream(thread_id: int, content: str, client: Any, model: str, attachment_ids: list[str]):
+    """Bridge chat_service.stream_chat_reply into SSE frames. Starlette iterates
+    this sync generator in a threadpool, so its blocking work never stalls the
+    event loop."""
+    try:
+        for event in chat_service.stream_chat_reply(thread_id, content, client, model, attachment_ids):
+            if event["type"] == "delta":
+                yield _format_named_sse("delta", {"text": event["text"]})
+            elif event["type"] == "done":
+                yield _format_named_sse("done", event["result"])
+    except Exception as exc:  # surface any unexpected failure as an SSE error frame
+        yield _format_named_sse("error", {"message": str(exc)})
+
+
+def _format_named_sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 @router.patch("/messages/{message_id}")
 async def update_chat_message(message_id: int, request: UpdateChatMessageRequest):
     runtime = require_configured_runtime_or_409()

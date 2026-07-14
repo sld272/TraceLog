@@ -12,6 +12,18 @@ from core import logging_service
 from core.llm.types import LLMClient
 
 
+class StreamCompletionError(Exception):
+    """A streaming chat completion failed mid-flight.
+
+    Carries the length of text accumulated before the failure so callers can
+    log how far the stream got, without exposing the (discarded) partial text.
+    """
+
+    def __init__(self, message: str, *, accumulated_length: int = 0) -> None:
+        super().__init__(message)
+        self.accumulated_length = accumulated_length
+
+
 def now_str() -> str:
     now = datetime.now().astimezone()
     weekday = ["一", "二", "三", "四", "五", "六", "日"]
@@ -86,6 +98,76 @@ def call_json_completion(
             context=trace_context,
             response_format=response_format,
         )
+
+
+def stream_completion(
+    *,
+    client: LLMClient,
+    model: str,
+    operation: str,
+    messages: list[dict[str, Any]],
+    on_delta: Callable[[str], None],
+    timeout: int = 30,
+    trace_context: dict | None = None,
+) -> str:
+    """Stream a chat completion, invoking ``on_delta`` for each non-empty text
+    delta, and log the full lifecycle (the streaming sibling of
+    ``call_json_completion``).
+
+    Returns the accumulated text on success. Raises ``StreamCompletionError`` on
+    a transport failure — the partial text is discarded, only its length is kept
+    for the log so callers never surface a truncated reply.
+    """
+    call_id = _new_call_id()
+    started = perf_counter()
+    chunks: list[str] = []
+    status = "ok"
+    error: dict | str | None = None
+
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            timeout=timeout,
+            messages=messages,
+            stream=True,
+        )
+        for chunk in stream:
+            text = _stream_delta_text(chunk)
+            if text:
+                chunks.append(text)
+                on_delta(text)
+        return "".join(chunks)
+    except Exception as exc:
+        status = "api_error"
+        error = _api_error_details(exc, operation=operation, model=model, timeout_s=timeout)
+        raise StreamCompletionError(str(exc), accumulated_length=len("".join(chunks))) from exc
+    finally:
+        duration_ms = int((perf_counter() - started) * 1000)
+        logging_service.log_llm_call(
+            call_id=call_id,
+            operation=operation,
+            model=model,
+            status=status,
+            duration_ms=duration_ms,
+            timeout_s=timeout,
+            messages=messages,
+            response_content="".join(chunks),
+            error=error,
+            context=trace_context,
+        )
+
+
+def _stream_delta_text(chunk: Any) -> str:
+    """Extract the incremental text from one streamed chunk.
+
+    Tolerates the empty ``choices`` chunks some OpenAI-compatible providers emit
+    (usage-only or keep-alive frames)."""
+    choices = getattr(chunk, "choices", None) or []
+    if not choices:
+        return ""
+    delta = getattr(choices[0], "delta", None)
+    content = getattr(delta, "content", None) if delta is not None else None
+    return content or ""
 
 
 def _invalid_response_status(content: str | None) -> str:

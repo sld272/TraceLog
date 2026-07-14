@@ -12,7 +12,7 @@ from unittest.mock import patch
 from core import chat_service, db, logging_service, memory_read, memory_unit_service, memory_view_service, reply_context, soul_relationship_memory, soul_service, suggestion_pipeline, tool_config_service, turn_prep, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
-from tests.helpers import require_not_none
+from tests.helpers import FakeStreamingClient, require_not_none
 
 
 class FakeClient:
@@ -28,6 +28,66 @@ class FakeClient:
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
         )
+
+
+class ReplyRouterStreamTest(unittest.TestCase):
+    """Router-level streaming: accumulation + on_delta order, empty stream, and
+    mid-stream failure — all without touching the DB."""
+
+    def _context(self, *, context: str = "", messages=None):
+        messages = messages or [SimpleNamespace(role="user", content="在吗")]
+        return SimpleNamespace(context=context, messages=messages)
+
+    def _soul(self) -> SoulContext:
+        return SoulContext("测试", None, 0, "测试人格")
+
+    def test_stream_accumulates_and_calls_on_delta_in_order(self) -> None:
+        client = FakeStreamingClient(["你", "好", "呀"])
+        seen: list[str] = []
+        with patch.object(reply_router, "_relationship_memory", return_value="（暂无）"):
+            data = reply_router.call_soul_chat_reply_stream(
+                client, "fake-model", self._context(), self._soul(), on_delta=seen.append
+            )
+
+        self.assertEqual(["你", "好", "呀"], seen)
+        self.assertEqual({"reply": "你好呀"}, data)
+        stream_call = client.stream_calls[-1]
+        self.assertTrue(stream_call["stream"])
+        self.assertNotIn("response_format", stream_call)  # plain text, no JSON mode
+
+    def test_empty_stream_returns_none(self) -> None:
+        client = FakeStreamingClient([])
+        seen: list[str] = []
+        with patch.object(reply_router, "_relationship_memory", return_value="（暂无）"):
+            data = reply_router.call_soul_chat_reply_stream(
+                client, "fake-model", self._context(), self._soul(), on_delta=seen.append
+            )
+
+        self.assertIsNone(data)
+        self.assertEqual([], seen)
+
+    def test_mid_stream_error_raises_chat_reply_stream_error(self) -> None:
+        client = FakeStreamingClient(["部分文本"], raise_after=1)
+        seen: list[str] = []
+        with patch.object(reply_router, "_relationship_memory", return_value="（暂无）"):
+            with self.assertRaises(reply_router.ChatReplyStreamError) as ctx:
+                reply_router.call_soul_chat_reply_stream(
+                    client, "fake-model", self._context(), self._soul(), on_delta=seen.append
+                )
+
+        self.assertEqual(["部分文本"], seen)  # delta delivered before the break
+        self.assertEqual(len("部分文本"), ctx.exception.accumulated_length)
+
+    def test_stream_without_current_user_message_returns_none(self) -> None:
+        client = FakeStreamingClient(["无关"])
+        context = self._context(messages=[SimpleNamespace(role="assistant", content="旧回复")])
+        with patch.object(reply_router, "_relationship_memory", return_value="（暂无）"):
+            data = reply_router.call_soul_chat_reply_stream(
+                client, "fake-model", context, self._soul(), on_delta=lambda _text: None
+            )
+
+        self.assertIsNone(data)
+        self.assertEqual([], client.stream_calls)  # never reached the LLM
 
 
 class ChatServiceTest(unittest.TestCase):
@@ -328,6 +388,97 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIsNotNone(result.assistant_message_id)
         self.assertEqual(["user", "assistant"], [message.role for message in messages])
         self.assertEqual("先睡一下也行。", messages[-1].content)
+
+    def test_chat_reply_accepts_plain_text_without_json_wrapper(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeClient(content="就直接说这句，没有 JSON。")
+
+        result = chat_service.call_chat_reply(thread.id, "在吗", client, "fake-model")
+
+        self.assertTrue(result.ok)
+        self.assertEqual("就直接说这句，没有 JSON。", chat_service.list_thread_messages(thread.id)[-1].content)
+        # plain-text contract: the reply call must not send response_format
+        self.assertNotIn("response_format", client.calls[-1])
+
+    def test_chat_reply_unwraps_stray_json_wrapper_and_fences(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeClient(content='```json\n{"reply": "被包起来的正文"}\n```')
+
+        result = chat_service.call_chat_reply(thread.id, "在吗", client, "fake-model")
+
+        self.assertTrue(result.ok)
+        self.assertEqual("被包起来的正文", chat_service.list_thread_messages(thread.id)[-1].content)
+
+    def test_stream_chat_reply_emits_deltas_then_done_and_persists(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeStreamingClient(["先", "睡", "一下"])
+
+        events = list(chat_service.stream_chat_reply(thread.id, "我好累", client, "fake-model"))
+
+        self.assertEqual(["delta", "delta", "delta", "done"], [event["type"] for event in events])
+        self.assertEqual(["先", "睡", "一下"], [event["text"] for event in events if event["type"] == "delta"])
+        done = events[-1]["result"]
+        self.assertTrue(done["ok"])
+        self.assertEqual("先睡一下", done["reply"])
+        # done arrives only after post-processing: assistant message is persisted,
+        # and the evidence has been recorded (memory accounting ran).
+        messages = chat_service.list_thread_messages(thread.id)
+        self.assertEqual(["user", "assistant"], [message.role for message in messages])
+        self.assertEqual("先睡一下", messages[-1].content)
+        self.assertEqual(done["assistant_message_id"], messages[-1].id)
+        self.assertGreater(
+            require_not_none(db.query_one("SELECT COUNT(*) AS count FROM memory_ingest_events"))["count"],
+            0,
+        )
+
+    def test_stream_chat_reply_attaches_suggestions_in_done(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        candidate = {"title": "准备考研", "detail": None, "horizon": "long", "confidence": 0.92}
+        client = FakeStreamingClient(["那我们", "认真规划"])
+
+        with patch.dict(os.environ, {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "1"}), patch(
+            "core.suggestion_pipeline.goal_router.call_goal_router",
+            return_value=[candidate],
+        ):
+            events = list(chat_service.stream_chat_reply(thread.id, "我决定准备考研", client, "fake-model"))
+
+        done = events[-1]["result"]
+        self.assertEqual("准备考研", done["suggestions"][0]["payload"]["title"])
+        assistant = chat_service.get_message(require_not_none(done["assistant_message_id"]))
+        metadata = json.loads(assistant.metadata or "{}")
+        self.assertEqual(done["suggestions"], metadata["suggestions"])
+
+    def test_stream_chat_reply_falls_back_to_non_stream_on_mid_stream_error(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeStreamingClient(["部分文本"], raise_after=1, non_stream_reply="完整降级回复")
+
+        events = list(chat_service.stream_chat_reply(thread.id, "我好累", client, "fake-model"))
+
+        # the partial delta streamed before the break, then a fallback done replaces it
+        self.assertIn("部分文本", [event.get("text") for event in events if event["type"] == "delta"])
+        done = events[-1]
+        self.assertEqual("done", done["type"])
+        self.assertTrue(done["result"]["ok"])
+        self.assertEqual("完整降级回复", done["result"]["reply"])
+        self.assertTrue(client.stream_calls)      # streaming attempted first
+        self.assertTrue(client.non_stream_calls)  # then a non-streaming fallback
+        self.assertEqual("完整降级回复", chat_service.list_thread_messages(thread.id)[-1].content)
+        self.assertEqual("reply_stream_fallback", self._last_log_event("reply_stream_fallback")["event"])
+
+    def test_stream_chat_reply_double_failure_yields_failed_done(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        # empty stream -> fallback; fallback returns an empty reply -> failed result
+        client = FakeStreamingClient([], non_stream_reply="")
+
+        events = list(chat_service.stream_chat_reply(thread.id, "我好累", client, "fake-model"))
+
+        done = events[-1]
+        self.assertEqual("done", done["type"])
+        self.assertFalse(done["result"]["ok"])
+        self.assertIsNotNone(done["result"]["assistant_message_id"])
+        messages = chat_service.list_thread_messages(thread.id)
+        self.assertEqual(["user", "assistant"], [message.role for message in messages])
+        self.assertEqual("failed", json.loads(messages[-1].metadata or "{}")["status"])
 
     def test_chat_reply_attaches_inline_goal_suggestion_when_enabled(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
