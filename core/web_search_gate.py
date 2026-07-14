@@ -72,12 +72,12 @@ def decide(
     client, model = secondary_model.resolve(client, model)
     if client is None or model is None:
         decision = default_decision("missing_llm_client")
-        _log_decision(decision, channel=channel, trace_context=trace_context, skipped=True)
+        log_decision(decision, channel=channel, trace_context=trace_context, skipped=True)
         return decision
     body = user_message.strip()
     if not body:
         decision = default_decision("empty_user_message")
-        _log_decision(decision, channel=channel, trace_context=trace_context, skipped=True)
+        log_decision(decision, channel=channel, trace_context=trace_context, skipped=True)
         return decision
 
     messages = [
@@ -96,7 +96,7 @@ def decide(
     )
     if data is None:
         decision = default_decision("gate_failed")
-        _log_decision(decision, channel=channel, trace_context=trace_context, skipped=True)
+        log_decision(decision, channel=channel, trace_context=trace_context, skipped=True)
         return decision
     decision = WebSearchDecision(
         should_search=bool(data["should_search"]),
@@ -104,7 +104,7 @@ def decide(
         reason=str(data.get("reason") or ""),
         freshness_required=bool(data.get("freshness_required")),
     )
-    _log_decision(decision, channel=channel, trace_context=trace_context, skipped=False)
+    log_decision(decision, channel=channel, trace_context=trace_context, skipped=False)
     return decision
 
 
@@ -122,6 +122,15 @@ def parse_decision_payload(content: str | None) -> dict | None:
         raw = json.loads(clean_json_content(content))
     except json.JSONDecodeError:
         return None
+    return decision_fields_from_payload(raw)
+
+
+def decision_fields_from_payload(raw: Any) -> dict | None:
+    """Validate + normalize the web-search half of an already-parsed JSON payload.
+
+    Shared by the standalone gate (``parse_decision_payload``) and the merged
+    turn-prep parser, so both apply the exact same query normalization, privacy
+    filtering, and no-query degradation."""
     if not isinstance(raw, dict):
         return None
     should_search = bool(raw.get("should_search"))
@@ -197,7 +206,7 @@ def _gate_user_message(channel: str, user_message: str, context_hint: str) -> st
     return "\n".join(parts)
 
 
-def _log_decision(
+def log_decision(
     decision: WebSearchDecision,
     *,
     channel: str,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, turn_prep, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -203,32 +203,29 @@ def build_chat_context(
 
     timings: dict[str, float] = {}
     stage_started = db.now_ts()
-    web_section = reply_context.build_web_search_section(
+    # Web-search gate and query rewrite are independent yet used to run serially;
+    # merge them into one LLM call, then execute the (already-made) search decision.
+    prep = turn_prep.prepare_turn(
         client,
         model,
-        user_message,
+        user_message=user_message,
         channel="chat",
+        recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
         context_hint="\n\n---\n\n".join(sections),
         trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
     )
-    timings["web_gate_s"] = round(db.now_ts() - stage_started, 3)
+    rewrite = prep.rewritten
+    web_section = reply_context.run_web_search_section(
+        prep.search_decision,
+        channel="chat",
+        trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
+    )
+    # turn_prep_s spans the merged gate+rewrite call and the search execution
+    # (what web_gate_s + query_rewrite_s covered together before the merge).
+    timings["turn_prep_s"] = round(db.now_ts() - stage_started, 3)
     if web_section:
         sections.append(web_section)
 
-    stage_started = db.now_ts()
-    rewrite = (
-        query_rewriter.rewrite_query(
-            client,
-            model,
-            user_message,
-            "chat",
-            recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
-            trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
-        )
-        if client and model
-        else None
-    )
-    timings["query_rewrite_s"] = round(db.now_ts() - stage_started, 3)
     stage_started = db.now_ts()
     memory = memory_read.memory_section_with_citations(
         "chat",
@@ -239,8 +236,8 @@ def build_chat_context(
             for message in llm_messages
             if message.id > 0
         },
-        semantic_query=rewrite.semantic_query if rewrite else None,
-        keywords=rewrite.keywords if rewrite else None,
+        semantic_query=rewrite.semantic_query,
+        keywords=rewrite.keywords,
         trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
     )
     timings["memory_read_s"] = round(db.now_ts() - stage_started, 3)

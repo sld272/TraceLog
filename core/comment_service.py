@@ -20,6 +20,7 @@ from core import (
     suggestion_pipeline,
     todo_service,
     tool_config_service,
+    turn_prep,
     vision_service,
 )
 from core.attachment_service import Attachment
@@ -284,12 +285,20 @@ def build_comment_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
-    web_section = reply_context.build_web_search_section(
+    # Web-search gate and query rewrite are independent yet used to run serially;
+    # merge them into one LLM call, then execute the (already-made) search decision.
+    prep = turn_prep.prepare_turn(
         client,
         model,
-        user_message,
+        user_message=user_message,
         channel="comment",
+        recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
         context_hint="\n\n---\n\n".join(sections),
+        trace_context={"post_id": post_id, "soul_name": soul_name},
+    )
+    web_section = reply_context.run_web_search_section(
+        prep.search_decision,
+        channel="comment",
         trace_context={"post_id": post_id, "soul_name": soul_name},
     )
     if web_section:
@@ -305,25 +314,14 @@ def build_comment_context(
         ("comment_message", str(row["id"]))
         for row in db.query_all("SELECT id FROM comments WHERE post_id = ?", (post_id,))
     }
-    rewrite = (
-        query_rewriter.rewrite_query(
-            client,
-            model,
-            user_message,
-            "comment",
-            recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
-            trace_context={"post_id": post_id, "soul_name": soul_name},
-        )
-        if client and model
-        else None
-    )
+    rewrite = prep.rewritten
     memory = memory_read.memory_section_with_citations(
         "comment",
         soul_name,
         user_message,
         excluded_sources=excluded_comment_sources,
-        semantic_query=rewrite.semantic_query if rewrite else None,
-        keywords=rewrite.keywords if rewrite else None,
+        semantic_query=rewrite.semantic_query,
+        keywords=rewrite.keywords,
         trace_context={"post_id": post_id, "soul_name": soul_name},
     )
     if memory.text:
@@ -626,13 +624,17 @@ def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClie
         },
     )
     soul = _load_soul_context(message.soul_name)
-    rewrite = query_rewriter.rewrite_query(
-        client,
-        model,
-        llm_content,
-        "public_post",
-        trace_context={"post_id": message.post_id, "soul_name": message.soul_name},
-    )
+    # build_public_post_reply_context already ran turn_prep (gate + rewrite) while
+    # assembling the shared context, so reuse that rewrite instead of a second call.
+    rewrite = public_context.built_context.rewritten
+    if rewrite is None:
+        rewrite = query_rewriter.rewrite_query(
+            client,
+            model,
+            llm_content,
+            "public_post",
+            trace_context={"post_id": message.post_id, "soul_name": message.soul_name},
+        )
     memory = memory_read.memory_section_with_citations(
         "public_post",
         message.soul_name,

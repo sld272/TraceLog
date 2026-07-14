@@ -65,8 +65,20 @@ def rewrite_query(
     if data is None:
         return fallback
 
-    semantic_query = _normalize_text(data.get("semantic_query"), limit=MAX_SEMANTIC_QUERY_CHARS)
-    keywords = _normalize_keywords(data.get("keywords"))
+    return rewrite_from_fields(raw, data.get("semantic_query"), data.get("keywords"))
+
+
+def rewrite_from_fields(raw_query: str, semantic_query, keywords) -> RewrittenQuery:
+    """Build a RewrittenQuery from already-extracted (semantic_query, keywords),
+    applying the same normalization/thresholds as ``rewrite_query``. Falls back to
+    the raw query when the rewrite is too thin to help retrieval.
+
+    Lets the merged turn-prep call reuse the rewrite half's cleaning without a
+    second LLM round trip, while keeping ``rewrite_query``'s behavior identical."""
+    raw = str(raw_query or "").strip()
+    fallback = RewrittenQuery(raw_query=raw, semantic_query=raw, keywords=[], used_rewrite=False)
+    semantic_query = _normalize_text(semantic_query, limit=MAX_SEMANTIC_QUERY_CHARS)
+    keywords = _normalize_keywords(keywords)
     if len(semantic_query) < MIN_SEMANTIC_QUERY_CHARS and not keywords:
         return fallback
     if len(semantic_query) < MIN_SEMANTIC_QUERY_CHARS:

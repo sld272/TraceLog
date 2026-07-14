@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import goal_service, logging_service, reply_context, todo_service, tool_config_service
+from core import goal_service, logging_service, query_rewriter, reply_context, todo_service, tool_config_service, turn_prep
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext, list_enabled_souls
 
@@ -13,6 +13,7 @@ from core.soul_service import SoulContext, list_enabled_souls
 class BuiltContext:
     shared_context: str
     enabled_souls: list[SoulContext]
+    rewritten: query_rewriter.RewrittenQuery | None = None
 
 
 def build_context(
@@ -38,17 +39,31 @@ def build_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
+    rewritten: query_rewriter.RewrittenQuery | None = None
     if query and enabled_souls:
-        web_section = reply_context.build_web_search_section(
+        # Merge the web-search gate and the query rewrite into one LLM call, then
+        # execute the search decision. The rewrite is carried on BuiltContext so the
+        # downstream fanout reuses it instead of issuing its own rewrite call.
+        prep = turn_prep.prepare_turn(
             client,
             model,
-            query,
+            user_message=query,
             channel="public_post",
             context_hint="\n\n---\n\n".join(sections),
             trace_context=trace_context,
         )
+        web_section = reply_context.run_web_search_section(
+            prep.search_decision,
+            channel="public_post",
+            trace_context=trace_context,
+        )
         if web_section:
             sections.append(web_section)
+        # Only hand a rewrite downstream when a real LLM produced it. The CLI builds
+        # context without a client (its client lives in fanout), so leave the rewrite
+        # to fanout there rather than shipping a no-op fallback.
+        if client and model:
+            rewritten = prep.rewritten
 
     shared_context = "\n\n---\n\n".join(sections)
     logging_service.log_event(
@@ -61,4 +76,5 @@ def build_context(
     return BuiltContext(
         shared_context=shared_context,
         enabled_souls=enabled_souls,
+        rewritten=rewritten,
     )

@@ -28,6 +28,9 @@ def build_web_search_section(
     context_hint: str = "",
     trace_context: dict | None = None,
 ) -> str:
+    """Decide + execute in one shot. Retained for standalone callers (CLI/tests);
+    reply paths now split this into turn_prep.prepare_turn + run_web_search_section
+    so the gate shares one LLM call with the query rewrite."""
     log_context = {"channel": channel, **(trace_context or {})}
     settings = web_search_service.effective_config()
     if not settings.enabled:
@@ -46,6 +49,19 @@ def build_web_search_section(
         context_hint=context_hint,
         trace_context=log_context,
     )
+    return run_web_search_section(decision, channel=channel, trace_context=trace_context)
+
+
+def run_web_search_section(
+    decision: web_search_gate.WebSearchDecision,
+    *,
+    channel: str,
+    trace_context: dict | None = None,
+) -> str:
+    """Execute the search for an already-made decision, format the results into a
+    context section, and log the outcome. Fed by a gate/turn-prep decision made
+    upstream, so no LLM call happens here."""
+    log_context = {"channel": channel, **(trace_context or {})}
     if not decision.should_search:
         logging_service.log_event(
             "web_search_skipped",
@@ -54,6 +70,7 @@ def build_web_search_section(
             query_count=0,
         )
         return ""
+    settings = web_search_service.effective_config()
     run = web_search_service.search(
         decision.queries,
         config=settings,

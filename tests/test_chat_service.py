@@ -189,13 +189,13 @@ class ChatServiceTest(unittest.TestCase):
         thread = chat_service.get_or_create_thread("拾迹者")
 
         with (
-            patch("core.reply_context.web_search_gate.decide") as decide,
+            patch("core.llm.turn_prep_router.call_turn_prep") as call_turn_prep,
             patch("core.reply_context.web_search_service.search") as search,
         ):
             context = chat_service.build_chat_context(thread.id, "短句")
 
         self.assertNotIn("# 网页搜索结果", context.context)
-        decide.assert_not_called()
+        call_turn_prep.assert_not_called()
         search.assert_not_called()
 
     def test_build_chat_context_injects_web_search_results_when_gate_requests_search(self) -> None:
@@ -230,9 +230,19 @@ class ChatServiceTest(unittest.TestCase):
             elapsed_ms=1,
         )
 
+        # Gate + rewrite now share one merged turn-prep call; the merged JSON carries
+        # both halves, and the chat path must fire it exactly once.
+        merged = {
+            "should_search": True,
+            "queries": ["OpenAI latest model"],
+            "reason": "当前事实",
+            "freshness_required": True,
+            "semantic_query": "用户询问 OpenAI 最新模型",
+            "keywords": ["OpenAI"],
+        }
         with (
             patch("core.reply_context.web_search_service.effective_config", return_value=settings),
-            patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
+            patch("core.llm.turn_prep_router.call_turn_prep", return_value=merged) as call_turn_prep,
             patch("core.reply_context.web_search_service.search", return_value=run) as search,
         ):
             context = chat_service.build_chat_context(
@@ -245,7 +255,7 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIn("# 网页搜索结果", context.context)
         self.assertIn("OpenAI news", context.context)
         self.assertIn("最新公开信息", context.context)
-        decide.assert_called_once()
+        call_turn_prep.assert_called_once()
         search.assert_called_once()
 
     def test_chat_reply_success_writes_assistant_message(self) -> None:

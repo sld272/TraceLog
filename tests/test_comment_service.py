@@ -275,9 +275,19 @@ class CommentServiceTest(unittest.TestCase):
             elapsed_ms=1,
         )
 
+        # Gate + rewrite now share one merged turn-prep call; the merged JSON carries
+        # both halves, and the comment path must fire it exactly once.
+        merged = {
+            "should_search": True,
+            "queries": ["Python 3.13 stable release"],
+            "reason": "当前版本事实",
+            "freshness_required": True,
+            "semantic_query": "用户询问 Python 3.13 稳定版发布信息",
+            "keywords": ["Python", "3.13", "稳定版"],
+        }
         with (
             patch("core.reply_context.web_search_service.effective_config", return_value=settings),
-            patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
+            patch("core.llm.turn_prep_router.call_turn_prep", return_value=merged) as call_turn_prep,
             patch("core.reply_context.web_search_service.search", return_value=run) as search,
         ):
             context = comment_service.build_comment_context(
@@ -291,7 +301,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIn("# 网页搜索结果", context.context)
         self.assertIn("Python release", context.context)
         self.assertIn("Python 版本信息", context.context)
-        decide.assert_called_once()
+        call_turn_prep.assert_called_once()
         search.assert_called_once()
 
     def test_comment_reply_sends_multi_turn_messages(self) -> None:

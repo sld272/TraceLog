@@ -133,9 +133,19 @@ class ContextBuilderTest(unittest.TestCase):
             elapsed_ms=1,
         )
 
+        # Gate + rewrite now share one merged turn-prep call; the merged JSON carries
+        # both halves, and the public-post context must fire it exactly once.
+        merged = {
+            "should_search": True,
+            "queries": ["OpenAI latest model"],
+            "reason": "当前公开事实",
+            "freshness_required": True,
+            "semantic_query": "用户询问 OpenAI 最新模型",
+            "keywords": ["OpenAI"],
+        }
         with (
             patch("core.reply_context.web_search_service.effective_config", return_value=settings),
-            patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
+            patch("core.llm.turn_prep_router.call_turn_prep", return_value=merged) as call_turn_prep,
             patch("core.reply_context.web_search_service.search", return_value=run) as search,
         ):
             built = context_builder.build_context(
@@ -148,7 +158,7 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertIn("# 网页搜索结果", built.shared_context)
         self.assertIn("OpenAI", built.shared_context)
         self.assertIn("最新公开信息", built.shared_context)
-        decide.assert_called_once()
+        call_turn_prep.assert_called_once()
         search.assert_called_once()
 
     def test_public_context_skips_web_search_when_no_enabled_souls(self) -> None:
@@ -156,13 +166,13 @@ class ContextBuilderTest(unittest.TestCase):
             soul_service.disable_soul(soul.name)
 
         with (
-            patch("core.reply_context.web_search_gate.decide") as decide,
+            patch("core.llm.turn_prep_router.call_turn_prep") as call_turn_prep,
             patch("core.reply_context.web_search_service.search") as search,
         ):
             built = context_builder.build_context(query="今天 OpenAI 最新模型是什么")
 
         self.assertEqual([], built.enabled_souls)
-        decide.assert_not_called()
+        call_turn_prep.assert_not_called()
         search.assert_not_called()
 
     def _insert_post(self, post_id: str, content: str, *, created_at: float = 1.0) -> None:
