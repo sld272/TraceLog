@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 
 from core import (
     db,
@@ -61,7 +61,7 @@ def memory_section_with_citations(
     outputs steering unit retrieval; absent them retrieval falls back to the raw
     query. ``prefetched`` is an optional vector-recall bundle (see
     prefetch_semantic_recall) that a caller ran ahead of time — reused when its
-    query matches, unioned otherwise, and pure sugar when None."""
+    query matches and discarded otherwise, so it is pure performance sugar."""
     prompt = build_memory_section(
         channel,
         reply_soul,
@@ -843,9 +843,8 @@ class PrefetchedRecall:
     stay in retrieve_units_with_anchors, which intersects these candidates with its
     scope-filtered SQL set exactly as on the un-prefetched path. ``query`` and
     ``excluded_sources`` record what these candidates were pulled for, so the
-    assembly stage reuses them only on an exact match and otherwise
-    recomputes/unions — the prefetch can only ever ADD recall, never widen
-    visibility or become a new failure source."""
+    assembly stage reuses them only on an exact match and otherwise recomputes.
+    Prefetching never changes recall, visibility, or failure semantics."""
 
     query: str
     unit_hits: list[SemanticHit]
@@ -879,39 +878,16 @@ def prefetch_semantic_recall(
     )
 
 
-def _merge_semantic_hits(
-    primary: list[SemanticHit], extra: list[SemanticHit]
-) -> list[SemanticHit]:
-    """Union two unit-ANN result sets by unit_id: keep each unit's best similarity
-    and admit it if it cleared EITHER query's adaptive gate (passed OR). A repeated
-    unit collapses to one entry scored by its max sim — never summed — matching the
-    'evidence vs unit sim take max, no double count' precedent. Used only when the
-    rewrite's semantic_query diverged from the prefetched raw query, so raw-query
-    recall and rewrite recall reinforce instead of one shadowing the other."""
-    best: dict[str, SemanticHit] = {}
-    for hit in (*primary, *extra):
-        current = best.get(hit.unit_id)
-        if current is None:
-            best[hit.unit_id] = hit
-        elif hit.sim > current.sim:
-            best[hit.unit_id] = replace(hit, passed=hit.passed or current.passed)
-        elif hit.passed and not current.passed:
-            best[hit.unit_id] = replace(current, passed=True)
-    return list(best.values())
-
-
 def _resolve_unit_hits(
     unit_query: str, prefetched: "PrefetchedRecall | None"
 ) -> list[SemanticHit]:
     """Unit-ANN neighbours for ``unit_query``. Reuses the prefetch verbatim when
-    its query matches (no re-embedding), unions raw-query recall with the rewrite
-    recall when they diverge, and is identical to a bare _semantic_unit_hits when
-    there is no prefetch."""
-    if prefetched is None:
-        return _semantic_unit_hits(unit_query)
-    if prefetched.query == unit_query:
+    its query matches (no re-embedding); otherwise discards the raw-query unit
+    prefetch and follows the rewritten query exactly. This keeps prefetched and
+    serial retrieval observationally identical."""
+    if prefetched is not None and prefetched.query == unit_query:
         return prefetched.unit_hits
-    return _merge_semantic_hits(_semantic_unit_hits(unit_query), prefetched.unit_hits)
+    return _semantic_unit_hits(unit_query)
 
 
 def _resolve_evidence_hits(

@@ -391,7 +391,7 @@ class MemoryReadTest(unittest.TestCase):
             hits = memory_read.retrieve_units("zzz", "public_post", "gotoh")
         self.assertEqual([], [h.unit_id for h in hits])  # far semantic + no FTS -> dropped
 
-    # --- recall prefetch: reuse / union / evidence-reuse / merge ----------
+    # --- recall prefetch: reuse / rewrite transparency / evidence-reuse ---
 
     @staticmethod
     def _unit_vec(uid: str, distance: float, *, dtype: str = "unit") -> SimpleNamespace:
@@ -433,7 +433,7 @@ class MemoryReadTest(unittest.TestCase):
         self.assertEqual(2, len(self._qd_calls))  # unit + evidence, un-prefetched
         self.assertIn("周末喜欢去爬山", section.text)  # reused candidate still surfaced
 
-    def test_prefetch_union_when_rewrite_diverges(self) -> None:
+    def test_prefetch_discards_raw_unit_hits_when_rewrite_diverges(self) -> None:
         a = self._unit("global", "public", type="preference", content="A 项：登山路线")
         b = self._unit("global", "public", type="preference", content="B 项：手冲咖啡")
         fake = self._counting_query_documents({
@@ -446,8 +446,8 @@ class MemoryReadTest(unittest.TestCase):
                 "raw", "public_post", "gotoh", semantic_query="rewrite", prefetched=pre,
             )
         ids = {it.unit_id for it in items}
-        self.assertIn(a, ids)  # union keeps the prefetched raw-query hit
-        self.assertIn(b, ids)  # and the diverged rewrite hit
+        self.assertNotIn(a, ids)  # raw unit prefetch cannot change rewrite recall
+        self.assertIn(b, ids)
 
     def test_evidence_prefetch_reused_on_rewrite_divergence(self) -> None:
         hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")
@@ -467,29 +467,25 @@ class MemoryReadTest(unittest.TestCase):
         # evidence keys on the raw query, matching the prefetch -> never re-queried
         self.assertTrue(all(w == {"type": "unit"} for w in wheres))
 
-    def test_merge_semantic_hits_dedups_max_sim_or_passed(self) -> None:
-        SH = memory_read.SemanticHit
-        primary = [
-            SH(unit_id="u1", sim=0.5, passed=True, distance_missing=False),
-            SH(unit_id="shared", sim=0.3, passed=False, distance_missing=False),
-        ]
-        extra = [
-            SH(unit_id="u2", sim=0.4, passed=True, distance_missing=False),
-            SH(unit_id="shared", sim=0.6, passed=True, distance_missing=False),
-        ]
-        merged = {h.unit_id: h for h in memory_read._merge_semantic_hits(primary, extra)}
-        self.assertEqual({"u1", "u2", "shared"}, set(merged))  # union of both sides
-        self.assertAlmostEqual(0.6, merged["shared"].sim)      # duplicate kept at max sim
-        self.assertTrue(merged["shared"].passed)               # one entry, no double count
-
-    def test_merge_semantic_hits_admits_via_either_gate(self) -> None:
-        SH = memory_read.SemanticHit
-        # higher sim failed one query's gate; the lower-sim copy cleared the other's
-        primary = [SH(unit_id="shared", sim=0.7, passed=False, distance_missing=False)]
-        extra = [SH(unit_id="shared", sim=0.3, passed=True, distance_missing=False)]
-        merged = {h.unit_id: h for h in memory_read._merge_semantic_hits(primary, extra)}
-        self.assertAlmostEqual(0.7, merged["shared"].sim)  # best sim retained
-        self.assertTrue(merged["shared"].passed)           # admitted via either gate
+    def test_prefetch_and_serial_paths_match_when_rewrite_diverges(self) -> None:
+        raw_only = self._unit("global", "public", type="preference", content="A 项：登山路线")
+        rewritten = self._unit("global", "public", type="preference", content="B 项：手冲咖啡")
+        fake = self._counting_query_documents({
+            "raw": [self._unit_vec(raw_only, 0.2)],
+            "rewrite": [self._unit_vec(rewritten, 0.2)],
+        })
+        with patch("core.vectorstore.query_documents", side_effect=fake):
+            pre = memory_read.prefetch_semantic_recall("raw")
+            prefetched, _, _ = memory_read.retrieve_units_with_anchors(
+                "raw", "public_post", "gotoh", semantic_query="rewrite", prefetched=pre,
+            )
+            serial, _, _ = memory_read.retrieve_units_with_anchors(
+                "raw", "public_post", "gotoh", semantic_query="rewrite",
+            )
+        self.assertEqual(
+            [item.unit_id for item in serial],
+            [item.unit_id for item in prefetched],
+        )
 
     def test_prefetched_none_matches_unprefetched(self) -> None:
         hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")

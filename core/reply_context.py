@@ -109,7 +109,8 @@ def prepare_turn_with_prefetch(
     and the recall's raw-query channels never needed it), so overlapping them hides
     the recall's embedding+ANN round trips behind the LLM call. The caller then
     hands the prefetch to memory_read.memory_section_with_citations, which reuses it
-    when the rewrite left semantic_query unchanged and unions it otherwise.
+    when the rewrite left semantic_query unchanged and discards the raw unit hits
+    otherwise. The raw-query evidence hits remain reusable in both cases.
 
     The prefetch is strictly best-effort: any failure is logged and downgraded to
     ``None`` so the caller falls back to the current serial recall. prepare_turn's
