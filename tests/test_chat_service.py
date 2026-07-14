@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, memory_unit_service, memory_view_service, soul_relationship_memory, soul_service, suggestion_pipeline, tool_config_service, web_search_gate, web_search_service
+from core import chat_service, db, logging_service, memory_read, memory_unit_service, memory_view_service, reply_context, soul_relationship_memory, soul_service, suggestion_pipeline, tool_config_service, turn_prep, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
 from tests.helpers import require_not_none
@@ -154,6 +155,64 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIn("复习数学", context.context)         # todo
         self.assertNotIn("聊聊考试", context.context)      # prior turn not echoed as background
         self.assertEqual(["聊聊考试"], [message.content for message in context.messages])
+
+    def test_build_chat_context_overlaps_prep_and_prefetch(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        chat_service.append_user_message(thread.id, "聊聊考试")
+
+        # A 2-party barrier releases only if prepare_turn and the recall prefetch are
+        # BOTH in flight at once; a serial submission would leave one side waiting and
+        # trip the timeout (BrokenBarrierError) -> the turn fails the test.
+        barrier = threading.Barrier(2, timeout=5)
+        real_prepare_turn = turn_prep.prepare_turn
+        real_prefetch = memory_read.prefetch_semantic_recall
+        real_section = memory_read.memory_section_with_citations
+        seen = {"prep": False, "prefetch": False, "consumed": None}
+        produced = {}
+
+        def fake_prep(*args, **kwargs):
+            seen["prep"] = True
+            barrier.wait()
+            return real_prepare_turn(*args, **kwargs)
+
+        def fake_prefetch(*args, **kwargs):
+            seen["prefetch"] = True
+            barrier.wait()
+            produced["value"] = real_prefetch(*args, **kwargs)
+            return produced["value"]
+
+        def spy_section(*args, **kwargs):
+            seen["consumed"] = kwargs.get("prefetched")
+            return real_section(*args, **kwargs)
+
+        with patch("core.turn_prep.prepare_turn", side_effect=fake_prep), \
+             patch("core.memory_read.prefetch_semantic_recall", side_effect=fake_prefetch), \
+             patch("core.memory_read.memory_section_with_citations", side_effect=spy_section):
+            context = chat_service.build_chat_context(thread.id, "考试怎么办")
+
+        self.assertTrue(seen["prep"])                          # gate+rewrite ran
+        self.assertTrue(seen["prefetch"])                      # recall prefetch ran concurrently
+        self.assertIs(seen["consumed"], produced["value"])     # its result fed memory assembly
+        self.assertTrue(context.timings["recall_prefetch_reused"])  # reused (rewrite unchanged)
+
+    def test_prepare_turn_with_prefetch_downgrades_prefetch_failure_to_none(self) -> None:
+        # The prefetch is best-effort: a worker-thread crash must be swallowed to a
+        # WARNING + None, never surfacing as a new failure mode for the turn.
+        logged: list[str] = []
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("chroma down")
+
+        with patch("core.memory_read.prefetch_semantic_recall", side_effect=boom), \
+             patch.object(reply_context.logging_service, "log_event",
+                          side_effect=lambda event, **fields: logged.append(event)):
+            prep, prefetched = reply_context.prepare_turn_with_prefetch(
+                None, None, user_message="考试怎么办", channel="chat",
+            )
+
+        self.assertIsNone(prefetched)                                  # failure -> None, not raised
+        self.assertEqual("考试怎么办", prep.rewritten.semantic_query)   # turn prep still returned
+        self.assertIn("recall_prefetch_failed", logged)                # logged as WARNING
 
     def test_build_chat_context_loads_current_soul_relationship_view_only(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")

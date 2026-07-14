@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from core import (
     soul_service,
     suggestion_pipeline,
     tool_config_service,
+    turn_prep,
     web_search_gate,
     web_search_service,
 )
@@ -154,6 +156,42 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(["user", "assistant"], [message.role for message in default_messages])
         self.assertEqual([1, 2], [message.seq for message in default_messages])
         self.assertEqual([], other_messages)
+
+    def test_build_comment_context_overlaps_prep_and_prefetch(self) -> None:
+        # A 2-party barrier releases only if prepare_turn and the recall prefetch are
+        # BOTH in flight at once; a serial submission would leave one side waiting and
+        # trip the timeout (BrokenBarrierError) -> the turn fails the test.
+        barrier = threading.Barrier(2, timeout=5)
+        real_prepare_turn = turn_prep.prepare_turn
+        real_prefetch = memory_read.prefetch_semantic_recall
+        real_section = memory_read.memory_section_with_citations
+        seen = {"prep": False, "prefetch": False, "consumed": None}
+        produced = {}
+
+        def fake_prep(*args, **kwargs):
+            seen["prep"] = True
+            barrier.wait()
+            return real_prepare_turn(*args, **kwargs)
+
+        def fake_prefetch(*args, **kwargs):
+            seen["prefetch"] = True
+            barrier.wait()
+            produced["value"] = real_prefetch(*args, **kwargs)
+            return produced["value"]
+
+        def spy_section(*args, **kwargs):
+            seen["consumed"] = kwargs.get("prefetched")
+            return real_section(*args, **kwargs)
+
+        with patch("core.turn_prep.prepare_turn", side_effect=fake_prep), \
+             patch("core.memory_read.prefetch_semantic_recall", side_effect=fake_prefetch), \
+             patch("core.memory_read.memory_section_with_citations", side_effect=spy_section):
+            comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊练歌")
+
+        self.assertTrue(seen["prep"])                       # gate+rewrite ran
+        self.assertTrue(seen["prefetch"])                   # recall prefetch ran concurrently
+        self.assertIsNotNone(seen["consumed"])              # a prefetch bundle reached assembly
+        self.assertIs(seen["consumed"], produced["value"])  # the exact concurrent result
 
     def test_build_comment_context_separates_evidence_and_messages(self) -> None:
         comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊练歌")

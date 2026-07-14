@@ -20,7 +20,6 @@ from core import (
     suggestion_pipeline,
     todo_service,
     tool_config_service,
-    turn_prep,
     vision_service,
 )
 from core.attachment_service import Attachment
@@ -285,35 +284,42 @@ def build_comment_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
-    # Web-search gate and query rewrite are independent yet used to run serially;
-    # merge them into one LLM call, then execute the (already-made) search decision.
-    prep = turn_prep.prepare_turn(
-        client,
-        model,
-        user_message=user_message,
-        channel="comment",
-        recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
-        context_hint="\n\n---\n\n".join(sections),
-        trace_context={"post_id": post_id, "soul_name": soul_name},
-    )
-    web_section = reply_context.run_web_search_section(
-        prep.search_decision,
-        channel="comment",
-        trace_context={"post_id": post_id, "soul_name": soul_name},
-    )
-    if web_section:
-        sections.append(web_section)
-
+    trace_ctx = {"post_id": post_id, "soul_name": soul_name}
     # Exclude EVERY comment under this post (all SOULs' threads) from the memory
     # section. Public-post comments all share the global/public bucket, so the
     # freshness seam would otherwise surface the user's parallel comments to OTHER
     # SOULs as the current user's "recent evidence" and pull the reply off-topic
     # (cross-talk). The current thread is already the live multi-turn conversation,
     # and other threads are shown as labeled background — neither belongs in memory.
+    # Computed up front (a read-only SELECT) so the recall prefetch and the memory
+    # assembly share one excluded set.
     excluded_comment_sources = {
         ("comment_message", str(row["id"]))
         for row in db.query_all("SELECT id FROM comments WHERE post_id = ?", (post_id,))
     }
+    # Web-search gate and query rewrite are independent yet used to run serially;
+    # merge them into one LLM call, and overlap that call with the query-dependent
+    # vector recall (both need only the raw user message), then execute the
+    # (already-made) search decision. The prefetch is best-effort: on failure it
+    # comes back None and memory assembly falls back to the current serial recall.
+    prep, prefetched = reply_context.prepare_turn_with_prefetch(
+        client,
+        model,
+        user_message=user_message,
+        channel="comment",
+        recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
+        context_hint="\n\n---\n\n".join(sections),
+        excluded_sources=excluded_comment_sources,
+        trace_context=trace_ctx,
+    )
+    web_section = reply_context.run_web_search_section(
+        prep.search_decision,
+        channel="comment",
+        trace_context=trace_ctx,
+    )
+    if web_section:
+        sections.append(web_section)
+
     rewrite = prep.rewritten
     memory = memory_read.memory_section_with_citations(
         "comment",
@@ -322,7 +328,8 @@ def build_comment_context(
         excluded_sources=excluded_comment_sources,
         semantic_query=rewrite.semantic_query,
         keywords=rewrite.keywords,
-        trace_context={"post_id": post_id, "soul_name": soul_name},
+        prefetched=prefetched,
+        trace_context=trace_ctx,
     )
     if memory.text:
         sections.append(f"# 记忆\n\n{memory.text}")

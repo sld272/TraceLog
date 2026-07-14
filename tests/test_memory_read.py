@@ -391,6 +391,118 @@ class MemoryReadTest(unittest.TestCase):
             hits = memory_read.retrieve_units("zzz", "public_post", "gotoh")
         self.assertEqual([], [h.unit_id for h in hits])  # far semantic + no FTS -> dropped
 
+    # --- recall prefetch: reuse / union / evidence-reuse / merge ----------
+
+    @staticmethod
+    def _unit_vec(uid: str, distance: float, *, dtype: str = "unit") -> SimpleNamespace:
+        return SimpleNamespace(
+            doc_id=f"{dtype}-{uid}", type=dtype, metadata={"unit_id": uid}, rank=1, distance=distance
+        )
+
+    def _counting_query_documents(self, by_query: dict[str, list]):
+        """Fake vectorstore.query_documents that records (where, query) per call and
+        returns unit hits from ``by_query`` for the unit channel, nothing for the
+        evidence channel. ``self._qd_calls`` collects the calls for assertions."""
+        self._qd_calls: list[tuple] = []
+
+        def fake(query, n_results=20, where=None):
+            self._qd_calls.append((where, query))
+            if where == {"type": "unit"}:
+                return list(by_query.get(query, []))
+            return []  # evidence channel: no doc-typed hits in these fakes
+
+        return fake
+
+    def test_prefetch_reuse_avoids_second_ann(self) -> None:
+        hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")
+        fake = self._counting_query_documents({"爬山": [self._unit_vec(hit, 0.2)]})
+        with patch("core.vectorstore.query_documents", side_effect=fake):
+            pre = memory_read.prefetch_semantic_recall("爬山")
+            self.assertEqual(2, len(self._qd_calls))  # prefetch: unit ANN + evidence ANN
+            self._qd_calls.clear()
+            # rewrite left semantic_query on the prefetched raw query -> full reuse
+            section = memory_read.memory_section_with_citations(
+                "public_post", "gotoh", "爬山", semantic_query="爬山", prefetched=pre,
+            )
+            self.assertEqual([], self._qd_calls)  # both channels reused: zero new ANN
+            # contrast: without the prefetch, assembly re-embeds both channels
+            self._qd_calls.clear()
+            memory_read.memory_section_with_citations(
+                "public_post", "gotoh", "爬山", semantic_query="爬山",
+            )
+        self.assertEqual(2, len(self._qd_calls))  # unit + evidence, un-prefetched
+        self.assertIn("周末喜欢去爬山", section.text)  # reused candidate still surfaced
+
+    def test_prefetch_union_when_rewrite_diverges(self) -> None:
+        a = self._unit("global", "public", type="preference", content="A 项：登山路线")
+        b = self._unit("global", "public", type="preference", content="B 项：手冲咖啡")
+        fake = self._counting_query_documents({
+            "raw": [self._unit_vec(a, 0.2)],       # raw-query recall finds A
+            "rewrite": [self._unit_vec(b, 0.2)],   # rewrite recall finds B
+        })
+        with patch("core.vectorstore.query_documents", side_effect=fake):
+            pre = memory_read.prefetch_semantic_recall("raw")
+            items, _, _ = memory_read.retrieve_units_with_anchors(
+                "raw", "public_post", "gotoh", semantic_query="rewrite", prefetched=pre,
+            )
+        ids = {it.unit_id for it in items}
+        self.assertIn(a, ids)  # union keeps the prefetched raw-query hit
+        self.assertIn(b, ids)  # and the diverged rewrite hit
+
+    def test_evidence_prefetch_reused_on_rewrite_divergence(self) -> None:
+        hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")
+        fake = self._counting_query_documents({
+            "raw": [self._unit_vec(hit, 0.2)],
+            "rewrite": [self._unit_vec(hit, 0.2)],
+        })
+        with patch("core.vectorstore.query_documents", side_effect=fake):
+            pre = memory_read.prefetch_semantic_recall("raw")
+            self._qd_calls.clear()
+            memory_read.retrieve_units_with_anchors(
+                "raw", "public_post", "gotoh", semantic_query="rewrite", prefetched=pre,
+            )
+        wheres = [w for (w, _q) in self._qd_calls]
+        unit_queries = [q for (w, q) in self._qd_calls if w == {"type": "unit"}]
+        self.assertEqual(["rewrite"], unit_queries)  # unit ANN re-ran on the rewrite
+        # evidence keys on the raw query, matching the prefetch -> never re-queried
+        self.assertTrue(all(w == {"type": "unit"} for w in wheres))
+
+    def test_merge_semantic_hits_dedups_max_sim_or_passed(self) -> None:
+        SH = memory_read.SemanticHit
+        primary = [
+            SH(unit_id="u1", sim=0.5, passed=True, distance_missing=False),
+            SH(unit_id="shared", sim=0.3, passed=False, distance_missing=False),
+        ]
+        extra = [
+            SH(unit_id="u2", sim=0.4, passed=True, distance_missing=False),
+            SH(unit_id="shared", sim=0.6, passed=True, distance_missing=False),
+        ]
+        merged = {h.unit_id: h for h in memory_read._merge_semantic_hits(primary, extra)}
+        self.assertEqual({"u1", "u2", "shared"}, set(merged))  # union of both sides
+        self.assertAlmostEqual(0.6, merged["shared"].sim)      # duplicate kept at max sim
+        self.assertTrue(merged["shared"].passed)               # one entry, no double count
+
+    def test_merge_semantic_hits_admits_via_either_gate(self) -> None:
+        SH = memory_read.SemanticHit
+        # higher sim failed one query's gate; the lower-sim copy cleared the other's
+        primary = [SH(unit_id="shared", sim=0.7, passed=False, distance_missing=False)]
+        extra = [SH(unit_id="shared", sim=0.3, passed=True, distance_missing=False)]
+        merged = {h.unit_id: h for h in memory_read._merge_semantic_hits(primary, extra)}
+        self.assertAlmostEqual(0.7, merged["shared"].sim)  # best sim retained
+        self.assertTrue(merged["shared"].passed)           # admitted via either gate
+
+    def test_prefetched_none_matches_unprefetched(self) -> None:
+        hit = self._unit("global", "public", type="preference", content="周末喜欢去爬山")
+        hits = [self._unit_vec(hit, 0.2)]
+        with patch("core.vectorstore.query_documents", return_value=hits):
+            base = memory_read.memory_section_with_citations(
+                "public_post", "gotoh", "爬山", semantic_query="爬山",
+            )
+            explicit_none = memory_read.memory_section_with_citations(
+                "public_post", "gotoh", "爬山", semantic_query="爬山", prefetched=None,
+            )
+        self.assertEqual(base.text, explicit_none.text)  # None is pure sugar
+
     # --- retrieval debug log (memory_retrieval) ---------------------------
 
     def test_semantic_unit_hits_retains_sub_floor_neighbors(self) -> None:

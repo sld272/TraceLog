@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from core import (
     db,
@@ -50,6 +50,7 @@ def memory_section_with_citations(
     excluded_sources: set[tuple[str, str]] | None = None,
     semantic_query: str | None = None,
     keywords: list[str] | None = None,
+    prefetched: "PrefetchedRecall | None" = None,
     trace_context: dict | None = None,
 ) -> MemorySection:
     """Single entry used by every reply path for memory-v2 prompt assembly.
@@ -58,7 +59,9 @@ def memory_section_with_citations(
     every reply path (post first-reply, comment, chat) surfaces the same 引用记忆
     panel from one code path. ``semantic_query``/``keywords`` are the query-rewrite
     outputs steering unit retrieval; absent them retrieval falls back to the raw
-    query."""
+    query. ``prefetched`` is an optional vector-recall bundle (see
+    prefetch_semantic_recall) that a caller ran ahead of time — reused when its
+    query matches, unioned otherwise, and pure sugar when None."""
     prompt = build_memory_section(
         channel,
         reply_soul,
@@ -66,6 +69,7 @@ def memory_section_with_citations(
         excluded_sources=excluded_sources,
         semantic_query=semantic_query,
         keywords=keywords,
+        prefetched=prefetched,
         trace_context=trace_context,
     )
     return MemorySection(
@@ -294,6 +298,7 @@ def retrieve_units_with_anchors(
     semantic_query: str | None = None,
     keywords: list[str] | None = None,
     excluded_sources: set[tuple[str, str]] | None = None,
+    prefetched: "PrefetchedRecall | None" = None,
     trace_context: dict | None = None,
 ) -> tuple[list[MemoryItem], dict[str, sqlite3.Row], list[FreshnessItem]]:
     """Query-relevant beliefs in the admissible scopes, excluding state units
@@ -336,7 +341,7 @@ def retrieve_units_with_anchors(
     )
 
     now = db.now_ts()
-    sem_hits = _semantic_unit_hits(semantic_query or query)
+    sem_hits = _resolve_unit_hits(semantic_query or query, prefetched)
     semantic = {h.unit_id: h.sim for h in sem_hits if h.passed}
     # wide gate: an FTS-corroborated unit may still count its semantic sim for
     # scoring when it failed the strict gate — keyword evidence vouches for it.
@@ -346,7 +351,7 @@ def retrieve_units_with_anchors(
         if not h.passed and h.sim >= SEMANTIC_SIM_HARD_FLOOR
     }
     fts = _fts_unit_ranks(query, keywords)
-    evidence_hits, orphan_evidence = _evidence_unit_hits(query, excluded_sources)
+    evidence_hits, orphan_evidence = _resolve_evidence_hits(query, excluded_sources, prefetched)
     evidence = {h.unit_id: h.sim for h in evidence_hits}
     orphan_items = _orphan_evidence_items(orphan_evidence, plan, channel, reply_soul)
 
@@ -824,6 +829,107 @@ def _orphan_evidence_items(
             source_id=str(event["source_id"]),
         ))
     return items
+
+
+@dataclass(frozen=True)
+class PrefetchedRecall:
+    """The query-dependent vector recall for one turn, pulled ahead of assembly.
+
+    Holds ONLY what depends on the raw query — the unit-index ANN neighbours and
+    the evidence-index ANN hits already resolved to their units (plus orphans) —
+    so a caller can compute it concurrently with turn_prep and hand it back to
+    memory_section_with_citations, hiding the embedding+ANN round trips behind the
+    LLM call. Scope filtering, tombstones and folding are NOT applied here; they
+    stay in retrieve_units_with_anchors, which intersects these candidates with its
+    scope-filtered SQL set exactly as on the un-prefetched path. ``query`` and
+    ``excluded_sources`` record what these candidates were pulled for, so the
+    assembly stage reuses them only on an exact match and otherwise
+    recomputes/unions — the prefetch can only ever ADD recall, never widen
+    visibility or become a new failure source."""
+
+    query: str
+    unit_hits: list[SemanticHit]
+    evidence_hits: list[EvidenceHit]
+    orphan_evidence: list[OrphanEvidence]
+    excluded_sources: frozenset[tuple[str, str]] = frozenset()
+
+
+def prefetch_semantic_recall(
+    query: str,
+    *,
+    excluded_sources: set[tuple[str, str]] | None = None,
+) -> PrefetchedRecall:
+    """Run just the vector recall channels for ``query`` (unit ANN + evidence
+    ANN→units), so a caller can overlap the embedding+ANN round trips with other
+    pre-reply work and pass the result to memory_section_with_citations.
+
+    A pure read (Chroma query + SQLite reads), safe to call from a worker thread.
+    It applies NO scope/tombstone/fold semantics — those remain in the assembly
+    stage — so on its own it can only stage candidates, never widen visibility."""
+    q = str(query or "")
+    excluded = set(excluded_sources or set())
+    unit_hits = _semantic_unit_hits(q)
+    evidence_hits, orphan_evidence = _evidence_unit_hits(q, excluded)
+    return PrefetchedRecall(
+        query=q,
+        unit_hits=unit_hits,
+        evidence_hits=evidence_hits,
+        orphan_evidence=orphan_evidence,
+        excluded_sources=frozenset(excluded),
+    )
+
+
+def _merge_semantic_hits(
+    primary: list[SemanticHit], extra: list[SemanticHit]
+) -> list[SemanticHit]:
+    """Union two unit-ANN result sets by unit_id: keep each unit's best similarity
+    and admit it if it cleared EITHER query's adaptive gate (passed OR). A repeated
+    unit collapses to one entry scored by its max sim — never summed — matching the
+    'evidence vs unit sim take max, no double count' precedent. Used only when the
+    rewrite's semantic_query diverged from the prefetched raw query, so raw-query
+    recall and rewrite recall reinforce instead of one shadowing the other."""
+    best: dict[str, SemanticHit] = {}
+    for hit in (*primary, *extra):
+        current = best.get(hit.unit_id)
+        if current is None:
+            best[hit.unit_id] = hit
+        elif hit.sim > current.sim:
+            best[hit.unit_id] = replace(hit, passed=hit.passed or current.passed)
+        elif hit.passed and not current.passed:
+            best[hit.unit_id] = replace(current, passed=True)
+    return list(best.values())
+
+
+def _resolve_unit_hits(
+    unit_query: str, prefetched: "PrefetchedRecall | None"
+) -> list[SemanticHit]:
+    """Unit-ANN neighbours for ``unit_query``. Reuses the prefetch verbatim when
+    its query matches (no re-embedding), unions raw-query recall with the rewrite
+    recall when they diverge, and is identical to a bare _semantic_unit_hits when
+    there is no prefetch."""
+    if prefetched is None:
+        return _semantic_unit_hits(unit_query)
+    if prefetched.query == unit_query:
+        return prefetched.unit_hits
+    return _merge_semantic_hits(_semantic_unit_hits(unit_query), prefetched.unit_hits)
+
+
+def _resolve_evidence_hits(
+    query: str,
+    excluded_sources: set[tuple[str, str]] | None,
+    prefetched: "PrefetchedRecall | None",
+) -> tuple[list[EvidenceHit], list[OrphanEvidence]]:
+    """Evidence-ANN hits + orphans for the raw ``query``. The evidence channel
+    always keys on the raw query (never the rewrite), so the prefetch — also
+    raw-query — is reused whenever the query and excluded set match; any mismatch
+    recomputes, staying byte-identical to the un-prefetched path."""
+    if (
+        prefetched is not None
+        and prefetched.query == query
+        and prefetched.excluded_sources == frozenset(excluded_sources or set())
+    ):
+        return prefetched.evidence_hits, prefetched.orphan_evidence
+    return _evidence_unit_hits(query, excluded_sources)
 
 
 def _top_evidence_row(unit_id: str, terms: list[str]) -> sqlite3.Row | None:
@@ -1355,6 +1461,7 @@ def build_memory_section(
     excluded_sources: set[tuple[str, str]] | None = None,
     semantic_query: str | None = None,
     keywords: list[str] | None = None,
+    prefetched: "PrefetchedRecall | None" = None,
     trace_context: dict | None = None,
 ) -> MemoryPrompt:
     """Assemble the always-on + retrieved memory block for a reply prompt.
@@ -1403,7 +1510,7 @@ def build_memory_section(
     # 3. query-relevant beliefs (de-noised topic anchors)
     retrieved, anchors, orphan_items = retrieve_units_with_anchors(
         query, channel, reply_soul, semantic_query=semantic_query, keywords=keywords,
-        excluded_sources=excluded_sources, trace_context=trace_context,
+        excluded_sources=excluded_sources, prefetched=prefetched, trace_context=trace_context,
     )
     hits = _fold_linked_items(retrieved)
     terms = fts_query.search_terms(query)

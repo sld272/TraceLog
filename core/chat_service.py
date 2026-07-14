@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
-from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, turn_prep, vision_service
+from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -201,27 +201,38 @@ def build_chat_context(
             lines = [todo_service.format_todo_for_context(todo) for todo in pending]
             sections.append("# 待办事项\n\n" + "\n".join(lines))
 
-    timings: dict[str, float] = {}
+    timings: dict[str, float | bool] = {}
+    trace_ctx = {"thread_id": thread_id, "soul_name": thread.soul_name}
+    excluded_sources = {
+        ("chat_message", str(message.id))
+        for message in llm_messages
+        if message.id > 0
+    }
     stage_started = db.now_ts()
     # Web-search gate and query rewrite are independent yet used to run serially;
-    # merge them into one LLM call, then execute the (already-made) search decision.
-    prep = turn_prep.prepare_turn(
+    # merge them into one LLM call, and overlap that call with the query-dependent
+    # vector recall (both need only the raw user message), then execute the
+    # (already-made) search decision. The prefetch is best-effort: on failure it
+    # comes back None and memory assembly falls back to the current serial recall.
+    prep, prefetched = reply_context.prepare_turn_with_prefetch(
         client,
         model,
         user_message=user_message,
         channel="chat",
         recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
         context_hint="\n\n---\n\n".join(sections),
-        trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
+        excluded_sources=excluded_sources,
+        trace_context=trace_ctx,
     )
     rewrite = prep.rewritten
     web_section = reply_context.run_web_search_section(
         prep.search_decision,
         channel="chat",
-        trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
+        trace_context=trace_ctx,
     )
-    # turn_prep_s spans the merged gate+rewrite call and the search execution
-    # (what web_gate_s + query_rewrite_s covered together before the merge).
+    # turn_prep_s spans the merged gate+rewrite call overlapped with the recall
+    # prefetch, plus the search execution (what web_gate_s + query_rewrite_s covered
+    # together before the merge).
     timings["turn_prep_s"] = round(db.now_ts() - stage_started, 3)
     if web_section:
         sections.append(web_section)
@@ -231,16 +242,18 @@ def build_chat_context(
         "chat",
         thread.soul_name,
         user_message,
-        excluded_sources={
-            ("chat_message", str(message.id))
-            for message in llm_messages
-            if message.id > 0
-        },
+        excluded_sources=excluded_sources,
         semantic_query=rewrite.semantic_query,
         keywords=rewrite.keywords,
-        trace_context={"thread_id": thread_id, "soul_name": thread.soul_name},
+        prefetched=prefetched,
+        trace_context=trace_ctx,
     )
     timings["memory_read_s"] = round(db.now_ts() - stage_started, 3)
+    # Did the rewrite leave semantic_query on the prefetched raw query, letting the
+    # unit ANN be reused instead of re-embedded? (Evidence recall reuses regardless.)
+    timings["recall_prefetch_reused"] = bool(
+        prefetched is not None and prefetched.query == (rewrite.semantic_query or user_message)
+    )
     if memory.text:
         sections.append(f"# 记忆\n\n{memory.text}")
 
