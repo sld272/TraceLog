@@ -51,14 +51,17 @@ def make_llm_synthesizer(
         # 闸1：证据稀薄时不走 LLM，让 synthesize_view 回落确定性模板。
         if len(units) < MIN_UNITS_FOR_LLM:
             return None
-        valid_ids = {str(unit["id"]) for unit in units}
+        unit_contents = {
+            str(unit["id"]): str(unit["content"] or "").strip()
+            for unit in units
+        }
         return memory_router.call_view_synthesis(
             client,
             model,
             units_text=_format_units(units, view_type),
             char_budget=char_budget,
             view_type=view_type,
-            valid_ids=valid_ids,
+            unit_contents=unit_contents,
             trace_context=trace_context,
         )
 

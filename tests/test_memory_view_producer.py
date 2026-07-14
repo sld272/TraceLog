@@ -18,78 +18,73 @@ from core.llm import memory_router
 
 
 class ViewSynthParserTest(unittest.TestCase):
-    """Gate 3: the parser turns the cited-paragraph response into a verifiable
-    body, stripping any paragraph that is unreferenced, cites an unknown id, or is
-    model meta-discourse — and returns None (-> template) when nothing survives."""
+    """The model may group ids, but only exact source unit text reaches users."""
 
-    def _parse(self, obj, *, valid_ids, char_budget=1000):
+    def _parse(self, obj, *, unit_contents, char_budget=1000):
         raw = obj if isinstance(obj, str) else json.dumps(obj)
         return memory_router._parse_view_synthesis_content(
-            raw, valid_ids=set(valid_ids), char_budget=char_budget
+            raw, unit_contents=unit_contents, char_budget=char_budget
         )
 
-    def test_assembles_valid_paragraphs_blank_line_joined(self) -> None:
+    def test_renders_selected_units_blank_line_joined(self) -> None:
         out = self._parse(
             {"paragraphs": [
-                {"text": "用户在准备考研。", "unit_ids": ["mu_a"]},
-                {"text": "偏好安静的学习环境。", "unit_ids": ["mu_b", "mu_a"]},
+                {"unit_ids": ["mu_a"]},
+                {"unit_ids": ["mu_b"]},
             ]},
-            valid_ids=["mu_a", "mu_b"],
+            unit_contents={"mu_a": "用户在准备考研", "mu_b": "偏好安静的学习环境。"},
         )
         self.assertEqual(out, "用户在准备考研。\n\n偏好安静的学习环境。")
 
-    def test_strips_unknown_id_empty_refs_and_meta(self) -> None:
+    def test_model_text_is_ignored_even_with_legal_id(self) -> None:
         out = self._parse(
             {"paragraphs": [
-                {"text": "合法段。", "unit_ids": ["mu_a"]},
-                {"text": "未知引用段。", "unit_ids": ["mu_x"]},           # unknown id
-                {"text": "部分未知段。", "unit_ids": ["mu_a", "mu_x"]},   # one unknown -> whole段 dropped
-                {"text": "无引用段。", "unit_ids": []},                    # empty refs
-                {"text": "注意：以上叙事严格基于给定单元，未添加任何虚构共同经历。",
-                 "unit_ids": ["mu_a"]},                                     # meta-discourse
+                {"text": "用户每天清晨跑十公里。", "unit_ids": ["mu_a"]},
             ]},
-            valid_ids=["mu_a", "mu_b"],
+            unit_contents={"mu_a": "用户正在准备考研"},
         )
-        self.assertEqual(out, "合法段。")
+        self.assertEqual(out, "用户正在准备考研。")
+        self.assertNotIn("跑十公里", out)
+
+    def test_unknown_empty_and_repeated_ids_are_ignored(self) -> None:
+        out = self._parse(
+            {"paragraphs": [
+                {"unit_ids": ["mu_x"]},
+                {"unit_ids": []},
+                {"unit_ids": ["mu_a", "mu_a"]},
+                {"unit_ids": ["mu_a", "mu_b"]},
+            ]},
+            unit_contents={"mu_a": "事实 A", "mu_b": "事实 B"},
+        )
+        self.assertEqual(out, "事实 A。\n\n事实 B。")
 
     def test_all_dropped_returns_none(self) -> None:
         self.assertIsNone(self._parse(
             {"paragraphs": [
-                {"text": "根据提供的单元整理如下。", "unit_ids": ["mu_a"]},  # meta
-                {"text": "凭空推断段。", "unit_ids": []},                     # no refs
+                {"unit_ids": ["mu_x"]},
+                {"unit_ids": []},
             ]},
-            valid_ids=["mu_a"],
+            unit_contents={"mu_a": "事实 A"},
         ))
-
-    def test_caps_paragraph_count_to_valid_ids_plus_one(self) -> None:
-        out = self._parse(
-            {"paragraphs": [
-                {"text": "段一。", "unit_ids": ["mu_a"]},
-                {"text": "段二。", "unit_ids": ["mu_a"]},
-                {"text": "段三。", "unit_ids": ["mu_a"]},
-                {"text": "段四。", "unit_ids": ["mu_a"]},
-            ]},
-            valid_ids=["mu_a"],  # cap = 1 + 1 = 2
-        )
-        self.assertEqual(out, "段一。\n\n段二。")
 
     def test_over_budget_drops_whole_trailing_paragraph(self) -> None:
         out = self._parse(
             {"paragraphs": [
-                {"text": "AAAA", "unit_ids": ["mu_a"]},
-                {"text": "BBBB", "unit_ids": ["mu_b"]},
-                {"text": "CCCC", "unit_ids": ["mu_c"]},
+                {"unit_ids": ["mu_a"]},
+                {"unit_ids": ["mu_b"]},
+                {"unit_ids": ["mu_c"]},
             ]},
-            valid_ids=["mu_a", "mu_b", "mu_c"],
-            char_budget=12,  # "AAAA\n\nBBBB" = 10 fits; + "\n\nCCCC" = 16 overflows
+            unit_contents={"mu_a": "AAAA", "mu_b": "BBBB", "mu_c": "CCCC"},
+            char_budget=14,  # "AAAA。\n\nBBBB。" = 12 fits; next paragraph overflows
         )
-        self.assertEqual(out, "AAAA\n\nBBBB")
+        self.assertEqual(out, "AAAA。\n\nBBBB。")
 
     def test_rejects_non_paragraph_shapes(self) -> None:
-        self.assertIsNone(self._parse("not json", valid_ids=["mu_a"]))
-        self.assertIsNone(self._parse({"profile_md": "旧格式"}, valid_ids=["mu_a"]))
-        self.assertIsNone(self._parse({"paragraphs": "x"}, valid_ids=["mu_a"]))
-        self.assertIsNone(self._parse({"paragraphs": []}, valid_ids=["mu_a"]))
+        units = {"mu_a": "事实 A"}
+        self.assertIsNone(self._parse("not json", unit_contents=units))
+        self.assertIsNone(self._parse({"profile_md": "旧格式"}, unit_contents=units))
+        self.assertIsNone(self._parse({"paragraphs": "x"}, unit_contents=units))
+        self.assertIsNone(self._parse({"paragraphs": []}, unit_contents=units))
 
 
 class ViewSynthProducerTest(unittest.TestCase):
@@ -148,9 +143,9 @@ class ViewSynthProducerTest(unittest.TestCase):
         self._seed_core_units(vproducer.MIN_UNITS_FOR_LLM)
         captured = {}
 
-        def fake_call(client, model, *, units_text, char_budget, view_type, valid_ids, trace_context=None):
+        def fake_call(client, model, *, units_text, char_budget, view_type, unit_contents, trace_context=None):
             captured["units_text"] = units_text
-            captured["valid_ids"] = valid_ids
+            captured["unit_contents"] = unit_contents
             captured["budget"] = char_budget
             return "综合画像：用户专注考研。"
 
@@ -160,7 +155,7 @@ class ViewSynthProducerTest(unittest.TestCase):
 
         self.assertFalse(view.used_fallback)
         self.assertIn("综合画像", view.content_md)
-        self.assertEqual(len(captured["valid_ids"]), vproducer.MIN_UNITS_FOR_LLM)
+        self.assertEqual(len(captured["unit_contents"]), vproducer.MIN_UNITS_FOR_LLM)
         self.assertIn("[id=mu_", captured["units_text"])
         self.assertEqual(captured["budget"], mvs.USER_PORTRAIT_CHAR_BUDGET)
 
@@ -193,10 +188,10 @@ class ViewSynthProducerTest(unittest.TestCase):
             )
         captured = {}
 
-        def fake_call(client, model, *, units_text, char_budget, view_type, valid_ids, trace_context=None):
+        def fake_call(client, model, *, units_text, char_budget, view_type, unit_contents, trace_context=None):
             captured["units_text"] = units_text
             captured["view_type"] = view_type
-            captured["valid_ids"] = valid_ids
+            captured["unit_contents"] = unit_contents
             return "难过时，我们先安静陪伴。"
 
         with patch.object(memory_router, "call_view_synthesis", fake_call):
@@ -205,7 +200,7 @@ class ViewSynthProducerTest(unittest.TestCase):
         self.assertEqual(1, len(results))
         self.assertEqual(mvs.VIEW_SOUL_RELATIONSHIP, captured["view_type"])
         self.assertIn("场景=私聊", captured["units_text"])
-        self.assertEqual(len(captured["valid_ids"]), vproducer.MIN_UNITS_FOR_LLM)
+        self.assertEqual(len(captured["unit_contents"]), vproducer.MIN_UNITS_FOR_LLM)
         self.assertEqual("难过时，我们先安静陪伴。", srm.read_relationship_memory("luna"))
 
 
