@@ -173,5 +173,44 @@ class SecondaryModelRoutingTest(unittest.TestCase):
         self._assert_routed_to_secondary()
 
 
+class TimeAnnotationInjectionTest(unittest.TestCase):
+    """待办/目标抽取在 user 消息末尾注入「系统按说话时刻计算」的时间标注区块。"""
+
+    def setUp(self) -> None:
+        secondary_model.reset()
+
+    def tearDown(self) -> None:
+        secondary_model.reset()
+
+    def _user_message(self, client: FakeClient) -> str:
+        self.assertEqual(1, len(client.calls))
+        return client.calls[0]["messages"][1]["content"]
+
+    def test_todo_tool_injects_time_annotation_block(self) -> None:
+        client = FakeClient({"todos_to_upsert": [], "todos_to_delete": []})
+        todo_router.call_todo_tool(
+            client=client, model="m", post="周五前交实验报告", active_todos="（暂无）"
+        )
+        user_msg = self._user_message(client)
+        self.assertIn("## 时间标注（系统按说话时刻计算）", user_msg)
+        self.assertIn("周五＝", user_msg)  # 裸周X 恒能解析，日期随运行日而变，只锁 span＝
+
+    def test_goal_router_injects_time_annotation_block(self) -> None:
+        client = FakeClient({"goals": []})
+        goal_router.call_goal_router(
+            client, "m", user_input="打算周五前交报告，这学期还要把绩点提到 3.7"
+        )
+        user_msg = self._user_message(client)
+        self.assertIn("## 时间标注（系统按说话时刻计算）", user_msg)
+        self.assertIn("周五＝", user_msg)
+
+    def test_no_block_when_text_has_no_relative_time(self) -> None:
+        client = FakeClient({"todos_to_upsert": [], "todos_to_delete": []})
+        todo_router.call_todo_tool(
+            client=client, model="m", post="把实验报告整理好", active_todos=""
+        )
+        self.assertNotIn("时间标注", self._user_message(client))
+
+
 if __name__ == "__main__":
     unittest.main()

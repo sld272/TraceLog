@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -172,6 +173,37 @@ class ReconcileProducerTest(unittest.TestCase):
             with self.assertRaises(producer_mod.ReconcileProducerError):
                 producer(boundary={"owner_scope": "global", "visibility_scope": "public"},
                          events=[], active_units=[], tombstones=[])
+
+class EvidenceTimeAnnotationTest(unittest.TestCase):
+    """证据行的相对时间必须以事件自身的说话时刻为锚，而非 reconcile 当前时间。"""
+
+    def test_format_events_anchors_relative_time_on_event_timestamp(self) -> None:
+        spoke_at = datetime(2025, 3, 10, 9, 0)  # 固定在过去的某个上午
+        text = producer_mod._format_events([
+            {"id": 501, "author": "user", "source_channel": "chat", "op": "create",
+             "content_snapshot": "明天去打疫苗", "occurred_at": spoke_at.timestamp()},
+        ])
+        self.assertIn("〔时间标注：", text)
+        self.assertIn("明天＝2025-03-11", text)  # 事件时刻的次日，而不是今天的次日
+        # 若错误地按当前时间解释，落点会是今天的次日——断言它没有出现
+        now_tomorrow = (datetime.now() + timedelta(days=1)).date().isoformat()
+        self.assertNotIn(now_tomorrow, text)
+
+    def test_format_events_skips_annotation_without_timestamp(self) -> None:
+        # 缺 occurred_at 时不臆测锚点（宁缺勿错），且不得崩溃
+        text = producer_mod._format_events([
+            {"id": 7, "author": "user", "source_channel": "post", "op": "create",
+             "content_snapshot": "明天去打疫苗"},
+        ])
+        self.assertNotIn("时间标注", text)
+
+    def test_format_events_no_annotation_when_no_relative_time(self) -> None:
+        text = producer_mod._format_events([
+            {"id": 8, "author": "user", "source_channel": "post", "op": "create",
+             "content_snapshot": "考研倒计时", "occurred_at": datetime(2025, 3, 10).timestamp()},
+        ])
+        self.assertNotIn("时间标注", text)
+
 
 class ReconcileEndToEndWithMockedLLMTest(unittest.TestCase):
     """LLM-shaped JSON -> parser -> producer -> reconcile -> a real unit."""

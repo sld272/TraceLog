@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
+from core import time_normalizer
 from core.llm import secondary_model
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
@@ -46,7 +48,7 @@ TODO_TOOL_PROMPT = """\
 
 ## 当前时间
 {current_datetime}
-请以此为绝对基准，计算并将“明天、后天、下周三”等相对时间转化为 YYYY-MM-DD。
+若下方提供了「时间标注」，date 必须采用标注给出的主日期（＝号后的第一个日期），禁止自行推算；无标注的相对时间才以当前时间为基准换算。
 """
 
 
@@ -65,6 +67,9 @@ def call_todo_tool(
         "---\n\n"
         f"## 目标公开 post\n\n{post}"
     )
+    note = time_normalizer.annotation_note(post, anchor=datetime.now().astimezone())
+    if note:
+        user_content += f"\n\n## 时间标注（系统按说话时刻计算）\n{note}"
 
     return call_json_completion(
         client=client,
