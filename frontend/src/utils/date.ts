@@ -82,6 +82,14 @@ export function formatUnixScope(start: number, end: number): string {
   return `${formatDateFromMs(start * 1000)} - ${formatDateFromMs(end * 1000)}`
 }
 
+/** 格式化待办到期日（含星期，便于采纳前核对；同年省略年份，跨年带年份前缀） */
+export function formatDueDate(value: string, now = new Date()): string {
+  const parsed = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(parsed.getTime())) return value
+  const base = `${parsed.getMonth() + 1}月${parsed.getDate()}日（${WEEKDAYS[parsed.getDay()]}）`
+  return parsed.getFullYear() === now.getFullYear() ? base : `${parsed.getFullYear()}年${base}`
+}
+
 /** 格式化日期标签（今天 / 明天 / M月D日，跨年带年份前缀） */
 export function formatDateLabel(date: string, todayKey: string): string {
   if (date === todayKey) return '今天'

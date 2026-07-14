@@ -826,7 +826,7 @@ function MessageBubble({
       <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
       {!isUser && !isFailedAssistant && !isPendingAssistant && editDraft === null && (
         <>
-          <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
+          <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} fromPrivateChat />
           <EvidencePanel metadata={message.metadata} channel="chat" messageId={message.id} />
         </>
       )}

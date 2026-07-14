@@ -64,6 +64,14 @@
   word-break: break-word;
 }
 
+.meta {
+  display: block;
+  margin-top: 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 .actions {
   display: flex;
   align-items: center;
@@ -106,6 +114,14 @@
 .dismiss:disabled {
   cursor: wait;
   opacity: 0.5;
+}
+
+.visibilityHint {
+  margin-top: var(--space-1);
+  padding-left: var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 .error {
