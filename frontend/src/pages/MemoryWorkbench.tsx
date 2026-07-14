@@ -376,7 +376,12 @@ export function MemoryWorkbench() {
                           ? `最新 · 整理于 ${formatSmartTime(selectedEntry.view.generated_at ?? selectedEntry.view.updated_at)}`
                           : '暂无相处记忆'}
                     </div>
-                    <h2 className={styles.portraitTitle}>{selectedEntry.label}</h2>
+                    <h2 className={styles.portraitTitle}>
+                      {selectedEntry.label}
+                      {selectedEntry.stale && (
+                        <span className={styles.portraitChip}>画像更新中</span>
+                      )}
+                    </h2>
                     {selectedEntry.view && portraitProse(selectedEntry.view.content_md) ? (
                       <div className={styles.portraitProse}>
                         {portraitProse(selectedEntry.view.content_md).split(/\n{2,}/).map((para, index) => (

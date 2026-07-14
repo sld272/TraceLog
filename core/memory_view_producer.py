@@ -14,6 +14,10 @@ from core import memory_view_service as mvs, soul_relationship_memory as srm
 from core.llm import memory_router
 from core.llm.types import LLMClient
 
+# 闸1：数据量门槛。核心单元少于这么多时不调 LLM 合成，直接交给确定性模板——
+# 证据稀薄时模型会虚构事件、抒情铺陈，不如逐条列举来得诚实。
+MIN_UNITS_FOR_LLM = 4
+
 
 def _format_units(units: list[sqlite3.Row], view_type: str) -> str:
     if not units:
@@ -25,8 +29,10 @@ def _format_units(units: list[sqlite3.Row], view_type: str) -> str:
             visibility = str(unit["visibility_scope"])
             scene = "私聊" if visibility.startswith("private:soul:") else "公开评论"
             scene = f" | 场景={scene}"
+        # [id=...] anchors each unit so the synthesis prompt can cite it and the
+        # parser can verify every paragraph is grounded in a real, offered unit.
         parts.append(
-            f"- [{unit['type']}] {unit['content']} "
+            f"- [id={unit['id']}] [{unit['type']}] {unit['content']} "
             f"(confidence={unit['confidence']}, tier={unit['tier']}{scene})"
         )
     return "\n".join(parts)
@@ -42,12 +48,17 @@ def make_llm_synthesizer(
     """Return a synthesizer(units, char_budget) -> str|None for synthesize_view."""
 
     def synthesizer(units: list[sqlite3.Row], char_budget: int):
+        # 闸1：证据稀薄时不走 LLM，让 synthesize_view 回落确定性模板。
+        if len(units) < MIN_UNITS_FOR_LLM:
+            return None
+        valid_ids = {str(unit["id"]) for unit in units}
         return memory_router.call_view_synthesis(
             client,
             model,
             units_text=_format_units(units, view_type),
             char_budget=char_budget,
             view_type=view_type,
+            valid_ids=valid_ids,
             trace_context=trace_context,
         )
 

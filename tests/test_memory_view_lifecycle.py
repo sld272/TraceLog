@@ -19,16 +19,21 @@ from core.llm import memory_router
 
 
 def _seed_core_producer(content: str = "用户持续投入考研准备"):
-    """A producer that adds one core-eligible non-goal unit citing the batch events."""
+    """A producer that adds core-eligible non-goal units citing the batch events.
+
+    Emits MIN_UNITS_FOR_LLM distinct units (the first carrying ``content``) so the
+    gate-1 synthesis threshold is met and these lifecycle cases keep exercising
+    the LLM synthesis path rather than silently dropping to the template."""
     def producer(*, boundary, events, active_units, tombstones):
         ids = [e["id"] for e in events]
+        contents = [content] + [f"{content}·补充{i}" for i in range(view_producer.MIN_UNITS_FOR_LLM - 1)]
         return {
             "summary": "s",
             "ops": [{
-                "op": "add", "type": "preference", "content": content,
+                "op": "add", "type": "preference", "content": text,
                 "confidence": 0.9, "tier": "core", "importance": 0.85,
                 "evidence_event_ids": ids,
-            }],
+            } for text in contents],
         }
     return producer
 

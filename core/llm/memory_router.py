@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
@@ -105,23 +106,42 @@ MEMORY_RELINK_PROMPT = """\
 
 
 MEMORY_VIEW_SYNTH_PROMPT = """\
-把给定的核心 memory units 综合成一段【简洁、整体性】的用户概述。
+把给定的核心 memory units 综合成一段【简洁、整体性】的用户概述：一眼看懂用户是谁——
+身份、主要方向/目标、稳定偏好与重要处境，融成一个整体，而不是逐条罗列。
 
-要求：
-- 目标是"一眼看懂用户是谁"：身份、主要方向/目标、稳定偏好与重要处境，融成一个整体，而不是逐条罗列。
-- 只能使用输入 units 里的事实，不得脑补、不得编造关联、细节或情节。
-- 克制中性，像一段简短的人物简介；不要文学化修辞、不要渲染情绪、不要展开举例。
-- 控制在数句话以内，压在字数预算内；不要把短期状态夸大为长期身份。
+## 硬规则
+1. 反捏造：只能陈述给定 units 里明确写出的内容；禁止推断或虚构任何事件、偏好、习惯、
+   共同经历或对话方式；units 没写的就不写，不确定就不写。
+2. 比例：全文句数不超过「单元数 + 1」。单元少就写得短，禁止铺陈、抒情、举例、渲染情绪。
+3. 禁元话语：不得输出「注意/以上叙事/未添加任何虚构/根据提供（给定）的单元」之类的说明、
+   免责声明或自我评价；只写画像本身。
+4. 克制中性，像一段简短的人物简介，不用文学化修辞；不要把短期状态夸大为长期身份；
+   压在字数预算内。
 
-只输出 JSON：{"profile_md":"画像"}
+## 输出格式
+分段输出。每段都要在 unit_ids 里列出该段内容【直接依据】的 unit id（即每行开头 [id=...]
+里的值）；一段找不到可依据的 unit 就不要写这段。
+只输出 JSON：{"paragraphs":[{"text":"一段话","unit_ids":["mu_x","mu_y"]}]}
 当前时间：{current_datetime}
 """
 
 
 SOUL_RELATIONSHIP_VIEW_SYNTH_PROMPT = """\
-把给定的 relationship units 综合成这个 SOUL 与用户的相处叙事。
-只能使用输入 units，不得新增共同经历；重点表达称呼、节奏、回应偏好、边界和默契。
-不要重复普通身份画像；压在字数预算内。只输出 JSON：{"profile_md":"关系叙事"}
+把给定的 relationship units 综合成这个 SOUL 与用户的相处叙事：重点表达称呼、节奏、
+回应偏好、边界和默契，不要重复普通身份画像。
+
+## 硬规则
+1. 反捏造：只能陈述给定 units 里明确写出的内容；禁止新增或虚构任何共同经历、事件、
+   偏好、习惯或对话方式；units 没写的就不写，不确定就不写。
+2. 比例：全文句数不超过「单元数 + 1」。单元少就写得短，禁止铺陈、抒情、举例、渲染情绪。
+3. 禁元话语：不得输出「注意/以上叙事/未添加任何虚构/根据提供（给定）的单元」之类的说明、
+   免责声明或自我评价；只写叙事本身。
+4. 压在字数预算内。
+
+## 输出格式
+分段输出。每段都要在 unit_ids 里列出该段内容【直接依据】的 unit id（即每行开头 [id=...]
+里的值）；一段找不到可依据的 unit 就不要写这段。
+只输出 JSON：{"paragraphs":[{"text":"一段话","unit_ids":["mu_x","mu_y"]}]}
 当前时间：{current_datetime}
 """
 
@@ -527,8 +547,14 @@ def call_view_synthesis(
     units_text: str,
     char_budget: int,
     view_type: str,
+    valid_ids: set[str],
     trace_context: dict | None = None,
 ) -> str | None:
+    """Synthesize a portrait body from cited units. ``valid_ids`` is the set of
+    unit ids offered to the model; every kept paragraph must cite only ids in
+    this set, making "did not fabricate" a code-verifiable property rather than a
+    prompt promise. Returns a paragraph-joined body, or None on any failure /
+    full strip so synthesize_view falls back to the deterministic template."""
     user_content = (
         f"## 画像类型\n\n{view_type}\n\n"
         f"## 字数预算\n\n不超过 {char_budget} 字\n\n---\n\n"
@@ -539,6 +565,12 @@ def call_view_synthesis(
         if view_type == "soul_relationship_memory"
         else MEMORY_VIEW_SYNTH_PROMPT
     )
+
+    def parser(content: str | None) -> str | None:
+        return _parse_view_synthesis_content(
+            content, valid_ids=valid_ids, char_budget=char_budget
+        )
+
     return call_json_completion(
         client=client,
         model=model,
@@ -552,12 +584,42 @@ def call_view_synthesis(
             },
             {"role": "user", "content": user_content},
         ],
-        parser=_parse_view_synthesis_content,
+        parser=parser,
         trace_context=trace_context,
     )
 
 
-def _parse_view_synthesis_content(content: str | None) -> str | None:
+# Model meta-discourse: explanations/disclaimers/self-evaluation about its own
+# output. It must never reach the user-facing portrait, so drop any paragraph
+# whose text hits this. ^注意 is start-anchored (mid-sentence 注意 is fine); the
+# rest match anywhere.
+_VIEW_META_RE = re.compile(r"^注意[：:]|以上叙事|未添加任何虚构|根据(提供|给定)的")
+
+
+def _join_paragraphs_within_budget(paragraphs: list[str], char_budget: int) -> str:
+    """Join paragraphs with blank lines, dropping whole trailing paragraphs once
+    the budget would overflow — never hard-cutting a sentence mid-way."""
+    selected: list[str] = []
+    for para in paragraphs:
+        candidate = "\n\n".join(selected + [para])
+        if len(candidate) > char_budget:
+            break
+        selected.append(para)
+    return "\n\n".join(selected)
+
+
+def _parse_view_synthesis_content(
+    content: str | None,
+    *,
+    valid_ids: set[str],
+    char_budget: int,
+) -> str | None:
+    """Parse the {"paragraphs":[{"text","unit_ids"}]} response into a verifiable
+    portrait body. A paragraph survives only if it cites a non-empty set of KNOWN
+    unit ids (subset of ``valid_ids``) and its text is not meta-discourse; the
+    kept set is count-capped to len(valid_ids)+1 and whole-paragraph budget
+    trimmed. Any parse failure or a fully-stripped result returns None so the
+    caller falls back to the deterministic template."""
     content = clean_json_content(content)
     try:
         data = json.loads(content)
@@ -565,7 +627,30 @@ def _parse_view_synthesis_content(content: str | None) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    profile_md = data.get("profile_md")
-    if not isinstance(profile_md, str) or not profile_md.strip():
+    raw_paragraphs = data.get("paragraphs")
+    if not isinstance(raw_paragraphs, list):
         return None
-    return profile_md.strip()
+
+    kept: list[str] = []
+    for item in raw_paragraphs:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str):
+            continue
+        text = text.strip()
+        if not text or _VIEW_META_RE.search(text):
+            continue
+        raw_ids = item.get("unit_ids")
+        if not isinstance(raw_ids, list):
+            continue
+        ids = {str(x).strip() for x in raw_ids if str(x).strip()}
+        if not ids or not ids.issubset(valid_ids):
+            continue
+        kept.append(text)
+
+    if not kept:
+        return None
+    kept = kept[: len(valid_ids) + 1]
+    body = _join_paragraphs_within_budget(kept, char_budget)
+    return body or None

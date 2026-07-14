@@ -185,6 +185,20 @@
   padding-right: 140px;
 }
 
+/* 画像内容已过期、等待重新综合时的轻量提示，沿用 chip 药丸形状 + stale 警示色。 */
+.portraitChip {
+  margin-left: 10px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--color-warning);
+  background: rgba(184, 134, 11, 0.1);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-full);
+  padding: 2px 9px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 .portraitProse {
   font-size: var(--text-base);
   line-height: var(--leading-relaxed);
