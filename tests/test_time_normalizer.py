@@ -121,9 +121,22 @@ class NegativeGuardTest(unittest.TestCase):
         self.assertEqual([], extract("今天天气不错但没有具体安排", anchor=MON)[1:])  # 只命中一个“今天”
 
     def test_compound_words_do_not_leak_day_substrings(self) -> None:
-        self.assertEqual([], extract("今后天气会转冷", anchor=MON))
-        self.assertEqual([], extract("明后天来找我", anchor=MON))
-        self.assertEqual([], extract("史前天气很热", anchor=MON))
+        # 后天/前天 是纯字符序列，任何「X后/X前 + 天…」组合都会包含它们；
+        # 词边界验证必须整类拒绝，而不是依赖前缀字黑名单。
+        for text in (
+            "今后天气会转冷", "明后天来找我", "史前天气很热",
+            "然后天气怎么样", "最后天气也不错", "午后天气很热",
+            "雨后天晴", "饭后天气凉快", "睡前天气预报",
+            "术后天气", "课后天气不错",
+        ):
+            self.assertEqual([], extract(text, anchor=MON), text)
+
+    def test_day_words_on_word_boundaries_still_annotate(self) -> None:
+        self.assertEqual("2026-07-15", _first("后天气温骤降", MON).date)  # 后天|气温
+        self.assertEqual("2026-07-15", _first("我后天去北京", MON).date)
+        self.assertEqual("2026-07-11", _first("他前天来过", MON).date)
+        # jieba 把「今天下午」切成一个整体 token，日期词是其前缀
+        self.assertEqual("2026-07-13", _first("今天下午开会", MON).date)
 
 
 class AnnotationNoteTest(unittest.TestCase):

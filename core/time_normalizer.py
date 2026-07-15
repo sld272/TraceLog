@@ -10,8 +10,9 @@ that is correct for THEM (speech time for live extraction, the event's own
 timestamp for reconcile), inject the result as an inline annotation, and the
 LLM copies dates instead of computing them.
 
-Pure rules, no LLM, no IO, no schema. Better to skip than to mislabel: past
-or periodic expressions ("上周三", "每周三", "周末") are left unannotated.
+Deterministic rules plus jieba word segmentation — no LLM, no schema. Better
+to skip than to mislabel: past or periodic expressions ("上周三", "每周三",
+"周末") are left unannotated.
 """
 
 from __future__ import annotations
@@ -20,6 +21,11 @@ import calendar
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+
+import jieba
+
+# jieba prints "Building prefix dict..." to stderr on first use; silence it.
+jieba.setLogLevel(60)
 
 
 @dataclass(frozen=True)
@@ -59,7 +65,7 @@ _PATTERN = re.compile(
     rf"|(?P<next_week>下个?(?:周|星期|礼拜)(?P<next_wd>[{_WEEK_CHARS}]))"
     rf"|(?P<this_week>[这本]个?(?:周|星期|礼拜)(?P<this_wd>[{_WEEK_CHARS}]))"
     rf"|(?P<bare_week>(?:周|星期|礼拜)(?P<bare_wd>[{_WEEK_CHARS}]))"
-    r"|(?P<day_word>大后天|大前天|(?<![以之今明史日稍往])后天|(?<![目之当以大史今明])前天|明[天早晚]|今[天早晚夜]|昨天)"
+    r"|(?P<day_word>大后天|大前天|后天|前天|明[天早晚]|今[天早晚夜]|昨天)"
     r"|(?P<month_day>(?<![0-9年])(?P<md_month>[0-9]{1,2})月(?P<md_day>[0-9]{1,2})[日号])"
     r"|(?P<days_later>(?P<dl_num>[0-9]{1,3}|[一二两三四五六七八九十]{1,3})天之?后)"
     r"|(?P<month_part>月(?P<mp_part>[底初中]))"
@@ -109,6 +115,30 @@ def _nearest_month_day(anchor_day: date, month: int, day: int) -> date | None:
     return best
 
 
+def _word_spans(text: str) -> dict[int, int]:
+    """jieba PRECISE-mode segmentation as {token_start: token_end}. Tokens
+    partition the text, so every token end is the next token's start or
+    len(text)."""
+    return {start: end for _word, start, end in jieba.tokenize(text)}
+
+
+def _on_word_boundary(start: int, end: int, spans: dict[int, int], text_len: int) -> bool:
+    """Whether the day-word span [start, end) respects word segmentation.
+
+    Day words are bare character sequences, so "然后天气"/"雨后天晴" contain a
+    literal 后天 that belongs to the surrounding words. A blacklist of what may
+    precede 后天/前天 is an open set (然后/午后/雨后/术后/…); segmentation
+    settles it directly — 后天|气温 keeps 后天 a word of its own, 然后|天气
+    does not. The span must begin a token and either stay inside that token
+    (jieba keeps 今天下午 whole) or end exactly on a token boundary (大|前天)."""
+    token_end = spans.get(start)
+    if token_end is None:
+        return False  # starts mid-word: 然后|天气, 明后天
+    if end <= token_end:
+        return True  # the word itself, or a prefix of a longer token
+    return end in spans or end == text_len  # covers whole tokens only
+
+
 def _parse_day_count(token: str) -> int | None:
     """Parse "3" / "三" / "十" / "二十一" (1..99). None when unsure."""
     if token.isdigit():
@@ -147,6 +177,7 @@ def extract(text: str, *, anchor: datetime) -> list[TimeAnnotation]:
         return []
     anchor_day = _anchor_date(anchor)
     annotations: list[TimeAnnotation] = []
+    word_spans: dict[int, int] | None = None
     for match in _PATTERN.finditer(text):
         if match.group("skip_week") or match.group("skip_month"):
             continue
@@ -174,6 +205,10 @@ def extract(text: str, *, anchor: datetime) -> list[TimeAnnotation]:
             target = _upcoming(anchor_day, _WEEKDAY_INDEX[match.group("bare_wd")], include_today=True)
             annotations.append(_annotation(span, target))
         elif match.group("day_word"):
+            if word_spans is None:
+                word_spans = _word_spans(text)
+            if not _on_word_boundary(match.start(), match.end(), word_spans, len(text)):
+                continue
             annotations.append(_annotation(span, anchor_day + timedelta(days=_DAY_WORDS[span])))
         elif match.group("month_day"):
             target = _nearest_month_day(
