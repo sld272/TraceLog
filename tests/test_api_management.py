@@ -354,6 +354,28 @@ class ApiManagementTest(unittest.TestCase):
             )
             saved = json.loads(self.config_path.read_text(encoding="utf-8"))
             get_response = client.get("/settings/model")
+            preserve_response = client.put(
+                "/settings/model",
+                json={
+                    **base_payload,
+                    "secondary_model": "fast-mini",
+                    "reuse_secondary_config": False,
+                    "reuse_secondary_api_key": False,
+                    "secondary_base_url": "https://faster.invalid/v1",
+                },
+            )
+            preserved = json.loads(self.config_path.read_text(encoding="utf-8"))
+            reuse_key_response = client.put(
+                "/settings/model",
+                json={
+                    **base_payload,
+                    "secondary_model": "fast-mini",
+                    "reuse_secondary_config": False,
+                    "reuse_secondary_api_key": True,
+                    "secondary_base_url": "https://fastest.invalid/v1",
+                },
+            )
+            reused = json.loads(self.config_path.read_text(encoding="utf-8"))
             clear_response = client.put("/settings/model", json=base_payload)
 
         self.assertEqual(200, save_response.status_code)
@@ -367,8 +389,18 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("fast-mini", payload["secondary_model"])
         self.assertTrue(payload["has_secondary_api_key"])
         self.assertFalse(payload["reuse_secondary_config"])
+        self.assertFalse(payload["reuse_secondary_api_key"])
         self.assertNotIn("sk-secondary-secret", json.dumps(payload))
         self.assertNotIn("sk-secondary-secret", json.dumps(save_response.json()))
+
+        self.assertEqual(200, preserve_response.status_code)
+        self.assertEqual("sk-secondary-secret", preserved["secondary_api_key"])
+        self.assertEqual("https://faster.invalid/v1", preserved["secondary_base_url"])
+
+        self.assertEqual(200, reuse_key_response.status_code)
+        self.assertIsNone(reused["secondary_api_key"])
+        self.assertEqual("https://fastest.invalid/v1", reused["secondary_base_url"])
+        self.assertTrue(reuse_key_response.json()["reuse_secondary_api_key"])
 
         self.assertEqual(200, clear_response.status_code)
         cleared = json.loads(self.config_path.read_text(encoding="utf-8"))

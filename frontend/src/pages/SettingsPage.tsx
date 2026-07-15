@@ -68,6 +68,7 @@ interface ModelForm {
   secondary_api_key: string
   secondary_base_url: string
   reuse_secondary_config: boolean
+  reuse_secondary_api_key: boolean
   logging: ModelSettings['logging']
   vision: {
     enabled: boolean
@@ -97,6 +98,7 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   secondary_api_key: '',
   secondary_base_url: '',
   reuse_secondary_config: true,
+  reuse_secondary_api_key: true,
   logging: {
     enabled: true,
     level: 'INFO',
@@ -670,7 +672,7 @@ function ModelSettingsPanel({
                 checked={form.reuse_secondary_config}
                 onChange={(event) => setField('reuse_secondary_config', event.target.checked)}
               />
-              <span>复用主模型密钥</span>
+              <span>复用主模型配置</span>
             </label>
           </div>
         </div>
@@ -689,13 +691,23 @@ function ModelSettingsPanel({
                 placeholder={form.base_url || '留空复用主 Base URL'}
                 onChange={(value) => setField('secondary_base_url', value)}
               />
-              <TextField
-                label="API Key"
-                type="password"
-                value={form.secondary_api_key}
-                placeholder={settings?.secondary_api_key_masked ?? '留空复用主 Key'}
-                onChange={(value) => setField('secondary_api_key', value)}
-              />
+              <label className={styles.toggleRow}>
+                <input
+                  type="checkbox"
+                  checked={form.reuse_secondary_api_key}
+                  onChange={(event) => setField('reuse_secondary_api_key', event.target.checked)}
+                />
+                <span>复用主 Key</span>
+              </label>
+              {!form.reuse_secondary_api_key && (
+                <TextField
+                  label="独立 API Key"
+                  type="password"
+                  value={form.secondary_api_key}
+                  placeholder={settings?.secondary_api_key_masked ?? '输入副模型 API Key'}
+                  onChange={(value) => setField('secondary_api_key', value)}
+                />
+              )}
             </>
           )}
         </div>
@@ -1420,6 +1432,7 @@ function formFromModelSettings(settings: ModelSettings): ModelForm {
     secondary_api_key: '',
     secondary_base_url: settings.secondary_base_url ?? '',
     reuse_secondary_config: settings.reuse_secondary_config ?? true,
+    reuse_secondary_api_key: settings.reuse_secondary_api_key ?? !settings.has_secondary_api_key,
     logging: settings.logging,
     vision: {
       enabled: settings.vision?.enabled ?? false,
@@ -1451,6 +1464,7 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
     secondary_api_key: form.reuse_secondary_config ? undefined : form.secondary_api_key.trim() || undefined,
     secondary_base_url: form.reuse_secondary_config ? null : form.secondary_base_url.trim() || null,
     reuse_secondary_config: form.reuse_secondary_config,
+    reuse_secondary_api_key: form.reuse_secondary_config || form.reuse_secondary_api_key,
     logging: form.logging,
     vision: {
       enabled: form.vision.enabled,

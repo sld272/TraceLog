@@ -316,6 +316,7 @@ export interface ModelSettings {
   secondary_api_key_masked: string | null
   secondary_base_url: string | null
   reuse_secondary_config: boolean
+  reuse_secondary_api_key: boolean
   logging: {
     enabled: boolean
     level: string
@@ -364,6 +365,7 @@ export interface ModelSettingsUpdate {
   secondary_api_key?: string
   secondary_base_url?: string | null
   reuse_secondary_config: boolean
+  reuse_secondary_api_key: boolean
   logging: ModelSettings['logging']
   vision: {
     enabled: boolean

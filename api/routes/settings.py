@@ -55,6 +55,7 @@ class ModelSettingsRequest(BaseModel):
     secondary_api_key: str | None = None
     secondary_base_url: str | None = None
     reuse_secondary_config: bool = True
+    reuse_secondary_api_key: bool = True
     logging: LoggingSettings | None = None
     vision: VisionSettings | None = None
     web_search: WebSearchSettings | None = None
@@ -125,6 +126,7 @@ def _read_model_settings() -> dict[str, Any]:
         "secondary_api_key_masked": _mask_secret(config.get("secondary_api_key")),
         "secondary_base_url": config.get("secondary_base_url"),
         "reuse_secondary_config": not bool(config.get("secondary_api_key") or config.get("secondary_base_url")),
+        "reuse_secondary_api_key": not bool(config.get("secondary_api_key")),
         "logging": logging_config,
         "vision": {
             "enabled": bool(vision.get("enabled")),
@@ -178,7 +180,12 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         secondary_api_key = _clean_optional(payload.get("secondary_api_key"))
         if secondary_api_key is None:
-            secondary_api_key = existing.get("secondary_api_key")
+            if payload.get("reuse_secondary_api_key", True):
+                secondary_api_key = None
+            else:
+                # The user explicitly chose an independent key but left the
+                # masked password field untouched: preserve the existing secret.
+                secondary_api_key = existing.get("secondary_api_key")
         secondary_base_url = _clean_optional(payload.get("secondary_base_url"))
 
     incoming_vision = normalize_vision_config(payload.get("vision"))
