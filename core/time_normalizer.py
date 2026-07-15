@@ -122,13 +122,19 @@ def _word_spans(text: str) -> dict[int, int]:
     return {start: end for _word, start, end in jieba.tokenize(text)}
 
 
-# jieba merges a day word with a following time-of-day word into one token
-# (今天下午/昨天晚上/昨天夜里). Only these remainders justify annotating a
-# day-word prefix of a longer token; any other long token owns its prefix
-# (后天性耳聋, 明天科技) and must not leak a date.
+# jieba merges some day-word-led phrases into one token (今天下午/昨天晚上/
+# 今天天气). A day-word prefix of such a token is annotated only when the
+# remainder is allowlisted: any time-of-day word, or an exact (day word,
+# remainder) pair — the stock dictionary currently merges only 今天天气; the
+# other 天气 pairs guard against dictionary drift. Every other long token owns
+# its prefix (后天性耳聋, 明天科技) and must not leak a date.
 _MERGED_TIME_OF_DAY_SUFFIXES = frozenset({
     "早上", "早晨", "上午", "中午", "下午", "晚上", "傍晚",
     "凌晨", "夜里", "夜晚", "半夜", "深夜",
+})
+_MERGED_DAY_WORD_PAIRS = frozenset({
+    ("今天", "天气"), ("明天", "天气"), ("昨天", "天气"),
+    ("前天", "天气"), ("后天", "天气"),
 })
 
 
@@ -146,10 +152,14 @@ def _on_word_boundary(text: str, start: int, end: int, spans: dict[int, int]) ->
     if end == token_end:
         return True  # the day word is a word of its own
     if end < token_end:
-        # Prefix of a longer token: legal only when the remainder is a
-        # time-of-day word jieba merged in (今天|下午), never an arbitrary
-        # continuation (后天|性, 明天|科技).
-        return text[end:token_end] in _MERGED_TIME_OF_DAY_SUFFIXES
+        # Prefix of a longer token: legal only for allowlisted remainders
+        # (今天|下午, 今天|天气), never an arbitrary continuation (后天|性,
+        # 明天|科技).
+        remainder = text[end:token_end]
+        return (
+            remainder in _MERGED_TIME_OF_DAY_SUFFIXES
+            or (text[start:end], remainder) in _MERGED_DAY_WORD_PAIRS
+        )
     return end in spans or end == len(text)  # covers whole tokens only
 
 

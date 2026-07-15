@@ -118,7 +118,13 @@ class NegativeGuardTest(unittest.TestCase):
 
     def test_empty_and_plain_text(self) -> None:
         self.assertEqual([], extract("", anchor=MON))
-        self.assertEqual([], extract("今天天气不错但没有具体安排", anchor=MON)[1:])  # 只命中一个“今天”
+
+    def test_merged_day_word_weather_token_still_annotates(self) -> None:
+        # jieba 把「今天天气」合并成整体 token，须恰好命中一个「今天」
+        anns = extract("今天天气不错但没有具体安排", anchor=MON)
+        self.assertEqual(1, len(anns))
+        self.assertEqual("今天", anns[0].span)
+        self.assertEqual("2026-07-13", anns[0].date)
 
     def test_compound_words_do_not_leak_day_substrings(self) -> None:
         # 后天/前天 是纯字符序列，任何「X后/X前 + 天…」组合都会包含它们；
