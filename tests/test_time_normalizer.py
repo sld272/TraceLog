@@ -131,12 +131,24 @@ class NegativeGuardTest(unittest.TestCase):
         ):
             self.assertEqual([], extract(text, anchor=MON), text)
 
+    def test_day_word_prefix_of_longer_token_is_not_a_date(self) -> None:
+        # 「后天性」「明天科技」被 jieba 切成整体 token，日期词只是其前缀，
+        # 余部不是时段词 → 整类拒绝。
+        for text in (
+            "后天性耳聋", "后天性心脏病", "明天科技公司", "后天下之乐而乐",
+        ):
+            self.assertEqual([], extract(text, anchor=MON), text)
+
     def test_day_words_on_word_boundaries_still_annotate(self) -> None:
         self.assertEqual("2026-07-15", _first("后天气温骤降", MON).date)  # 后天|气温
         self.assertEqual("2026-07-15", _first("我后天去北京", MON).date)
         self.assertEqual("2026-07-11", _first("他前天来过", MON).date)
-        # jieba 把「今天下午」切成一个整体 token，日期词是其前缀
+        self.assertEqual("2026-07-13", _first("今晚上加班", MON).date)
+        # jieba 把「今天下午」「昨天晚上」合并成整体 token：
+        # 日期词是前缀且余部是时段词，仍应标注
         self.assertEqual("2026-07-13", _first("今天下午开会", MON).date)
+        self.assertEqual("2026-07-12", _first("昨天晚上下雨", MON).date)
+        self.assertEqual("2026-07-12", _first("昨天夜里失眠", MON).date)
 
 
 class AnnotationNoteTest(unittest.TestCase):

@@ -122,21 +122,35 @@ def _word_spans(text: str) -> dict[int, int]:
     return {start: end for _word, start, end in jieba.tokenize(text)}
 
 
-def _on_word_boundary(start: int, end: int, spans: dict[int, int], text_len: int) -> bool:
+# jieba merges a day word with a following time-of-day word into one token
+# (今天下午/昨天晚上/昨天夜里). Only these remainders justify annotating a
+# day-word prefix of a longer token; any other long token owns its prefix
+# (后天性耳聋, 明天科技) and must not leak a date.
+_MERGED_TIME_OF_DAY_SUFFIXES = frozenset({
+    "早上", "早晨", "上午", "中午", "下午", "晚上", "傍晚",
+    "凌晨", "夜里", "夜晚", "半夜", "深夜",
+})
+
+
+def _on_word_boundary(text: str, start: int, end: int, spans: dict[int, int]) -> bool:
     """Whether the day-word span [start, end) respects word segmentation.
 
     Day words are bare character sequences, so "然后天气"/"雨后天晴" contain a
     literal 后天 that belongs to the surrounding words. A blacklist of what may
     precede 后天/前天 is an open set (然后/午后/雨后/术后/…); segmentation
     settles it directly — 后天|气温 keeps 后天 a word of its own, 然后|天气
-    does not. The span must begin a token and either stay inside that token
-    (jieba keeps 今天下午 whole) or end exactly on a token boundary (大|前天)."""
+    does not."""
     token_end = spans.get(start)
     if token_end is None:
         return False  # starts mid-word: 然后|天气, 明后天
-    if end <= token_end:
-        return True  # the word itself, or a prefix of a longer token
-    return end in spans or end == text_len  # covers whole tokens only
+    if end == token_end:
+        return True  # the day word is a word of its own
+    if end < token_end:
+        # Prefix of a longer token: legal only when the remainder is a
+        # time-of-day word jieba merged in (今天|下午), never an arbitrary
+        # continuation (后天|性, 明天|科技).
+        return text[end:token_end] in _MERGED_TIME_OF_DAY_SUFFIXES
+    return end in spans or end == len(text)  # covers whole tokens only
 
 
 def _parse_day_count(token: str) -> int | None:
@@ -207,7 +221,7 @@ def extract(text: str, *, anchor: datetime) -> list[TimeAnnotation]:
         elif match.group("day_word"):
             if word_spans is None:
                 word_spans = _word_spans(text)
-            if not _on_word_boundary(match.start(), match.end(), word_spans, len(text)):
+            if not _on_word_boundary(text, match.start(), match.end(), word_spans):
                 continue
             annotations.append(_annotation(span, anchor_day + timedelta(days=_DAY_WORDS[span])))
         elif match.group("month_day"):
