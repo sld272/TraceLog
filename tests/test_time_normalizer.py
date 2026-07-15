@@ -6,10 +6,12 @@ from datetime import datetime
 from core.time_normalizer import TimeAnnotation, annotation_note, extract
 
 
-# 主锚点：2026-07-13 周一。周五锚点 2026-07-17，跨年锚点 2026-12-30（周三）。
+# 主锚点：2026-07-13 周一。周五锚点 2026-07-17，年末锚点 2026-12-30（周三），
+# 年初锚点 2026-01-02（周五）。
 MON = datetime(2026, 7, 13, 10, 30)
 FRI = datetime(2026, 7, 17, 10, 30)
 EOY = datetime(2026, 12, 30, 10, 30)
+BOY = datetime(2026, 1, 2, 10, 30)
 
 
 def _first(text: str, anchor: datetime) -> TimeAnnotation:
@@ -64,8 +66,18 @@ class ExtractMatrixTest(unittest.TestCase):
         self.assertEqual("2026-07-20", _first("7月20日", MON).date)
         self.assertEqual("2026-07-20", _first("7月20号", MON).date)
 
-    def test_month_day_rolls_into_next_year_when_current_year_passed(self) -> None:
+    def test_month_day_resolves_to_nearest_instance(self) -> None:
+        # 年末说一月 → 次年（未来实例更近）
         self.assertEqual("2027-01-05", _first("1月5日交报告", EOY).date)
+        # 七月中回顾 7月10日 → 当年的过去日期，不得前滚到明年
+        self.assertEqual("2026-07-10", _first("7月10日我们见过面", MON).date)
+        # 年初回顾 12月31日 → 上一年年末
+        self.assertEqual("2025-12-31", _first("12月31日见过面", BOY).date)
+
+    def test_month_day_leap_and_impossible_dates(self) -> None:
+        # 2月29日：取最近的有效闰日实例（2024 与 2028 之间 2028 更近）
+        self.assertEqual("2028-02-29", _first("2月29日请假", MON).date)
+        self.assertEqual([], extract("2月30日", anchor=MON))
 
     def test_days_later(self) -> None:
         self.assertEqual("2026-07-16", _first("3天后", MON).date)

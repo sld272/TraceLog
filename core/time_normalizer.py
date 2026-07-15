@@ -86,22 +86,27 @@ def _upcoming(anchor_day: date, weekday: int, *, include_today: bool) -> date:
     return anchor_day + timedelta(days=delta)
 
 
-def _upcoming_month_day(anchor_day: date, month: int, day: int) -> date | None:
-    """Nearest valid occurrence of an unqualified month/day on or after anchor.
+def _nearest_month_day(anchor_day: date, month: int, day: int) -> date | None:
+    """Valid instance of an unqualified month/day calendar-closest to anchor.
 
-    Chinese scheduling phrases normally omit the year, so a January date spoken
-    at the end of December belongs to the next year. Leap-day searches may need
-    to advance more than one year; impossible dates return None."""
+    Chinese omits the year both prospectively ("1月5日交报告" said in late
+    December) and retrospectively ("7月10日见过面" said days later), and the
+    phrase itself carries no tense, so neither "always this year" nor "always
+    the next occurrence" is safe — annotations feed memory units, where a
+    wrong year becomes a durable fact. The closest instance caps the
+    worst-case error near half a year; ties prefer the future. The ±8-year
+    window covers Feb 29 gaps; dates that never exist return None."""
     if not 1 <= month <= 12 or not 1 <= day <= 31:
         return None
-    for year in range(anchor_day.year, anchor_day.year + 9):
+    best: date | None = None
+    for year in range(anchor_day.year - 8, anchor_day.year + 9):
         try:
             candidate = date(year, month, day)
         except ValueError:
             continue
-        if candidate >= anchor_day:
-            return candidate
-    return None
+        if best is None or abs((candidate - anchor_day).days) <= abs((best - anchor_day).days):
+            best = candidate
+    return best
 
 
 def _parse_day_count(token: str) -> int | None:
@@ -171,7 +176,7 @@ def extract(text: str, *, anchor: datetime) -> list[TimeAnnotation]:
         elif match.group("day_word"):
             annotations.append(_annotation(span, anchor_day + timedelta(days=_DAY_WORDS[span])))
         elif match.group("month_day"):
-            target = _upcoming_month_day(
+            target = _nearest_month_day(
                 anchor_day,
                 int(match.group("md_month")),
                 int(match.group("md_day")),
