@@ -38,6 +38,7 @@ def init_db() -> None:
         _drop_retired_tables(conn)
         _migrate_columns(conn)
         conn.executescript(sql)
+        _backfill_schedule_event_accounts(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         if str(mode).lower() != "wal":
@@ -66,6 +67,7 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("memory_units", "contested_at", "REAL"),
     ("chat_messages", "client_request_id", "TEXT"),
     ("goals", "schedule_expectation", "TEXT"),
+    ("schedule_events", "account_id", "TEXT"),
 )
 
 
@@ -84,6 +86,24 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     conn.commit()
+
+
+def _backfill_schedule_event_accounts(conn: sqlite3.Connection) -> None:
+    legacy_count = conn.execute(
+        "SELECT COUNT(*) FROM schedule_events WHERE account_id IS NULL"
+    ).fetchone()[0]
+    if legacy_count <= 0:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO calendar_accounts(id, provider, display_name, created_at)
+        VALUES ('outlook', 'outlook', 'Outlook', ?)
+        """,
+        (now_ts(),),
+    )
+    conn.execute(
+        "UPDATE schedule_events SET account_id = 'outlook' WHERE account_id IS NULL"
+    )
 
 
 def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:

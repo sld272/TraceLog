@@ -8,7 +8,11 @@ from pathlib import Path
 from core import db
 from core import goal_schedule_service, goal_service
 from core.graph.client import GraphHTTPError
-from core.schedule_service import ScheduleNotConnectedError, ScheduleService
+from core.schedule_service import (
+    NoWritableAccountError,
+    ScheduleNotConnectedError,
+    ScheduleService,
+)
 
 
 def graph_event(event_id: str, subject: str, hour: int = 9) -> dict:
@@ -50,6 +54,8 @@ class FakeGraph:
         self.delta_results = list(delta_results or [])
         self.delta_calls: list[dict] = []
         self.created_payloads: list[dict] = []
+        self.updated_payloads: list[tuple[str, dict]] = []
+        self.deleted_ids: list[str] = []
 
     def calendarview_delta(self, **kwargs):
         self.delta_calls.append(kwargs)
@@ -63,9 +69,11 @@ class FakeGraph:
         return graph_event("created-1", payload["subject"], 14)
 
     def update_event(self, event_id, payload):
+        self.updated_payloads.append((event_id, payload))
         return graph_event(event_id, payload.get("subject", "updated"), 15)
 
     def delete_event(self, event_id):
+        self.deleted_ids.append(event_id)
         return None
 
 
@@ -120,6 +128,17 @@ class ScheduleServiceTest(unittest.TestCase):
         rows = db.query_all("SELECT id, subject FROM schedule_events ORDER BY id")
         self.assertEqual([("e1", "新版")], [(row["id"], row["subject"]) for row in rows])
         self.assertEqual("https://graph.microsoft.com/delta-2", db.query_one("SELECT value FROM meta WHERE key = 'graph.delta_link'")["value"])
+        self.assertEqual(
+            [
+                {
+                    "id": "outlook",
+                    "provider": "outlook",
+                    "display_name": "person@example.com",
+                    "event_count": 1,
+                }
+            ],
+            service.status()["accounts"],
+        )
 
     def test_410_discards_expired_delta_and_replaces_full_cache(self) -> None:
         graph = FakeGraph(
@@ -129,11 +148,21 @@ class ScheduleServiceTest(unittest.TestCase):
             ]
         )
         service = self._service(graph)
+        service.create_local_account()
+        goal = goal_service.create_goal("保留本地日程", None, "short")
+        local = service.create_event(
+            subject="本地不参与重建",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+            goal_id=goal["id"],
+        )
         db.execute(
             """
             INSERT INTO schedule_events(
-                id, subject, start_ts, end_ts, start_local, end_local, synced_at
-            ) VALUES ('stale', '旧缓存', 1, 2, '2026-01-01T00:00:00', '2026-01-01T01:00:00', 1)
+                id, account_id, subject, start_ts, end_ts, start_local, end_local,
+                synced_at
+            ) VALUES ('stale', 'outlook', '旧缓存', 1, 2,
+                      '2026-01-01T00:00:00', '2026-01-01T01:00:00', 1)
             """
         )
         for key, value in (
@@ -150,6 +179,10 @@ class ScheduleServiceTest(unittest.TestCase):
         self.assertIn("start", graph.delta_calls[1])
         self.assertIsNone(db.query_one("SELECT 1 FROM schedule_events WHERE id = 'stale'"))
         self.assertIsNotNone(db.query_one("SELECT 1 FROM schedule_events WHERE id = 'fresh'"))
+        self.assertEqual(
+            [local["id"]],
+            [event["id"] for event in goal_schedule_service.links_for_goal(goal["id"])],
+        )
         self.assertEqual("new-delta", db.query_one("SELECT value FROM meta WHERE key = 'graph.delta_link'")["value"])
 
     def test_delta_removed_and_cancelled_events_remove_goal_links(self) -> None:
@@ -231,6 +264,190 @@ class ScheduleServiceTest(unittest.TestCase):
         self.assertEqual([], graph.delta_calls)
         with self.assertRaises(ScheduleNotConnectedError):
             service.create_event(subject="x", event_date=date(2026, 7, 16))
+
+    def test_local_account_lifecycle_is_explicit_and_listed_with_event_count(self) -> None:
+        service = self._service(
+            FakeGraph(), auth=FakeAuth(configured=False, connected=False)
+        )
+
+        created = service.create_local_account()
+
+        self.assertEqual(
+            {
+                "id": "local",
+                "provider": "local",
+                "display_name": "本地日历",
+                "event_count": 0,
+            },
+            created,
+        )
+        self.assertEqual([created], service.list_accounts())
+        with self.assertRaises(ValueError):
+            service.create_local_account()
+        with self.assertRaises(ValueError):
+            service.delete_local_account(delete_events=False)
+        self.assertEqual(0, service.delete_local_account(delete_events=True))
+        self.assertEqual([], service.list_accounts())
+
+    def test_local_event_crud_uses_sqlite_and_remains_available_without_outlook(self) -> None:
+        graph = FakeGraph()
+        service = self._service(
+            graph, auth=FakeAuth(configured=True, connected=False)
+        )
+        service.create_local_account()
+        goal = goal_service.create_goal("完成本地日程", None, "short")
+
+        created = service.create_event(
+            subject="本地评审",
+            event_date=date(2026, 7, 16),
+            start_time=time(14, 0),
+            end_time=time(15, 0),
+            goal_id=goal["id"],
+        )
+        listed = service.list_events(date(2026, 7, 16), date(2026, 7, 16))
+
+        self.assertTrue(created["id"].startswith("local_"))
+        self.assertEqual("local", created["account_id"])
+        self.assertEqual("local", created["provider"])
+        self.assertEqual("2026-07-16T14:00:00", created["start_local"])
+        self.assertIsNone(created["web_link"])
+        self.assertIsNone(created["series_master_id"])
+        self.assertIsNone(created["change_key"])
+        self.assertFalse(listed["connected"])
+        self.assertEqual("ok", listed["status"])
+        self.assertEqual([created["id"]], [event["id"] for event in listed["events"]])
+        self.assertEqual(1, listed["accounts"][0]["event_count"])
+        self.assertEqual([], graph.created_payloads)
+
+        updated = service.update_event(
+            created["id"],
+            {
+                "subject": "本地评审完成",
+                "start_time": time(15, 0),
+                "end_time": time(16, 0),
+            },
+        )
+        self.assertEqual("本地评审完成", updated["subject"])
+        self.assertEqual("2026-07-16T15:00:00", updated["start_local"])
+        self.assertEqual([], graph.updated_payloads)
+
+        service.delete_event(created["id"])
+        self.assertEqual([], graph.deleted_ids)
+        self.assertEqual([], goal_schedule_service.links_for_goal(goal["id"]))
+        self.assertEqual(
+            [],
+            service.list_events(date(2026, 7, 16), date(2026, 7, 16))["events"],
+        )
+
+    def test_explicit_and_default_account_routing_produce_a_sorted_mixed_list(self) -> None:
+        graph = FakeGraph()
+        service = self._service(graph)
+        service.create_local_account()
+
+        local = service.create_event(
+            subject="本地早会",
+            event_date=date(2026, 7, 16),
+            start_time=time(8, 0),
+            end_time=time(9, 0),
+            account_id="local",
+        )
+        outlook = service.create_event(
+            subject="云端评审",
+            event_date=date(2026, 7, 16),
+        )
+
+        listed = service.list_events(date(2026, 7, 16), date(2026, 7, 16))
+        self.assertEqual([local["id"], outlook["id"]], [e["id"] for e in listed["events"]])
+        self.assertEqual(["local", "outlook"], [e["provider"] for e in listed["events"]])
+        self.assertEqual(["云端评审"], [p["subject"] for p in graph.created_payloads])
+
+        self.auth.connected = False
+        fallback = service.create_event(
+            subject="断网本地写入",
+            event_date=date(2026, 7, 16),
+        )
+        self.assertEqual("local", fallback["account_id"])
+        service.delete_local_account(delete_events=True)
+        with self.assertRaises(NoWritableAccountError):
+            service.create_event(
+                subject="没有可写账号",
+                event_date=date(2026, 7, 16),
+            )
+
+    def test_delta_remote_removal_never_deletes_a_local_event_or_goal_link(self) -> None:
+        graph = FakeGraph()
+        service = self._service(graph)
+        service.create_local_account()
+        goal = goal_service.create_goal("保护本地事件", None, "short")
+        local = service.create_event(
+            subject="只在本地",
+            event_date=date(2026, 7, 16),
+            goal_id=goal["id"],
+            account_id="local",
+        )
+        graph.delta_results.append(
+            {
+                "events": [{"id": local["id"], "@removed": {"reason": "deleted"}}],
+                "delta_link": "delta-2",
+            }
+        )
+        for key, value in (
+            ("graph.delta_link", "delta-1"),
+            ("graph.window_start", "2026-05-17"),
+            ("graph.window_end", "2027-07-16"),
+        ):
+            db.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))
+
+        result = service.sync()
+
+        self.assertEqual(0, result["deleted"])
+        self.assertEqual([local["id"]], [e["id"] for e in goal_schedule_service.links_for_goal(goal["id"])])
+
+    def test_deleting_local_account_cascades_events_and_goal_links(self) -> None:
+        service = self._service(
+            FakeGraph(), auth=FakeAuth(configured=False, connected=False)
+        )
+        service.create_local_account()
+        goal = goal_service.create_goal("级联目标", None, "short")
+        local = service.create_event(
+            subject="会随账号删除",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+            goal_id=goal["id"],
+        )
+
+        deleted = service.delete_local_account(delete_events=True)
+
+        self.assertEqual(1, deleted)
+        self.assertEqual([], service.list_accounts())
+        self.assertEqual([], goal_schedule_service.links_for_goal(goal["id"]))
+        self.assertIsNone(
+            db.query_one("SELECT 1 FROM schedule_events WHERE id = ?", (local["id"],))
+        )
+
+    def test_outlook_logout_removes_only_outlook_events(self) -> None:
+        graph = FakeGraph()
+        service = self._service(graph)
+        service.create_local_account()
+        local = service.create_event(
+            subject="退出后保留",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+        )
+        outlook = service.create_event(
+            subject="退出后清理",
+            event_date=date(2026, 7, 16),
+        )
+
+        service.logout()
+
+        self.assertTrue(self.auth.logged_out)
+        self.assertIsNotNone(
+            db.query_one("SELECT 1 FROM schedule_events WHERE id = ?", (local["id"],))
+        )
+        self.assertIsNone(
+            db.query_one("SELECT 1 FROM schedule_events WHERE id = ?", (outlook["id"],))
+        )
 
 
 if __name__ == "__main__":

@@ -32,8 +32,16 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS idx_posts_ts ON posts(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_importance ON posts(importance DESC);
 
+CREATE TABLE IF NOT EXISTS calendar_accounts (
+    id           TEXT PRIMARY KEY,
+    provider     TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    created_at   REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schedule_events (
     id               TEXT PRIMARY KEY,
+    account_id       TEXT,
     subject          TEXT NOT NULL DEFAULT '',
     body_preview     TEXT,
     start_ts         REAL NOT NULL,
@@ -50,6 +58,7 @@ CREATE TABLE IF NOT EXISTS schedule_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_schedule_events_start ON schedule_events(start_ts);
+CREATE INDEX IF NOT EXISTS idx_schedule_events_account ON schedule_events(account_id);
 
 CREATE TABLE IF NOT EXISTS post_soul_orders (
     post_id    TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,

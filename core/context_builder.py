@@ -88,8 +88,6 @@ def build_context(
 
 def _schedule_context_section(context_date: date) -> str:
     result = ScheduleService().list_events(context_date, context_date + timedelta(days=7))
-    if not result["connected"]:
-        return ""
     events = result["events"][:SCHEDULE_CONTEXT_LIMIT]
     if not events:
         return ""

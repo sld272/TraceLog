@@ -79,6 +79,53 @@ class ApiScheduleTest(unittest.TestCase):
         self.assertEqual("true", events.headers["x-schedule-configured"])
         self.assertEqual("false", events.headers["x-schedule-connected"])
         self.assertEqual(409, create.status_code)
+        self.assertEqual(
+            {"detail": {"code": "no_writable_account"}}, create.json()
+        )
+
+    def test_local_account_endpoints_and_local_event_creation(self) -> None:
+        with self._client() as client:
+            empty = client.get("/schedule/accounts")
+            created = client.post("/schedule/accounts/local")
+            duplicate = client.post("/schedule/accounts/local")
+            status = client.get("/schedule/status")
+            event = client.post(
+                "/schedule/events",
+                json={
+                    "subject": "API 本地日程",
+                    "date": "2026-07-16",
+                    "account_id": "local",
+                },
+            )
+            listed = client.get(
+                "/schedule/events?start=2026-07-16&end=2026-07-16"
+            )
+            missing_confirmation = client.request(
+                "DELETE", "/schedule/accounts/local"
+            )
+            rejected = client.request(
+                "DELETE",
+                "/schedule/accounts/local",
+                json={"delete_events": False},
+            )
+            deleted = client.request(
+                "DELETE",
+                "/schedule/accounts/local",
+                json={"delete_events": True},
+            )
+
+        self.assertEqual([], empty.json())
+        self.assertEqual("本地日历", created.json()["display_name"])
+        self.assertEqual(409, duplicate.status_code)
+        self.assertEqual([created.json()], status.json()["accounts"])
+        self.assertEqual(200, event.status_code, event.text)
+        self.assertEqual("local", event.json()["account_id"])
+        self.assertEqual("local", event.json()["provider"])
+        self.assertEqual([event.json()["id"]], [item["id"] for item in listed.json()])
+        self.assertEqual("false", listed.headers["x-schedule-connected"])
+        self.assertEqual(422, missing_confirmation.status_code)
+        self.assertEqual(422, rejected.status_code)
+        self.assertEqual({"ok": True, "deleted_events": 1}, deleted.json())
 
     def test_posts_activity_returns_raw_timestamps_without_bucketing(self) -> None:
         db.execute(
@@ -130,9 +177,10 @@ class ApiScheduleTest(unittest.TestCase):
             db.execute(
                 """
                 INSERT INTO schedule_events(
-                    id, subject, start_ts, end_ts, start_local, end_local, synced_at
-                ) VALUES (?, '缓存日程', 1, 2, '2026-07-16T09:00:00',
-                          '2026-07-16T10:00:00', 1)
+                    id, account_id, subject, start_ts, end_ts, start_local,
+                    end_local, synced_at
+                ) VALUES (?, 'outlook', '缓存日程', 1, 2,
+                          '2026-07-16T09:00:00', '2026-07-16T10:00:00', 1)
                 """,
                 (event_id,),
             )

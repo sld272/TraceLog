@@ -21,6 +21,14 @@ class ConnectedScheduleAuth:
         return "access-token"
 
 
+class DisconnectedScheduleAuth:
+    def client_id(self):
+        return None
+
+    def get_access_token(self):
+        return None
+
+
 class ContextBuilderTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -173,6 +181,24 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertNotIn("下周末", built.shared_context)
         self.assertIn("目标：每周健身", built.shared_context)
         self.assertIn("每周健身 3 次，本周 2/3", built.shared_context)
+
+    def test_public_context_includes_local_schedule_without_outlook(self) -> None:
+        goal = goal_service.create_goal("本地目标", None, "short")
+        service = ScheduleService(auth=DisconnectedScheduleAuth(), clock=lambda: 1.0)
+        service.create_local_account()
+        local = service.create_event(
+            subject="本地专注时间",
+            event_date=date(2026, 7, 16),
+            goal_id=goal["id"],
+        )
+
+        with patch("core.context_builder.ScheduleService", return_value=service):
+            built = context_builder.build_context(today=date(2026, 7, 16))
+
+        self.assertEqual("local", local["provider"])
+        self.assertIn("# 近期日程", built.shared_context)
+        self.assertIn("本地专注时间", built.shared_context)
+        self.assertIn("目标：本地目标", built.shared_context)
 
     def test_public_context_skips_web_search_when_no_enabled_souls(self) -> None:
         for soul in soul_service.list_souls(enabled_only=True):

@@ -114,6 +114,57 @@ class DbTest(unittest.TestCase):
             db.WORKSPACE_DIR = old_ws
             db.DB_PATH = old_path
 
+    def test_legacy_schedule_events_gain_account_id_and_backfill_idempotently(self) -> None:
+        legacy = Path(self.tmp.name) / "legacy-schedule-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            conn.execute(
+                """
+                CREATE TABLE schedule_events (
+                    id TEXT PRIMARY KEY,
+                    start_ts REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO schedule_events(id, start_ts) VALUES ('legacy-event', 1)"
+            )
+            conn.commit()
+            conn.close()
+
+            db.init_db()
+            db.init_db()
+
+            columns = {
+                row["name"] for row in db.query_all("PRAGMA table_info(schedule_events)")
+            }
+            indexes = {
+                row["name"] for row in db.query_all("PRAGMA index_list(schedule_events)")
+            }
+            event = db.query_one(
+                "SELECT account_id FROM schedule_events WHERE id = 'legacy-event'"
+            )
+            accounts = db.query_all(
+                "SELECT id, provider, display_name FROM calendar_accounts ORDER BY id"
+            )
+            self.assertIn("account_id", columns)
+            self.assertIn("idx_schedule_events_account", indexes)
+            self.assertEqual("outlook", event["account_id"])
+            self.assertEqual(
+                [("outlook", "outlook", "Outlook")],
+                [
+                    (row["id"], row["provider"], row["display_name"])
+                    for row in accounts
+                ],
+            )
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
     def test_schema_version_is_current_and_observation_tables_are_absent(self) -> None:
         tables = {
             row["name"]

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from core import db, goal_schedule_service, goal_service
+from core.schedule_service import ScheduleService
 
 
 class GoalScheduleServiceTest(unittest.TestCase):
@@ -73,6 +74,32 @@ class GoalScheduleServiceTest(unittest.TestCase):
         self.assertEqual(3, progress["target"])
         self.assertEqual("2/3", progress["text"])
         self.assertEqual(expectation, progress["expectation"])
+
+    def test_weekly_progress_counts_a_linked_local_event(self) -> None:
+        class DisconnectedAuth:
+            def client_id(self):
+                return None
+
+            def get_access_token(self):
+                return None
+
+        zone = ZoneInfo("Asia/Shanghai")
+        goal = goal_service.create_goal("本地周目标", None, "short")
+        service = ScheduleService(auth=DisconnectedAuth(), clock=lambda: 1.0)
+        service.create_local_account()
+        created = service.create_event(
+            subject="本地执行",
+            event_date=date(2026, 7, 16),
+            goal_id=goal["id"],
+        )
+
+        progress = goal_schedule_service.weekly_progress(
+            goal["id"],
+            now=datetime(2026, 7, 15, 12, 0, tzinfo=zone),
+        )
+
+        self.assertEqual("local", created["account_id"])
+        self.assertEqual(1, progress["current"])
 
     def _insert_event(self, event_id: str, subject: str, start_ts: float, end_ts: float) -> None:
         db.execute(

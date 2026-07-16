@@ -63,9 +63,10 @@ def unlink(goal_id: str, event_id: str) -> bool:
 def links_for_goal(goal_id: str) -> list[dict[str, Any]]:
     rows = db.query_all(
         """
-        SELECT e.*
+        SELECT e.*, account.provider AS provider
         FROM goal_schedule_links AS link
         JOIN schedule_events AS e ON e.id = link.event_id
+        LEFT JOIN calendar_accounts AS account ON account.id = e.account_id
         WHERE link.goal_id = ? AND e.is_cancelled = 0
         ORDER BY e.start_ts, e.end_ts, e.id
         """,
@@ -166,6 +167,9 @@ def weekly_progress(
 
 def _event_from_row(row: Any) -> dict[str, Any]:
     event = dict(row)
+    account_id = str(event.get("account_id") or "outlook")
+    event["account_id"] = account_id
+    event["provider"] = str(event.get("provider") or account_id)
     event["all_day"] = bool(event["all_day"])
     event["is_cancelled"] = bool(event["is_cancelled"])
     event["goal_link"] = None

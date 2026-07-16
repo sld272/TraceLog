@@ -20,7 +20,11 @@ from core.graph.auth import (
     GraphNotConfiguredError,
 )
 from core.graph.client import GraphHTTPError
-from core.schedule_service import ScheduleNotConnectedError, ScheduleService
+from core.schedule_service import (
+    NoWritableAccountError,
+    ScheduleNotConnectedError,
+    ScheduleService,
+)
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
 
@@ -36,6 +40,11 @@ class CreateEventRequest(BaseModel):
     end_time: Time | None = None
     all_day: bool = False
     goal_id: str | None = None
+    account_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class DeleteLocalAccountRequest(BaseModel):
+    delete_events: bool
 
 
 class UpdateEventRequest(BaseModel):
@@ -58,6 +67,31 @@ _auth_resetting = False
 @router.get("/status")
 async def get_status():
     return await run_sync(ScheduleService().status)
+
+
+@router.get("/accounts")
+async def list_accounts():
+    return await run_sync(ScheduleService().list_accounts)
+
+
+@router.post("/accounts/local")
+async def create_local_account():
+    try:
+        return await run_sync(ScheduleService().create_local_account)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.delete("/accounts/local")
+async def delete_local_account(request: DeleteLocalAccountRequest):
+    try:
+        deleted = await run_sync(
+            ScheduleService().delete_local_account,
+            delete_events=request.delete_events,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True, "deleted_events": deleted}
 
 
 @router.post("/auth/client-id")
@@ -190,9 +224,14 @@ async def create_event(request: CreateEventRequest):
             end_time=request.end_time,
             all_day=request.all_day,
             goal_id=request.goal_id,
+            account_id=request.account_id,
         )
     except goal_schedule_service.GoalNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except NoWritableAccountError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": "no_writable_account"}
+        ) from exc
     except (ScheduleNotConnectedError, GraphNotConfiguredError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
