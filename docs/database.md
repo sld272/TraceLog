@@ -1,6 +1,6 @@
 # 数据库设计
 
-SQLite 是唯一的持久化真相源；ChromaDB 向量索引随时可以由 SQLite 重建。
+SQLite 是本地业务与记忆的持久化真相源；ChromaDB 向量索引随时可以由 SQLite 重建。日程是例外：Exchange / Outlook 是真相源，SQLite 中的 `schedule_events` 只是 Graph 读取缓存。
 
 ## 业务表
 
@@ -10,9 +10,34 @@ SQLite 是唯一的持久化真相源；ChromaDB 向量索引随时可以由 SQL
 - `chat_threads`、`chat_messages`：私聊
 - `attachments` 及三类关系表：图片附件
 - `souls`：AI 人格
-- `todos`、`goals`、`suggestions`：待办 / 目标 / 建议
+- `goals`、`suggestions`：目标与目标建议；`goals.schedule_expectation` 保存可空的每周期望 JSON
+- `schedule_events`：Microsoft Graph 日程的本地只读缓存
+- `goal_schedule_links`：TraceLog 目标与 Graph 事件的本地链接
 - `jobs`、`post_events`：后台任务队列与发帖流水事件
 - `vision_cache`：图片理解结果缓存
+
+## 日程表
+
+`schedule_events` 以 Graph event id 为主键：
+
+- `subject`、`body_preview`、`location`、`web_link`：显示内容与 Outlook 深链。
+- `start_ts`、`end_ts`：UTC epoch 秒，用于范围查询和排序。
+- `start_local`、`end_local`：`Asia/Shanghai` 的原始本地日期时间；`all_day` 标记全天事件。
+- `series_master_id`、`is_cancelled`、`change_key`：保留 Graph 事件状态。
+- `synced_at`：该缓存行最近一次写入时间；`idx_schedule_events_start` 加速按开始时间读取。
+
+`goal_schedule_links` 以 `(goal_id, event_id)` 为联合主键，并记录 `created_at`。它是 TraceLog 本地领域关系：远端删除 / 取消事件、写穿删除、全量缓存重建时由服务层清理失效链接。
+
+`goals.schedule_expectation` 是可空 JSON，当前只接受 `{"period":"week","target":3,"label":"每周 3 次"}` 这类周目标。周进度由链接事件实时计算，不另存汇总值。
+
+## `meta` 中的 Graph 状态
+
+- `graph.client_id`：Entra Application (client) ID。
+- `graph.delta_link`：下一次 calendarView delta query 的游标链接。
+- `graph.last_sync_at`：最近一次成功同步的 epoch 秒。
+- `graph.window_start`、`graph.window_end`：delta 缓存窗口边界。
+
+OAuth token 不进入 `meta`，只存在权限为 `0600` 的 `workspace/graph_token_cache.json`。退出登录会保留 client ID，清除其他 `graph.*` 同步状态和日程缓存。
 
 ## 记忆表（memory-v2）
 

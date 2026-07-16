@@ -8,16 +8,46 @@
 Web 前端 / CLI
   -> API routes / CLI commands
   -> core/ 服务层
-  -> SQLite（唯一真相源）+ 向量 outbox
+  -> SQLite（本地业务与记忆真相源、日程只读缓存）+ 向量 outbox
+  -> Microsoft Graph（日程真相源）
   -> 后台 job worker
        -> embedding 索引
        -> SOUL 回复生成
        -> memory reconcile（记忆整理流水线）
+  -> 15 分钟日程同步任务
 ```
 
-所有持久化以 SQLite 为准，ChromaDB 向量索引可随时由 SQLite 重建。后台工作走一条 SQLite job 队列，由 API 进程内的 worker 消费。
+除日程外，持久化以 SQLite 为准，ChromaDB 向量索引可随时由 SQLite 重建。日程以用户的 Exchange / Outlook 日历为准，SQLite 只保留 Graph 事件的读取缓存。后台工作走一条 SQLite job 队列，由 API 进程内的 worker 消费；日程轮询是独立的 API 进程内周期任务，不进入 job 队列。
 
 **调度铁律：后台维护不挡用户。** 单 worker 下，认领 job 时交互类（回复、embedding）永远优先于 memory reconcile；reconcile 自己跑到一半发现有交互 job 在等，也会在桶间让路、提前收工，由续跑 job 无损接续。
+
+---
+
+# 日程与 Microsoft Graph
+
+TraceLog 是 **Microsoft Graph 的客户端，不是日历同步引擎**。Exchange / Outlook 是日程的唯一真相源：读取侧通过 calendarView delta query 维护本地只读缓存，写入侧直接调用 Graph，成功后再写穿本地缓存。系统不做双向冲突合并；下一次 delta 同步总以远端结果覆盖本地状态。
+
+## Graph 边界
+
+- `core/graph/auth.py`：基于 MSAL public client 与设备码流完成 delegated authentication。Application client ID 存在 SQLite `meta` 的 `graph.client_id`；token / refresh token 只进入权限为 `0600` 的 `workspace/graph_token_cache.json`，不写日志。
+- `core/graph/client.py`：薄 Graph REST 封装，负责 calendarView delta、事件增删改和账户信息。请求统一使用 `Asia/Shanghai` 时区偏好、15 秒超时；429 与 5xx 尊重 `Retry-After` 并重试一次。
+- 这一层不承载本地领域状态或冲突策略；Graph 返回的事件由 `core/schedule_service.py` 规范化后进入缓存。
+
+## 缓存、delta 与写穿
+
+`core/schedule_service.py` 管理今天前 60 天到后 365 天的窗口。`schedule_events` 同时保存 UTC epoch 与上海本地时间，列表读取只查缓存；deltaLink、同步时间和窗口边界保存在 `meta`。窗口变化、强制同步或 Graph 返回 410 时执行全量重拉，远端删除 / 取消事件时同步清理目标链接。
+
+创建、更新、删除日程都先写 Graph，成功后立即 upsert / 删除缓存，不等待下一轮轮询。未配置 client ID 或未登录时，状态和读取接口以 `configured / connected` 明确降级为空结果；需要写 Graph 的操作返回“尚未连接”。退出登录会清 token、delta 状态和事件缓存。
+
+## 目标联动与回复上下文
+
+`core/goal_schedule_service.py` 在本地维护目标↔日程链接和每周期望。周进度按 `Asia/Shanghai`、周一为周首统计本周已链接且未取消的事件，生成 `current / target`；期望存于 `goals.schedule_expectation`，链接本身不回写 Exchange。
+
+`core/context_builder.py` 在公开帖回复的共享上下文中加入“近期日程”块：读取今天到未来 7 天，最多 10 条；已绑定目标的事件附目标标题、期望和本周进度。未连接或没有事件时不注入该块。
+
+## 同步调度
+
+API runtime 初始化时启动独立 asyncio 任务：启动后先尝试同步一次，随后每 15 分钟运行 `ScheduleService.sync()`；未登录时安全跳过，失败只记警告，不影响 API。`POST /schedule/sync` 提供手动同步，设备码登录成功后也会立即同步。FastAPI lifespan 退出时由 `shutdown_runtime()` 取消周期任务和仍在等待的设备码登录。
 
 ---
 
