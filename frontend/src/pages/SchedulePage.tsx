@@ -9,6 +9,7 @@ import {
   listScheduleEvents,
   syncSchedule,
 } from '@/api/client'
+import { getCachedScheduleStatus, setCachedScheduleStatus } from '@/utils/scheduleStatusCache'
 import { Notice } from '@/components/Notice'
 import { ScheduleEventDrawer } from '@/components/ScheduleEventDrawer'
 import { ScheduleList } from '@/components/ScheduleList'
@@ -31,7 +32,8 @@ interface SchedulePageProps {
 }
 
 export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
-  const [status, setStatus] = useState<ScheduleStatus | null>(null)
+  /* 先用上次已知状态渲染，避免切页时把"加载中"误显示为未连接引导。 */
+  const [status, setStatus] = useState<ScheduleStatus | null>(() => getCachedScheduleStatus())
   const [events, setEvents] = useState<ScheduleEvent[]>([])
   const [goals, setGoals] = useState<Goal[]>([])
   const [progressByGoal, setProgressByGoal] = useState<Record<string, ScheduleProgress>>({})
@@ -53,6 +55,7 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
         listGoals({ status: 'active' }),
       ])
       setStatus(statusData)
+      setCachedScheduleStatus(statusData)
       setGoals(goalData)
       if (statusData.connected) {
         const keys = weekKeys()
@@ -135,8 +138,10 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
       {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
 
-      {loading ? (
+      {loading && status === null ? (
         <div className={workspaceStyles.empty}>加载中...</div>
+      ) : status === null ? (
+        <div className={workspaceStyles.empty}>连接状态获取失败，稍后再试。</div>
       ) : !connected ? (
         <div className={styles.guide}>
           <span className={styles.guideIcon}><CalendarBigIcon /></span>

@@ -28,6 +28,7 @@ import {
   updateSoul,
 } from '@/api/client'
 import { formatSmartTime } from '@/utils/date'
+import { invalidateScheduleStatusCache, setCachedScheduleStatus } from '@/utils/scheduleStatusCache'
 import { Notice } from '@/components/Notice'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, PencilIcon } from '@/components/icons'
@@ -652,7 +653,12 @@ function ScheduleSettingsPanel() {
   // status 可能较慢（首次需要唤起 Graph/MSAL），互不阻塞。
   const reload = async () => {
     await Promise.allSettled([
-      getScheduleStatus().then(setStatus).catch(() => {}),
+      getScheduleStatus()
+        .then((data) => {
+          setStatus(data)
+          setCachedScheduleStatus(data)
+        })
+        .catch(() => {}),
       getScheduleClientId().then(setClientIdInfo).catch(() => {}),
     ])
   }
@@ -754,6 +760,7 @@ function ScheduleSettingsPanel() {
     setLoginPhase(null)
     try {
       const info = await saveScheduleClientId(value)
+      invalidateScheduleStatusCache()
       setClientIdInfo(info)
       setClientIdInput('')
       setNotice('已保存自定义应用 ID，请重新登录。')
@@ -775,6 +782,7 @@ function ScheduleSettingsPanel() {
     setLoginPhase(null)
     try {
       const info = await restoreDefaultClientId()
+      invalidateScheduleStatusCache()
       setClientIdInfo(info)
       setClientIdInput('')
       setNotice('已恢复内置应用，请重新登录。')
@@ -795,6 +803,7 @@ function ScheduleSettingsPanel() {
     setLoginPhase(null)
     try {
       await scheduleLogout()
+      invalidateScheduleStatusCache()
       setNotice('已退出 Microsoft 登录。')
       await reload()
     } catch (err) {

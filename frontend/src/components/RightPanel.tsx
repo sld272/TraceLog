@@ -10,6 +10,12 @@ import {
 } from '@/api/client'
 import { formatSmartTime } from '@/utils/date'
 import { fetchGoalProgress, monthDayLabel, todayKey } from '@/utils/schedule'
+import {
+  type ScheduleConnectionState,
+  getCachedScheduleStatus,
+  scheduleConnectionState,
+  setCachedScheduleStatus,
+} from '@/utils/scheduleStatusCache'
 import { ChevronRightIcon } from '@/components/icons'
 import { MiniCalendar } from '@/components/MiniCalendar'
 import { ScheduleList } from '@/components/ScheduleList'
@@ -35,23 +41,28 @@ export function RightPanel({
   onOpenSchedule,
   onOpenSettings,
 }: RightPanelProps) {
-  const [status, setStatus] = useState<ScheduleStatus | null>(null)
+  /* 先用上次已知状态渲染（跨页切换不闪"未连接"），后台刷新校正。 */
+  const [status, setStatus] = useState<ScheduleStatus | null>(() => getCachedScheduleStatus())
+  const [statusFailed, setStatusFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     void getScheduleStatus()
       .then((data) => {
-        if (!cancelled) setStatus(data)
+        if (cancelled) return
+        setStatus(data)
+        setStatusFailed(false)
+        setCachedScheduleStatus(data)
       })
       .catch(() => {
-        /* 右栏保持安静：拿不到日程状态时按未连接降级 */
+        if (!cancelled) setStatusFailed(true)
       })
     return () => {
       cancelled = true
     }
   }, [])
 
-  const connected = status?.connected ?? false
+  const connection = scheduleConnectionState(status, statusFailed)
 
   return (
     <div className={styles.panel}>
@@ -72,11 +83,11 @@ export function RightPanel({
           </button>
         )}
       </div>
-      <MiniCalendar selectedDate={selectedDate} connected={connected} onSelectDate={onSelectDate} />
+      <MiniCalendar selectedDate={selectedDate} connected={connection === 'connected'} onSelectDate={onSelectDate} />
       <ScheduleDayCard
         targetDate={selectedDate ?? todayKey()}
         isToday={selectedDate === null}
-        connected={connected}
+        connection={connection}
         onOpenSchedule={onOpenSchedule}
         onOpenSettings={onOpenSettings}
       />
@@ -88,13 +99,13 @@ export function RightPanel({
 function ScheduleDayCard({
   targetDate,
   isToday,
-  connected,
+  connection,
   onOpenSchedule,
   onOpenSettings,
 }: {
   targetDate: string
   isToday: boolean
-  connected: boolean
+  connection: ScheduleConnectionState
   onOpenSchedule: () => void
   onOpenSettings: () => void
 }) {
@@ -102,7 +113,7 @@ function ScheduleDayCard({
   const [progressByGoal, setProgressByGoal] = useState<Record<string, ScheduleProgress>>({})
 
   useEffect(() => {
-    if (!connected) {
+    if (connection !== 'connected') {
       setEvents([])
       setProgressByGoal({})
       return
@@ -125,7 +136,7 @@ function ScheduleDayCard({
     return () => {
       cancelled = true
     }
-  }, [targetDate, connected])
+  }, [targetDate, connection])
 
   const title = isToday ? '今日日程' : `${monthDayLabel(targetDate)}日程`
   const emptyText = isToday ? '今天没有日程，安心记录就好。' : '这天没有日程。'
@@ -133,7 +144,11 @@ function ScheduleDayCard({
   return (
     <section className={styles.card}>
       <PanelHeader title={title} onMore={onOpenSchedule} />
-      {!connected ? (
+      {connection === 'loading' ? (
+        <p className={styles.empty}>正在检查连接…</p>
+      ) : connection === 'error' ? (
+        <p className={styles.empty}>连接状态获取失败，稍后再试。</p>
+      ) : connection === 'disconnected' ? (
         <p className={styles.schedGuide}>
           连接 Outlook 日历后，这里会显示你的日程。
           <button type="button" className={styles.schedGuideLink} onClick={onOpenSettings}>去设置连接</button>
