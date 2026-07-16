@@ -1,0 +1,450 @@
+"""Outlook calendar cache and write-through synchronization service."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from datetime import date, datetime, time, timedelta, timezone
+import threading
+from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from core import db
+from core.graph.auth import GraphAuth, GraphAuthError
+from core.graph.client import GraphClient, GraphHTTPError
+
+LOCAL_TIMEZONE_NAME = "Asia/Shanghai"
+LOCAL_TIMEZONE = ZoneInfo(LOCAL_TIMEZONE_NAME)
+DELTA_LINK_META_KEY = "graph.delta_link"
+LAST_SYNC_AT_META_KEY = "graph.last_sync_at"
+WINDOW_START_META_KEY = "graph.window_start"
+WINDOW_END_META_KEY = "graph.window_end"
+_SYNC_LOCK = threading.Lock()
+
+
+class ScheduleNotConnectedError(RuntimeError):
+    """Raised only by write operations that require an Outlook connection."""
+
+
+class ScheduleService:
+    def __init__(
+        self,
+        *,
+        auth: Any | None = None,
+        graph_factory: Callable[[Callable[[], str | None]], Any] = GraphClient,
+        today: Callable[[], date] | None = None,
+        clock: Callable[[], float] = db.now_ts,
+    ) -> None:
+        self.auth = auth or GraphAuth()
+        self._graph_factory = graph_factory
+        self._today = today or (lambda: datetime.now(LOCAL_TIMEZONE).date())
+        self._clock = clock
+
+    def status(self) -> dict[str, Any]:
+        configured = self.auth.client_id() is not None
+        token = self._access_token() if configured else None
+        connected = token is not None
+        window_start, window_end = self._window_dates()
+        last_sync = _meta_value(LAST_SYNC_AT_META_KEY)
+        return {
+            "configured": configured,
+            "connected": connected,
+            "account": self.auth.account_info() if connected else None,
+            "last_sync_at": float(last_sync) if last_sync is not None else None,
+            "window_start": window_start.isoformat(),
+            "window_end": window_end.isoformat(),
+        }
+
+    def list_events(self, start_date: date, end_date: date) -> dict[str, Any]:
+        _validate_date_range(start_date, end_date)
+        configured = self.auth.client_id() is not None
+        token = self._access_token() if configured else None
+        if token is None:
+            return {
+                "configured": configured,
+                "connected": False,
+                "status": "not_connected",
+                "events": [],
+            }
+        start_ts, end_ts = _date_range_epoch(start_date, end_date)
+        rows = db.query_all(
+            """
+            SELECT * FROM schedule_events
+            WHERE end_ts > ? AND start_ts < ? AND is_cancelled = 0
+            ORDER BY start_ts, end_ts, id
+            """,
+            (start_ts, end_ts),
+        )
+        return {
+            "configured": True,
+            "connected": True,
+            "status": "ok",
+            "events": [_row_to_event(row) for row in rows],
+        }
+
+    def sync(self, *, force: bool = False) -> dict[str, Any]:
+        with _SYNC_LOCK:
+            return self._sync(force=force)
+
+    def _sync(self, *, force: bool) -> dict[str, Any]:
+        configured = self.auth.client_id() is not None
+        token = self._access_token() if configured else None
+        if token is None:
+            last_sync = _meta_value(LAST_SYNC_AT_META_KEY)
+            return {
+                "ok": False,
+                "configured": configured,
+                "connected": False,
+                "status": "not_connected",
+                "upserted": 0,
+                "deleted": 0,
+                "last_sync_at": float(last_sync) if last_sync is not None else None,
+            }
+
+        graph = self._graph_factory(lambda: token)
+        window_start, window_end = self._window_dates()
+        stored_window = (
+            _meta_value(WINDOW_START_META_KEY),
+            _meta_value(WINDOW_END_META_KEY),
+        )
+        delta_link = None if force else _meta_value(DELTA_LINK_META_KEY)
+        if stored_window != (window_start.isoformat(), window_end.isoformat()):
+            delta_link = None
+
+        full_refresh = delta_link is None
+        try:
+            result = self._fetch_delta(graph, window_start, window_end, delta_link)
+        except GraphHTTPError as exc:
+            if delta_link is None or exc.status_code != 410:
+                raise
+            full_refresh = True
+            result = self._fetch_delta(graph, window_start, window_end, None)
+
+        now = self._clock()
+        upserted = 0
+        deleted = 0
+        with db.transaction() as conn:
+            if full_refresh:
+                conn.execute("DELETE FROM schedule_events")
+            for raw_event in result["events"]:
+                event_id = str(raw_event.get("id") or "")
+                if not event_id:
+                    raise ValueError("Graph 日程缺少 id")
+                if raw_event.get("@removed") is not None:
+                    cursor = conn.execute("DELETE FROM schedule_events WHERE id = ?", (event_id,))
+                    deleted += max(0, cursor.rowcount)
+                    continue
+                normalized = _normalize_graph_event(raw_event, synced_at=now)
+                _upsert_event(conn, normalized)
+                upserted += 1
+            _set_meta(conn, DELTA_LINK_META_KEY, str(result["delta_link"]))
+            _set_meta(conn, LAST_SYNC_AT_META_KEY, str(now))
+            _set_meta(conn, WINDOW_START_META_KEY, window_start.isoformat())
+            _set_meta(conn, WINDOW_END_META_KEY, window_end.isoformat())
+        return {
+            "ok": True,
+            "configured": True,
+            "connected": True,
+            "status": "ok",
+            "upserted": upserted,
+            "deleted": deleted,
+            "last_sync_at": now,
+        }
+
+    def create_event(
+        self,
+        *,
+        subject: str,
+        event_date: date,
+        start_time: time | None = None,
+        end_time: time | None = None,
+        all_day: bool = False,
+    ) -> dict[str, Any]:
+        graph = self._connected_graph()
+        payload = _create_payload(
+            subject=subject,
+            event_date=event_date,
+            start_time=start_time,
+            end_time=end_time,
+            all_day=all_day,
+        )
+        raw_event = graph.create_event(payload)
+        normalized = _normalize_graph_event(raw_event, synced_at=self._clock())
+        with db.transaction() as conn:
+            _upsert_event(conn, normalized)
+        return _event_dict(normalized)
+
+    def update_event(self, event_id: str, changes: Mapping[str, Any]) -> dict[str, Any]:
+        graph = self._connected_graph()
+        payload = self._update_payload(event_id, changes)
+        if not payload:
+            raise ValueError("没有可更新的日程字段")
+        raw_event = graph.update_event(event_id, payload)
+        normalized = _normalize_graph_event(raw_event, synced_at=self._clock())
+        with db.transaction() as conn:
+            _upsert_event(conn, normalized)
+        return _event_dict(normalized)
+
+    def delete_event(self, event_id: str) -> None:
+        graph = self._connected_graph()
+        graph.delete_event(event_id)
+        db.execute("DELETE FROM schedule_events WHERE id = ?", (event_id,))
+
+    def logout(self) -> None:
+        self.auth.logout()
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM schedule_events")
+            conn.execute(
+                "DELETE FROM meta WHERE key IN (?, ?, ?, ?)",
+                (
+                    DELTA_LINK_META_KEY,
+                    LAST_SYNC_AT_META_KEY,
+                    WINDOW_START_META_KEY,
+                    WINDOW_END_META_KEY,
+                ),
+            )
+
+    def _connected_graph(self) -> Any:
+        configured = self.auth.client_id() is not None
+        token = self._access_token() if configured else None
+        if token is None:
+            raise ScheduleNotConnectedError("Microsoft 日历尚未连接")
+        return self._graph_factory(lambda: token)
+
+    def _access_token(self) -> str | None:
+        try:
+            return self.auth.get_access_token()
+        except GraphAuthError:
+            return None
+
+    def _window_dates(self) -> tuple[date, date]:
+        today = self._today()
+        return today - timedelta(days=60), today + timedelta(days=365)
+
+    def _fetch_delta(
+        self,
+        graph: Any,
+        window_start: date,
+        window_end: date,
+        delta_link: str | None,
+    ) -> dict[str, Any]:
+        if delta_link:
+            return graph.calendarview_delta(delta_link=delta_link)
+        start_dt = datetime.combine(window_start, time.min, LOCAL_TIMEZONE)
+        exclusive_end = datetime.combine(window_end + timedelta(days=1), time.min, LOCAL_TIMEZONE)
+        return graph.calendarview_delta(
+            start=start_dt.isoformat(timespec="seconds"),
+            end=exclusive_end.isoformat(timespec="seconds"),
+        )
+
+    def _update_payload(self, event_id: str, changes: Mapping[str, Any]) -> dict[str, Any]:
+        allowed = {"subject", "date", "start_time", "end_time", "all_day"}
+        unknown = set(changes) - allowed
+        if unknown:
+            raise ValueError(f"不支持更新字段：{', '.join(sorted(unknown))}")
+        payload: dict[str, Any] = {}
+        if "subject" in changes:
+            if changes["subject"] is None:
+                raise ValueError("subject 不能为空")
+            subject = str(changes["subject"]).strip()
+            if not subject:
+                raise ValueError("subject 不能为空")
+            payload["subject"] = subject
+        time_keys = {"date", "start_time", "end_time", "all_day"}
+        if time_keys.intersection(changes):
+            null_fields = [key for key in time_keys.intersection(changes) if changes[key] is None]
+            if null_fields:
+                raise ValueError(f"字段不能为 null：{', '.join(sorted(null_fields))}")
+            row = db.query_one("SELECT * FROM schedule_events WHERE id = ?", (event_id,))
+            if row is None:
+                raise ValueError("本地缓存中找不到该日程，请先同步")
+            existing_start = datetime.fromisoformat(str(row["start_local"]))
+            existing_end = datetime.fromisoformat(str(row["end_local"]))
+            event_date = changes.get("date", existing_start.date())
+            if not isinstance(event_date, date):
+                raise ValueError("date 格式无效")
+            all_day = bool(changes.get("all_day", bool(row["all_day"])))
+            start_value = changes.get("start_time", existing_start.time().replace(microsecond=0))
+            end_value = changes.get("end_time", existing_end.time().replace(microsecond=0))
+            time_payload = _create_payload(
+                subject=str(row["subject"]),
+                event_date=event_date,
+                start_time=start_value if isinstance(start_value, time) else None,
+                end_time=end_value if isinstance(end_value, time) else None,
+                all_day=all_day,
+            )
+            payload.update(
+                {
+                    "start": time_payload["start"],
+                    "end": time_payload["end"],
+                    "isAllDay": time_payload["isAllDay"],
+                }
+            )
+        return payload
+
+
+def _validate_date_range(start_date: date, end_date: date) -> None:
+    if end_date < start_date:
+        raise ValueError("end 不能早于 start")
+
+
+def _date_range_epoch(start_date: date, end_date: date) -> tuple[float, float]:
+    start_dt = datetime.combine(start_date, time.min, LOCAL_TIMEZONE)
+    end_dt = datetime.combine(end_date + timedelta(days=1), time.min, LOCAL_TIMEZONE)
+    return start_dt.timestamp(), end_dt.timestamp()
+
+
+def _create_payload(
+    *,
+    subject: str,
+    event_date: date,
+    start_time: time | None,
+    end_time: time | None,
+    all_day: bool,
+) -> dict[str, Any]:
+    clean_subject = subject.strip()
+    if not clean_subject:
+        raise ValueError("subject 不能为空")
+    if all_day:
+        start_dt = datetime.combine(event_date, time.min)
+        end_dt = start_dt + timedelta(days=1)
+    else:
+        start_value = start_time or time(hour=9)
+        start_dt = datetime.combine(event_date, start_value)
+        end_dt = datetime.combine(event_date, end_time) if end_time else start_dt + timedelta(hours=1)
+        if end_dt <= start_dt:
+            raise ValueError("end_time 必须晚于 start_time")
+    return {
+        "subject": clean_subject,
+        "start": {
+            "dateTime": start_dt.isoformat(timespec="seconds"),
+            "timeZone": LOCAL_TIMEZONE_NAME,
+        },
+        "end": {
+            "dateTime": end_dt.isoformat(timespec="seconds"),
+            "timeZone": LOCAL_TIMEZONE_NAME,
+        },
+        "isAllDay": all_day,
+    }
+
+
+def _normalize_graph_event(raw: Mapping[str, Any], *, synced_at: float) -> dict[str, Any]:
+    event_id = str(raw.get("id") or "")
+    if not event_id:
+        raise ValueError("Graph 日程缺少 id")
+    start = raw.get("start")
+    end = raw.get("end")
+    if not isinstance(start, Mapping) or not isinstance(end, Mapping):
+        raise ValueError("Graph 日程缺少 start/end")
+    start_dt = _parse_graph_datetime(start)
+    end_dt = _parse_graph_datetime(end)
+    if end_dt <= start_dt:
+        raise ValueError("Graph 日程结束时间无效")
+    location = raw.get("location")
+    location_name = location.get("displayName") if isinstance(location, Mapping) else None
+    return {
+        "id": event_id,
+        "subject": str(raw.get("subject") or ""),
+        "body_preview": raw.get("bodyPreview"),
+        "start_ts": start_dt.astimezone(timezone.utc).timestamp(),
+        "end_ts": end_dt.astimezone(timezone.utc).timestamp(),
+        "start_local": start_dt.astimezone(LOCAL_TIMEZONE).replace(tzinfo=None).isoformat(timespec="seconds"),
+        "end_local": end_dt.astimezone(LOCAL_TIMEZONE).replace(tzinfo=None).isoformat(timespec="seconds"),
+        "all_day": 1 if raw.get("isAllDay") else 0,
+        "location": str(location_name) if location_name else None,
+        "web_link": raw.get("webLink"),
+        "series_master_id": raw.get("seriesMasterId"),
+        "is_cancelled": 1 if raw.get("isCancelled") else 0,
+        "change_key": raw.get("changeKey"),
+        "synced_at": synced_at,
+    }
+
+
+def _parse_graph_datetime(value: Mapping[str, Any]) -> datetime:
+    raw = str(value.get("dateTime") or "").strip()
+    if not raw:
+        raise ValueError("Graph 日程时间为空")
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError("Graph 日程时间格式无效") from exc
+    if parsed.tzinfo is None:
+        zone_name = str(value.get("timeZone") or LOCAL_TIMEZONE_NAME)
+        aliases = {
+            "China Standard Time": LOCAL_TIMEZONE_NAME,
+            "UTC": "UTC",
+        }
+        try:
+            zone = ZoneInfo(aliases.get(zone_name, zone_name))
+        except ZoneInfoNotFoundError:
+            zone = LOCAL_TIMEZONE
+        parsed = parsed.replace(tzinfo=zone)
+    return parsed
+
+
+def _upsert_event(conn: Any, event: Mapping[str, Any]) -> None:
+    conn.execute(
+        """
+        INSERT INTO schedule_events(
+            id, subject, body_preview, start_ts, end_ts, start_local, end_local,
+            all_day, location, web_link, series_master_id, is_cancelled,
+            change_key, synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            subject = excluded.subject,
+            body_preview = excluded.body_preview,
+            start_ts = excluded.start_ts,
+            end_ts = excluded.end_ts,
+            start_local = excluded.start_local,
+            end_local = excluded.end_local,
+            all_day = excluded.all_day,
+            location = excluded.location,
+            web_link = excluded.web_link,
+            series_master_id = excluded.series_master_id,
+            is_cancelled = excluded.is_cancelled,
+            change_key = excluded.change_key,
+            synced_at = excluded.synced_at
+        """,
+        tuple(
+            event[key]
+            for key in (
+                "id", "subject", "body_preview", "start_ts", "end_ts",
+                "start_local", "end_local", "all_day", "location", "web_link",
+                "series_master_id", "is_cancelled", "change_key", "synced_at",
+            )
+        ),
+    )
+
+
+def _row_to_event(row: Any) -> dict[str, Any]:
+    return _event_dict(dict(row))
+
+
+def _event_dict(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": event["id"],
+        "subject": event["subject"],
+        "body_preview": event["body_preview"],
+        "start_ts": event["start_ts"],
+        "end_ts": event["end_ts"],
+        "start_local": event["start_local"],
+        "end_local": event["end_local"],
+        "all_day": bool(event["all_day"]),
+        "location": event["location"],
+        "web_link": event["web_link"],
+        "series_master_id": event["series_master_id"],
+        "is_cancelled": bool(event["is_cancelled"]),
+        "change_key": event["change_key"],
+        "synced_at": event["synced_at"],
+        "goal_link": None,
+        "goal_links": [],
+    }
+
+
+def _meta_value(key: str) -> str | None:
+    row = db.query_one("SELECT value FROM meta WHERE key = ?", (key,))
+    return str(row["value"]) if row is not None else None
+
+
+def _set_meta(conn: Any, key: str, value: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", (key, value))

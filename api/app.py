@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from api import deps
-from api.routes import attachments, chat, comments, feedback, goals, jobs, memory, posts, settings, souls, suggestions
+from api.routes import attachments, chat, comments, feedback, goals, jobs, memory, posts, schedule, settings, souls, suggestions
 
 
 @asynccontextmanager
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(attachments.router)
     app.include_router(settings.router)
     app.include_router(memory.router)
+    app.include_router(schedule.router)
     return app
 
 
