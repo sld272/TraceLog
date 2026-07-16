@@ -1,0 +1,97 @@
+.card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.headRow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.headCell {
+  padding: 8px 4px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.cell {
+  min-height: 108px;
+  padding: 6px 6px 8px;
+  border-left: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.cell:nth-child(7n + 1) {
+  border-left: none;
+}
+
+.cell:nth-child(-n + 7) {
+  border-top: none;
+}
+
+.cell:hover {
+  background: var(--color-bg-hover);
+}
+
+.outside {
+  opacity: 0.4;
+}
+
+.date {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: var(--weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.todayCell .date {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.chip {
+  display: block;
+  margin-top: 3px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border-left: 2px solid var(--color-accent);
+  background: rgba(47, 139, 125, 0.12);
+  color: var(--color-text-primary);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.chipGoal {
+  background: rgba(201, 134, 85, 0.16);
+  border-left-color: var(--color-warm);
+}
+
+.more {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}

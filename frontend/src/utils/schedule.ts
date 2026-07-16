@@ -145,3 +145,158 @@ export function goalChipLabel(
   const label = progress?.expectation?.label ?? goalTitle
   return progress?.text ? `${label} · 本周 ${progress.text}` : label
 }
+
+/* ===== 日历视图（P10）辅助 ===== */
+
+/** 含 anchorKey 的那一周（周一至周日）的 7 个日期 key。 */
+export function weekKeysFor(anchorKey: string): string[] {
+  const base = dateFromKey(anchorKey)
+  if (Number.isNaN(base.getTime())) return weekKeys()
+  const monday = new Date(base)
+  const offset = (base.getDay() + 6) % 7
+  monday.setDate(base.getDate() - offset)
+  monday.setHours(0, 0, 0, 0)
+  return Array.from({ length: 7 }, (_, i) => {
+    const day = new Date(monday)
+    day.setDate(monday.getDate() + i)
+    return localDateKey(day)
+  })
+}
+
+/** 把 'YYYY-MM-DD' 平移 days 天（负数向前）。 */
+export function shiftDateKey(key: string, days: number): string {
+  const date = dateFromKey(key)
+  if (Number.isNaN(date.getTime())) return key
+  date.setDate(date.getDate() + days)
+  return localDateKey(date)
+}
+
+/** 把 anchor 平移 months 个月，落到目标月的第一天。 */
+export function shiftMonthKey(key: string, months: number): string {
+  const date = dateFromKey(key)
+  if (Number.isNaN(date.getTime())) return key
+  return localDateKey(new Date(date.getFullYear(), date.getMonth() + months, 1))
+}
+
+/**
+ * 月历方格（周一起始，补格带真实 key + outside 标记）。
+ * 与 monthGrid 的区别：补格也给出真实日期 key，方便渲染事件与点击跳转。
+ */
+export function monthCalendarCells(year: number, month: number): CalendarCell[] {
+  const first = new Date(year, month - 1, 1)
+  const leading = (first.getDay() + 6) % 7
+  const daysInMonth = new Date(year, month, 0).getDate()
+  const total = Math.ceil((leading + daysInMonth) / 7) * 7
+  const start = new Date(year, month - 1, 1 - leading)
+  const cells: CalendarCell[] = []
+  for (let i = 0; i < total; i += 1) {
+    const day = new Date(start)
+    day.setDate(start.getDate() + i)
+    cells.push({ key: localDateKey(day), day: day.getDate(), outside: day.getMonth() !== month - 1 })
+  }
+  return cells
+}
+
+/** 'YYYY-MM-DDTHH:MM:SS' → 当天分钟数（HH*60+MM）。 */
+export function localMinutes(local: string): number {
+  const hours = Number(String(local).slice(11, 13))
+  const minutes = Number(String(local).slice(14, 16))
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) return 0
+  return hours * 60 + minutes
+}
+
+/** 分钟数 → 'HH:MM'。 */
+export function minutesToTime(min: number): string {
+  const clamped = Math.max(0, Math.min(min, 24 * 60))
+  return `${pad2(Math.floor(clamped / 60) % 24)}:${pad2(clamped % 60)}`
+}
+
+/** 事件时长（分钟），基于 start_ts/end_ts。 */
+export function eventDurationMinutes(event: Pick<ScheduleEvent, 'start_ts' | 'end_ts'>): number {
+  return Math.max(0, Math.round((event.end_ts - event.start_ts) / 60))
+}
+
+/** 'HH:MM'（本地墙钟）取自 start_local / end_local。 */
+export function eventClock(local: string): string {
+  return String(local).slice(11, 16)
+}
+
+/** 周视图副标题：`2026年7月13日 – 19日`（跨月带月份）。 */
+export function weekRangeLabel(days: string[]): string {
+  const first = dateFromKey(days[0] ?? '')
+  const last = dateFromKey(days[6] ?? '')
+  if (Number.isNaN(first.getTime()) || Number.isNaN(last.getTime())) return ''
+  const head = `${first.getFullYear()}年${first.getMonth() + 1}月${first.getDate()}日`
+  if (first.getMonth() === last.getMonth()) return `${head} – ${last.getDate()}日`
+  return `${head} – ${last.getMonth() + 1}月${last.getDate()}日`
+}
+
+/** 月视图副标题：`2026年7月`。 */
+export function monthTitleLabel(key: string): string {
+  const date = dateFromKey(key)
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getFullYear()}年${date.getMonth() + 1}月`
+}
+
+/** 短星期标签：`周X`（用于事件 popover）。 */
+export function weekdayShortLabel(key: string): string {
+  const date = dateFromKey(key)
+  if (Number.isNaN(date.getTime())) return ''
+  return `周${WEEKDAY_CN[date.getDay()]}`
+}
+
+/** 一个绝对定位的事件块：时间坐标 + 重叠分列位置。 */
+export interface ScheduleBlock {
+  event: ScheduleEvent
+  /** 当天起始分钟。 */
+  startMin: number
+  /** 当天结束分钟（startMin + 时长，跨日截断到 1440）。 */
+  endMin: number
+  /** 所在列索引（0 起）。 */
+  col: number
+  /** 所在聚簇的总列数。 */
+  cols: number
+}
+
+/**
+ * 一天内定时事件的重叠布局：按区间聚簇，簇内贪心分列
+ * （排序后放入首个不冲突列），每列等分宽度。all_day 事件应先剔除。
+ */
+export function layoutDayBlocks(events: ScheduleEvent[]): ScheduleBlock[] {
+  const blocks: ScheduleBlock[] = events.map((event) => {
+    const startMin = localMinutes(event.start_local)
+    const endMin = Math.min(startMin + eventDurationMinutes(event), 24 * 60)
+    return { event, startMin, endMin: Math.max(endMin, startMin + 1), col: 0, cols: 1 }
+  })
+  blocks.sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin)
+
+  let i = 0
+  while (i < blocks.length) {
+    let clusterEnd = blocks[i]!.endMin
+    let j = i + 1
+    while (j < blocks.length && blocks[j]!.startMin < clusterEnd) {
+      clusterEnd = Math.max(clusterEnd, blocks[j]!.endMin)
+      j += 1
+    }
+    const cluster = blocks.slice(i, j)
+    const colEnds: number[] = []
+    for (const block of cluster) {
+      let placed = false
+      for (let c = 0; c < colEnds.length; c += 1) {
+        if (colEnds[c]! <= block.startMin) {
+          block.col = c
+          colEnds[c] = block.endMin
+          placed = true
+          break
+        }
+      }
+      if (!placed) {
+        block.col = colEnds.length
+        colEnds.push(block.endMin)
+      }
+    }
+    for (const block of cluster) block.cols = colEnds.length
+    i = j
+  }
+  return blocks
+}
