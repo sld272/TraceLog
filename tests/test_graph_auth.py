@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import stat
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from core import db
@@ -26,11 +28,13 @@ class FakeSerializableCache:
 
 class FakePublicClientApplication:
     interactive_calls: list[dict] = []
+    instances: list["FakePublicClientApplication"] = []
 
     def __init__(self, *, client_id, authority, token_cache) -> None:
         self.client_id = client_id
         self.authority = authority
         self.cache = token_cache
+        self.instances.append(self)
 
     def get_accounts(self):
         return list(self.cache.data["accounts"])
@@ -73,6 +77,7 @@ class FakePublicClientApplication:
 class GraphAuthCacheTest(unittest.TestCase):
     def setUp(self) -> None:
         FakePublicClientApplication.interactive_calls = []
+        FakePublicClientApplication.instances = []
         self.tmp = tempfile.TemporaryDirectory()
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
@@ -106,6 +111,108 @@ class GraphAuthCacheTest(unittest.TestCase):
         reloaded = self._auth()
         self.assertEqual("test-token", reloaded.get_access_token())
         self.assertEqual("person@example.com", reloaded.account_info()["username"])
+
+    def test_same_client_id_reuses_application_across_auth_instances(self) -> None:
+        first_auth = self._auth()
+        second_auth = self._auth()
+
+        first_auth.get_access_token()
+        second_auth.get_access_token()
+
+        self.assertEqual(1, len(FakePublicClientApplication.instances))
+
+    def test_concurrent_auth_instances_share_one_application(self) -> None:
+        auth_instances = [self._auth() for _ in range(8)]
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            results = list(
+                executor.map(lambda auth: auth.get_access_token(), auth_instances)
+            )
+
+        self.assertEqual([None] * 8, results)
+        self.assertEqual(1, len(FakePublicClientApplication.instances))
+
+    def test_client_id_change_invalidates_shared_application(self) -> None:
+        first_auth = self._auth()
+        second_auth = self._auth()
+        first_auth.get_access_token()
+        second_auth.get_access_token()
+        original_app = FakePublicClientApplication.instances[-1]
+
+        first_auth.set_client_id("client-id-secret-1234")
+        second_auth.get_access_token()
+
+        self.assertEqual(2, len(FakePublicClientApplication.instances))
+        self.assertIsNot(original_app, FakePublicClientApplication.instances[-1])
+        self.assertEqual(
+            "client-id-secret-1234",
+            FakePublicClientApplication.instances[-1].client_id,
+        )
+
+    def test_logout_invalidates_shared_application(self) -> None:
+        first_auth = self._auth()
+        second_auth = self._auth()
+        first_auth.get_access_token()
+        second_auth.get_access_token()
+        original_app = FakePublicClientApplication.instances[-1]
+
+        first_auth.logout()
+        second_auth.get_access_token()
+
+        self.assertEqual(2, len(FakePublicClientApplication.instances))
+        self.assertIsNot(original_app, FakePublicClientApplication.instances[-1])
+
+    def test_logout_during_silent_auth_cannot_restore_stale_cache(self) -> None:
+        silent_started = threading.Event()
+        silent_release = threading.Event()
+
+        class BlockingSilentApplication(FakePublicClientApplication):
+            def acquire_token_silent(self, scopes, account):
+                del scopes, account
+                silent_started.set()
+                self.assert_released()
+                self.cache.has_state_changed = True
+                return {"access_token": "stale-token"}
+
+            @staticmethod
+            def assert_released() -> None:
+                if not silent_release.wait(1.0):
+                    raise AssertionError("silent token probe did not release")
+
+        cache_path = db.WORKSPACE_DIR / "graph_token_cache.json"
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps(
+                {
+                    "accounts": [{"home_account_id": "home-1"}],
+                    "access_token": "old-token",
+                }
+            ),
+            encoding="utf-8",
+        )
+        auth = GraphAuth(
+            app_factory=BlockingSilentApplication,
+            cache_factory=FakeSerializableCache,
+        )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            token_future = executor.submit(auth.get_access_token)
+            self.assertTrue(silent_started.wait(1.0))
+            auth.logout()
+            silent_release.set()
+            token = token_future.result(timeout=1.0)
+
+        self.assertIsNone(token)
+        self.assertFalse(cache_path.exists())
+
+    def test_completed_login_invalidates_shared_application(self) -> None:
+        auth = self._auth()
+        flow = auth.start_device_flow()
+
+        auth.complete_device_flow(flow)
+        auth.get_access_token()
+
+        self.assertEqual(2, len(FakePublicClientApplication.instances))
 
     def test_default_client_id_is_configured_and_only_exposes_tail(self) -> None:
         auth = self._auth()
