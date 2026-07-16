@@ -18,8 +18,6 @@ from core import (
     reply_context,
     soul_service,
     suggestion_pipeline,
-    todo_service,
-    tool_config_service,
     vision_service,
 )
 from core.attachment_service import Attachment
@@ -277,12 +275,6 @@ def build_comment_context(
     root_comment = _get_root_comment(post_id, soul_name)
     if include_root_comment and root_comment is not None:
         sections.append(f"# {soul_name} 的首条回复\n\n{root_comment['content']}")
-
-    if tool_config_service.is_tool_enabled("todo"):
-        pending = todo_service.list_active_todos()
-        if pending:
-            lines = [todo_service.format_todo_for_context(todo) for todo in pending]
-            sections.append("# 待办事项\n\n" + "\n".join(lines))
 
     trace_ctx = {"post_id": post_id, "soul_name": soul_name}
     # Exclude EVERY comment under this post (all SOULs' threads) from the memory
@@ -940,5 +932,4 @@ def _post_content_for_llm(post) -> str:
         return f"{content}\n\n{vision_context}" if content.strip() else vision_context
     attachment_count = len(attachment_service.list_post_attachments(str(post["id"])))
     return attachment_service.content_for_llm(content, attachment_count)
-
 

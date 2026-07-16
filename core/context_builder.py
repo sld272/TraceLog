@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from core import goal_service, logging_service, query_rewriter, reply_context, todo_service, tool_config_service, turn_prep
+from core import goal_service, logging_service, query_rewriter, reply_context, turn_prep
 from core.llm.types import LLMClient
 from core.soul_service import SoulContext, list_enabled_souls
 
@@ -22,7 +22,7 @@ def build_context(
     model: str | None = None,
     trace_context: dict | None = None,
 ) -> BuiltContext:
-    """Build the soul-agnostic shared context (goals/todo/web) plus enabled SOULs.
+    """Build the soul-agnostic shared context (goals/web) plus enabled SOULs.
 
     The user portrait and the rest of memory-v2 (# 记忆, baseline + state + relevant
     + freshness) are appended per-soul downstream (reply_service._call_one_soul) so
@@ -32,12 +32,6 @@ def build_context(
     sections: list[str] = []
 
     sections.extend(goal_service.prompt_sections())
-
-    if tool_config_service.is_tool_enabled("todo"):
-        pending = todo_service.list_active_todos()
-        if pending:
-            lines = [todo_service.format_todo_for_context(todo) for todo in pending]
-            sections.append("# 待办事项\n\n" + "\n".join(lines))
 
     rewritten: query_rewriter.RewrittenQuery | None = None
     if query and enabled_souls:

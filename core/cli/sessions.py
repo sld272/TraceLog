@@ -8,8 +8,6 @@ from core import (
     logging_service,
     memory_reconcile_runner,
     memory_view_producer,
-    todo_service,
-    tool_config_service,
     vector_index_service,
 )
 from core.cli_input import read_cli_input
@@ -56,47 +54,35 @@ def run_memory_reconcile(client: LLMClient, model: str, *, trigger: str) -> None
         print(f"[记忆] 对账失败：{e}；未消费的证据会保留。")
 
 
-def run_todo_tool_for_post(post_id: str, client: LLMClient, model: str) -> None:
-    if not tool_config_service.is_tool_enabled("todo"):
-        return
-    result = todo_service.run_for_post_safely(post_id, client, model)
-    if result.error:
-        print(f"[TodoTool] 待办抽取暂时失败：{result.error}\n")
-    elif result.applied:
-        print(f"[TodoTool] 待办已更新：新增/更新 {result.upserted} 条，删除 {result.deleted} 条。\n")
-
-
 def run_comment_session(
     conversation: comment_service.CommentConversation,
     client: LLMClient,
     model: str,
-    todos: list,
-) -> tuple[list, bool]:
+) -> bool:
     print(
         f"\n[评论] 已进入 post {conversation.post_id} 下与 {conversation.soul_name} 的评论对话。"
         "输入 /back 返回发帖模式，/quit 退出。\n"
     )
-    current_todos = todos
     while True:
         try:
             raw_input = read_cli_input(f"[{conversation.soul_name} 评论] 你: ")
         except (KeyboardInterrupt, EOFError):
-            return current_todos, True
+            return True
         user_message = raw_input.strip()
         if not user_message:
             continue
         if user_message == "/back":
             print("[评论] 已返回发帖模式。\n")
-            return current_todos, False
+            return False
         if user_message == "/quit":
-            return current_todos, True
+            return True
 
         print(f"\n[{thread.soul_name} 正在回复评论...]\n")
         try:
             result = comment_service.call_comment_reply(conversation.post_id, conversation.soul_name, user_message, client, model)
         except ValueError as exc:
             print(f"[评论] {exc}\n")
-            return current_todos, False
+            return False
 
         if result.ok:
             print(f"[{result.soul_name}] {result.reply}\n")
@@ -108,30 +94,28 @@ def run_chat_session(
     thread: chat_service.ChatThread,
     client: LLMClient,
     model: str,
-    todos: list,
-) -> tuple[list, bool]:
+) -> bool:
     print(f"\n[私聊] 已进入与 {thread.soul_name} 的私聊。输入 /back 返回发帖模式，/quit 退出。\n")
-    current_todos = todos
     while True:
         try:
             raw_input = read_cli_input(f"[{thread.soul_name}] 你: ")
         except (KeyboardInterrupt, EOFError):
-            return current_todos, True
+            return True
         user_message = raw_input.strip()
         if not user_message:
             continue
         if user_message == "/back":
             print("[私聊] 已返回发帖模式。\n")
-            return current_todos, False
+            return False
         if user_message == "/quit":
-            return current_todos, True
+            return True
 
         print(f"\n[{thread.soul_name} 正在回复...]\n")
         try:
             result = chat_service.call_chat_reply(thread.id, user_message, client, model)
         except ValueError as exc:
             print(f"[私聊] {exc}\n")
-            return current_todos, False
+            return False
 
         if result.ok:
             print(f"[{result.soul_name}] {result.reply}\n")

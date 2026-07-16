@@ -23,20 +23,16 @@ class CliSessionsTest(unittest.TestCase):
             patch("core.cli.sessions.read_cli_input", side_effect=KeyboardInterrupt),
             redirect_stdout(StringIO()),
         ):
-            result = sessions.run_chat_session(
-                _chat_thread(), _fake_client(), "model", ["todo"]
-            )
-        self.assertEqual((["todo"], True), result)
+            result = sessions.run_chat_session(_chat_thread(), _fake_client(), "model")
+        self.assertTrue(result)
 
     def test_comment_session_eof_requests_quit(self) -> None:
         with (
             patch("core.cli.sessions.read_cli_input", side_effect=EOFError),
             redirect_stdout(StringIO()),
         ):
-            result = sessions.run_comment_session(
-                _comment_thread(), _fake_client(), "model", ["todo"]
-            )
-        self.assertEqual((["todo"], True), result)
+            result = sessions.run_comment_session(_comment_thread(), _fake_client(), "model")
+        self.assertTrue(result)
 
     def test_memory_reconcile_reports_applied_operations(self) -> None:
         summary = SimpleNamespace(applied=2)

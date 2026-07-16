@@ -57,12 +57,6 @@ class SuggestionServiceTest(unittest.TestCase):
         db.WORKSPACE_DIR = Path(self.tmp.name) / "workspace"
         db.DB_PATH = db.WORKSPACE_DIR / "state.db"
         db.init_db()
-        db.execute(
-            """
-            INSERT INTO posts(id, ts, content, created_at, updated_at)
-            VALUES ('p-1', '2026-06-19T10:00:00+08:00', '交作业', 1.0, 1.0)
-            """
-        )
 
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
@@ -80,16 +74,6 @@ class SuggestionServiceTest(unittest.TestCase):
         self.assertEqual("accepted", result["suggestion"]["status"])
         self.assertEqual("suggested_accepted", result["created"]["source"])
         self.assertEqual("active", result["created"]["status"])
-
-    def test_todo_accept_preserves_post_source(self) -> None:
-        suggestion = suggestion_service.create_suggestion(
-            "todo",
-            {"task": "交作业", "date": "2026-06-20"},
-            "post:p-1",
-            0.8,
-        )
-        result = suggestion_service.accept(suggestion["id"])
-        self.assertEqual("p-1", result["created"]["source_post"])
 
     def test_dismissed_key_is_a_permanent_tombstone(self) -> None:
         first = suggestion_service.create_suggestion(
@@ -118,46 +102,31 @@ class SuggestionServiceTest(unittest.TestCase):
         self.assertEqual(first["id"], second["id"])
         self.assertEqual(1, len(suggestion_service.list_pending("goal")))
 
-    def test_todo_update_and_delete_suggestions_apply_only_on_accept(self) -> None:
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES ('todo-1', '旧任务', '未完成', 1.0, 1.0)
-            """
-        )
-        update = suggestion_service.create_suggestion(
-            "todo",
-            {
-                "action": "update",
-                "todo_id": "todo-1",
-                "task": "新任务",
-                "date": None,
-                "start_time": None,
-                "end_time": None,
-                "status": "已完成",
-            },
-            "chat:1",
-            0.8,
-        )
-        self.assertEqual("旧任务", db.query_one("SELECT task FROM todos WHERE id = 'todo-1'")["task"])
-        updated = suggestion_service.accept(update["id"])["created"]
-        self.assertEqual("新任务", updated["task"])
-        self.assertEqual("已完成", updated["status"])
+    def test_legacy_pending_non_goal_suggestions_are_hidden(self) -> None:
+        conn = db.connect()
+        try:
+            conn.execute("PRAGMA ignore_check_constraints = ON")
+            conn.execute(
+                """
+                INSERT INTO suggestions(
+                    id, kind, payload_json, confidence, status,
+                    normalized_key, created_at
+                )
+                VALUES ('legacy-1', 'todo', '{}', 0.8, 'pending', 'legacy-key', 1.0)
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
-        delete = suggestion_service.create_suggestion(
-            "todo",
-            {
-                "action": "delete",
-                "todo_id": "todo-1",
-                "task": "新任务",
-                "status": "已完成",
-            },
-            "comment:2",
-            0.8,
-        )
-        deleted = suggestion_service.accept(delete["id"])["created"]
-        self.assertTrue(deleted["deleted"])
-        self.assertIsNone(db.query_one("SELECT id FROM todos WHERE id = 'todo-1'"))
+        self.assertEqual([], suggestion_service.list_pending())
+        self.assertIsNone(suggestion_service.get_suggestion("legacy-1"))
+        with self.assertRaisesRegex(ValueError, "suggestion 不存在"):
+            suggestion_service.accept("legacy-1")
+
+    def test_only_goal_suggestion_kind_is_supported(self) -> None:
+        with self.assertRaisesRegex(ValueError, "kind 只支持：goal"):
+            suggestion_service.create_suggestion("todo", {}, None)
 
 
 class FakeClient:

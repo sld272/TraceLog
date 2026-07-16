@@ -35,6 +35,7 @@ def init_db() -> None:
     sql = INIT_SQL_PATH.read_text(encoding="utf-8")
     conn = connect()
     try:
+        _drop_retired_tables(conn)
         _migrate_columns(conn)
         conn.executescript(sql)
         conn.execute("PRAGMA foreign_keys = ON")
@@ -65,6 +66,10 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("memory_units", "contested_at", "REAL"),
     ("chat_messages", "client_request_id", "TEXT"),
 )
+
+
+def _drop_retired_tables(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS todos")
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:

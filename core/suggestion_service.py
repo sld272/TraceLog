@@ -1,4 +1,4 @@
-"""Unified pending/accepted/dismissed suggestions for todos and goals."""
+"""Pending, accepted, and dismissed goal suggestions."""
 
 from __future__ import annotations
 
@@ -9,12 +9,11 @@ import secrets
 import sqlite3
 import time
 import unicodedata
-import uuid
 from typing import Any
 
 from core import db, goal_service
 
-SUGGESTION_KINDS = {"todo", "goal"}
+SUGGESTION_KINDS = {"goal"}
 SUGGESTION_STATUSES = {"pending", "accepted", "dismissed"}
 
 
@@ -77,28 +76,29 @@ def create_suggestion(
 
 def get_suggestion(suggestion_id: str, *, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
     row = (
-        conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+        conn.execute(
+            "SELECT * FROM suggestions WHERE id = ? AND kind = 'goal'",
+            (suggestion_id,),
+        ).fetchone()
         if conn is not None
-        else db.query_one("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,))
+        else db.query_one(
+            "SELECT * FROM suggestions WHERE id = ? AND kind = 'goal'",
+            (suggestion_id,),
+        )
     )
     return _row_to_dict(row) if row is not None else None
 
 
 def list_pending(kind: str | None = None) -> list[dict[str, Any]]:
-    params: tuple[Any, ...] = ()
-    kind_clause = ""
     if kind is not None:
         _validate_kind(kind)
-        kind_clause = " AND kind = ?"
-        params = (kind,)
     rows = db.query_all(
-        f"""
+        """
         SELECT *
         FROM suggestions
-        WHERE status = 'pending'{kind_clause}
+        WHERE status = 'pending' AND kind = 'goal'
         ORDER BY confidence DESC, created_at ASC, id ASC
-        """,
-        params,
+        """
     )
     return [_row_to_dict(row) for row in rows]
 
@@ -106,28 +106,24 @@ def list_pending(kind: str | None = None) -> list[dict[str, Any]]:
 def accept(suggestion_id: str) -> dict[str, Any]:
     """Accept one pending suggestion and atomically create its target object."""
     with db.immediate_transaction() as conn:
-        row = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM suggestions WHERE id = ? AND kind = 'goal'",
+            (suggestion_id,),
+        ).fetchone()
         if row is None:
             raise ValueError("suggestion 不存在")
         if row["status"] != "pending":
             raise ValueError("suggestion 已处理")
         suggestion = _row_to_dict(row)
-        if suggestion["kind"] == "goal":
-            payload = suggestion["payload"]
-            created = goal_service.create_goal(
-                payload["title"],
-                payload.get("detail"),
-                payload["horizon"],
-                source="suggested_accepted",
-                focus=bool(payload.get("focus", False)),
-                conn=conn,
-            )
-        else:
-            created = _apply_todo_suggestion(
-                conn,
-                suggestion["payload"],
-                suggestion.get("evidence_ref"),
-            )
+        payload = suggestion["payload"]
+        created = goal_service.create_goal(
+            payload["title"],
+            payload.get("detail"),
+            payload["horizon"],
+            source="suggested_accepted",
+            focus=bool(payload.get("focus", False)),
+            conn=conn,
+        )
         decided_at = db.now_ts()
         conn.execute(
             "UPDATE suggestions SET status = 'accepted', decided_at = ? WHERE id = ?",
@@ -140,7 +136,10 @@ def accept(suggestion_id: str) -> dict[str, Any]:
 def dismiss(suggestion_id: str) -> dict[str, Any]:
     """Dismiss a suggestion; its normalized key remains as a permanent tombstone."""
     with db.immediate_transaction() as conn:
-        row = conn.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM suggestions WHERE id = ? AND kind = 'goal'",
+            (suggestion_id,),
+        ).fetchone()
         if row is None:
             raise ValueError("suggestion 不存在")
         if row["status"] == "accepted":
@@ -175,23 +174,12 @@ def delete_pending_for_evidence(evidence_ref: str) -> int:
 def normalized_key_for(kind: str, payload: dict[str, Any], evidence_ref: str | None) -> str:
     _validate_kind(kind)
     source_kind = _evidence_source_kind(evidence_ref)
-    if kind == "goal":
-        material = {
-            "kind": kind,
-            "title": _normalize_key_text(payload.get("title")),
-            "horizon": payload.get("horizon"),
-            "source": source_kind,
-        }
-    else:
-        material = {
-            "kind": kind,
-            "action": payload.get("action", "create"),
-            "todo_id": payload.get("todo_id"),
-            "task": _normalize_key_text(payload.get("task")),
-            "date": payload.get("date"),
-            "start_time": payload.get("start_time"),
-            "source": source_kind,
-        }
+    material = {
+        "kind": kind,
+        "title": _normalize_key_text(payload.get("title")),
+        "horizon": payload.get("horizon"),
+        "source": source_kind,
+    }
     encoded = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -200,167 +188,26 @@ def _normalize_payload(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     _validate_kind(kind)
     if not isinstance(payload, dict):
         raise ValueError("payload 必须是对象")
-    if kind == "goal":
-        title = payload.get("title")
-        horizon = payload.get("horizon")
-        if not isinstance(title, str) or not title.strip():
-            raise ValueError("goal suggestion title 不能为空")
-        if horizon not in goal_service.GOAL_HORIZONS:
-            raise ValueError("goal suggestion horizon 只支持：short、long")
-        detail = payload.get("detail")
-        if detail is not None and not isinstance(detail, str):
-            raise ValueError("goal suggestion detail 必须是字符串或 null")
-        return {
-            "title": title.strip(),
-            "detail": detail.strip() if isinstance(detail, str) and detail.strip() else None,
-            "horizon": horizon,
-            "focus": bool(payload.get("focus", horizon == "short")),
-        }
-
-    action = payload.get("action") or "create"
-    if action not in {"create", "update", "delete"}:
-        raise ValueError("todo suggestion action 只支持：create、update、delete")
-    todo_id = payload.get("todo_id")
-    if action in {"update", "delete"} and (not isinstance(todo_id, str) or not todo_id.strip()):
-        raise ValueError("todo suggestion update/delete 必须提供 todo_id")
-    task = payload.get("task")
-    if not isinstance(task, str) or not task.strip():
-        raise ValueError("todo suggestion task 不能为空")
-    status = payload.get("status") or "未完成"
-    if status not in {"未完成", "已完成"}:
-        status = "未完成"
-    normalized: dict[str, Any] = {
-        "action": action,
-        "todo_id": todo_id.strip() if isinstance(todo_id, str) and todo_id.strip() else None,
-        "task": task.strip(),
-        "status": status,
+    title = payload.get("title")
+    horizon = payload.get("horizon")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("goal suggestion title 不能为空")
+    if horizon not in goal_service.GOAL_HORIZONS:
+        raise ValueError("goal suggestion horizon 只支持：short、long")
+    detail = payload.get("detail")
+    if detail is not None and not isinstance(detail, str):
+        raise ValueError("goal suggestion detail 必须是字符串或 null")
+    return {
+        "title": title.strip(),
+        "detail": detail.strip() if isinstance(detail, str) and detail.strip() else None,
+        "horizon": horizon,
+        "focus": bool(payload.get("focus", horizon == "short")),
     }
-    for field in ("date", "start_time", "end_time"):
-        value = payload.get(field)
-        if value is not None and not isinstance(value, str):
-            raise ValueError(f"todo suggestion {field} 必须是字符串或 null")
-        normalized[field] = value.strip() if isinstance(value, str) and value.strip() else None
-    return normalized
-
-
-def _apply_todo_suggestion(
-    conn: sqlite3.Connection,
-    payload: dict[str, Any],
-    evidence_ref: str | None,
-) -> dict[str, Any]:
-    action = payload.get("action") or "create"
-    if action == "update":
-        return _update_todo(conn, payload)
-    if action == "delete":
-        return _delete_todo(conn, payload)
-
-    todo_id = f"manual-{uuid.uuid4().hex[:12]}"
-    now = db.now_ts()
-    source_post = _source_post_from_evidence(conn, evidence_ref)
-    completed_at = now if payload.get("status") == "已完成" else None
-    conn.execute(
-        """
-        INSERT INTO todos(
-            id, task, date, start_time, end_time, status,
-            source_post, created_at, updated_at, completed_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            todo_id,
-            payload["task"],
-            payload.get("date"),
-            payload.get("start_time"),
-            payload.get("end_time"),
-            payload.get("status") or "未完成",
-            source_post,
-            now,
-            now,
-            completed_at,
-        ),
-    )
-    row = conn.execute(
-        """
-        SELECT id, task, date, start_time, end_time, status,
-               source_post, created_at, updated_at, completed_at
-        FROM todos WHERE id = ?
-        """,
-        (todo_id,),
-    ).fetchone()
-    return dict(row)
-
-
-def _update_todo(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
-    todo_id = payload["todo_id"]
-    current = conn.execute("SELECT * FROM todos WHERE id = ?", (todo_id,)).fetchone()
-    if current is None:
-        raise ValueError("待更新 todo 不存在")
-    now = db.now_ts()
-    completed_at = current["completed_at"]
-    if payload["status"] == "已完成" and completed_at is None:
-        completed_at = now
-    if payload["status"] != "已完成":
-        completed_at = None
-    conn.execute(
-        """
-        UPDATE todos
-        SET task = ?, date = ?, start_time = ?, end_time = ?, status = ?,
-            updated_at = ?, completed_at = ?
-        WHERE id = ?
-        """,
-        (
-            payload["task"],
-            payload.get("date"),
-            payload.get("start_time"),
-            payload.get("end_time"),
-            payload["status"],
-            now,
-            completed_at,
-            todo_id,
-        ),
-    )
-    row = conn.execute(
-        """
-        SELECT id, task, date, start_time, end_time, status,
-               source_post, created_at, updated_at, completed_at
-        FROM todos WHERE id = ?
-        """,
-        (todo_id,),
-    ).fetchone()
-    return dict(row)
-
-
-def _delete_todo(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
-    todo_id = payload["todo_id"]
-    row = conn.execute(
-        """
-        SELECT id, task, date, start_time, end_time, status,
-               source_post, created_at, updated_at, completed_at
-        FROM todos WHERE id = ?
-        """,
-        (todo_id,),
-    ).fetchone()
-    if row is None:
-        raise ValueError("待删除 todo 不存在")
-    deleted = dict(row)
-    deleted["deleted"] = True
-    conn.execute("DELETE FROM todos WHERE id = ?", (todo_id,))
-    return deleted
-
-
-def _source_post_from_evidence(conn: sqlite3.Connection, evidence_ref: str | None) -> str | None:
-    if not evidence_ref or not evidence_ref.startswith("post:"):
-        return None
-    post_id = evidence_ref.split(":", 1)[1].strip()
-    if not post_id:
-        return None
-    exists = conn.execute("SELECT 1 FROM posts WHERE id = ?", (post_id,)).fetchone()
-    return post_id if exists is not None else None
 
 
 def _validate_kind(kind: Any) -> None:
     if kind not in SUGGESTION_KINDS:
-        raise ValueError("kind 只支持：todo、goal")
+        raise ValueError("kind 只支持：goal")
 
 
 def _coerce_confidence(value: Any) -> float:

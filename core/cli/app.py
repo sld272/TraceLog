@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from openai import OpenAI
 
-from core import context_builder, logging_service, record_service, reply_service, todo_service, tool_config_service, vector_index_service
+from core import context_builder, logging_service, record_service, reply_service, vector_index_service
 from core import vectorstore, workspace_service
 from core.cli import commands, sessions
 from core.llm import secondary_model
@@ -70,7 +70,6 @@ def main() -> None:
         if reindexed_vector_docs or fixed_vector_docs:
             print(f"[向量存储] 已同步 {reindexed_vector_docs + fixed_vector_docs} 条向量任务。")
         sessions.run_memory_reconcile(client, model, trigger="cli_startup")
-        todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
     except vectorstore.VectorStoreInitError as e:
         print(f"[向量存储] 初始化失败：{e}")
         return
@@ -91,22 +90,19 @@ def main() -> None:
 
         if not user_input:
             continue
-        chat_handled, todos, quit_requested = commands.handle_chat_command(user_input, client, model, todos)
+        chat_handled, quit_requested = commands.handle_chat_command(user_input, client, model)
         if quit_requested:
             sessions.run_memory_reconcile(client, model, trigger="cli_exit")
             print("再见！\n")
             break
         if chat_handled:
             continue
-        comment_handled, todos, quit_requested = commands.handle_comment_command(user_input, client, model, todos)
+        comment_handled, quit_requested = commands.handle_comment_command(user_input, client, model)
         if quit_requested:
             sessions.run_memory_reconcile(client, model, trigger="cli_exit")
             print("再见！\n")
             break
         if comment_handled:
-            continue
-        if commands.handle_tool_command(user_input):
-            todos = todo_service.load_todos() if tool_config_service.is_tool_enabled("todo") else []
             continue
         if commands.handle_soul_command(user_input):
             continue
@@ -119,7 +115,6 @@ def main() -> None:
 
         post_id = record_service.save_post(user_input)
         logging_service.log_event("post_saved", post_id=post_id, content_length=len(user_input))
-        sessions.run_todo_tool_for_post(post_id, client, model)
 
         results = reply_service.fanout(post_id, user_input, client, model, built_context)
         if not results:
@@ -138,6 +133,3 @@ def main() -> None:
         if not any(result.ok for result in results):
             print("[TraceLog] 所有 SOUL 本次都回复失败，post 已保存，可稍后重试。\n")
             continue
-
-        if tool_config_service.is_tool_enabled("todo"):
-            todos = todo_service.load_todos()

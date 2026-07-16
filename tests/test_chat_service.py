@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, memory_read, memory_unit_service, memory_view_service, reply_context, soul_relationship_memory, soul_service, suggestion_pipeline, tool_config_service, turn_prep, web_search_gate, web_search_service
+from core import chat_service, db, logging_service, memory_read, memory_unit_service, memory_view_service, reply_context, soul_relationship_memory, soul_service, suggestion_pipeline, turn_prep, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
 from tests.helpers import FakeStreamingClient, require_not_none
@@ -17,7 +17,7 @@ from tests.helpers import FakeStreamingClient, require_not_none
 
 class FakeClient:
     def __init__(self, payload: dict | None = None, content: str | None = None) -> None:
-        self.payload = payload or {"reply": "收到，我陪你捋一下。", "todos_to_upsert": [], "todos_to_delete": []}
+        self.payload = payload or {"reply": "收到，我陪你捋一下。"}
         self.content = content
         self.calls: list[dict] = []
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
@@ -96,10 +96,7 @@ class ChatServiceTest(unittest.TestCase):
         # aren't about suggestions so it doesn't consume the FakeClient queue
         suggestions_off = patch.dict(
             os.environ,
-            {
-                suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
-                suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "0",
-            },
+            {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0"},
         )
         suggestions_off.start()
         self.addCleanup(suggestions_off.stop)
@@ -183,7 +180,7 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual(["测试好友", "拾迹者"], [thread.soul_name for thread in threads])
 
     def test_build_chat_context_separates_memory_and_messages(self) -> None:
-        # background (portrait + v2 memory + todo) lands in context.context;
+        # background (portrait + v2 memory) lands in context.context;
         # the live conversation stays in context.messages, never duplicated into
         # the background block.
         thread = chat_service.get_or_create_thread("拾迹者")
@@ -199,20 +196,11 @@ class ChatServiceTest(unittest.TestCase):
             source="user_authored",
             actor="user",
         )
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "复习数学", "未完成", 1.0, 1.0),
-        )
-
         context = chat_service.build_chat_context(thread.id, "考试怎么办")
 
         self.assertIn("你是「拾迹者」", context.soul.soul)
         self.assertIn("测试用户", context.context)       # portrait baseline
         self.assertIn("最近在准备期末考试", context.context)  # v2 memory in # 记忆
-        self.assertIn("复习数学", context.context)         # todo
         self.assertNotIn("聊聊考试", context.context)      # prior turn not echoed as background
         self.assertEqual(["聊聊考试"], [message.content for message in context.messages])
 
@@ -379,7 +367,7 @@ class ChatServiceTest(unittest.TestCase):
 
     def test_chat_reply_success_writes_assistant_message(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
-        client = FakeClient({"reply": "先睡一下也行。", "todos_to_upsert": [], "todos_to_delete": []})
+        client = FakeClient({"reply": "先睡一下也行。"})
 
         result = chat_service.call_chat_reply(thread.id, "我好累", client, "fake-model")
         messages = chat_service.list_thread_messages(thread.id)
@@ -856,48 +844,6 @@ class ChatServiceTest(unittest.TestCase):
                 db.query_one("SELECT COUNT(*) AS count FROM memory_reconcile_runs")
             )["count"],
         )
-
-    def test_private_chat_reply_ignores_todo_fields(self) -> None:
-        thread = chat_service.get_or_create_thread("拾迹者")
-        client = FakeClient(
-            {
-                "reply": "我记下来了。",
-                "todos_to_upsert": [
-                    {
-                        "id": None,
-                        "task": "明天交作业",
-                        "date": "2026-05-26",
-                        "start_time": None,
-                        "end_time": None,
-                        "status": "未完成",
-                    }
-                ],
-                "todos_to_delete": [],
-            }
-        )
-
-        result = chat_service.call_chat_reply(thread.id, "提醒我明天交作业", client, "fake-model")
-        row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM todos"))
-
-        self.assertTrue(result.ok)
-        self.assertIsNotNone(result.assistant_message_id)
-        self.assertEqual(0, row["count"])
-
-    def test_build_chat_context_omits_todos_when_tool_disabled(self) -> None:
-        tool_config_service.set_tool_enabled("todo", False)
-        thread = chat_service.get_or_create_thread("拾迹者")
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "复习数学", "未完成", 1.0, 1.0),
-        )
-
-        context = chat_service.build_chat_context(thread.id, "考试怎么办")
-
-        self.assertNotIn("复习数学", context.context)
-        self.assertNotIn("# 待办事项", context.context)
 
     def _last_log_event(self, event_name: str) -> dict:
         log_path = self.workspace / "logs" / "current.jsonl"

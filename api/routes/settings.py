@@ -241,7 +241,6 @@ def _workspace_status() -> dict[str, Any]:
             "comments": _count_table("comments"),
             "souls": _count_table("souls"),
             "enabled_souls": _count_enabled_souls(),
-            "todos": _count_table("todos"),
             "jobs": _count_table("jobs"),
             "vision_cache": _count_table("vision_cache"),
             "memory_units": _count_table("memory_units"),

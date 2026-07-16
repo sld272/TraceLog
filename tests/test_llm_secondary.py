@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 
 from core import web_search_gate
-from core.llm import goal_router, query_rewrite_router, secondary_model, todo_router
+from core.llm import goal_router, query_rewrite_router, secondary_model
 
 
 class FakeClient:
@@ -160,13 +160,6 @@ class SecondaryModelRoutingTest(unittest.TestCase):
 
         self._assert_routed_to_secondary()
 
-    def test_todo_tool_uses_secondary_model(self) -> None:
-        todo_router.call_todo_tool(
-            client=self.main, model="main-model", post="周五前交实验报告", active_todos="（暂无）"
-        )
-
-        self._assert_routed_to_secondary()
-
     def test_goal_router_uses_secondary_model(self) -> None:
         goal_router.call_goal_router(self.main, "main-model", user_input="我决定这学期把绩点提到 3.7")
 
@@ -174,7 +167,7 @@ class SecondaryModelRoutingTest(unittest.TestCase):
 
 
 class TimeAnnotationInjectionTest(unittest.TestCase):
-    """待办/目标抽取在 user 消息末尾注入「系统按说话时刻计算」的时间标注区块。"""
+    """目标抽取在 user 消息末尾注入「系统按说话时刻计算」的时间标注区块。"""
 
     def setUp(self) -> None:
         secondary_model.reset()
@@ -186,15 +179,6 @@ class TimeAnnotationInjectionTest(unittest.TestCase):
         self.assertEqual(1, len(client.calls))
         return client.calls[0]["messages"][1]["content"]
 
-    def test_todo_tool_injects_time_annotation_block(self) -> None:
-        client = FakeClient({"todos_to_upsert": [], "todos_to_delete": []})
-        todo_router.call_todo_tool(
-            client=client, model="m", post="周五前交实验报告", active_todos="（暂无）"
-        )
-        user_msg = self._user_message(client)
-        self.assertIn("## 时间标注（系统按说话时刻计算）", user_msg)
-        self.assertIn("周五＝", user_msg)  # 裸周X 恒能解析，日期随运行日而变，只锁 span＝
-
     def test_goal_router_injects_time_annotation_block(self) -> None:
         client = FakeClient({"goals": []})
         goal_router.call_goal_router(
@@ -205,10 +189,8 @@ class TimeAnnotationInjectionTest(unittest.TestCase):
         self.assertIn("周五＝", user_msg)
 
     def test_no_block_when_text_has_no_relative_time(self) -> None:
-        client = FakeClient({"todos_to_upsert": [], "todos_to_delete": []})
-        todo_router.call_todo_tool(
-            client=client, model="m", post="把实验报告整理好", active_todos=""
-        )
+        client = FakeClient({"goals": []})
+        goal_router.call_goal_router(client, "m", user_input="我决定认真准备研究生考试")
         self.assertNotIn("时间标注", self._user_message(client))
 
 

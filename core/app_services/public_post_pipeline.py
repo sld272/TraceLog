@@ -97,10 +97,6 @@ def execute_job(job: dict[str, Any], client: LLMClient, model: str) -> None:
         _run_generate_post_replies(job_id, payload, client, model)
     elif job_type == job_service.TYPE_RUN_MEMORY_RECONCILE:
         _run_memory_reconcile(job_id, client, model)
-    elif job_type == job_service.TYPE_RUN_TODO_TOOL:
-        # legacy auto-add todo job: todos now flow through the suggestion
-        # pipeline, so drain any still-queued jobs of this type as no-ops
-        pass
     else:
         raise ValueError(f"unsupported job type: {job_type}")
 

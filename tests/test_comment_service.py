@@ -19,7 +19,6 @@ from core import (
     soul_relationship_memory,
     soul_service,
     suggestion_pipeline,
-    tool_config_service,
     turn_prep,
     web_search_gate,
     web_search_service,
@@ -29,7 +28,7 @@ from tests.helpers import require_not_none
 
 class FakeClient:
     def __init__(self, payload: dict | None = None, content: str | None = None) -> None:
-        self.payload = payload or {"reply": "我看到了，继续说。", "todos_to_upsert": [], "todos_to_delete": []}
+        self.payload = payload or {"reply": "我看到了，继续说。"}
         self.content = content
         self.calls: list[dict] = []
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
@@ -46,10 +45,7 @@ class CommentServiceTest(unittest.TestCase):
         # aren't about suggestions so it doesn't consume the FakeClient queue
         suggestions_off = patch.dict(
             os.environ,
-            {
-                suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
-                suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "0",
-            },
+            {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0"},
         )
         suggestions_off.start()
         self.addCleanup(suggestions_off.stop)
@@ -145,7 +141,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(["拾迹者", "毒舌好友"], [conversation.soul_name for conversation in conversations])
 
     def test_comment_reply_only_writes_selected_soul_conversation(self) -> None:
-        client = FakeClient({"reply": "好，我只在这里接住这句。", "todos_to_upsert": [], "todos_to_delete": []})
+        client = FakeClient({"reply": "好，我只在这里接住这句。"})
 
         result = comment_service.call_comment_reply("20260525-001", "拾迹者", "只回复拾迹者", client, "fake-model")
         default_messages = comment_service.list_conversation_messages("20260525-001", "拾迹者", include_root=False)
@@ -195,20 +191,11 @@ class CommentServiceTest(unittest.TestCase):
 
     def test_build_comment_context_separates_evidence_and_messages(self) -> None:
         comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊练歌")
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "整理歌单", "未完成", 1.0, 1.0),
-        )
-
         context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊练歌")
 
         self.assertIn("测试用户", context.context)
         self.assertIn("今天想认真练歌", context.context)
         self.assertIn("我陪你继续拆", context.context)
-        self.assertIn("整理歌单", context.context)
         self.assertNotIn("继续聊练歌", context.context)
         self.assertEqual(["继续聊练歌"], [message.content for message in context.messages])
 
@@ -594,46 +581,6 @@ class CommentServiceTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             comment_service.rerun_latest_assistant_message(first.assistant_message_id, FakeClient(), "fake-model")
-
-    def test_comment_reply_ignores_todo_fields(self) -> None:
-        client = FakeClient(
-            {
-                "reply": "我记下来了。",
-                "todos_to_upsert": [
-                    {
-                        "id": None,
-                        "task": "今晚整理歌单",
-                        "date": "2026-05-25",
-                        "start_time": None,
-                        "end_time": None,
-                        "status": "未完成",
-                    }
-                ],
-                "todos_to_delete": [],
-            }
-        )
-
-        result = comment_service.call_comment_reply("20260525-001", "拾迹者", "提醒我今晚整理歌单", client, "fake-model")
-        row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM todos"))
-
-        self.assertTrue(result.ok)
-        self.assertIsNotNone(result.assistant_message_id)
-        self.assertEqual(0, row["count"])
-
-    def test_comment_context_omits_todos_when_tool_disabled(self) -> None:
-        tool_config_service.set_tool_enabled("todo", False)
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "整理歌单", "未完成", 1.0, 1.0),
-        )
-
-        context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊")
-
-        self.assertNotIn("整理歌单", context.context)
-        self.assertNotIn("# 待办事项", context.context)
 
     def test_comment_reply_only_records_evidence_until_reconcile_runs(self) -> None:
         comment_service.call_comment_reply("20260525-001", "拾迹者", "这是一条评论回复", FakeClient(), "fake-model")

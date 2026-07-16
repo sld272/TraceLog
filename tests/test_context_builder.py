@@ -7,7 +7,7 @@ from pathlib import Path
 
 from unittest.mock import patch
 
-from core import context_builder, db, goal_service, logging_service, memory_unit_service, memory_view_service, soul_service, tool_config_service, web_search_gate, web_search_service
+from core import context_builder, db, goal_service, logging_service, memory_unit_service, memory_view_service, soul_service, web_search_gate, web_search_service
 
 
 class ContextBuilderTest(unittest.TestCase):
@@ -53,14 +53,7 @@ class ContextBuilderTest(unittest.TestCase):
         web_search_service.CONFIG_FILE = self.old_web_search_config
         self.tmp.cleanup()
 
-    def test_public_context_uses_goals_and_todos_without_portrait_or_related_posts(self) -> None:
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "整理比赛材料", "未完成", 1.0, 1.0),
-        )
+    def test_public_context_uses_goals_without_portrait_or_related_posts(self) -> None:
         goal_service.create_goal("跨专业考研", None, "long")
         goal_service.create_goal("完成课程项目", None, "short", focus=True)
 
@@ -73,8 +66,6 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertNotIn("# 当前用户的历史相关帖子", built.shared_context)
         self.assertNotIn("# 相关记忆", built.shared_context)
         self.assertNotIn("# 记忆", built.shared_context)
-        self.assertIn("# 待办事项", built.shared_context)
-        self.assertIn("整理比赛材料", built.shared_context)
         self.assertIn("# 长期目标", built.shared_context)
         self.assertIn("跨专业考研", built.shared_context)
         self.assertIn("# 当前状态", built.shared_context)
@@ -83,24 +74,9 @@ class ContextBuilderTest(unittest.TestCase):
         event = self._last_event("context_assembly_result")
         self.assertEqual("public_post", event["context_type"])
         self.assertEqual(
-            ["# 长期目标", "# 当前状态", "# 待办事项"],
+            ["# 长期目标", "# 当前状态"],
             [item["title"] for item in event["sections"]],
         )
-
-    def test_public_context_omits_todos_when_tool_disabled(self) -> None:
-        tool_config_service.set_tool_enabled("todo", False)
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "不应进入上下文", "未完成", 1.0, 1.0),
-        )
-
-        built = context_builder.build_context()
-
-        self.assertNotIn("# 待办事项", built.shared_context)
-        self.assertNotIn("不应进入上下文", built.shared_context)
 
     def test_public_context_injects_web_search_once_for_enabled_souls(self) -> None:
         settings = web_search_service.WebSearchConfig(

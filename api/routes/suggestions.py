@@ -14,7 +14,7 @@ router = APIRouter(prefix="/suggestions", tags=["suggestions"])
 
 @router.get("")
 async def list_pending_suggestions(
-    kind: Literal["todo", "goal"] | None = Query(default=None),
+    kind: Literal["goal"] | None = Query(default=None),
 ):
     return await run_sync(suggestion_service.list_pending, kind)
 

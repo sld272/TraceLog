@@ -98,6 +98,7 @@ class DbTest(unittest.TestCase):
         self.assertNotIn("observation_sources", tables)
         self.assertNotIn("observations_fts", tables)
         self.assertNotIn("observation_cursors", tables)
+        self.assertNotIn("todos", tables)
         self.assertEqual("1", version["value"])
         self.assertIn("jobs", tables)
         self.assertIn("post_events", tables)
@@ -107,6 +108,30 @@ class DbTest(unittest.TestCase):
         self.assertIn("vector_index_items", tables)
         self.assertIn("vector_outbox", tables)
         self.assertIn("post_soul_orders", tables)
+
+    def test_init_drops_retired_todos_table(self) -> None:
+        conn = db.connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE todos (
+                    id TEXT PRIMARY KEY,
+                    task TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute("INSERT INTO todos(id, task) VALUES ('legacy-1', '旧数据')")
+            conn.commit()
+        finally:
+            conn.close()
+
+        db.init_db()
+
+        self.assertIsNone(
+            db.query_one(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'todos'"
+            )
+        )
 
     def test_message_mutation_marker_columns_exist(self) -> None:
         comment_columns = {row["name"] for row in db.query_all("PRAGMA table_info(comments)")}

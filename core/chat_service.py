@@ -9,7 +9,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
-from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, todo_service, tool_config_service, vision_service
+from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -314,12 +314,6 @@ def build_chat_context(
     sections: list[str] = []
 
     sections.extend(goal_service.prompt_sections())
-
-    if tool_config_service.is_tool_enabled("todo"):
-        pending = todo_service.list_active_todos()
-        if pending:
-            lines = [todo_service.format_todo_for_context(todo) for todo in pending]
-            sections.append("# 待办事项\n\n" + "\n".join(lines))
 
     timings: dict[str, float | bool] = {}
     trace_ctx = {"thread_id": thread_id, "soul_name": thread.soul_name}

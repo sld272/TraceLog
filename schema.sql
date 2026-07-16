@@ -192,22 +192,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_request_role
     ON chat_messages(thread_id, client_request_id, role)
     WHERE client_request_id IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS todos (
-    id           TEXT PRIMARY KEY,
-    task         TEXT NOT NULL,
-    date         TEXT,
-    start_time   TEXT,
-    end_time     TEXT,
-    status       TEXT NOT NULL DEFAULT '未完成',
-    source_post  TEXT REFERENCES posts(id) ON DELETE SET NULL,
-    created_at   REAL NOT NULL,
-    updated_at   REAL NOT NULL,
-    completed_at REAL
-);
-
-CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status, date);
-CREATE INDEX IF NOT EXISTS idx_todos_date ON todos(date);
-
 CREATE TABLE IF NOT EXISTS goals (
     id               TEXT PRIMARY KEY,
     title            TEXT NOT NULL,
@@ -228,7 +212,7 @@ CREATE INDEX IF NOT EXISTS idx_goals_status_horizon
 
 CREATE TABLE IF NOT EXISTS suggestions (
     id             TEXT PRIMARY KEY,
-    kind           TEXT NOT NULL CHECK(kind IN ('todo', 'goal')),
+    kind           TEXT NOT NULL CHECK(kind = 'goal'),
     payload_json   TEXT NOT NULL,
     evidence_ref   TEXT,
     confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),
