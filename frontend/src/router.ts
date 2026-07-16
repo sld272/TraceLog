@@ -1,6 +1,5 @@
 export type Route =
   | { kind: 'home' }
-  | { kind: 'todos' }
   | { kind: 'goals' }
   | { kind: 'memory' }
   | { kind: 'settings' }
@@ -11,7 +10,6 @@ export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, '').replace(/^\//, '')
   const [path = '', query = ''] = raw.split('?')
   if (!path || path === 'home') return { kind: 'home' }
-  if (path === 'todos') return { kind: 'todos' }
   if (path === 'goals') return { kind: 'goals' }
   if (path === 'memory') return { kind: 'memory' }
   if (path === 'settings') return { kind: 'settings' }
@@ -32,8 +30,6 @@ export function formatRoute(route: Route): string {
   switch (route.kind) {
     case 'home':
       return '#/'
-    case 'todos':
-      return '#/todos'
     case 'goals':
       return '#/goals'
     case 'memory':

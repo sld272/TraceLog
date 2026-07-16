@@ -42,7 +42,6 @@ import styles from './Timeline.module.css'
 
 interface TimelineProps {
   onActivitySettled?: () => void
-  onTodosChanged?: () => void
   modelConfigured?: boolean | null
   onOpenSettings?: () => void
   postMutationSignal?: PostMutationSignal | null
@@ -52,7 +51,6 @@ interface TimelineProps {
 
 export function Timeline({
   onActivitySettled,
-  onTodosChanged,
   modelConfigured,
   onOpenSettings,
   postMutationSignal,
@@ -289,10 +287,6 @@ export function Timeline({
           void refreshPostDetail(postId, event.event_type)
           void refreshSuggestions()
         }
-
-        if (event.event_type === 'todo_succeeded') {
-          onTodosChanged?.()
-        }
       },
       () => {
         setPosts((prev) =>
@@ -513,7 +507,6 @@ export function Timeline({
             delete next[postId]
             return next
           })
-          onTodosChanged?.()
           onActivitySettled?.()
         } catch (err) {
           setError(err instanceof Error ? err.message : '删除失败')

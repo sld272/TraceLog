@@ -2,13 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   type MemoryStatus,
   type Soul,
-  type Todo,
   getMemoryStatus,
   getModelSettings,
   listGoals,
   listSouls,
-  listTodos,
-  updateTodo,
 } from '@/api/client'
 import { AppShell } from '@/components/AppShell'
 import { LeftNav } from '@/components/LeftNav'
@@ -19,10 +16,8 @@ import { MemoryWorkbench } from '@/pages/MemoryWorkbench'
 import { PostDetailPage } from '@/pages/PostDetailPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { Timeline } from '@/pages/Timeline'
-import { TodosPage } from '@/pages/TodosPage'
 import { formatRoute, parseRoute, type Route } from '@/router'
 import { type PostMutationKind, type PostMutationSignal } from '@/types/postMutation'
-import { isTodoDone } from '@/utils/todo'
 import styles from '@/components/AppShell.module.css'
 
 const MODEL_CONFIG_RETRY_DELAYS = [2_000, 5_000, 10_000, 30_000]
@@ -34,7 +29,6 @@ export function App() {
   const [modelConfigured, setModelConfigured] = useState<boolean | null>(null)
   const [souls, setSouls] = useState<Soul[]>([])
   const [soulsLoadState, setSoulsLoadState] = useState<SoulsLoadState>('loading')
-  const [todos, setTodos] = useState<Todo[]>([])
   const [activeGoalCount, setActiveGoalCount] = useState(0)
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null)
   const [postMutationSignal, setPostMutationSignal] = useState<PostMutationSignal | null>(null)
@@ -44,7 +38,6 @@ export function App() {
   const showRightPanel = route.kind === 'home'
   const navKey = navKeyFromRoute(route)
   const memoryQueueCount = memoryStatus?.pending_event_count ?? 0
-  const openTodoCount = todos.filter((todo) => !isTodoDone(todo)).length
 
   const loadSouls = useCallback(async () => {
     const data = await listSouls(true)
@@ -62,22 +55,15 @@ export function App() {
 
   const refreshHomeContext = useCallback(async () => {
     try {
-      const [todoData, memoryData, goalData] = await Promise.all([
-        listTodos(),
+      const [memoryData, goalData] = await Promise.all([
         getMemoryStatus(),
         listGoals({ status: 'active' }),
       ])
-      setTodos(todoData)
       setMemoryStatus(memoryData)
       setActiveGoalCount(goalData.length)
     } catch {
       /* Keep the right rail calm when optional context is unavailable. */
     }
-  }, [])
-
-  const refreshTodos = useCallback(async () => {
-    const todoData = await listTodos()
-    setTodos(todoData)
   }, [])
 
   const navigate = useCallback((nextRoute: Route) => {
@@ -96,25 +82,8 @@ export function App() {
     setPostMutationSignal({ postId, kind, nonce: Date.now() })
   }, [])
 
-  const handleTodosChanged = useCallback((nextTodos?: Todo[]) => {
-    if (nextTodos) {
-      setTodos(nextTodos)
-      return
-    }
-    void refreshTodos()
-  }, [refreshTodos])
-
-  const handleTodoToggle = useCallback(async (todo: Todo) => {
-    await updateTodo(todo.id, { status: isTodoDone(todo) ? '未完成' : '已完成' })
-    await refreshTodos()
-  }, [refreshTodos])
-
   const openMemory = useCallback(() => {
     navigateToPage('memory')
-  }, [navigateToPage])
-
-  const openTodos = useCallback(() => {
-    navigateToPage('todos')
   }, [navigateToPage])
 
   const openSettings = useCallback(() => {
@@ -234,7 +203,6 @@ export function App() {
             modelConfigured={modelConfigured}
             onOpenSettings={openSettings}
             onActivitySettled={refreshHomeContext}
-            onTodosChanged={refreshTodos}
             postMutationSignal={postMutationSignal}
             searchQuery={homeSearch}
           />
@@ -247,10 +215,8 @@ export function App() {
             modelConfigured={modelConfigured}
             onOpenSettings={openSettings}
             onPostMutated={notifyPostMutated}
-            onTodosChanged={refreshTodos}
           />
         )}
-        {route.kind === 'todos' && <TodosPage onTodosChanged={handleTodosChanged} />}
         {route.kind === 'goals' && <GoalsPage />}
         {route.kind === 'memory' && <MemoryWorkbench />}
         {route.kind === 'settings' && (
@@ -280,7 +246,6 @@ export function App() {
           soulsLoadState={soulsLoadState}
           memoryQueueCount={memoryQueueCount}
           goalCount={activeGoalCount}
-          todoCount={openTodoCount}
           activePage={navKey}
           onNavigate={navigateToPage}
           onAfterNavigate={closeMobileNav}
@@ -289,11 +254,8 @@ export function App() {
       main={renderMain()}
       panel={showRightPanel ? (
         <RightPanel
-          todos={todos}
           searchQuery={homeSearch}
           onSearchQueryChange={setHomeSearch}
-          onTodoToggle={handleTodoToggle}
-          onOpenTodos={openTodos}
           onOpenMemory={openMemory}
         />
       ) : undefined}
@@ -308,7 +270,6 @@ function navKeyFromRoute(route: Route): string {
 }
 
 function routeFromNavKey(page: string): Route {
-  if (page === 'todos') return { kind: 'todos' }
   if (page === 'goals') return { kind: 'goals' }
   if (page === 'memory') return { kind: 'memory' }
   if (page === 'settings') return { kind: 'settings' }

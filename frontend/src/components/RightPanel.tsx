@@ -1,34 +1,21 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   type MemoryOperation,
-  type Todo,
   listMemoryOperations,
 } from '@/api/client'
-import { isTodoDone, getTodayKey } from '@/utils/todo'
-import { formatDateLabel, formatSmartTime } from '@/utils/date'
+import { formatSmartTime } from '@/utils/date'
 import { ChevronRightIcon } from '@/components/icons'
 import styles from './RightPanel.module.css'
 
-interface PendingCompletedTodo {
-  todo: Todo
-  timeoutId: number
-}
-
 interface RightPanelProps {
-  todos: Todo[]
   searchQuery: string
   onSearchQueryChange: (value: string) => void
-  onTodoToggle: (todo: Todo) => Promise<void> | void
-  onOpenTodos: () => void
   onOpenMemory: () => void
 }
 
 export function RightPanel({
-  todos,
   searchQuery,
   onSearchQueryChange,
-  onTodoToggle,
-  onOpenTodos,
   onOpenMemory,
 }: RightPanelProps) {
   return (
@@ -50,144 +37,8 @@ export function RightPanel({
           </button>
         )}
       </div>
-      <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} onOpenTodos={onOpenTodos} />
       <MemoryPulseCard onOpenMemory={onOpenMemory} />
     </div>
-  )
-}
-
-function TodayTodosCard({
-  todos,
-  onTodoToggle,
-  onOpenTodos,
-}: {
-  todos: Todo[]
-  onTodoToggle: (todo: Todo) => Promise<void> | void
-  onOpenTodos: () => void
-}) {
-  const [savingId, setSavingId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [pendingCompleted, setPendingCompleted] = useState<Record<string, PendingCompletedTodo>>({})
-  const pendingTimeoutsRef = useRef<Record<string, number>>({})
-  const todayTodos = selectTodayTodos(todos)
-  const displayTodos = [
-    ...todayTodos.filter((todo) => !pendingCompleted[todo.id]),
-    ...Object.values(pendingCompleted).map((entry) => entry.todo),
-  ]
-
-  useEffect(() => {
-    return () => {
-      Object.values(pendingTimeoutsRef.current).forEach((timeoutId) => window.clearTimeout(timeoutId))
-    }
-  }, [])
-
-  const removePendingCompleted = (todoId: string) => {
-    setPendingCompleted((prev) => {
-      const entry = prev[todoId]
-      if (entry) window.clearTimeout(entry.timeoutId)
-      delete pendingTimeoutsRef.current[todoId]
-      const next = { ...prev }
-      delete next[todoId]
-      return next
-    })
-  }
-
-  const holdCompletedTodo = (todo: Todo) => {
-    const completedTodo = { ...todo, status: '已完成' }
-    const timeoutId = window.setTimeout(() => {
-      setPendingCompleted((prev) => {
-        const next = { ...prev }
-        delete next[todo.id]
-        return next
-      })
-      delete pendingTimeoutsRef.current[todo.id]
-    }, 3000)
-
-    setPendingCompleted((prev) => {
-      const existing = prev[todo.id]
-      if (existing) window.clearTimeout(existing.timeoutId)
-      pendingTimeoutsRef.current[todo.id] = timeoutId
-      return {
-        ...prev,
-        [todo.id]: { todo: completedTodo, timeoutId },
-      }
-    })
-  }
-
-  const completeTodo = async (todo: Todo) => {
-    setSavingId(todo.id)
-    setError(null)
-    try {
-      await onTodoToggle(todo)
-      holdCompletedTodo(todo)
-    } catch {
-      setError('更新失败，稍后再试')
-    } finally {
-      setSavingId(null)
-    }
-  }
-
-  const undoCompleteTodo = async (todo: Todo) => {
-    setSavingId(todo.id)
-    setError(null)
-    try {
-      await onTodoToggle(todo)
-      removePendingCompleted(todo.id)
-    } catch {
-      setError('撤销失败，稍后再试')
-    } finally {
-      setSavingId(null)
-    }
-  }
-
-  return (
-    <section className={styles.card}>
-      <PanelHeader title="待办速览" onMore={onOpenTodos} />
-      <div className={styles.itemList}>
-        {displayTodos.length > 0 ? (
-          displayTodos.map((todo) => {
-            const meta = todoMeta(todo)
-            const completedPending = Boolean(pendingCompleted[todo.id])
-
-            return (
-              <div
-                key={todo.id}
-                className={`${styles.todoItem} ${completedPending ? styles.todoItemCompleted : ''}`}
-              >
-                <button
-                  type="button"
-                  className={`${styles.todoCheckbox} ${completedPending ? styles.todoCheckboxDone : ''}`}
-                  disabled={savingId === todo.id || completedPending}
-                  aria-label={completedPending ? `已完成待办：${todo.task}` : `完成待办：${todo.task}`}
-                  onClick={() => {
-                    if (!completedPending) completeTodo(todo)
-                  }}
-                >
-                  {savingId === todo.id ? '...' : completedPending ? '✓' : ''}
-                </button>
-                <div className={styles.todoBody}>
-                  <p className={completedPending ? styles.todoDoneText : undefined}>{todo.task}</p>
-                  {meta && <span>{meta}</span>}
-                  {completedPending && (
-                    <button
-                      type="button"
-                      className={styles.undoButton}
-                      disabled={savingId === todo.id}
-                      onClick={() => undoCompleteTodo(todo)}
-                    >
-                      撤销
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })
-        ) : (
-          <p className={styles.empty}>今天没有待办。记录里提到的事会自动出现在这里。</p>
-        )}
-        {error && <p className={styles.inlineError}>{error}</p>}
-      </div>
-    </section>
   )
 }
 
@@ -341,16 +192,3 @@ function PanelHeader({ title, onMore }: { title: string; onMore?: () => void }) 
   )
 }
 
-function selectTodayTodos(todos: Todo[]): Todo[] {
-  const active = todos.filter((todo) => !isTodoDone(todo))
-  const today = active.filter((todo) => todo.date === getTodayKey())
-  const undated = active.filter((todo) => !todo.date)
-  return [...today, ...undated].slice(0, 3)
-}
-
-function todoMeta(todo: Todo): string {
-  const time = [todo.start_time, todo.end_time].filter(Boolean).join(' - ')
-  if (!todo.date) return time ? `无日期 · ${time}` : '无日期'
-  const dateLabel = formatDateLabel(todo.date, getTodayKey())
-  return time ? `${dateLabel} ${time}` : dateLabel
-}

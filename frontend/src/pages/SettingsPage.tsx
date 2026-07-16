@@ -1227,7 +1227,6 @@ function DataSettingsPanel({
           <Stat label="回应" value={status.counts.comments} />
           <Stat label="人格" value={status.counts.souls} />
           <Stat label="启用人格" value={status.counts.enabled_souls} />
-          <Stat label="待办" value={status.counts.todos} />
           <Stat label="任务" value={status.counts.jobs} />
           <Stat label="图片摘要" value={status.counts.vision_cache} />
         </div>

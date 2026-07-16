@@ -104,19 +104,6 @@ export interface Soul {
   updated_at: number
 }
 
-export interface Todo {
-  id: string
-  task: string
-  date: string | null
-  start_time: string | null
-  end_time: string | null
-  status: string
-  source_post: string | null
-  created_at?: number
-  updated_at?: number
-  completed_at?: number | null
-}
-
 export type GoalHorizon = 'short' | 'long'
 export type GoalStatus = 'active' | 'done' | 'abandoned' | 'paused'
 
@@ -135,7 +122,7 @@ export interface Goal {
 
 export interface Suggestion {
   id: string
-  kind: 'todo' | 'goal'
+  kind: 'goal'
   payload: Record<string, unknown>
   evidence_ref: string | null
   confidence: number
@@ -197,9 +184,6 @@ export type PostEventType =
   | 'reply_started'
   | 'reply_succeeded'
   | 'reply_failed'
-  | 'todo_started'
-  | 'todo_succeeded'
-  | 'todo_failed'
   | 'pipeline_done'
 
 export interface PostEvent {
@@ -395,7 +379,6 @@ export interface WorkspaceStatus {
     comments: number
     souls: number
     enabled_souls: number
-    todos: number
     jobs: number
     vision_cache: number
     memory_units: number
@@ -560,7 +543,7 @@ function isSuggestion(value: unknown): value is Suggestion {
   if (!value || typeof value !== 'object') return false
   const item = value as Record<string, unknown>
   return typeof item.id === 'string'
-    && (item.kind === 'goal' || item.kind === 'todo')
+    && item.kind === 'goal'
     && item.status === 'pending'
     && typeof item.payload === 'object'
     && item.payload !== null
@@ -622,9 +605,6 @@ const POST_EVENT_TYPES: PostEventType[] = [
   'reply_started',
   'reply_succeeded',
   'reply_failed',
-  'todo_started',
-  'todo_succeeded',
-  'todo_failed',
   'pipeline_done',
 ]
 
@@ -731,31 +711,6 @@ export function reorderSouls(order: string[]) {
   })
 }
 
-/* Todos */
-export function listTodos() {
-  return request<Todo[]>('/todos')
-}
-
-export function createTodo(changes: Partial<Todo> & { task: string }) {
-  return request<Todo>('/todos', {
-    method: 'POST',
-    body: JSON.stringify(changes),
-  })
-}
-
-export function updateTodo(todoId: string, changes: Partial<Todo>) {
-  return request<Todo>(`/todos/${todoId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(changes),
-  })
-}
-
-export function deleteTodo(todoId: string) {
-  return request<{ ok: boolean }>(`/todos/${todoId}`, {
-    method: 'DELETE',
-  })
-}
-
 /* Goals */
 export function listGoals(filters: { status?: GoalStatus; horizon?: GoalHorizon } = {}) {
   const search = new URLSearchParams()
@@ -795,7 +750,7 @@ export function deleteGoal(goalId: string) {
 }
 
 /* Suggestions */
-export function listPendingSuggestions(kind?: 'goal' | 'todo'): Promise<Suggestion[]> {
+export function listPendingSuggestions(kind?: 'goal'): Promise<Suggestion[]> {
   const suffix = kind ? `?kind=${kind}` : ''
   return request<Suggestion[]>(`/suggestions${suffix}`)
 }
@@ -808,7 +763,7 @@ export function postIdFromEvidenceRef(ref: string | null | undefined): string | 
 }
 
 export function acceptSuggestion(suggestionId: string) {
-  return request<{ suggestion: Suggestion; created: Goal | Todo }>(
+  return request<{ suggestion: Suggestion; created: Goal }>(
     `/suggestions/${suggestionId}/accept`,
     { method: 'POST', body: JSON.stringify({}) },
   )

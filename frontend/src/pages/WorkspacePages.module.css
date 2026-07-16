@@ -157,33 +157,13 @@
   white-space: pre-wrap;
 }
 
-.todoWorkspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-5);
-  align-items: start;
-}
-
-.todoWorkspace.drawerOpen {
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
-}
-
 .todoDrawer {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-bg-card);
 }
 
-.todoListPanel {
-  min-width: 0;
-}
-
-.todoGroups {
-  display: flex;
-  flex-direction: column;
-}
-
-/* ---- collapsible group (goals + todos) ---- */
+/* ---- collapsible group (goals) ---- */
 .group {
   margin-bottom: var(--space-6);
 }
@@ -241,60 +221,7 @@
   font-size: var(--text-sm);
 }
 
-.todoCheckbox {
-  display: grid;
-  place-items: center;
-  width: 21px;
-  height: 21px;
-  flex-shrink: 0;
-  border: 2px solid var(--color-border-strong);
-  border-radius: 7px;
-  color: transparent;
-  margin-top: 1px;
-  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
-}
-
-.todoCheckbox:hover:not(:disabled) {
-  border-color: var(--color-accent);
-}
-
-.todoCheckbox.done {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: var(--color-text-inverse);
-}
-
-.todoCheckbox:disabled {
-  cursor: wait;
-  opacity: 0.55;
-}
-
-.todoBody {
-  min-width: 0;
-  flex: 1;
-}
-
-.todoTask {
-  color: var(--color-text-primary);
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-  line-height: 1.4;
-  word-break: break-word;
-}
-
-.todoTask.done {
-  color: var(--color-text-tertiary);
-  text-decoration: line-through;
-}
-
-.todoMeta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-}
-
-/* ---- item card (goals + todos) ---- */
+/* ---- item card (goals) ---- */
 .itemCard {
   background: var(--color-bg-card);
   border: 1px solid var(--color-border);
@@ -367,25 +294,6 @@
 .rowActs button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
-}
-
-.todoSourceLink,
-.drawerSourceLink {
-  color: var(--color-accent);
-  font-weight: var(--weight-medium);
-  text-decoration: none;
-}
-
-.todoSourceLink:hover,
-.drawerSourceLink:hover {
-  color: var(--color-accent-hover);
-  text-decoration: underline;
-}
-
-.drawerSourceLink {
-  display: inline-flex;
-  margin-top: var(--space-1);
-  font-size: var(--text-xs);
 }
 
 .todoDrawerLayer {
@@ -566,7 +474,6 @@
 }
 
 @media (max-width: 980px) {
-  .todoWorkspace.drawerOpen,
   .goalWorkspace.drawerOpen {
     grid-template-columns: minmax(0, 1fr);
   }

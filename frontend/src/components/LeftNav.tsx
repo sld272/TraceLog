@@ -9,8 +9,6 @@ interface LeftNavProps {
   memoryQueueCount?: number
   /** 进行中的目标数，>0 时在「目标」项上显示 badge */
   goalCount?: number
-  /** 未完成的待办数，>0 时在「待办」项上显示 badge */
-  todoCount?: number
   activePage: string
   onNavigate: (page: string) => void
   onAfterNavigate?: () => void
@@ -21,7 +19,6 @@ export function LeftNav({
   soulsLoadState = 'ready',
   memoryQueueCount = 0,
   goalCount = 0,
-  todoCount = 0,
   activePage,
   onNavigate,
   onAfterNavigate,
@@ -50,13 +47,6 @@ export function LeftNav({
           badge={goalCount > 0 ? goalCount : undefined}
           active={activePage === 'goals'}
           onClick={() => navigate('goals')}
-        />
-        <NavItem
-          icon={<TodoIcon />}
-          label="待办"
-          badge={todoCount > 0 ? todoCount : undefined}
-          active={activePage === 'todos'}
-          onClick={() => navigate('todos')}
         />
         <NavItem
           icon={<MemoryIcon />}
@@ -141,15 +131,6 @@ function HomeIcon() {
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       <polyline points="9 22 9 12 15 12 15 22" />
-    </svg>
-  )
-}
-
-function TodoIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 11l3 3L22 4" />
-      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
     </svg>
   )
 }
