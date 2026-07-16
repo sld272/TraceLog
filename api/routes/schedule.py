@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from api.deps import run_sync
+from core import goal_schedule_service
 from core.graph.auth import GraphAuth, GraphAuthError, GraphNotConfiguredError
 from core.graph.client import GraphHTTPError
 from core.schedule_service import ScheduleNotConnectedError, ScheduleService
@@ -124,7 +125,10 @@ async def create_event(request: CreateEventRequest):
             start_time=request.start_time,
             end_time=request.end_time,
             all_day=request.all_day,
+            goal_id=request.goal_id,
         )
+    except goal_schedule_service.GoalNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (ScheduleNotConnectedError, GraphNotConfiguredError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:

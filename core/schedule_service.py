@@ -8,7 +8,7 @@ import threading
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from core import db
+from core import db, goal_schedule_service
 from core.graph.auth import GraphAuth, GraphAuthError
 from core.graph.client import GraphClient, GraphHTTPError
 
@@ -74,11 +74,13 @@ class ScheduleService:
             """,
             (start_ts, end_ts),
         )
+        events = [_row_to_event(row) for row in rows]
+        _attach_goal_links(events)
         return {
             "configured": True,
             "connected": True,
             "status": "ok",
-            "events": [_row_to_event(row) for row in rows],
+            "events": events,
         }
 
     def sync(self, *, force: bool = False) -> dict[str, Any]:
@@ -130,12 +132,22 @@ class ScheduleService:
                 if not event_id:
                     raise ValueError("Graph 日程缺少 id")
                 if raw_event.get("@removed") is not None:
+                    conn.execute("DELETE FROM goal_schedule_links WHERE event_id = ?", (event_id,))
                     cursor = conn.execute("DELETE FROM schedule_events WHERE id = ?", (event_id,))
                     deleted += max(0, cursor.rowcount)
                     continue
                 normalized = _normalize_graph_event(raw_event, synced_at=now)
                 _upsert_event(conn, normalized)
+                if normalized["is_cancelled"]:
+                    conn.execute("DELETE FROM goal_schedule_links WHERE event_id = ?", (event_id,))
                 upserted += 1
+            if full_refresh:
+                conn.execute(
+                    """
+                    DELETE FROM goal_schedule_links
+                    WHERE event_id NOT IN (SELECT id FROM schedule_events)
+                    """
+                )
             _set_meta(conn, DELTA_LINK_META_KEY, str(result["delta_link"]))
             _set_meta(conn, LAST_SYNC_AT_META_KEY, str(now))
             _set_meta(conn, WINDOW_START_META_KEY, window_start.isoformat())
@@ -158,7 +170,10 @@ class ScheduleService:
         start_time: time | None = None,
         end_time: time | None = None,
         all_day: bool = False,
+        goal_id: str | None = None,
     ) -> dict[str, Any]:
+        if goal_id is not None and db.query_one("SELECT 1 FROM goals WHERE id = ?", (goal_id,)) is None:
+            raise goal_schedule_service.GoalNotFoundError("goal not found")
         graph = self._connected_graph()
         payload = _create_payload(
             subject=subject,
@@ -171,7 +186,11 @@ class ScheduleService:
         normalized = _normalize_graph_event(raw_event, synced_at=self._clock())
         with db.transaction() as conn:
             _upsert_event(conn, normalized)
-        return _event_dict(normalized)
+            if goal_id is not None:
+                goal_schedule_service.link(goal_id, str(normalized["id"]), conn=conn)
+        created = _event_dict(normalized)
+        _attach_goal_links([created])
+        return created
 
     def update_event(self, event_id: str, changes: Mapping[str, Any]) -> dict[str, Any]:
         graph = self._connected_graph()
@@ -182,12 +201,16 @@ class ScheduleService:
         normalized = _normalize_graph_event(raw_event, synced_at=self._clock())
         with db.transaction() as conn:
             _upsert_event(conn, normalized)
-        return _event_dict(normalized)
+        updated = _event_dict(normalized)
+        _attach_goal_links([updated])
+        return updated
 
     def delete_event(self, event_id: str) -> None:
         graph = self._connected_graph()
         graph.delete_event(event_id)
-        db.execute("DELETE FROM schedule_events WHERE id = ?", (event_id,))
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM goal_schedule_links WHERE event_id = ?", (event_id,))
+            conn.execute("DELETE FROM schedule_events WHERE id = ?", (event_id,))
 
     def logout(self) -> None:
         self.auth.logout()
@@ -439,6 +462,12 @@ def _event_dict(event: Mapping[str, Any]) -> dict[str, Any]:
         "goal_link": None,
         "goal_links": [],
     }
+
+
+def _attach_goal_links(events: list[dict[str, Any]]) -> None:
+    links = goal_schedule_service.links_for_events([str(event["id"]) for event in events])
+    for event in events:
+        event["goal_links"] = links.get(str(event["id"]), [])
 
 
 def _meta_value(key: str) -> str | None:

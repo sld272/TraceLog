@@ -81,6 +81,39 @@ class DbTest(unittest.TestCase):
         self.assertIsNotNone(probe)
         self.assertEqual([], generated)
 
+    def test_legacy_goals_gain_schedule_expectation_and_link_table(self) -> None:
+        legacy = Path(self.tmp.name) / "legacy-goals-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            conn.execute(
+                """
+                CREATE TABLE goals (
+                    id TEXT PRIMARY KEY,
+                    horizon TEXT NOT NULL,
+                    status TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            db.init_db()
+
+            columns = {row["name"] for row in db.query_all("PRAGMA table_info(goals)")}
+            link_table = db.query_one(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("goal_schedule_links",),
+            )
+            self.assertIn("schedule_expectation", columns)
+            self.assertIsNotNone(link_table)
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
     def test_schema_version_is_current_and_observation_tables_are_absent(self) -> None:
         tables = {
             row["name"]
@@ -108,6 +141,7 @@ class DbTest(unittest.TestCase):
         self.assertIn("vector_index_items", tables)
         self.assertIn("vector_outbox", tables)
         self.assertIn("post_soul_orders", tables)
+        self.assertIn("goal_schedule_links", tables)
 
     def test_init_drops_retired_todos_table(self) -> None:
         conn = db.connect()

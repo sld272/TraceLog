@@ -65,6 +65,7 @@ def init_db() -> None:
 _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("memory_units", "contested_at", "REAL"),
     ("chat_messages", "client_request_id", "TEXT"),
+    ("goals", "schedule_expectation", "TEXT"),
 )
 
 

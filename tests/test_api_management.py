@@ -7,14 +7,16 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from PIL import Image
 
-from core import chat_service, db, logging_service, soul_service, suggestion_service
+from core import chat_service, db, goal_service, logging_service, soul_service, suggestion_service
 from core.app_services import job_service
 
 
@@ -460,6 +462,47 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIsNotNone(progress_response.json()["last_progress_at"])
         self.assertEqual(200, delete_response.status_code)
         self.assertEqual(404, missing_response.status_code)
+
+    def test_goal_schedule_routes_cover_links_expectation_and_progress(self) -> None:
+        goal = goal_service.create_goal("每周健身", None, "short")
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        db.execute(
+            """
+            INSERT INTO schedule_events(
+                id, subject, start_ts, end_ts, start_local, end_local, synced_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "event-api-1",
+                "练背",
+                now.timestamp(),
+                now.timestamp() + 3600,
+                now.replace(tzinfo=None).isoformat(timespec="seconds"),
+                (now + timedelta(hours=1)).replace(tzinfo=None).isoformat(timespec="seconds"),
+                now.timestamp(),
+            ),
+        )
+
+        with self._client() as client:
+            linked = client.post(
+                f"/goals/{goal['id']}/schedule/links",
+                json={"event_id": "event-api-1"},
+            )
+            expectation = client.put(
+                f"/goals/{goal['id']}/schedule/expectation",
+                json={"period": "week", "target": 3, "label": "每周健身 3 次"},
+            )
+            schedule = client.get(f"/goals/{goal['id']}/schedule")
+            unlinked = client.delete(
+                f"/goals/{goal['id']}/schedule/links/event-api-1"
+            )
+
+        self.assertEqual(200, linked.status_code, linked.text)
+        self.assertEqual(200, expectation.status_code, expectation.text)
+        self.assertEqual(["event-api-1"], [event["id"] for event in schedule.json()["events"]])
+        self.assertEqual(1, schedule.json()["progress"]["current"])
+        self.assertEqual("1/3", schedule.json()["progress"]["text"])
+        self.assertEqual(200, unlinked.status_code, unlinked.text)
 
     def test_suggestion_routes_accept_and_dismiss_goals(self) -> None:
         accepted_suggestion = suggestion_service.create_suggestion(

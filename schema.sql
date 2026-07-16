@@ -222,12 +222,20 @@ CREATE TABLE IF NOT EXISTS goals (
                          CHECK(source IN ('user', 'suggested_accepted')),
     focus            INTEGER NOT NULL DEFAULT 0 CHECK(focus IN (0, 1)),
     last_progress_at REAL,
+    schedule_expectation TEXT,
     created_at       REAL NOT NULL,
     updated_at       REAL NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_goals_status_horizon
     ON goals(status, horizon, id);
+
+CREATE TABLE IF NOT EXISTS goal_schedule_links (
+    goal_id     TEXT NOT NULL,
+    event_id    TEXT NOT NULL,
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (goal_id, event_id)
+);
 
 CREATE TABLE IF NOT EXISTS suggestions (
     id             TEXT PRIMARY KEY,

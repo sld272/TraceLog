@@ -8,7 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import db
+from core import db, goal_service
+from core.schedule_service import ScheduleService
 
 
 @unittest.skipUnless(importlib.util.find_spec("fastapi"), "FastAPI is not installed")
@@ -105,6 +106,48 @@ class ApiScheduleTest(unittest.TestCase):
         self.assertNotIn(client_id, str(saved.json()))
         self.assertTrue(status.json()["configured"])
         self.assertFalse(status.json()["connected"])
+
+    def test_create_event_goal_id_links_the_created_event(self) -> None:
+        class ConnectedAuth:
+            def client_id(self):
+                return "client-id"
+
+            def get_access_token(self):
+                return "access-token"
+
+        class CreatingGraph:
+            def create_event(self, payload):
+                return {
+                    "id": "created-api",
+                    "subject": payload["subject"],
+                    "start": payload["start"],
+                    "end": payload["end"],
+                    "isAllDay": payload["isAllDay"],
+                }
+
+        goal = goal_service.create_goal("完成 P4", None, "short")
+        service = ScheduleService(
+            auth=ConnectedAuth(),
+            graph_factory=lambda token_provider: CreatingGraph(),
+            clock=lambda: 1.0,
+        )
+
+        with patch("api.routes.schedule.ScheduleService", return_value=service):
+            with self._client() as client:
+                response = client.post(
+                    "/schedule/events",
+                    json={
+                        "subject": "API 创建日程",
+                        "date": "2026-07-16",
+                        "goal_id": goal["id"],
+                    },
+                )
+
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual(
+            [{"goal_id": goal["id"], "goal_title": "完成 P4"}],
+            response.json()["goal_links"],
+        )
 
 
 class ScheduleSyncLifecycleTest(unittest.IsolatedAsyncioTestCase):

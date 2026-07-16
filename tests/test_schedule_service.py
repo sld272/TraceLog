@@ -6,6 +6,7 @@ from datetime import date, time
 from pathlib import Path
 
 from core import db
+from core import goal_schedule_service, goal_service
 from core.graph.client import GraphHTTPError
 from core.schedule_service import ScheduleNotConnectedError, ScheduleService
 
@@ -151,21 +152,58 @@ class ScheduleServiceTest(unittest.TestCase):
         self.assertIsNotNone(db.query_one("SELECT 1 FROM schedule_events WHERE id = 'fresh'"))
         self.assertEqual("new-delta", db.query_one("SELECT value FROM meta WHERE key = 'graph.delta_link'")["value"])
 
+    def test_delta_removed_and_cancelled_events_remove_goal_links(self) -> None:
+        cancelled = graph_event("cancelled", "会取消", 13)
+        cancelled["isCancelled"] = True
+        graph = FakeGraph(
+            [
+                {
+                    "events": [graph_event("removed", "会删除", 11), graph_event("cancelled", "待确认", 13)],
+                    "delta_link": "delta-1",
+                },
+                {
+                    "events": [
+                        {"id": "removed", "@removed": {"reason": "deleted"}},
+                        cancelled,
+                    ],
+                    "delta_link": "delta-2",
+                },
+            ]
+        )
+        service = self._service(graph)
+        service.sync()
+        goal = goal_service.create_goal("准备会议", None, "short")
+        goal_schedule_service.link(goal["id"], "removed")
+        goal_schedule_service.link(goal["id"], "cancelled")
+
+        service.sync()
+
+        self.assertEqual([], goal_schedule_service.links_for_goal(goal["id"]))
+        self.assertEqual(
+            0,
+            db.query_one("SELECT COUNT(*) AS count FROM goal_schedule_links")["count"],
+        )
+
     def test_create_writes_graph_then_event_is_immediately_visible_in_cache(self) -> None:
         graph = FakeGraph()
         service = self._service(graph)
+        goal = goal_service.create_goal("完成 P4", None, "short")
 
         created = service.create_event(
             subject="评审 P3",
             event_date=date(2026, 7, 16),
             start_time=time(14, 0),
             end_time=time(15, 0),
+            goal_id=goal["id"],
         )
         listed = service.list_events(date(2026, 7, 16), date(2026, 7, 16))
 
         self.assertEqual("created-1", created["id"])
         self.assertEqual("评审 P3", graph.created_payloads[0]["subject"])
         self.assertEqual(["created-1"], [event["id"] for event in listed["events"]])
+        expected_links = [{"goal_id": goal["id"], "goal_title": "完成 P4"}]
+        self.assertEqual(expected_links, created["goal_links"])
+        self.assertEqual(expected_links, listed["events"][0]["goal_links"])
 
         updated = service.update_event("created-1", {"subject": "P3 已评审"})
         self.assertEqual("P3 已评审", updated["subject"])

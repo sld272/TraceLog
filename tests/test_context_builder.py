@@ -3,11 +3,22 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from unittest.mock import patch
 
-from core import context_builder, db, goal_service, logging_service, memory_unit_service, memory_view_service, soul_service, web_search_gate, web_search_service
+from core import context_builder, db, goal_schedule_service, goal_service, logging_service, memory_unit_service, memory_view_service, soul_service, web_search_gate, web_search_service
+from core.schedule_service import ScheduleService
+
+
+class ConnectedScheduleAuth:
+    def client_id(self):
+        return "client-id"
+
+    def get_access_token(self):
+        return "access-token"
 
 
 class ContextBuilderTest(unittest.TestCase):
@@ -137,6 +148,32 @@ class ContextBuilderTest(unittest.TestCase):
         call_turn_prep.assert_called_once()
         search.assert_called_once()
 
+    def test_public_context_includes_upcoming_schedule_goals_and_weekly_progress(self) -> None:
+        zone = ZoneInfo("Asia/Shanghai")
+        goal = goal_service.create_goal("每周健身", None, "short")
+        goal_schedule_service.update_expectation(
+            goal["id"],
+            {"period": "week", "target": 3, "label": "每周健身 3 次"},
+        )
+        for event_id, subject, local_start in (
+            ("event-1", "练背", datetime(2026, 7, 16, 19, 0, tzinfo=zone)),
+            ("event-2", "练腿", datetime(2026, 7, 18, 19, 0, tzinfo=zone)),
+            ("event-outside", "下周末", datetime(2026, 7, 24, 19, 0, tzinfo=zone)),
+        ):
+            self._insert_schedule_event(event_id, subject, local_start)
+            goal_schedule_service.link(goal["id"], event_id)
+
+        service = ScheduleService(auth=ConnectedScheduleAuth())
+        with patch("core.context_builder.ScheduleService", return_value=service):
+            built = context_builder.build_context(today=date(2026, 7, 16))
+
+        self.assertIn("# 近期日程", built.shared_context)
+        self.assertIn("练背", built.shared_context)
+        self.assertIn("练腿", built.shared_context)
+        self.assertNotIn("下周末", built.shared_context)
+        self.assertIn("目标：每周健身", built.shared_context)
+        self.assertIn("每周健身 3 次，本周 2/3", built.shared_context)
+
     def test_public_context_skips_web_search_when_no_enabled_souls(self) -> None:
         for soul in soul_service.list_souls(enabled_only=True):
             soul_service.disable_soul(soul.name)
@@ -158,6 +195,25 @@ class ContextBuilderTest(unittest.TestCase):
             VALUES (?, ?, ?, ?, ?)
             """,
             (post_id, "2026-05-25T10:00:00+08:00", content, created_at, created_at),
+        )
+
+    def _insert_schedule_event(self, event_id: str, subject: str, start: datetime) -> None:
+        end = start + timedelta(hours=1)
+        db.execute(
+            """
+            INSERT INTO schedule_events(
+                id, subject, start_ts, end_ts, start_local, end_local, synced_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                subject,
+                start.timestamp(),
+                end.timestamp(),
+                start.replace(tzinfo=None).isoformat(timespec="seconds"),
+                end.replace(tzinfo=None).isoformat(timespec="seconds"),
+                start.timestamp(),
+            ),
         )
 
     def _last_event(self, event_name: str) -> dict:

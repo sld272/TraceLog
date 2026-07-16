@@ -195,7 +195,9 @@ def mark_progress(goal_id: str, *, at: float | None = None) -> dict[str, Any] | 
 def delete_goal(goal_id: str) -> bool | None:
     if get_goal(goal_id) is None:
         return None
-    db.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+    with db.transaction() as conn:
+        conn.execute("DELETE FROM goal_schedule_links WHERE goal_id = ?", (goal_id,))
+        conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
     return True
 
 
