@@ -88,6 +88,7 @@ export function RightPanel({
         targetDate={selectedDate ?? todayKey()}
         isToday={selectedDate === null}
         connection={connection}
+        outlookConnected={status?.connected ?? false}
         onOpenSchedule={onOpenSchedule}
         onOpenSettings={onOpenSettings}
       />
@@ -100,12 +101,15 @@ function ScheduleDayCard({
   targetDate,
   isToday,
   connection,
+  outlookConnected,
   onOpenSchedule,
   onOpenSettings,
 }: {
   targetDate: string
   isToday: boolean
   connection: ScheduleConnectionState
+  /** 是否真连了 Outlook（本地日历也算 connected，但不该显示同步角标）。 */
+  outlookConnected: boolean
   onOpenSchedule: () => void
   onOpenSettings: () => void
 }) {
@@ -150,13 +154,13 @@ function ScheduleDayCard({
         <p className={styles.empty}>连接状态获取失败，稍后再试。</p>
       ) : connection === 'disconnected' ? (
         <p className={styles.schedGuide}>
-          连接 Outlook 日历后，这里会显示你的日程。
+          连接 Outlook 日历或启用本地日历后，这里会显示你的日程。
           <button type="button" className={styles.schedGuideLink} onClick={onOpenSettings}>去设置连接</button>
         </p>
       ) : (
         <>
           <ScheduleList events={events.slice(0, 4)} progressByGoal={progressByGoal} emptyText={emptyText} />
-          {events.length > 0 && (
+          {events.length > 0 && outlookConnected && (
             <div className={styles.schedSource}>
               <SyncIcon />
               同步自 Outlook 日历

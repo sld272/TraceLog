@@ -176,6 +176,24 @@
   line-height: var(--leading-normal);
 }
 
+/* 引导卡次级动作：「先用本地日历」 */
+.guideSecondary {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color var(--transition-fast);
+}
+
+.guideSecondary:hover {
+  color: var(--color-accent);
+}
+
+.guideSecondary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* ===== 页脚 ===== */
 .syncMeta {
   margin-top: var(--space-3);

@@ -1230,8 +1230,20 @@ export interface ScheduleEvent {
   is_cancelled: boolean
   change_key: string | null
   synced_at: number
+  /** 所属日历账号 id（'outlook' | 'local'）。 */
+  account_id: string
+  /** 账号 provider（'outlook' | 'local'，未来可能有其他云端家）。 */
+  provider: string
   goal_link: null
   goal_links: ScheduleGoalLink[]
+}
+
+/** A calendar account (local or cloud) that stores schedule events. */
+export interface ScheduleAccountInfo {
+  id: string
+  provider: string
+  display_name: string
+  event_count: number
 }
 
 export interface ScheduleAccount {
@@ -1247,6 +1259,8 @@ export interface ScheduleStatus {
   last_sync_at: number | null
   window_start: string
   window_end: string
+  /** 全部日历账号概要（本地 + 云端）。旧 sessionStorage 快照可能缺失。 */
+  accounts?: ScheduleAccountInfo[]
 }
 
 export interface ScheduleClientIdInfo {
@@ -1296,6 +1310,8 @@ export interface CreateScheduleEventInput {
   end_time?: string
   all_day?: boolean
   goal_id?: string
+  /** 保存到的账号（'outlook' | 'local'）；缺省由后端路由（已连接→Outlook，否则本地）。 */
+  account_id?: string
 }
 
 /** A goal's weekly schedule expectation ({ period, target, label }). */
@@ -1410,6 +1426,21 @@ export function updateScheduleEvent(eventId: string, changes: Partial<CreateSche
 export function deleteScheduleEvent(eventId: string) {
   return request<{ ok: boolean }>(`/schedule/events/${encodeURIComponent(eventId)}`, {
     method: 'DELETE',
+  })
+}
+
+export function listScheduleAccounts() {
+  return request<ScheduleAccountInfo[]>('/schedule/accounts')
+}
+
+export function createLocalCalendarAccount() {
+  return request<ScheduleAccountInfo>('/schedule/accounts/local', { method: 'POST' })
+}
+
+export function deleteLocalCalendarAccount(deleteEvents: boolean) {
+  return request<{ ok: boolean; deleted_events: number }>('/schedule/accounts/local', {
+    method: 'DELETE',
+    body: JSON.stringify({ delete_events: deleteEvents }),
   })
 }
 

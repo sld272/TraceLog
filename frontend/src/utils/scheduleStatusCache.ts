@@ -14,11 +14,16 @@ import { type ScheduleStatus } from '@/api/client'
 /**
  * UI 面向的连接状态：
  * - 'loading'      请求在途且没有任何已知状态 → 显示中性占位，不显示引导
- * - 'connected'    明确已连接 → 显示日程
- * - 'disconnected' 拿到明确 connected:false → 显示「去设置连接」引导
+ * - 'connected'    有任一可用日历账号（Outlook 已连接或本地日历已创建）→ 显示日程
+ * - 'disconnected' 明确既未连接云端也没有本地账号 → 显示引导
  * - 'error'        请求失败（网络/500）且无已知状态 → 显示「获取失败」而非引导
  */
 export type ScheduleConnectionState = 'loading' | 'connected' | 'disconnected' | 'error'
+
+/** status 是否包含本地日历账号（旧缓存快照可能没有 accounts 字段）。 */
+export function hasLocalCalendarAccount(status: ScheduleStatus | null): boolean {
+  return (status?.accounts ?? []).some((account) => account.provider === 'local')
+}
 
 const STORAGE_KEY = 'tracelog.scheduleStatus'
 
@@ -78,6 +83,8 @@ export function scheduleConnectionState(
   status: ScheduleStatus | null,
   failed: boolean,
 ): ScheduleConnectionState {
-  if (status) return status.connected ? 'connected' : 'disconnected'
+  if (status) {
+    return status.connected || hasLocalCalendarAccount(status) ? 'connected' : 'disconnected'
+  }
   return failed ? 'error' : 'loading'
 }

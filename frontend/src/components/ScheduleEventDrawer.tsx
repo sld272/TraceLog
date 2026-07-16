@@ -17,6 +17,8 @@ interface ScheduleEventDrawerProps {
   goals: Goal[]
   /** 预设并锁定绑定的目标（「为此目标创建日程」入口）。 */
   presetGoalId?: string
+  /** 可写日历账号（顺序即默认优先级，Outlook 在前）。缺省视为仅 Outlook。 */
+  accounts?: { id: string; label: string }[]
   /** 空白时段新建时的预填（日期 + 起止时间）。 */
   prefill?: { date: string; start_time?: string; end_time?: string }
   /** 传入则进入编辑态（预填现有事件字段）。 */
@@ -31,6 +33,7 @@ interface ScheduleEventDrawerProps {
 export function ScheduleEventDrawer({
   goals,
   presetGoalId,
+  accounts,
   prefill,
   event,
   onClose,
@@ -39,6 +42,7 @@ export function ScheduleEventDrawer({
 }: ScheduleEventDrawerProps) {
   const editing = event != null
   const handleSaved = onSaved ?? onCreated ?? (() => undefined)
+  const writable = accounts ?? []
 
   const [subject, setSubject] = useState(() => event?.subject ?? '')
   const [date, setDate] = useState(() => (event ? eventDateKey(event) : prefill?.date ?? todayKey()))
@@ -52,6 +56,8 @@ export function ScheduleEventDrawer({
   const [goalId, setGoalId] = useState(
     () => presetGoalId ?? event?.goal_links[0]?.goal_id ?? '',
   )
+  /** 保存到哪个账号（仅创建态；编辑态事件的家不可变）。 */
+  const [accountId, setAccountId] = useState(() => writable[0]?.id ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -90,12 +96,16 @@ export function ScheduleEventDrawer({
         }
         handleSaved(updated)
       } else {
-        const created = await createScheduleEvent({ ...fields, goal_id: goalId || undefined })
+        const created = await createScheduleEvent({
+          ...fields,
+          goal_id: goalId || undefined,
+          account_id: accountId || undefined,
+        })
         handleSaved(created)
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        setError('Microsoft 日历尚未连接，请先在设置中登录。')
+        setError('没有可用的日历账号：请先在设置中登录 Microsoft，或创建本地日历。')
       } else {
         setError(err instanceof Error ? err.message : editing ? '保存日程失败' : '创建日程失败')
       }
@@ -103,10 +113,18 @@ export function ScheduleEventDrawer({
     }
   }
 
+  const savingToLocal = editing ? event.provider === 'local' : accountId === 'local'
   const title = editing ? '编辑日程' : '新建日程'
+  const bindHint = presetGoal ? `，并绑定到「${presetGoal.title}」` : ''
   const subtitle = editing
-    ? '改动写回 Outlook 日历。'
-    : `写入 Outlook 日历${presetGoal ? `，并绑定到「${presetGoal.title}」` : ''}。`
+    ? savingToLocal
+      ? '改动保存在本地日历（仅这台设备）。'
+      : '改动写回 Outlook 日历。'
+    : savingToLocal
+      ? `保存到本地日历（仅这台设备）${bindHint}。`
+      : accountId === 'outlook'
+        ? `写入 Outlook 日历${bindHint}。`
+        : `保存到你的日历${bindHint}。`
 
   return (
     <div className={styles.overlay} onClick={onClose}>
@@ -153,6 +171,17 @@ export function ScheduleEventDrawer({
               <input type="time" value={endTime} onChange={(changeEvent) => setEndTime(changeEvent.target.value)} />
             </label>
           </div>
+        )}
+
+        {!editing && writable.length > 1 && (
+          <label className={styles.field}>
+            <span>保存到</span>
+            <select value={accountId} onChange={(changeEvent) => setAccountId(changeEvent.target.value)}>
+              {writable.map((account) => (
+                <option key={account.id} value={account.id}>{account.label}</option>
+              ))}
+            </select>
+          </label>
         )}
 
         <label className={styles.field}>

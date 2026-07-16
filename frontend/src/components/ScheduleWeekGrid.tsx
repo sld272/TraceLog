@@ -94,7 +94,7 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
               <button
                 key={event.id}
                 type="button"
-                className={`${styles.allDayChip} ${event.goal_links.length > 0 ? styles.allDayGoal : ''}`}
+                className={`${styles.allDayChip} ${event.goal_links.length > 0 ? styles.allDayGoal : ''} ${event.provider === 'local' ? styles.chipLocal : ''}`}
                 onClick={(clickEvent) => {
                   clickEvent.stopPropagation()
                   onEventClick(event, { x: clickEvent.clientX, y: clickEvent.clientY })
@@ -147,7 +147,7 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
                 return (
                   <div
                     key={block.event.id}
-                    className={`${styles.evt} ${bound ? styles.evtGoal : ''} ${compact ? styles.evtCompact : ''}`}
+                    className={`${styles.evt} ${bound ? styles.evtGoal : ''} ${compact ? styles.evtCompact : ''} ${block.event.provider === 'local' ? styles.evtLocal : ''}`}
                     style={{
                       top,
                       height,

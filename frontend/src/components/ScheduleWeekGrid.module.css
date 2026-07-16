@@ -247,3 +247,12 @@
   color: var(--color-accent);
   pointer-events: none;
 }
+
+/* 本地日历事件：虚线左边条（色彩语义不变，仅标注「家在本机」） */
+.evtLocal {
+  border-left-style: dashed;
+}
+
+.chipLocal {
+  border-left-style: dashed;
+}

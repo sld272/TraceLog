@@ -95,3 +95,8 @@
   font-size: 10px;
   color: var(--color-text-tertiary);
 }
+
+/* 本地日历事件 chip：虚线左边条 */
+.chipLocal {
+  border-left-style: dashed;
+}

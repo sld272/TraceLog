@@ -67,6 +67,10 @@ export function ScheduleEventPopover({ event, anchor, progressByGoal, onClose, o
       <div className={styles.title}>{event.subject || '(无标题)'}</div>
 
       <div className={styles.row}><span className={styles.icon} aria-hidden="true">🕐</span>{when}</div>
+      <div className={styles.row}>
+        <span className={styles.icon} aria-hidden="true">📅</span>
+        {event.provider === 'local' ? '本地日历（仅这台设备）' : 'Outlook 日历'}
+      </div>
       {event.location && (
         <div className={styles.row}><span className={styles.icon} aria-hidden="true">📍</span>{event.location}</div>
       )}

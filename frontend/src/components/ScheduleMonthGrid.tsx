@@ -59,7 +59,7 @@ export function ScheduleMonthGrid({ cells, today, events, onEventClick, onDayCli
               {shown.map((event) => (
                 <span
                   key={event.id}
-                  className={`${styles.chip} ${event.goal_links.length > 0 ? styles.chipGoal : ''}`}
+                  className={`${styles.chip} ${event.goal_links.length > 0 ? styles.chipGoal : ''} ${event.provider === 'local' ? styles.chipLocal : ''}`}
                   onClick={(clickEvent) => {
                     clickEvent.stopPropagation()
                     onEventClick(event, { x: clickEvent.clientX, y: clickEvent.clientY })

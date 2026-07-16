@@ -4,12 +4,17 @@ import {
   type ScheduleEvent,
   type ScheduleProgress,
   type ScheduleStatus,
+  createLocalCalendarAccount,
   getScheduleStatus,
   listGoals,
   listScheduleEvents,
   syncSchedule,
 } from '@/api/client'
-import { getCachedScheduleStatus, setCachedScheduleStatus } from '@/utils/scheduleStatusCache'
+import {
+  getCachedScheduleStatus,
+  hasLocalCalendarAccount,
+  setCachedScheduleStatus,
+} from '@/utils/scheduleStatusCache'
 import { Notice } from '@/components/Notice'
 import { ScheduleEventDrawer } from '@/components/ScheduleEventDrawer'
 import { ScheduleEventPopover } from '@/components/ScheduleEventPopover'
@@ -56,8 +61,12 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
   const [popover, setPopover] = useState<PopoverState | null>(null)
   const [drawer, setDrawer] = useState<DrawerState | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
+  const [creatingLocal, setCreatingLocal] = useState(false)
 
   const connected = status?.connected ?? false
+  const hasLocal = hasLocalCalendarAccount(status)
+  /** 有任一可写账号（Outlook 已连或本地日历已创建）即可使用日历。 */
+  const usable = connected || hasLocal
   const today = todayKey()
 
   const weekDays = useMemo(() => weekKeysFor(anchor), [anchor])
@@ -97,7 +106,7 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
 
   /* 事件 + 目标进度：随视图/锚点/目标/刷新信号变化重拉当前区间。 */
   useEffect(() => {
-    if (!connected) {
+    if (!usable) {
       setEvents([])
       setProgressByGoal({})
       return
@@ -122,7 +131,7 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
     return () => {
       cancelled = true
     }
-  }, [connected, range.start, range.end, goals, reloadKey])
+  }, [usable, range.start, range.end, goals, reloadKey])
 
   const goPrev = () => setAnchor((a) => (view === 'week' ? shiftDateKey(a, -7) : shiftMonthKey(a, -1)))
   const goNext = () => setAnchor((a) => (view === 'week' ? shiftDateKey(a, 7) : shiftMonthKey(a, 1)))
@@ -182,6 +191,23 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
     setReloadKey((key) => key + 1)
   }
 
+  /* 「先用本地日历」：创建本地账号后直接进入日历。 */
+  const handleUseLocal = async () => {
+    setCreatingLocal(true)
+    setError(null)
+    try {
+      await createLocalCalendarAccount()
+      const statusData = await getScheduleStatus()
+      setStatus(statusData)
+      setCachedScheduleStatus(statusData)
+      setNotice('已创建本地日历。日程仅保存在这台设备，连接云端账号可多端同步。')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建本地日历失败')
+    } finally {
+      setCreatingLocal(false)
+    }
+  }
+
   const handleDeleted = () => {
     setPopover(null)
     setNotice('日程已删除。')
@@ -214,6 +240,14 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
 
   const subtitle = view === 'week' ? weekRangeLabel(weekDays) : monthTitleLabel(anchor)
 
+  /** 可写账号列表（顺序即 Drawer 默认值优先级：Outlook 优先）。 */
+  const writableAccounts = useMemo(() => {
+    const list: { id: string; label: string }[] = []
+    if (connected) list.push({ id: 'outlook', label: 'Outlook' })
+    if (hasLocal) list.push({ id: 'local', label: '本地日历' })
+    return list
+  }, [connected, hasLocal])
+
   return (
     <div className={workspaceStyles.page}>
       <header className={workspaceStyles.header}>
@@ -221,7 +255,7 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
           <h1 className={workspaceStyles.title}>日程</h1>
           <p className={workspaceStyles.subtitle}>{subtitle}</p>
         </div>
-        {connected && (
+        {usable && (
           <div className={styles.controls}>
             <button className={styles.ghostBtn} type="button" onClick={goToday}>今天</button>
             <span className={styles.arrowGroup}>
@@ -244,10 +278,12 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
                 月
               </button>
             </span>
-            <button className={styles.ghostBtn} type="button" onClick={() => void handleSync()} disabled={syncing}>
-              <RefreshCwIcon />
-              {syncing ? '同步中...' : '立即同步'}
-            </button>
+            {connected && (
+              <button className={styles.ghostBtn} type="button" onClick={() => void handleSync()} disabled={syncing}>
+                <RefreshCwIcon />
+                {syncing ? '同步中...' : '立即同步'}
+              </button>
+            )}
             <button className={styles.primaryBtn} type="button" onClick={() => setDrawer({ mode: 'create' })}>
               <PlusIcon />
               新建日程
@@ -263,15 +299,23 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
         <div className={workspaceStyles.empty}>加载中...</div>
       ) : status === null ? (
         <div className={workspaceStyles.empty}>连接状态获取失败，稍后再试。</div>
-      ) : !connected ? (
+      ) : !usable ? (
         <div className={styles.guide}>
           <span className={styles.guideIcon}><CalendarBigIcon /></span>
-          <p className={styles.guideTitle}>还没有连接日历</p>
+          <p className={styles.guideTitle}>还没有日历账号</p>
           <p className={styles.guideHint}>
-            拾迹通过你的 Microsoft 账户读写 Outlook 日历。连接后，这里会以日历视图展示你的日程，也能把日程绑定到目标。
+            连接 Microsoft 账户后，日程与 Outlook 实时同步、多端可见；也可以先用只保存在这台设备上的本地日历。
           </p>
           <button className={workspaceStyles.button} type="button" onClick={onOpenSettings}>
-            去设置连接
+            连接 Microsoft 账户（推荐）
+          </button>
+          <button
+            className={styles.guideSecondary}
+            type="button"
+            onClick={() => void handleUseLocal()}
+            disabled={creatingLocal}
+          >
+            {creatingLocal ? '创建中...' : '先用本地日历'}
           </button>
         </div>
       ) : (
@@ -318,7 +362,9 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
           )}
 
           <p className={styles.syncMeta}>
-            {status?.last_sync_at ? `上次同步 ${formatSmartTime(status.last_sync_at)}` : '尚未同步'} · 改动实时写回 Outlook
+            {connected
+              ? `${status?.last_sync_at ? `上次同步 ${formatSmartTime(status.last_sync_at)}` : '尚未同步'} · 改动实时写回 Outlook${hasLocal ? ' · 本地日程仅保存在本机' : ''}`
+              : '本地日程仅保存在这台设备，连接云端账号可多端同步'}
           </p>
           <p className={styles.kbdHint}>
             <kbd className={styles.kbd}>←</kbd><kbd className={styles.kbd}>→</kbd> 切换 ·{' '}
@@ -342,6 +388,7 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
       {drawer && (
         <ScheduleEventDrawer
           goals={goals}
+          accounts={writableAccounts}
           prefill={drawer.mode === 'create' ? drawer.prefill : undefined}
           event={drawer.mode === 'edit' ? drawer.event : undefined}
           onClose={() => setDrawer(null)}

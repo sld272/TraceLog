@@ -22,6 +22,8 @@ import {
   retryVectorIndex,
   saveModelSettings,
   saveScheduleClientId,
+  createLocalCalendarAccount,
+  deleteLocalCalendarAccount,
   scheduleLogout,
   startInteractiveAuth,
   startScheduleDeviceLogin,
@@ -139,7 +141,7 @@ const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语
 const TAB_SUBTITLES: Record<SettingsTab, string> = {
   model: '模型、图片识别、网页搜索与 Embedding 配置',
   souls: '排序决定首页并发回应顺序，禁用后不进入回应队列',
-  schedule: '连接 Microsoft 账户，读写 Outlook 日历',
+  schedule: '管理日历账号：Outlook 云端与本地日历',
   data: '本地 workspace 状态、数据概览与记忆检索索引',
   about: '关于拾迹这个项目',
 }
@@ -624,7 +626,7 @@ function AboutSettingsPanel() {
   )
 }
 
-type ScheduleBusy = 'login' | 'device' | 'save' | 'restore' | 'logout' | null
+type ScheduleBusy = 'login' | 'device' | 'save' | 'restore' | 'logout' | 'createLocal' | 'deleteLocal' | null
 type LoginPhase = 'interactive' | 'device' | null
 
 function ScheduleSettingsPanel() {
@@ -637,6 +639,7 @@ function ScheduleSettingsPanel() {
   const [polling, setPolling] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [confirmRestore, setConfirmRestore] = useState(false)
+  const [confirmDeleteLocal, setConfirmDeleteLocal] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const pollRef = useRef<number | null>(null)
@@ -820,6 +823,45 @@ function ScheduleSettingsPanel() {
     )
   }
 
+  const localAccount = status?.accounts?.find((account) => account.provider === 'local') ?? null
+
+  const handleCreateLocal = async () => {
+    setBusy('createLocal')
+    setError(null)
+    setNotice(null)
+    try {
+      await createLocalCalendarAccount()
+      invalidateScheduleStatusCache()
+      setNotice('已创建本地日历。日程仅保存在这台设备。')
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建本地日历失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const handleDeleteLocal = async () => {
+    if (!confirmDeleteLocal) {
+      setConfirmDeleteLocal(true)
+      return
+    }
+    setBusy('deleteLocal')
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await deleteLocalCalendarAccount(true)
+      invalidateScheduleStatusCache()
+      setConfirmDeleteLocal(false)
+      setNotice(`已删除本地日历（连同 ${result.deleted_events} 条日程）。`)
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除本地日历失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const connected = status?.connected ?? false
   const accountName = status?.account?.username ?? status?.account?.name ?? null
   const usingDefault = clientIdInfo?.using_default ?? true
@@ -838,8 +880,8 @@ function ScheduleSettingsPanel() {
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
-            <h2 className={styles.sectionTitle}>连接账户</h2>
-            <p className={styles.sectionMeta}>登录 Microsoft，授权拾迹读写你的 Outlook 日历。</p>
+            <h2 className={styles.sectionTitle}>Outlook 日历</h2>
+            <p className={styles.sectionMeta}>登录 Microsoft 后日程多端同步，推荐使用。</p>
           </div>
           <StatusPill ok={connected} label={connected ? '已连接' : '未连接'} />
         </div>
@@ -903,6 +945,55 @@ function ScheduleSettingsPanel() {
               disabled={busy !== null || loginInFlight}
             >
               改用设备码登录
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>本地日历</h2>
+            <p className={styles.sectionMeta}>日程仅保存在这台设备，不同步到任何云端。</p>
+          </div>
+          {localAccount && <StatusPill ok label="已启用" />}
+        </div>
+        {localAccount ? (
+          <div className={styles.sectionBodyStack}>
+            <p className={styles.sectionMeta}>共 {localAccount.event_count} 条本地日程。</p>
+            <div className={styles.actionRow}>
+              <button
+                className={workspaceStyles.dangerButton}
+                type="button"
+                onClick={() => void handleDeleteLocal()}
+                disabled={busy !== null}
+              >
+                {busy === 'deleteLocal'
+                  ? '删除中...'
+                  : confirmDeleteLocal
+                    ? `确认删除？将连同 ${localAccount.event_count} 条日程一并删除，不可恢复`
+                    : '删除本地日历'}
+              </button>
+              {confirmDeleteLocal && busy === null && (
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={() => setConfirmDeleteLocal(false)}
+                >
+                  取消
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className={styles.actionRow}>
+            <button
+              className={workspaceStyles.ghostButton}
+              type="button"
+              onClick={() => void handleCreateLocal()}
+              disabled={busy !== null}
+            >
+              {busy === 'createLocal' ? '创建中...' : '创建本地日历'}
             </button>
           </div>
         )}
