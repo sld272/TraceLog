@@ -14,9 +14,11 @@ from typing import Any
 
 from core import db
 
+DEFAULT_GRAPH_CLIENT_ID = "a5811bbd-80ac-4bad-bafe-77ea8714b173"
 CLIENT_ID_META_KEY = "graph.client_id"
 TOKEN_CACHE_FILENAME = "graph_token_cache.json"
 AUTHORITY = "https://login.microsoftonline.com/common"
+INTERACTIVE_TIMEOUT_SECONDS = 300
 # MSAL adds the reserved offline_access/openid/profile scopes itself.
 GRAPH_SCOPES = ("Calendars.ReadWrite", "User.Read")
 
@@ -26,7 +28,7 @@ class GraphAuthError(RuntimeError):
 
 
 class GraphNotConfiguredError(GraphAuthError):
-    """Raised when a device flow is requested before a client id is saved."""
+    """Raised when an authentication flow has no effective client id."""
 
 
 class GraphAuth:
@@ -47,7 +49,10 @@ class GraphAuth:
     def token_cache_path(self) -> Path:
         return db.WORKSPACE_DIR / TOKEN_CACHE_FILENAME
 
-    def client_id(self) -> str | None:
+    def client_id(self) -> str:
+        return self.custom_client_id() or DEFAULT_GRAPH_CLIENT_ID
+
+    def custom_client_id(self) -> str | None:
         row = db.query_one("SELECT value FROM meta WHERE key = ?", (CLIENT_ID_META_KEY,))
         if row is None:
             return None
@@ -63,11 +68,16 @@ class GraphAuth:
             (CLIENT_ID_META_KEY, value),
         )
 
+    def clear_client_id(self) -> None:
+        db.execute("DELETE FROM meta WHERE key = ?", (CLIENT_ID_META_KEY,))
+
     def client_id_info(self) -> dict[str, Any]:
-        value = self.client_id()
+        custom_value = self.custom_client_id()
+        value = custom_value or DEFAULT_GRAPH_CLIENT_ID
         return {
-            "configured": value is not None,
-            "client_id_tail": value[-4:] if value is not None else None,
+            "configured": True,
+            "using_default": custom_value is None,
+            "client_id_tail": value[-4:],
         }
 
     def get_access_token(self) -> str | None:
@@ -101,9 +111,34 @@ class GraphAuth:
         app = self._app(required=True)
         kwargs = {"exit_condition": exit_condition} if exit_condition is not None else {}
         result = app.acquire_token_by_device_flow(flow, **kwargs)
+        if exit_condition is not None and exit_condition():
+            raise GraphAuthError("Microsoft 登录已取消")
         self._persist_if_changed()
         if not isinstance(result, dict) or not result.get("access_token"):
             raise GraphAuthError(_safe_auth_error(result, "Microsoft 登录未完成"))
+        account = self.account_info()
+        return account or {}
+
+    def complete_interactive_flow(
+        self,
+        *,
+        exit_condition: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        app = self._app(required=True)
+        try:
+            # MSAL generates PKCE parameters and hosts the callback on
+            # http://localhost with a system-selected port.
+            result = app.acquire_token_interactive(
+                scopes=list(GRAPH_SCOPES),
+                timeout=INTERACTIVE_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            raise GraphAuthError(_safe_interactive_exception(exc)) from exc
+        if exit_condition is not None and exit_condition():
+            raise GraphAuthError("Microsoft 登录已取消")
+        self._persist_if_changed()
+        if not isinstance(result, dict) or not result.get("access_token"):
+            raise GraphAuthError(_safe_auth_error(result, "Microsoft 浏览器登录未完成"))
         account = self.account_info()
         return account or {}
 
@@ -211,3 +246,10 @@ def _safe_auth_error(result: Any, fallback: str) -> str:
     if code:
         return str(code)
     return fallback
+
+
+def _safe_interactive_exception(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message:
+        return f"无法完成 Microsoft 浏览器登录：{message}"
+    return "无法完成 Microsoft 浏览器登录"

@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from core import db, goal_service
+from core.graph.auth import GraphAuth, GraphAuthError
 from core.schedule_service import ScheduleService
+from tests.test_graph_auth import FakePublicClientApplication, FakeSerializableCache
 
 
 @unittest.skipUnless(importlib.util.find_spec("fastapi"), "FastAPI is not installed")
@@ -53,9 +57,10 @@ class ApiScheduleTest(unittest.TestCase):
         self.addCleanup(shutdown_patch.stop)
         return TestClient(create_app())
 
-    def test_unconfigured_backend_status_and_event_read_are_available(self) -> None:
+    def test_default_client_id_configures_backend_without_login(self) -> None:
         with self._client() as client:
             status = client.get("/schedule/status")
+            client_id = client.get("/schedule/auth/client-id")
             events = client.get("/schedule/events?start=2026-07-16&end=2026-07-16")
             create = client.post(
                 "/schedule/events",
@@ -63,10 +68,15 @@ class ApiScheduleTest(unittest.TestCase):
             )
 
         self.assertEqual(200, status.status_code)
-        self.assertFalse(status.json()["configured"])
+        self.assertTrue(status.json()["configured"])
         self.assertFalse(status.json()["connected"])
+        self.assertEqual(
+            {"configured": True, "using_default": True, "client_id_tail": "b173"},
+            client_id.json(),
+        )
         self.assertEqual(200, events.status_code)
         self.assertEqual([], events.json())
+        self.assertEqual("true", events.headers["x-schedule-configured"])
         self.assertEqual("false", events.headers["x-schedule-connected"])
         self.assertEqual(409, create.status_code)
 
@@ -100,12 +110,176 @@ class ApiScheduleTest(unittest.TestCase):
             fetched = client.get("/schedule/auth/client-id")
             status = client.get("/schedule/status")
 
-        expected = {"configured": True, "client_id_tail": "9abc"}
+        expected = {
+            "configured": True,
+            "using_default": False,
+            "client_id_tail": "9abc",
+        }
         self.assertEqual(expected, saved.json())
         self.assertEqual(expected, fetched.json())
         self.assertNotIn(client_id, str(saved.json()))
         self.assertTrue(status.json()["configured"])
         self.assertFalse(status.json()["connected"])
+
+    def test_custom_client_id_switch_and_restore_clear_login_and_schedule_cache(self) -> None:
+        token_cache_path = db.WORKSPACE_DIR / "graph_token_cache.json"
+
+        def seed_login_state(event_id: str) -> None:
+            token_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            token_cache_path.write_text("cached-token", encoding="utf-8")
+            db.execute(
+                """
+                INSERT INTO schedule_events(
+                    id, subject, start_ts, end_ts, start_local, end_local, synced_at
+                ) VALUES (?, '缓存日程', 1, 2, '2026-07-16T09:00:00',
+                          '2026-07-16T10:00:00', 1)
+                """,
+                (event_id,),
+            )
+            db.execute(
+                "INSERT OR REPLACE INTO meta(key, value) VALUES ('graph.delta_link', 'delta')"
+            )
+
+        seed_login_state("before-custom")
+        custom_id = "00000000-0000-0000-0000-123456789abc"
+
+        with self._client() as client:
+            saved = client.post("/schedule/auth/client-id", json={"client_id": custom_id})
+
+            self.assertEqual(200, saved.status_code, saved.text)
+            self.assertFalse(token_cache_path.exists())
+            self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM schedule_events")["count"])
+            self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = 'graph.delta_link'"))
+
+            seed_login_state("before-default")
+            restored = client.delete("/schedule/auth/client-id")
+
+        self.assertEqual(
+            {"configured": True, "using_default": True, "client_id_tail": "b173"},
+            restored.json(),
+        )
+        self.assertFalse(token_cache_path.exists())
+        self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM schedule_events")["count"])
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = 'graph.client_id'"))
+        self.assertIsNone(db.query_one("SELECT value FROM meta WHERE key = 'graph.delta_link'"))
+
+    def test_interactive_login_persists_fake_msal_token_syncs_and_supports_status_alias(self) -> None:
+        auth = GraphAuth(
+            app_factory=FakePublicClientApplication,
+            cache_factory=FakeSerializableCache,
+        )
+        sync_calls: list[bool] = []
+
+        class SyncOnlyScheduleService:
+            def __init__(self, *, auth=None):
+                self.auth = auth
+
+            def sync(self):
+                sync_calls.append(True)
+                return {"ok": True}
+
+        with (
+            patch("api.routes.schedule.GraphAuth", return_value=auth),
+            patch("api.routes.schedule.ScheduleService", SyncOnlyScheduleService),
+            self._client() as client,
+        ):
+            started = client.post("/schedule/auth/interactive-start")
+            status = self._wait_for_auth_status(client)
+            legacy_status = client.get("/schedule/auth/device-status")
+
+        self.assertEqual(200, started.status_code, started.text)
+        self.assertEqual({"status": "pending"}, started.json())
+        self.assertEqual("ok", status["status"])
+        self.assertEqual("person@example.com", status["account"]["username"])
+        self.assertEqual(status, legacy_status.json())
+        self.assertEqual([True], sync_calls)
+        self.assertTrue((db.WORKSPACE_DIR / "graph_token_cache.json").exists())
+
+    def test_interactive_failure_marks_device_code_fallback(self) -> None:
+        class FailingInteractiveAuth:
+            def complete_interactive_flow(self, *, exit_condition=None):
+                del exit_condition
+                raise GraphAuthError("AADSTS50011: redirect URI mismatch")
+
+        with (
+            patch("api.routes.schedule.GraphAuth", return_value=FailingInteractiveAuth()),
+            self._client() as client,
+        ):
+            started = client.post("/schedule/auth/interactive-start")
+            status = self._wait_for_auth_status(client)
+
+        self.assertEqual(200, started.status_code)
+        self.assertEqual("error", status["status"])
+        self.assertIn("AADSTS50011", status["error"])
+        self.assertEqual("device_code", status["fallback"])
+
+    def test_interactive_and_device_flows_are_mutually_exclusive(self) -> None:
+        interactive_started = threading.Event()
+        interactive_release = threading.Event()
+        device_started = threading.Event()
+        device_release = threading.Event()
+
+        class BlockingAuth:
+            def complete_interactive_flow(self, *, exit_condition=None):
+                interactive_started.set()
+                self._wait(interactive_release, exit_condition)
+                return {"username": "interactive@example.com"}
+
+            def start_device_flow(self):
+                return {
+                    "user_code": "ABCD-EFGH",
+                    "verification_uri": "https://microsoft.com/devicelogin",
+                    "expires_in": 900,
+                }
+
+            def complete_device_flow(self, flow, *, exit_condition=None):
+                del flow
+                device_started.set()
+                self._wait(device_release, exit_condition)
+                return {"username": "device@example.com"}
+
+            @staticmethod
+            def _wait(release, exit_condition):
+                while not release.wait(0.01):
+                    if exit_condition is not None and exit_condition():
+                        raise GraphAuthError("登录已取消")
+
+        class SyncOnlyScheduleService:
+            def __init__(self, *, auth=None):
+                self.auth = auth
+
+            def sync(self):
+                return {"ok": True}
+
+        with (
+            patch("api.routes.schedule.GraphAuth", return_value=BlockingAuth()),
+            patch("api.routes.schedule.ScheduleService", SyncOnlyScheduleService),
+            self._client() as client,
+        ):
+            self.assertEqual(200, client.post("/schedule/auth/interactive-start").status_code)
+            self.assertTrue(interactive_started.wait(1.0))
+            device_conflict = client.post("/schedule/auth/device-start")
+            interactive_release.set()
+            self._wait_for_auth_status(client)
+
+            self.assertEqual(200, client.post("/schedule/auth/device-start").status_code)
+            self.assertTrue(device_started.wait(1.0))
+            interactive_conflict = client.post("/schedule/auth/interactive-start")
+            device_release.set()
+            self._wait_for_auth_status(client)
+
+        self.assertEqual(409, device_conflict.status_code)
+        self.assertEqual(409, interactive_conflict.status_code)
+
+    @staticmethod
+    def _wait_for_auth_status(client, timeout: float = 2.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            response = client.get("/schedule/auth/status")
+            if response.json().get("status") != "pending":
+                return response.json()
+            time.sleep(0.01)
+        raise AssertionError("登录状态在测试超时前仍为 pending")
 
     def test_create_event_goal_id_links_the_created_event(self) -> None:
         class ConnectedAuth:

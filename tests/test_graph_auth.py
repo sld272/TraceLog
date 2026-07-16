@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from core import db
-from core.graph.auth import GraphAuth
+from core.graph.auth import DEFAULT_GRAPH_CLIENT_ID, GraphAuth
 
 
 class FakeSerializableCache:
@@ -25,6 +25,8 @@ class FakeSerializableCache:
 
 
 class FakePublicClientApplication:
+    interactive_calls: list[dict] = []
+
     def __init__(self, *, client_id, authority, token_cache) -> None:
         self.client_id = client_id
         self.authority = authority
@@ -42,6 +44,13 @@ class FakePublicClientApplication:
 
     def acquire_token_by_device_flow(self, flow):
         del flow
+        return self._complete_login()
+
+    def acquire_token_interactive(self, scopes, timeout=None):
+        self.interactive_calls.append({"scopes": scopes, "timeout": timeout})
+        return self._complete_login()
+
+    def _complete_login(self):
         self.cache.data = {
             "accounts": [
                 {
@@ -63,6 +72,7 @@ class FakePublicClientApplication:
 
 class GraphAuthCacheTest(unittest.TestCase):
     def setUp(self) -> None:
+        FakePublicClientApplication.interactive_calls = []
         self.tmp = tempfile.TemporaryDirectory()
         self.old_workspace = db.WORKSPACE_DIR
         self.old_db_path = db.DB_PATH
@@ -97,14 +107,44 @@ class GraphAuthCacheTest(unittest.TestCase):
         self.assertEqual("test-token", reloaded.get_access_token())
         self.assertEqual("person@example.com", reloaded.account_info()["username"])
 
-    def test_client_id_info_only_returns_tail(self) -> None:
+    def test_default_client_id_is_configured_and_only_exposes_tail(self) -> None:
+        auth = self._auth()
+
+        self.assertEqual(DEFAULT_GRAPH_CLIENT_ID, auth.client_id())
+        self.assertEqual(
+            {"configured": True, "using_default": True, "client_id_tail": "b173"},
+            auth.client_id_info(),
+        )
+
+    def test_custom_client_id_overrides_default_and_can_be_cleared(self) -> None:
         auth = self._auth()
         auth.set_client_id("client-id-secret-1234")
 
         info = auth.client_id_info()
 
-        self.assertEqual({"configured": True, "client_id_tail": "1234"}, info)
+        self.assertEqual(
+            {"configured": True, "using_default": False, "client_id_tail": "1234"},
+            info,
+        )
         self.assertNotIn("client-id-secret", str(info))
+
+        auth.clear_client_id()
+
+        self.assertEqual(DEFAULT_GRAPH_CLIENT_ID, auth.client_id())
+        self.assertTrue(auth.client_id_info()["using_default"])
+
+    def test_interactive_flow_uses_300_second_timeout_and_persists_cache(self) -> None:
+        auth = self._auth()
+
+        account = auth.complete_interactive_flow()
+
+        self.assertEqual("person@example.com", account["username"])
+        self.assertEqual(
+            [{"scopes": ["Calendars.ReadWrite", "User.Read"], "timeout": 300}],
+            FakePublicClientApplication.interactive_calls,
+        )
+        reloaded = self._auth()
+        self.assertEqual("test-token", reloaded.get_access_token())
 
     def test_logout_removes_token_cache(self) -> None:
         auth = self._auth()

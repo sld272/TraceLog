@@ -213,18 +213,19 @@ class ScheduleService:
             conn.execute("DELETE FROM schedule_events WHERE id = ?", (event_id,))
 
     def logout(self) -> None:
-        self.auth.logout()
-        with db.transaction() as conn:
-            conn.execute("DELETE FROM schedule_events")
-            conn.execute(
-                "DELETE FROM meta WHERE key IN (?, ?, ?, ?)",
-                (
-                    DELTA_LINK_META_KEY,
-                    LAST_SYNC_AT_META_KEY,
-                    WINDOW_START_META_KEY,
-                    WINDOW_END_META_KEY,
-                ),
-            )
+        with _SYNC_LOCK:
+            self.auth.logout()
+            with db.transaction() as conn:
+                conn.execute("DELETE FROM schedule_events")
+                conn.execute(
+                    "DELETE FROM meta WHERE key IN (?, ?, ?, ?)",
+                    (
+                        DELTA_LINK_META_KEY,
+                        LAST_SYNC_AT_META_KEY,
+                        WINDOW_START_META_KEY,
+                        WINDOW_END_META_KEY,
+                    ),
+                )
 
     def _connected_graph(self) -> Any:
         configured = self.auth.client_id() is not None

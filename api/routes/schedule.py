@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from api.deps import run_sync
 from core import goal_schedule_service
-from core.graph.auth import GraphAuth, GraphAuthError, GraphNotConfiguredError
+from core.graph.auth import (
+    DEFAULT_GRAPH_CLIENT_ID,
+    GraphAuth,
+    GraphAuthError,
+    GraphNotConfiguredError,
+)
 from core.graph.client import GraphHTTPError
 from core.schedule_service import ScheduleNotConnectedError, ScheduleService
 
@@ -41,9 +46,13 @@ class UpdateEventRequest(BaseModel):
     all_day: bool | None = None
 
 
-_device_task: asyncio.Task[None] | None = None
-_device_cancel: threading.Event | None = None
-_device_state: dict[str, Any] = {"status": "error", "error": "尚未启动设备码登录"}
+_AUTH_NOT_STARTED = {"status": "error", "error": "尚未启动 Microsoft 登录"}
+_auth_task: asyncio.Task[None] | None = None
+_auth_cancel: threading.Event | None = None
+_auth_state: dict[str, Any] = dict(_AUTH_NOT_STARTED)
+_auth_busy = False
+_auth_generation = 0
+_auth_resetting = False
 
 
 @router.get("/status")
@@ -56,10 +65,17 @@ async def save_client_id(request: ClientIdRequest):
     auth = GraphAuth()
     try:
         current_client_id = await run_sync(auth.client_id)
-        if current_client_id is not None and current_client_id != request.client_id.strip():
-            await cancel_device_login()
-            await run_sync(ScheduleService(auth=auth).logout)
-        await run_sync(auth.set_client_id, request.client_id)
+        next_client_id = request.client_id.strip()
+        if current_client_id != next_client_id:
+            _begin_auth_reset()
+            try:
+                await cancel_auth_login()
+                await run_sync(ScheduleService(auth=auth).logout)
+                await run_sync(auth.set_client_id, next_client_id)
+            finally:
+                _end_auth_reset()
+        else:
+            await run_sync(auth.set_client_id, next_client_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await run_sync(auth.client_id_info)
@@ -70,21 +86,64 @@ async def get_client_id():
     return await run_sync(GraphAuth().client_id_info)
 
 
+@router.delete("/auth/client-id")
+async def restore_default_client_id():
+    auth = GraphAuth()
+    current_client_id = await run_sync(auth.client_id)
+    custom_client_id = await run_sync(auth.custom_client_id)
+    if custom_client_id is None:
+        return await run_sync(auth.client_id_info)
+    if current_client_id != DEFAULT_GRAPH_CLIENT_ID:
+        _begin_auth_reset()
+        try:
+            await cancel_auth_login()
+            await run_sync(ScheduleService(auth=auth).logout)
+            await run_sync(auth.clear_client_id)
+        finally:
+            _end_auth_reset()
+    else:
+        await run_sync(auth.clear_client_id)
+    return await run_sync(auth.client_id_info)
+
+
+@router.post("/auth/interactive-start")
+async def start_interactive_login():
+    global _auth_task
+    generation, cancel_event = _reserve_auth_flow()
+    auth = GraphAuth()
+    _auth_task = asyncio.create_task(
+        _complete_interactive_login(auth, cancel_event, generation)
+    )
+    return {"status": "pending"}
+
+
 @router.post("/auth/device-start")
 async def start_device_login():
-    global _device_cancel, _device_task, _device_state
-    if _device_task is not None and not _device_task.done():
-        raise HTTPException(status_code=409, detail="设备码登录正在进行中")
+    global _auth_task
+    generation, cancel_event = _reserve_auth_flow()
     auth = GraphAuth()
     try:
         flow = await run_sync(auth.start_device_flow)
     except GraphNotConfiguredError as exc:
+        _set_auth_state(generation, {"status": "error", "error": str(exc)})
+        _release_auth_flow(generation)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except GraphAuthError as exc:
+        _set_auth_state(generation, {"status": "error", "error": str(exc)})
+        _release_auth_flow(generation)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    _device_state = {"status": "pending"}
-    _device_cancel = threading.Event()
-    _device_task = asyncio.create_task(_complete_device_login(auth, flow, _device_cancel))
+    except Exception as exc:
+        _set_auth_state(
+            generation,
+            {"status": "error", "error": "无法启动 Microsoft 设备码登录"},
+        )
+        _release_auth_flow(generation)
+        raise HTTPException(status_code=502, detail="无法启动 Microsoft 设备码登录") from exc
+    if not _auth_flow_is_current(generation, cancel_event):
+        raise HTTPException(status_code=409, detail="Microsoft 登录已取消")
+    _auth_task = asyncio.create_task(
+        _complete_device_login(auth, flow, cancel_event, generation)
+    )
     return {
         "user_code": flow["user_code"],
         "verification_uri": flow.get("verification_uri") or flow.get("verification_url"),
@@ -92,15 +151,20 @@ async def start_device_login():
     }
 
 
+@router.get("/auth/status")
 @router.get("/auth/device-status")
-async def get_device_login_status():
-    return dict(_device_state)
+async def get_auth_login_status():
+    return dict(_auth_state)
 
 
 @router.post("/auth/logout")
 async def logout():
-    await cancel_device_login()
-    await run_sync(ScheduleService().logout)
+    _begin_auth_reset()
+    try:
+        await cancel_auth_login()
+        await run_sync(ScheduleService().logout)
+    finally:
+        _end_auth_reset()
     return {"ok": True}
 
 
@@ -173,33 +237,121 @@ async def _complete_device_login(
     auth: GraphAuth,
     flow: dict[str, Any],
     cancel_event: threading.Event,
+    generation: int,
 ) -> None:
-    global _device_state
     try:
         account = await run_sync(
             auth.complete_device_flow,
             flow,
             exit_condition=cancel_event.is_set,
         )
-        _device_state = {"status": "ok", "account": account}
-        try:
-            await run_sync(ScheduleService(auth=auth).sync)
-        except (GraphHTTPError, httpx.HTTPError, ValueError):
-            pass
+        if not _auth_flow_is_current(generation, cancel_event):
+            return
+        await _sync_after_login(auth)
+        if _auth_flow_is_current(generation, cancel_event):
+            _set_auth_state(generation, {"status": "ok", "account": account})
     except asyncio.CancelledError:
         raise
     except GraphAuthError as exc:
-        _device_state = {"status": "error", "error": str(exc)}
+        _set_auth_state(generation, {"status": "error", "error": str(exc)})
     except Exception:
-        _device_state = {"status": "error", "error": "设备码登录失败"}
+        _set_auth_state(generation, {"status": "error", "error": "设备码登录失败"})
+    finally:
+        _release_auth_flow(generation)
 
 
-async def cancel_device_login() -> None:
-    global _device_cancel, _device_task, _device_state
-    task = _device_task
-    _device_task = None
-    cancel_event = _device_cancel
-    _device_cancel = None
+async def _complete_interactive_login(
+    auth: GraphAuth,
+    cancel_event: threading.Event,
+    generation: int,
+) -> None:
+    try:
+        account = await run_sync(
+            auth.complete_interactive_flow,
+            exit_condition=cancel_event.is_set,
+        )
+        if not _auth_flow_is_current(generation, cancel_event):
+            return
+        await _sync_after_login(auth)
+        if _auth_flow_is_current(generation, cancel_event):
+            _set_auth_state(generation, {"status": "ok", "account": account})
+    except asyncio.CancelledError:
+        raise
+    except GraphAuthError as exc:
+        _set_auth_state(
+            generation,
+            {"status": "error", "error": str(exc), "fallback": "device_code"},
+        )
+    except Exception:
+        _set_auth_state(
+            generation,
+            {
+                "status": "error",
+                "error": "Microsoft 浏览器登录失败",
+                "fallback": "device_code",
+            },
+        )
+    finally:
+        _release_auth_flow(generation)
+
+
+async def _sync_after_login(auth: GraphAuth) -> None:
+    try:
+        await run_sync(ScheduleService(auth=auth).sync)
+    except Exception:
+        pass
+
+
+def _reserve_auth_flow() -> tuple[int, threading.Event]:
+    global _auth_busy, _auth_cancel, _auth_generation, _auth_state
+    if _auth_busy or _auth_resetting:
+        raise HTTPException(status_code=409, detail="Microsoft 登录正在进行中")
+    _auth_busy = True
+    _auth_generation += 1
+    _auth_cancel = threading.Event()
+    _auth_state = {"status": "pending"}
+    return _auth_generation, _auth_cancel
+
+
+def _auth_flow_is_current(generation: int, cancel_event: threading.Event) -> bool:
+    return generation == _auth_generation and not cancel_event.is_set()
+
+
+def _set_auth_state(generation: int, state: dict[str, Any]) -> None:
+    global _auth_state
+    if generation == _auth_generation:
+        _auth_state = state
+
+
+def _release_auth_flow(generation: int) -> None:
+    global _auth_busy, _auth_cancel, _auth_task
+    if generation != _auth_generation:
+        return
+    _auth_busy = False
+    _auth_cancel = None
+    _auth_task = None
+
+
+def _begin_auth_reset() -> None:
+    global _auth_resetting
+    if _auth_resetting:
+        raise HTTPException(status_code=409, detail="Microsoft 登录状态正在更新")
+    _auth_resetting = True
+
+
+def _end_auth_reset() -> None:
+    global _auth_resetting
+    _auth_resetting = False
+
+
+async def cancel_auth_login() -> None:
+    global _auth_busy, _auth_cancel, _auth_generation, _auth_state, _auth_task
+    task = _auth_task
+    cancel_event = _auth_cancel
+    _auth_generation += 1
+    _auth_task = None
+    _auth_cancel = None
+    _auth_busy = False
     if cancel_event is not None:
         cancel_event.set()
     if task is not None and not task.done():
@@ -211,4 +363,9 @@ async def cancel_device_login() -> None:
                 await task
             except asyncio.CancelledError:
                 pass
-    _device_state = {"status": "error", "error": "尚未启动设备码登录"}
+    _auth_state = dict(_AUTH_NOT_STARTED)
+
+
+async def cancel_device_login() -> None:
+    """Compatibility wrapper for shutdown callers introduced with device flow."""
+    await cancel_auth_login()
