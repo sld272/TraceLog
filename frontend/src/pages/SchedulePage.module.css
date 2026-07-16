@@ -1,0 +1,89 @@
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.weekList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.dayGroup {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-4) var(--space-5);
+}
+
+.dayGroup.today {
+  border-color: var(--color-accent-border);
+}
+
+.dayHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.dayLabel {
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+}
+
+.dayGroup.today .dayLabel {
+  color: var(--color-accent);
+}
+
+.dayMeta {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.dayCount {
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-12) var(--space-5);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-xl);
+  background: rgba(255, 255, 255, 0.54);
+  text-align: center;
+}
+
+.guideIcon {
+  color: var(--color-accent);
+  opacity: 0.7;
+}
+
+.guideTitle {
+  color: var(--color-text-secondary);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.guideHint {
+  max-width: 420px;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.syncMeta {
+  margin-top: var(--space-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}

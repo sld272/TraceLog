@@ -555,6 +555,90 @@
 
 }
 
+/* ===== Schedule sync panel ===== */
+.deviceBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-subtle);
+}
+
+.deviceHint {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.deviceRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.deviceLabel {
+  width: 64px;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.deviceCode {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+}
+
+.deviceUrl {
+  min-width: 0;
+  color: var(--color-accent);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.copyBtn {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-bg-card);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.copyBtn:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent-border);
+}
+
+.deviceStatus {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.guideOl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding-left: var(--space-5);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.guideOl li {
+  padding-left: var(--space-1);
+}
+
 /* ===== About panel ===== */
 .aboutPage {
   max-width: 560px;

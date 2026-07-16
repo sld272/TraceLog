@@ -1,16 +1,23 @@
 export type Route =
-  | { kind: 'home' }
+  | { kind: 'home'; date?: string }
   | { kind: 'goals' }
+  | { kind: 'schedule' }
   | { kind: 'memory' }
   | { kind: 'settings' }
   | { kind: 'chat'; soulName: string }
   | { kind: 'post'; postId: string; highlight?: string }
 
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, '').replace(/^\//, '')
   const [path = '', query = ''] = raw.split('?')
-  if (!path || path === 'home') return { kind: 'home' }
+  if (!path || path === 'home') {
+    const date = parseRouteQuery(query).get('date') ?? undefined
+    return date && DATE_KEY_PATTERN.test(date) ? { kind: 'home', date } : { kind: 'home' }
+  }
   if (path === 'goals') return { kind: 'goals' }
+  if (path === 'schedule') return { kind: 'schedule' }
   if (path === 'memory') return { kind: 'memory' }
   if (path === 'settings') return { kind: 'settings' }
   if (path.startsWith('chat/')) {
@@ -29,9 +36,11 @@ export function parseRoute(hash: string): Route {
 export function formatRoute(route: Route): string {
   switch (route.kind) {
     case 'home':
-      return '#/'
+      return route.date ? `#/?date=${encodeURIComponent(route.date)}` : '#/'
     case 'goals':
       return '#/goals'
+    case 'schedule':
+      return '#/schedule'
     case 'memory':
       return '#/memory'
     case 'settings':

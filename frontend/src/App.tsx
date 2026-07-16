@@ -14,6 +14,7 @@ import { ChatPage } from '@/pages/ChatPage'
 import { GoalsPage } from '@/pages/GoalsPage'
 import { MemoryWorkbench } from '@/pages/MemoryWorkbench'
 import { PostDetailPage } from '@/pages/PostDetailPage'
+import { SchedulePage } from '@/pages/SchedulePage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { Timeline } from '@/pages/Timeline'
 import { formatRoute, parseRoute, type Route } from '@/router'
@@ -38,6 +39,7 @@ export function App() {
   const showRightPanel = route.kind === 'home'
   const navKey = navKeyFromRoute(route)
   const memoryQueueCount = memoryStatus?.pending_event_count ?? 0
+  const selectedDate = route.kind === 'home' ? route.date ?? null : null
 
   const loadSouls = useCallback(async () => {
     const data = await listSouls(true)
@@ -89,6 +91,25 @@ export function App() {
   const openSettings = useCallback(() => {
     navigateToPage('settings')
   }, [navigateToPage])
+
+  const openSchedule = useCallback(() => {
+    navigateToPage('schedule')
+  }, [navigateToPage])
+
+  /* 日期透镜：点日期进入，再点同一日期退出（回到最新流）。 */
+  const selectDate = useCallback((date: string) => {
+    setRoute((current) => {
+      const nextDate = current.kind === 'home' && current.date === date ? undefined : date
+      const nextRoute: Route = { kind: 'home', date: nextDate }
+      const nextHash = formatRoute(nextRoute)
+      if (window.location.hash !== nextHash) window.location.hash = nextHash
+      return nextRoute
+    })
+  }, [])
+
+  const exitDateLens = useCallback(() => {
+    navigate({ kind: 'home' })
+  }, [navigate])
 
   const loadModelConfiguration = useCallback(async () => {
     const settings = await getModelSettings()
@@ -205,6 +226,8 @@ export function App() {
             onActivitySettled={refreshHomeContext}
             postMutationSignal={postMutationSignal}
             searchQuery={homeSearch}
+            selectedDate={selectedDate}
+            onExitDateLens={exitDateLens}
           />
         </div>
         {route.kind === 'post' && (
@@ -218,6 +241,7 @@ export function App() {
           />
         )}
         {route.kind === 'goals' && <GoalsPage />}
+        {route.kind === 'schedule' && <SchedulePage onOpenSettings={openSettings} />}
         {route.kind === 'memory' && <MemoryWorkbench />}
         {route.kind === 'settings' && (
           <SettingsPage
@@ -257,6 +281,10 @@ export function App() {
           searchQuery={homeSearch}
           onSearchQueryChange={setHomeSearch}
           onOpenMemory={openMemory}
+          selectedDate={selectedDate}
+          onSelectDate={selectDate}
+          onOpenSchedule={openSchedule}
+          onOpenSettings={openSettings}
         />
       ) : undefined}
     />
@@ -271,6 +299,7 @@ function navKeyFromRoute(route: Route): string {
 
 function routeFromNavKey(page: string): Route {
   if (page === 'goals') return { kind: 'goals' }
+  if (page === 'schedule') return { kind: 'schedule' }
   if (page === 'memory') return { kind: 'memory' }
   if (page === 'settings') return { kind: 'settings' }
   if (page.startsWith('chat:')) return { kind: 'chat', soulName: page.slice('chat:'.length) }

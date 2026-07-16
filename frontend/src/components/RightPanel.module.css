@@ -159,3 +159,32 @@
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
 }
+
+/* ===== 今日日程卡 ===== */
+.schedGuide {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.schedGuideLink {
+  display: inline;
+  color: var(--color-accent);
+  font-weight: var(--weight-medium);
+}
+
+.schedGuideLink:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.schedSource {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--space-2);
+  padding: 0 var(--space-1);
+  color: var(--color-text-tertiary);
+  font-size: 0.6875rem;
+}
+

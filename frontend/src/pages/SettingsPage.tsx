@@ -1,12 +1,18 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type ModelSettings,
   type ModelSettingsUpdate,
+  type ScheduleClientIdInfo,
+  type ScheduleStatus,
   type Soul,
   type WorkspaceStatus,
+  ApiError,
   createSoul,
   generateSoul,
   getModelSettings,
+  getScheduleClientId,
+  getScheduleDeviceStatus,
+  getScheduleStatus,
   getSoulContent,
   getWorkspaceStatus,
   listSouls,
@@ -14,15 +20,19 @@ import {
   reorderSouls,
   retryVectorIndex,
   saveModelSettings,
+  saveScheduleClientId,
+  scheduleLogout,
+  startScheduleDeviceLogin,
   updateSoul,
 } from '@/api/client'
+import { formatSmartTime } from '@/utils/date'
 import { Notice } from '@/components/Notice'
 import { ArrowDownIcon, ArrowUpIcon, PencilIcon } from '@/components/icons'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
-type SettingsTab = 'model' | 'souls' | 'data' | 'about'
+type SettingsTab = 'model' | 'souls' | 'schedule' | 'data' | 'about'
 type CreateSoulMode = 'ai' | 'markdown'
 type WebSearchProvider = ModelSettings['web_search']['provider']
 
@@ -125,6 +135,7 @@ const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语
 const TAB_SUBTITLES: Record<SettingsTab, string> = {
   model: '模型、图片识别、网页搜索与 Embedding 配置',
   souls: '排序决定首页并发回应顺序，禁用后不进入回应队列',
+  schedule: '连接 Microsoft 账户，读写 Outlook 日历',
   data: '本地 workspace 状态、数据概览与记忆检索索引',
   about: '关于拾迹这个项目',
 }
@@ -154,6 +165,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
     () => [
       { id: 'model' as const, label: '基本' },
       { id: 'souls' as const, label: '人格' },
+      { id: 'schedule' as const, label: '日程' },
       { id: 'data' as const, label: '数据' },
       { id: 'about' as const, label: '关于' },
     ],
@@ -558,6 +570,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
                   onCancelEditSoul={handleCancelEditSoul}
                 />
               )}
+              {activeTab === 'schedule' && <ScheduleSettingsPanel />}
               {activeTab === 'data' && (
                 <DataSettingsPanel
                   status={workspaceStatus}
@@ -603,6 +616,253 @@ function AboutSettingsPanel() {
           GitHub 仓库
         </a>
       </div>
+    </div>
+  )
+}
+
+const ENTRA_URL = 'https://entra.microsoft.com'
+
+function ScheduleSettingsPanel() {
+  const [status, setStatus] = useState<ScheduleStatus | null>(null)
+  const [clientIdInfo, setClientIdInfo] = useState<ScheduleClientIdInfo | null>(null)
+  const [clientIdInput, setClientIdInput] = useState('')
+  const [device, setDevice] = useState<{ user_code: string; verification_uri: string } | null>(null)
+  const [busy, setBusy] = useState<'save' | 'login' | 'logout' | null>(null)
+  const [polling, setPolling] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const pollRef = useRef<number | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    setPolling(false)
+  }
+
+  const reload = async () => {
+    try {
+      const [statusData, clientData] = await Promise.all([getScheduleStatus(), getScheduleClientId()])
+      setStatus(statusData)
+      setClientIdInfo(clientData)
+    } catch {
+      /* 保持上一次可用状态 */
+    }
+  }
+
+  useEffect(() => {
+    void reload()
+    return () => {
+      if (pollRef.current !== null) window.clearInterval(pollRef.current)
+    }
+  }, [])
+
+  const startPolling = () => {
+    setPolling(true)
+    pollRef.current = window.setInterval(() => {
+      void getScheduleDeviceStatus()
+        .then(async (result) => {
+          if (result.status === 'ok') {
+            stopPolling()
+            setDevice(null)
+            setNotice('已连接 Microsoft 账户。')
+            await reload()
+          } else if (result.status === 'error') {
+            stopPolling()
+            setDevice(null)
+            setError(result.error || 'Microsoft 登录失败')
+          }
+        })
+        .catch(() => {
+          /* 轮询期间的瞬时错误忽略，继续等待 */
+        })
+    }, 2500)
+  }
+
+  const handleSaveClientId = async () => {
+    const value = clientIdInput.trim()
+    if (!value) {
+      setError('client_id 不能为空')
+      return
+    }
+    setBusy('save')
+    setError(null)
+    setNotice(null)
+    try {
+      const info = await saveScheduleClientId(value)
+      setClientIdInfo(info)
+      setClientIdInput('')
+      setNotice('client_id 已保存。')
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存 client_id 失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const handleLogin = async () => {
+    setBusy('login')
+    setError(null)
+    setNotice(null)
+    try {
+      const flow = await startScheduleDeviceLogin()
+      setDevice({ user_code: flow.user_code, verification_uri: flow.verification_uri })
+      startPolling()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setError('请先填写并保存 client_id，再登录。')
+      } else {
+        setError(err instanceof Error ? err.message : '启动登录失败')
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const handleLogout = async () => {
+    setBusy('logout')
+    setError(null)
+    setNotice(null)
+    stopPolling()
+    setDevice(null)
+    try {
+      await scheduleLogout()
+      setNotice('已退出 Microsoft 登录。')
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '退出登录失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const copy = (text: string) => {
+    void navigator.clipboard?.writeText(text).then(
+      () => setNotice('已复制到剪贴板。'),
+      () => undefined,
+    )
+  }
+
+  const configured = clientIdInfo?.configured ?? false
+  const connected = status?.connected ?? false
+  const accountName = status?.account?.username ?? status?.account?.name ?? null
+
+  return (
+    <div className={styles.settingsStack}>
+      {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
+      {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>Microsoft 应用</h2>
+            <p className={styles.sectionMeta}>填入你在 Entra 注册应用得到的 Application (client) ID。</p>
+          </div>
+          <StatusPill
+            ok={configured}
+            label={configured ? `已配置 ···${clientIdInfo?.client_id_tail ?? ''}` : '未配置'}
+          />
+        </div>
+        <div className={styles.formGrid}>
+          <label className={styles.field}>
+            <span>Application (client) ID</span>
+            <input
+              value={clientIdInput}
+              placeholder={configured ? `已保存 ···${clientIdInfo?.client_id_tail ?? ''}，可重新输入覆盖` : '粘贴 client ID'}
+              onChange={(event) => setClientIdInput(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className={styles.actionRow} style={{ marginTop: 'var(--space-3)' }}>
+          <button
+            className={workspaceStyles.button}
+            type="button"
+            onClick={() => void handleSaveClientId()}
+            disabled={busy !== null || !clientIdInput.trim()}
+          >
+            {busy === 'save' ? '保存中...' : '保存 client_id'}
+          </button>
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>连接账户</h2>
+            <p className={styles.sectionMeta}>用设备码登录 Microsoft，授权拾迹读写你的 Outlook 日历。</p>
+          </div>
+          <StatusPill ok={connected} label={connected ? '已连接' : '未连接'} />
+        </div>
+        {connected ? (
+          <div className={styles.sectionBodyStack}>
+            <p className={styles.sectionMeta}>
+              当前账户：{accountName || '（未知）'}
+              {status?.last_sync_at ? ` · 上次同步 ${formatSmartTime(status.last_sync_at)}` : ''}
+            </p>
+            <div className={styles.actionRow}>
+              <button
+                className={workspaceStyles.dangerButton}
+                type="button"
+                onClick={() => void handleLogout()}
+                disabled={busy !== null}
+              >
+                {busy === 'logout' ? '退出中...' : '退出登录'}
+              </button>
+            </div>
+          </div>
+        ) : device ? (
+          <div className={styles.deviceBox}>
+            <p className={styles.deviceHint}>
+              在浏览器打开下面的地址，输入验证码完成登录。登录成功后本页会自动刷新。
+            </p>
+            <div className={styles.deviceRow}>
+              <span className={styles.deviceLabel}>验证码</span>
+              <code className={styles.deviceCode}>{device.user_code}</code>
+              <button className={styles.copyBtn} type="button" onClick={() => copy(device.user_code)}>复制</button>
+            </div>
+            <div className={styles.deviceRow}>
+              <span className={styles.deviceLabel}>登录地址</span>
+              <a className={styles.deviceUrl} href={device.verification_uri} target="_blank" rel="noreferrer">
+                {device.verification_uri}
+              </a>
+              <button className={styles.copyBtn} type="button" onClick={() => copy(device.verification_uri)}>复制</button>
+            </div>
+            <p className={styles.deviceStatus}>{polling ? '正在等待你完成登录…' : '登录会话已结束。'}</p>
+          </div>
+        ) : (
+          <div className={styles.actionRow}>
+            <button
+              className={workspaceStyles.button}
+              type="button"
+              onClick={() => void handleLogin()}
+              disabled={busy !== null || !configured}
+              title={configured ? undefined : '请先保存 client_id'}
+            >
+              {busy === 'login' ? '启动中...' : '登录 Microsoft'}
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>如何注册应用</h2>
+            <p className={styles.sectionMeta}>首次使用需要在 Microsoft Entra 管理中心注册一个应用（一次性）。</p>
+          </div>
+        </div>
+        <ol className={styles.guideOl}>
+          <li>打开 <a href={ENTRA_URL} target="_blank" rel="noreferrer">Entra 管理中心</a>，进入 App registrations → New registration。</li>
+          <li>Supported account types 选「Personal Microsoft accounts」（或含 personal 的混合项）。</li>
+          <li>无需 redirect URI；在 Authentication 中把「Allow public client flows」设为 Yes（设备码流必需）。</li>
+          <li>记下 Application (client) ID，填入上方「Microsoft 应用」保存即可。</li>
+        </ol>
+        <p className={styles.sectionMeta}>
+          首次登录时按提示同意 Calendars.ReadWrite 等权限，个人账户无需管理员批准。
+        </p>
+      </section>
     </div>
   )
 }

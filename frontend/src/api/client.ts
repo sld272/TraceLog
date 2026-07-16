@@ -1204,3 +1204,228 @@ export async function listMemoryOperations(limit = 20): Promise<MemoryOperation[
   )
   return data.operations
 }
+
+/* ===== Schedule (Outlook / Microsoft Graph) ===== */
+
+/** A goal a schedule event is bound to. */
+export interface ScheduleGoalLink {
+  goal_id: string
+  goal_title: string
+}
+
+/** A cached Outlook calendar event (read-only mirror of Graph). */
+export interface ScheduleEvent {
+  id: string
+  subject: string
+  body_preview: string | null
+  start_ts: number
+  end_ts: number
+  /** 'YYYY-MM-DDTHH:MM:SS' wall-clock in Asia/Shanghai. */
+  start_local: string
+  end_local: string
+  all_day: boolean
+  location: string | null
+  web_link: string | null
+  series_master_id: string | null
+  is_cancelled: boolean
+  change_key: string | null
+  synced_at: number
+  goal_link: null
+  goal_links: ScheduleGoalLink[]
+}
+
+export interface ScheduleAccount {
+  username: string | null
+  name: string | null
+  home_account_id: string | null
+}
+
+export interface ScheduleStatus {
+  configured: boolean
+  connected: boolean
+  account: ScheduleAccount | null
+  last_sync_at: number | null
+  window_start: string
+  window_end: string
+}
+
+export interface ScheduleClientIdInfo {
+  configured: boolean
+  client_id_tail: string | null
+}
+
+export interface ScheduleDeviceStart {
+  user_code: string
+  verification_uri: string
+  expires_in: number | null
+}
+
+export interface ScheduleDeviceStatus {
+  status: 'pending' | 'ok' | 'error'
+  account?: ScheduleAccount
+  error?: string
+}
+
+export interface ScheduleSyncResult {
+  ok: boolean
+  configured: boolean
+  connected: boolean
+  status: string
+  upserted: number
+  deleted: number
+  last_sync_at: number | null
+}
+
+export interface ScheduleEventsResult {
+  events: ScheduleEvent[]
+  configured: boolean
+  connected: boolean
+}
+
+export interface CreateScheduleEventInput {
+  subject: string
+  /** 'YYYY-MM-DD' */
+  date: string
+  /** 'HH:MM' — ignored when all_day. */
+  start_time?: string
+  end_time?: string
+  all_day?: boolean
+  goal_id?: string
+}
+
+/** A goal's weekly schedule expectation ({ period, target, label }). */
+export interface ScheduleExpectation {
+  period: 'week'
+  target: number
+  label: string
+}
+
+/** Weekly progress against a goal's schedule expectation. */
+export interface ScheduleProgress {
+  goal_id: string
+  week_start: string
+  week_end: string
+  current: number
+  target: number | null
+  text: string | null
+  expectation: ScheduleExpectation | null
+}
+
+export interface GoalSchedule {
+  events: ScheduleEvent[]
+  progress: ScheduleProgress
+}
+
+export interface PostActivity {
+  id: string
+  ts: string
+}
+
+export function getScheduleStatus() {
+  return request<ScheduleStatus>('/schedule/status')
+}
+
+export function getScheduleClientId() {
+  return request<ScheduleClientIdInfo>('/schedule/auth/client-id')
+}
+
+export function saveScheduleClientId(clientId: string) {
+  return request<ScheduleClientIdInfo>('/schedule/auth/client-id', {
+    method: 'POST',
+    body: JSON.stringify({ client_id: clientId }),
+  })
+}
+
+export function startScheduleDeviceLogin() {
+  return request<ScheduleDeviceStart>('/schedule/auth/device-start', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function getScheduleDeviceStatus() {
+  return request<ScheduleDeviceStatus>('/schedule/auth/device-status')
+}
+
+export function scheduleLogout() {
+  return request<{ ok: boolean }>('/schedule/auth/logout', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+/** List cached events in [start, end] (inclusive, 'YYYY-MM-DD'). The route
+ *  reports connection state via headers, not the body. */
+export async function listScheduleEvents(start: string, end: string): Promise<ScheduleEventsResult> {
+  const res = await fetch(`${BASE}/schedule/events?start=${start}&end=${end}`, {
+    headers: { 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(body.detail || `HTTP ${res.status}`, res.status)
+  }
+  const events = (await res.json()) as ScheduleEvent[]
+  return {
+    events,
+    configured: res.headers.get('X-Schedule-Configured') === 'true',
+    connected: res.headers.get('X-Schedule-Connected') === 'true',
+  }
+}
+
+export function createScheduleEvent(input: CreateScheduleEventInput) {
+  return request<ScheduleEvent>('/schedule/events', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateScheduleEvent(eventId: string, changes: Partial<CreateScheduleEventInput>) {
+  return request<ScheduleEvent>(`/schedule/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+}
+
+export function deleteScheduleEvent(eventId: string) {
+  return request<{ ok: boolean }>(`/schedule/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function syncSchedule() {
+  return request<ScheduleSyncResult>('/schedule/sync', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function listPostActivity(start: string, end: string) {
+  return request<PostActivity[]>(`/posts/activity?start=${start}&end=${end}`)
+}
+
+/* ===== Goal ↔ schedule links ===== */
+
+export function getGoalSchedule(goalId: string) {
+  return request<GoalSchedule>(`/goals/${encodeURIComponent(goalId)}/schedule`)
+}
+
+export function linkGoalSchedule(goalId: string, eventId: string) {
+  return request<{ goal_id: string; event_id: string; created_at: number }>(
+    `/goals/${encodeURIComponent(goalId)}/schedule/links`,
+    { method: 'POST', body: JSON.stringify({ event_id: eventId }) },
+  )
+}
+
+export function unlinkGoalSchedule(goalId: string, eventId: string) {
+  return request<{ ok: boolean }>(
+    `/goals/${encodeURIComponent(goalId)}/schedule/links/${encodeURIComponent(eventId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function updateGoalScheduleExpectation(goalId: string, expectation: ScheduleExpectation) {
+  return request<{ expectation: ScheduleExpectation | null; progress: ScheduleProgress }>(
+    `/goals/${encodeURIComponent(goalId)}/schedule/expectation`,
+    { method: 'PUT', body: JSON.stringify(expectation) },
+  )
+}

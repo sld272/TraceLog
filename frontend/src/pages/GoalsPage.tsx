@@ -2,18 +2,27 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   type Goal,
   type GoalHorizon,
+  type GoalSchedule,
   type GoalStatus,
+  type ScheduleEvent,
   createGoal,
   deleteGoal,
+  getGoalSchedule,
+  linkGoalSchedule,
   listGoals,
+  listScheduleEvents,
   markGoalProgress,
+  unlinkGoalSchedule,
   updateGoal,
+  updateGoalScheduleExpectation,
 } from '@/api/client'
 import { CollapsibleGroup } from '@/components/CollapsibleGroup'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Notice } from '@/components/Notice'
+import { ScheduleEventDrawer } from '@/components/ScheduleEventDrawer'
 import { PlusIcon } from '@/components/icons'
 import { formatAbsoluteTime } from '@/utils/date'
+import { eventDateKey, formatEventTime, localDateKey, monthDayLabel, todayKey } from '@/utils/schedule'
 import styles from './WorkspacePages.module.css'
 
 interface GoalForm {
@@ -212,6 +221,8 @@ export function GoalsPage() {
                 mode={drawerMode}
                 form={form}
                 saving={saving}
+                goalId={selectedGoal?.id ?? null}
+                goals={goals}
                 onChange={setForm}
                 onClose={closeDrawer}
                 onSave={() => void saveDrawer()}
@@ -307,6 +318,8 @@ function GoalDrawer({
   mode,
   form,
   saving,
+  goalId,
+  goals,
   onChange,
   onClose,
   onSave,
@@ -315,6 +328,8 @@ function GoalDrawer({
   mode: 'create' | 'edit'
   form: GoalForm
   saving: boolean
+  goalId: string | null
+  goals: Goal[]
   onChange: (form: GoalForm) => void
   onClose: () => void
   onSave: () => void
@@ -369,6 +384,7 @@ function GoalDrawer({
         />
         <span>作为当前关注（仅短期目标）</span>
       </label>
+      {mode === 'edit' && goalId && <GoalScheduleSection goalId={goalId} goals={goals} />}
       <div className={styles.drawerActions}>
         {mode === 'edit' ? (
           <button className={styles.dangerButton} onClick={onDelete} disabled={saving}>删除</button>
@@ -378,6 +394,179 @@ function GoalDrawer({
         </button>
       </div>
     </aside>
+  )
+}
+
+function shiftDays(key: string, delta: number): string {
+  const date = new Date(`${key}T00:00:00`)
+  date.setDate(date.getDate() + delta)
+  return localDateKey(date)
+}
+
+function GoalScheduleSection({ goalId, goals }: { goalId: string; goals: Goal[] }) {
+  const [data, setData] = useState<GoalSchedule | null>(null)
+  const [recentEvents, setRecentEvents] = useState<ScheduleEvent[]>([])
+  const [selectedRecent, setSelectedRecent] = useState('')
+  const [expLabel, setExpLabel] = useState('')
+  const [expTarget, setExpTarget] = useState(3)
+  const [busy, setBusy] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setError(null)
+    try {
+      const today = todayKey()
+      const [sched, recent] = await Promise.all([
+        getGoalSchedule(goalId),
+        listScheduleEvents(shiftDays(today, -14), today).catch(() => ({
+          events: [] as ScheduleEvent[],
+          configured: false,
+          connected: false,
+        })),
+      ])
+      setData(sched)
+      setRecentEvents(recent.events)
+      const expectation = sched.progress.expectation
+      setExpLabel(expectation?.label ?? '')
+      setExpTarget(expectation?.target ?? 3)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '日程信息加载失败')
+    }
+  }, [goalId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const linkedIds = new Set((data?.events ?? []).map((event) => event.id))
+  const recentOptions = recentEvents.filter((event) => !linkedIds.has(event.id))
+
+  const saveExpectation = async () => {
+    if (!expLabel.trim()) {
+      setError('期望描述不能为空')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      const result = await updateGoalScheduleExpectation(goalId, {
+        period: 'week',
+        target: expTarget,
+        label: expLabel.trim(),
+      })
+      setData((prev) => (prev ? { ...prev, progress: result.progress } : prev))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存期望失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const bindRecent = async () => {
+    if (!selectedRecent) return
+    setBusy(true)
+    setError(null)
+    try {
+      await linkGoalSchedule(goalId, selectedRecent)
+      setSelectedRecent('')
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '绑定失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const unbind = async (eventId: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await unlinkGoalSchedule(goalId, eventId)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '解绑失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const progressText = data?.progress.expectation
+    ? `${data.progress.expectation.label} · 本周 ${data.progress.text ?? '0/0'}`
+    : '尚未设置期望'
+
+  return (
+    <section className={styles.goalSchedBlock}>
+      <div className={styles.goalSchedTitle}>日程</div>
+      {error && <p className={styles.goalSchedError}>{error}</p>}
+
+      <div className={styles.goalSchedProgress}>{progressText}</div>
+      <div className={styles.goalSchedExpGrid}>
+        <label className={styles.field}>
+          <span>期望描述</span>
+          <input value={expLabel} placeholder="例如：每周健身 3 次" onChange={(event) => setExpLabel(event.target.value)} />
+        </label>
+        <label className={styles.field}>
+          <span>每周次数</span>
+          <input
+            type="number"
+            min={1}
+            value={expTarget}
+            onChange={(event) => setExpTarget(Math.max(1, Number(event.target.value) || 1))}
+          />
+        </label>
+      </div>
+      <button className={styles.ghostButton} type="button" onClick={() => void saveExpectation()} disabled={busy}>
+        保存期望
+      </button>
+
+      <div className={styles.goalSchedSub}>已绑定日程</div>
+      {data && data.events.length > 0 ? (
+        <div className={styles.goalSchedList}>
+          {data.events.map((event) => (
+            <div key={event.id} className={styles.goalSchedItem}>
+              <span className={styles.goalSchedItemTime}>{monthDayLabel(eventDateKey(event))} {formatEventTime(event)}</span>
+              <span className={styles.goalSchedItemTitle}>{event.subject || '(无标题)'}</span>
+              <button className={styles.goalSchedUnbind} type="button" onClick={() => void unbind(event.id)} disabled={busy}>解绑</button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className={styles.groupEmpty}>还没有绑定日程。</p>
+      )}
+
+      {recentOptions.length > 0 && (
+        <div className={styles.goalSchedBind}>
+          <select value={selectedRecent} onChange={(event) => setSelectedRecent(event.target.value)}>
+            <option value="">从近 14 天事件选择…</option>
+            {recentOptions.map((event) => (
+              <option key={event.id} value={event.id}>
+                {monthDayLabel(eventDateKey(event))} {formatEventTime(event)} · {event.subject || '(无标题)'}
+              </option>
+            ))}
+          </select>
+          <button className={styles.ghostButton} type="button" onClick={() => void bindRecent()} disabled={busy || !selectedRecent}>
+            绑定
+          </button>
+        </div>
+      )}
+
+      <button className={styles.ghostButton} type="button" onClick={() => setCreateOpen(true)} disabled={busy}>
+        为此目标创建日程
+      </button>
+
+      {createOpen && (
+        <ScheduleEventDrawer
+          goals={goals}
+          presetGoalId={goalId}
+          onClose={() => setCreateOpen(false)}
+          onCreated={() => {
+            setCreateOpen(false)
+            void load()
+          }}
+        />
+      )}
+    </section>
   )
 }
 

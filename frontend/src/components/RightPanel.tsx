@@ -1,23 +1,58 @@
 import { useEffect, useState } from 'react'
 import {
   type MemoryOperation,
+  type ScheduleEvent,
+  type ScheduleProgress,
+  type ScheduleStatus,
+  getScheduleStatus,
   listMemoryOperations,
+  listScheduleEvents,
 } from '@/api/client'
 import { formatSmartTime } from '@/utils/date'
+import { fetchGoalProgress, monthDayLabel, todayKey } from '@/utils/schedule'
 import { ChevronRightIcon } from '@/components/icons'
+import { MiniCalendar } from '@/components/MiniCalendar'
+import { ScheduleList } from '@/components/ScheduleList'
 import styles from './RightPanel.module.css'
 
 interface RightPanelProps {
   searchQuery: string
   onSearchQueryChange: (value: string) => void
   onOpenMemory: () => void
+  /** 日期透镜当前选中的日期（null = 最新流）。 */
+  selectedDate: string | null
+  onSelectDate: (date: string) => void
+  onOpenSchedule: () => void
+  onOpenSettings: () => void
 }
 
 export function RightPanel({
   searchQuery,
   onSearchQueryChange,
   onOpenMemory,
+  selectedDate,
+  onSelectDate,
+  onOpenSchedule,
+  onOpenSettings,
 }: RightPanelProps) {
+  const [status, setStatus] = useState<ScheduleStatus | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void getScheduleStatus()
+      .then((data) => {
+        if (!cancelled) setStatus(data)
+      })
+      .catch(() => {
+        /* 右栏保持安静：拿不到日程状态时按未连接降级 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const connected = status?.connected ?? false
+
   return (
     <div className={styles.panel}>
       <div className={styles.panelSearch}>
@@ -37,8 +72,93 @@ export function RightPanel({
           </button>
         )}
       </div>
+      <MiniCalendar selectedDate={selectedDate} connected={connected} onSelectDate={onSelectDate} />
+      <ScheduleDayCard
+        targetDate={selectedDate ?? todayKey()}
+        isToday={selectedDate === null}
+        connected={connected}
+        onOpenSchedule={onOpenSchedule}
+        onOpenSettings={onOpenSettings}
+      />
       <MemoryPulseCard onOpenMemory={onOpenMemory} />
     </div>
+  )
+}
+
+function ScheduleDayCard({
+  targetDate,
+  isToday,
+  connected,
+  onOpenSchedule,
+  onOpenSettings,
+}: {
+  targetDate: string
+  isToday: boolean
+  connected: boolean
+  onOpenSchedule: () => void
+  onOpenSettings: () => void
+}) {
+  const [events, setEvents] = useState<ScheduleEvent[]>([])
+  const [progressByGoal, setProgressByGoal] = useState<Record<string, ScheduleProgress>>({})
+
+  useEffect(() => {
+    if (!connected) {
+      setEvents([])
+      setProgressByGoal({})
+      return
+    }
+    let cancelled = false
+    void listScheduleEvents(targetDate, targetDate)
+      .then(async (result) => {
+        if (cancelled) return
+        setEvents(result.events)
+        const goalIds = result.events.flatMap((event) => event.goal_links.map((link) => link.goal_id))
+        const progress = await fetchGoalProgress(goalIds)
+        if (!cancelled) setProgressByGoal(progress)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEvents([])
+          setProgressByGoal({})
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [targetDate, connected])
+
+  const title = isToday ? '今日日程' : `${monthDayLabel(targetDate)}日程`
+  const emptyText = isToday ? '今天没有日程，安心记录就好。' : '这天没有日程。'
+
+  return (
+    <section className={styles.card}>
+      <PanelHeader title={title} onMore={onOpenSchedule} />
+      {!connected ? (
+        <p className={styles.schedGuide}>
+          连接 Outlook 日历后，这里会显示你的日程。
+          <button type="button" className={styles.schedGuideLink} onClick={onOpenSettings}>去设置连接</button>
+        </p>
+      ) : (
+        <>
+          <ScheduleList events={events.slice(0, 4)} progressByGoal={progressByGoal} emptyText={emptyText} />
+          {events.length > 0 && (
+            <div className={styles.schedSource}>
+              <SyncIcon />
+              同步自 Outlook 日历
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function SyncIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21.5 12a9.5 9.5 0 1 1-9.5-9.5" />
+      <path d="M21.5 2.5 12 12" />
+    </svg>
   )
 }
 
