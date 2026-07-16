@@ -9,25 +9,28 @@ import {
   ApiError,
   createSoul,
   generateSoul,
+  getAuthStatus,
   getModelSettings,
   getScheduleClientId,
-  getScheduleDeviceStatus,
   getScheduleStatus,
   getSoulContent,
   getWorkspaceStatus,
   listSouls,
   reconcileVectorIndex,
   reorderSouls,
+  restoreDefaultClientId,
   retryVectorIndex,
   saveModelSettings,
   saveScheduleClientId,
   scheduleLogout,
+  startInteractiveAuth,
   startScheduleDeviceLogin,
   updateSoul,
 } from '@/api/client'
 import { formatSmartTime } from '@/utils/date'
 import { Notice } from '@/components/Notice'
-import { ArrowDownIcon, ArrowUpIcon, PencilIcon } from '@/components/icons'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, PencilIcon } from '@/components/icons'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
@@ -620,15 +623,19 @@ function AboutSettingsPanel() {
   )
 }
 
-const ENTRA_URL = 'https://entra.microsoft.com'
+type ScheduleBusy = 'login' | 'device' | 'save' | 'restore' | 'logout' | null
+type LoginPhase = 'interactive' | 'device' | null
 
 function ScheduleSettingsPanel() {
   const [status, setStatus] = useState<ScheduleStatus | null>(null)
   const [clientIdInfo, setClientIdInfo] = useState<ScheduleClientIdInfo | null>(null)
   const [clientIdInput, setClientIdInput] = useState('')
   const [device, setDevice] = useState<{ user_code: string; verification_uri: string } | null>(null)
-  const [busy, setBusy] = useState<'save' | 'login' | 'logout' | null>(null)
+  const [busy, setBusy] = useState<ScheduleBusy>(null)
+  const [loginPhase, setLoginPhase] = useState<LoginPhase>(null)
   const [polling, setPolling] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [confirmRestore, setConfirmRestore] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const pollRef = useRef<number | null>(null)
@@ -641,14 +648,13 @@ function ScheduleSettingsPanel() {
     setPolling(false)
   }
 
+  // 两个请求各自独立落地：client-id 几乎瞬时（决定内置/自定义应用标签），
+  // status 可能较慢（首次需要唤起 Graph/MSAL），互不阻塞。
   const reload = async () => {
-    try {
-      const [statusData, clientData] = await Promise.all([getScheduleStatus(), getScheduleClientId()])
-      setStatus(statusData)
-      setClientIdInfo(clientData)
-    } catch {
-      /* 保持上一次可用状态 */
-    }
+    await Promise.allSettled([
+      getScheduleStatus().then(setStatus).catch(() => {}),
+      getScheduleClientId().then(setClientIdInfo).catch(() => {}),
+    ])
   }
 
   useEffect(() => {
@@ -658,26 +664,80 @@ function ScheduleSettingsPanel() {
     }
   }, [])
 
-  const startPolling = () => {
+  // 轮询统一的登录状态（interactive 与 device 共用后端 _auth_state）。
+  // interactive 失败且 fallback==='device_code' 时自动切入设备码流。
+  const startPolling = (phase: 'interactive' | 'device') => {
     setPolling(true)
     pollRef.current = window.setInterval(() => {
-      void getScheduleDeviceStatus()
+      void getAuthStatus()
         .then(async (result) => {
           if (result.status === 'ok') {
             stopPolling()
             setDevice(null)
+            setLoginPhase(null)
             setNotice('已连接 Microsoft 账户。')
             await reload()
           } else if (result.status === 'error') {
             stopPolling()
-            setDevice(null)
-            setError(result.error || 'Microsoft 登录失败')
+            if (phase === 'interactive' && result.fallback === 'device_code') {
+              await beginDeviceFlow()
+            } else {
+              setDevice(null)
+              setLoginPhase(null)
+              setError(result.error || 'Microsoft 登录失败')
+            }
           }
         })
         .catch(() => {
           /* 轮询期间的瞬时错误忽略，继续等待 */
         })
     }, 2500)
+  }
+
+  const beginDeviceFlow = async () => {
+    setError(null)
+    setLoginPhase('device')
+    try {
+      const flow = await startScheduleDeviceLogin()
+      setDevice({ user_code: flow.user_code, verification_uri: flow.verification_uri })
+      startPolling('device')
+    } catch (err) {
+      setLoginPhase(null)
+      if (err instanceof ApiError && err.status === 409) {
+        setError('Microsoft 登录正在进行中，请稍候重试。')
+      } else {
+        setError(err instanceof Error ? err.message : '启动设备码登录失败')
+      }
+    }
+  }
+
+  const handleInteractiveLogin = async () => {
+    setBusy('login')
+    setError(null)
+    setNotice(null)
+    setDevice(null)
+    setLoginPhase('interactive')
+    try {
+      await startInteractiveAuth()
+      startPolling('interactive')
+    } catch (err) {
+      setLoginPhase(null)
+      if (err instanceof ApiError && err.status === 409) {
+        setError('Microsoft 登录正在进行中，请稍候重试。')
+      } else {
+        setError(err instanceof Error ? err.message : '启动登录失败')
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const handleDeviceLogin = async () => {
+    setBusy('device')
+    setNotice(null)
+    setDevice(null)
+    await beginDeviceFlow()
+    setBusy(null)
   }
 
   const handleSaveClientId = async () => {
@@ -689,11 +749,14 @@ function ScheduleSettingsPanel() {
     setBusy('save')
     setError(null)
     setNotice(null)
+    stopPolling()
+    setDevice(null)
+    setLoginPhase(null)
     try {
       const info = await saveScheduleClientId(value)
       setClientIdInfo(info)
       setClientIdInput('')
-      setNotice('client_id 已保存。')
+      setNotice('已保存自定义应用 ID，请重新登录。')
       await reload()
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存 client_id 失败')
@@ -702,20 +765,22 @@ function ScheduleSettingsPanel() {
     }
   }
 
-  const handleLogin = async () => {
-    setBusy('login')
+  const handleRestoreDefault = async () => {
+    setConfirmRestore(false)
+    setBusy('restore')
     setError(null)
     setNotice(null)
+    stopPolling()
+    setDevice(null)
+    setLoginPhase(null)
     try {
-      const flow = await startScheduleDeviceLogin()
-      setDevice({ user_code: flow.user_code, verification_uri: flow.verification_uri })
-      startPolling()
+      const info = await restoreDefaultClientId()
+      setClientIdInfo(info)
+      setClientIdInput('')
+      setNotice('已恢复内置应用，请重新登录。')
+      await reload()
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        setError('请先填写并保存 client_id，再登录。')
-      } else {
-        setError(err instanceof Error ? err.message : '启动登录失败')
-      }
+      setError(err instanceof Error ? err.message : '恢复内置应用失败')
     } finally {
       setBusy(null)
     }
@@ -727,6 +792,7 @@ function ScheduleSettingsPanel() {
     setNotice(null)
     stopPolling()
     setDevice(null)
+    setLoginPhase(null)
     try {
       await scheduleLogout()
       setNotice('已退出 Microsoft 登录。')
@@ -745,9 +811,15 @@ function ScheduleSettingsPanel() {
     )
   }
 
-  const configured = clientIdInfo?.configured ?? false
   const connected = status?.connected ?? false
   const accountName = status?.account?.username ?? status?.account?.name ?? null
+  const usingDefault = clientIdInfo?.using_default ?? true
+  const clientTail = clientIdInfo?.client_id_tail ?? ''
+  const advancedState = usingDefault
+    ? `使用拾迹内置应用（···${clientTail}）`
+    : `自定义应用（···${clientTail}）`
+  // 登录进行中（轮询、已弹出设备码或等待浏览器授权）时锁住入口。
+  const loginInFlight = polling || loginPhase !== null
 
   return (
     <div className={styles.settingsStack}>
@@ -757,41 +829,8 @@ function ScheduleSettingsPanel() {
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
-            <h2 className={styles.sectionTitle}>Microsoft 应用</h2>
-            <p className={styles.sectionMeta}>填入你在 Entra 注册应用得到的 Application (client) ID。</p>
-          </div>
-          <StatusPill
-            ok={configured}
-            label={configured ? `已配置 ···${clientIdInfo?.client_id_tail ?? ''}` : '未配置'}
-          />
-        </div>
-        <div className={styles.formGrid}>
-          <label className={styles.field}>
-            <span>Application (client) ID</span>
-            <input
-              value={clientIdInput}
-              placeholder={configured ? `已保存 ···${clientIdInfo?.client_id_tail ?? ''}，可重新输入覆盖` : '粘贴 client ID'}
-              onChange={(event) => setClientIdInput(event.target.value)}
-            />
-          </label>
-        </div>
-        <div className={styles.actionRow} style={{ marginTop: 'var(--space-3)' }}>
-          <button
-            className={workspaceStyles.button}
-            type="button"
-            onClick={() => void handleSaveClientId()}
-            disabled={busy !== null || !clientIdInput.trim()}
-          >
-            {busy === 'save' ? '保存中...' : '保存 client_id'}
-          </button>
-        </div>
-      </section>
-
-      <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
             <h2 className={styles.sectionTitle}>连接账户</h2>
-            <p className={styles.sectionMeta}>用设备码登录 Microsoft，授权拾迹读写你的 Outlook 日历。</p>
+            <p className={styles.sectionMeta}>登录 Microsoft，授权拾迹读写你的 Outlook 日历。</p>
           </div>
           <StatusPill ok={connected} label={connected ? '已连接' : '未连接'} />
         </div>
@@ -831,38 +870,103 @@ function ScheduleSettingsPanel() {
             </div>
             <p className={styles.deviceStatus}>{polling ? '正在等待你完成登录…' : '登录会话已结束。'}</p>
           </div>
+        ) : loginPhase === 'interactive' ? (
+          <div className={styles.deviceBox}>
+            <p className={styles.deviceHint}>
+              浏览器将弹出微软登录页，完成授权后会自动返回。若没有弹出窗口，会自动切换到设备码登录。
+            </p>
+            <p className={styles.deviceStatus}>正在等待浏览器授权…</p>
+          </div>
         ) : (
-          <div className={styles.actionRow}>
+          <div className={styles.connectStack}>
             <button
               className={workspaceStyles.button}
               type="button"
-              onClick={() => void handleLogin()}
-              disabled={busy !== null || !configured}
-              title={configured ? undefined : '请先保存 client_id'}
+              onClick={() => void handleInteractiveLogin()}
+              disabled={busy !== null || loginInFlight}
             >
               {busy === 'login' ? '启动中...' : '登录 Microsoft'}
+            </button>
+            <button
+              className={styles.textLink}
+              type="button"
+              onClick={() => void handleDeviceLogin()}
+              disabled={busy !== null || loginInFlight}
+            >
+              改用设备码登录
             </button>
           </div>
         )}
       </section>
 
+      <p className={styles.scheduleNote}>
+        默认使用拾迹内置应用，无需注册；自托管或企业环境可在高级选项中改用自己的应用 ID。
+      </p>
+
       <section className={styles.section}>
-        <div className={styles.sectionHeader}>
-          <div>
-            <h2 className={styles.sectionTitle}>如何注册应用</h2>
-            <p className={styles.sectionMeta}>首次使用需要在 Microsoft Entra 管理中心注册一个应用（一次性）。</p>
+        <button
+          className={styles.advancedHeader}
+          type="button"
+          onClick={() => setAdvancedOpen((value) => !value)}
+          aria-expanded={advancedOpen}
+        >
+          <span className={styles.advancedChevron} data-open={advancedOpen}>
+            <ChevronRightIcon width={16} height={16} />
+          </span>
+          <span className={styles.advancedTitle}>高级选项</span>
+          <span className={styles.advancedState}>{advancedState}</span>
+        </button>
+        {advancedOpen && (
+          <div className={styles.advancedBody}>
+            <div>
+              <h3 className={styles.advancedSubTitle}>Microsoft 应用</h3>
+              <p className={styles.sectionMeta}>
+                默认使用拾迹内置的共享应用。自托管或企业环境可填入自己在 Entra 注册的 Application (client) ID。
+              </p>
+            </div>
+            <div className={styles.formGrid}>
+              <label className={styles.field}>
+                <span>Application (client) ID</span>
+                <input
+                  value={clientIdInput}
+                  placeholder={usingDefault ? '粘贴自定义 client ID' : `当前 ···${clientTail}，可重新输入覆盖`}
+                  onChange={(event) => setClientIdInput(event.target.value)}
+                />
+              </label>
+            </div>
+            <div className={styles.actionRow}>
+              <button
+                className={workspaceStyles.button}
+                type="button"
+                onClick={() => void handleSaveClientId()}
+                disabled={busy !== null || !clientIdInput.trim()}
+              >
+                {busy === 'save' ? '保存中...' : '保存自定义应用'}
+              </button>
+              {!usingDefault && (
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={() => setConfirmRestore(true)}
+                  disabled={busy !== null}
+                >
+                  {busy === 'restore' ? '恢复中...' : '恢复内置应用'}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-        <ol className={styles.guideOl}>
-          <li>打开 <a href={ENTRA_URL} target="_blank" rel="noreferrer">Entra 管理中心</a>，进入 App registrations → New registration。</li>
-          <li>Supported account types 选「Personal Microsoft accounts」（或含 personal 的混合项）。</li>
-          <li>无需 redirect URI；在 Authentication 中把「Allow public client flows」设为 Yes（设备码流必需）。</li>
-          <li>记下 Application (client) ID，填入上方「Microsoft 应用」保存即可。</li>
-        </ol>
-        <p className={styles.sectionMeta}>
-          首次登录时按提示同意 Calendars.ReadWrite 等权限，个人账户无需管理员批准。
-        </p>
+        )}
       </section>
+
+      <ConfirmDialog
+        isOpen={confirmRestore}
+        title="恢复内置应用"
+        message="恢复内置应用会清除当前自定义应用 ID 和登录状态，之后需要重新登录。确定继续吗？"
+        confirmText="恢复内置应用"
+        danger
+        onConfirm={() => void handleRestoreDefault()}
+        onCancel={() => setConfirmRestore(false)}
+      />
     </div>
   )
 }

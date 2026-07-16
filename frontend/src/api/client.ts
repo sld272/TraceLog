@@ -1251,6 +1251,8 @@ export interface ScheduleStatus {
 
 export interface ScheduleClientIdInfo {
   configured: boolean
+  /** True when the built-in shared app is in use (no custom client_id saved). */
+  using_default: boolean
   client_id_tail: string | null
 }
 
@@ -1260,10 +1262,13 @@ export interface ScheduleDeviceStart {
   expires_in: number | null
 }
 
-export interface ScheduleDeviceStatus {
+/** Shared poll result for both interactive and device-code sign-in flows. */
+export interface ScheduleAuthStatus {
   status: 'pending' | 'ok' | 'error'
   account?: ScheduleAccount
   error?: string
+  /** Present on interactive-login errors: suggests falling back to device code. */
+  fallback?: 'device_code'
 }
 
 export interface ScheduleSyncResult {
@@ -1336,6 +1341,21 @@ export function saveScheduleClientId(clientId: string) {
   })
 }
 
+/** Restore the built-in shared app (clears any custom client_id + login state). */
+export function restoreDefaultClientId() {
+  return request<ScheduleClientIdInfo>('/schedule/auth/client-id', {
+    method: 'DELETE',
+  })
+}
+
+/** Start the one-click browser (interactive) sign-in; poll getAuthStatus after. */
+export function startInteractiveAuth() {
+  return request<{ status: string }>('/schedule/auth/interactive-start', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
 export function startScheduleDeviceLogin() {
   return request<ScheduleDeviceStart>('/schedule/auth/device-start', {
     method: 'POST',
@@ -1343,8 +1363,9 @@ export function startScheduleDeviceLogin() {
   })
 }
 
-export function getScheduleDeviceStatus() {
-  return request<ScheduleDeviceStatus>('/schedule/auth/device-status')
+/** Poll the in-progress sign-in flow (interactive or device code). */
+export function getAuthStatus() {
+  return request<ScheduleAuthStatus>('/schedule/auth/status')
 }
 
 export function scheduleLogout() {
