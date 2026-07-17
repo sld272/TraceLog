@@ -809,13 +809,16 @@ export function postIdFromEvidenceRef(ref: string | null | undefined): string | 
 
 export function acceptSuggestion(
   suggestionId: string,
-  opts?: { fallbackLocal?: boolean },
+  opts?: { fallbackLocal?: boolean; overrides?: Record<string, unknown> },
 ) {
   return request<{ suggestion: Suggestion; created: Goal | ScheduleEvent | null }>(
     `/suggestions/${suggestionId}/accept`,
     {
       method: 'POST',
-      body: JSON.stringify({ fallback_local: opts?.fallbackLocal ?? false }),
+      body: JSON.stringify({
+        fallback_local: opts?.fallbackLocal ?? false,
+        ...(opts?.overrides ? { overrides: opts.overrides } : {}),
+      }),
     },
   )
 }

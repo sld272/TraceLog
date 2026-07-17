@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -402,6 +403,122 @@ class ScheduleSuggestionServiceTest(unittest.TestCase):
                 suggestion_service.accept(suggestion["id"])
         self.assertEqual("pending", suggestion_service.get_suggestion(suggestion["id"])["status"])
         self.assertEqual(0, db.query_one("SELECT COUNT(*) AS count FROM schedule_events")["count"])
+
+    def test_goal_overrides_merge_on_accept_and_leave_stored_row_unchanged(self) -> None:
+        suggestion = suggestion_service.create_suggestion(
+            "goal",
+            {"title": "准备考试", "detail": "旧详情", "horizon": "long"},
+            "chat:7",
+            0.8,
+        )
+        original_key = suggestion["normalized_key"]
+        original_payload_json = db.query_one(
+            "SELECT payload_json FROM suggestions WHERE id = ?", (suggestion["id"],)
+        )["payload_json"]
+
+        result = suggestion_service.accept(
+            suggestion["id"],
+            overrides={"title": "准备期末考", "detail": "  复习重点  ", "horizon": "short"},
+        )
+
+        created = result["created"]
+        self.assertEqual("准备期末考", created["title"])
+        self.assertEqual("复习重点", created["detail"])
+        self.assertEqual("short", created["horizon"])
+        self.assertEqual("accepted", result["suggestion"]["status"])
+
+        row = db.query_one(
+            "SELECT payload_json, normalized_key, status FROM suggestions WHERE id = ?",
+            (suggestion["id"],),
+        )
+        self.assertEqual("accepted", row["status"])
+        self.assertEqual(original_key, row["normalized_key"])
+        self.assertEqual(original_payload_json, row["payload_json"])
+        self.assertEqual(
+            {"title": "准备考试", "detail": "旧详情", "horizon": "long", "focus": False},
+            json.loads(row["payload_json"]),
+        )
+
+    def test_goal_overrides_reject_unknown_field_and_keep_pending(self) -> None:
+        suggestion = suggestion_service.create_suggestion(
+            "goal", {"title": "准备考试", "horizon": "long"}, "chat:8"
+        )
+        with self.assertRaises(suggestion_service.SuggestionOverrideError):
+            suggestion_service.accept(suggestion["id"], overrides={"status": "done"})
+        self.assertEqual("pending", suggestion_service.get_suggestion(suggestion["id"])["status"])
+
+    def test_goal_overrides_invalid_value_raises_override_error(self) -> None:
+        suggestion = suggestion_service.create_suggestion(
+            "goal", {"title": "准备考试", "horizon": "long"}, "chat:9"
+        )
+        with self.assertRaises(suggestion_service.SuggestionOverrideError):
+            suggestion_service.accept(suggestion["id"], overrides={"horizon": "forever"})
+        self.assertEqual("pending", suggestion_service.get_suggestion(suggestion["id"])["status"])
+
+    def test_schedule_overrides_reschedule_expired_to_future_and_keep_stored_row(self) -> None:
+        suggestion = self._create_schedule(date="2026-07-10")
+        original_key = suggestion["normalized_key"]
+        original_payload_json = db.query_one(
+            "SELECT payload_json FROM suggestions WHERE id = ?", (suggestion["id"],)
+        )["payload_json"]
+        service = FakeScheduleService([{"id": "event-1"}])
+        with patch("core.suggestion_service.ScheduleService", return_value=service), patch(
+            "core.suggestion_service._now_local",
+            return_value=datetime(2026, 7, 17, 12, tzinfo=ZoneInfo("Asia/Shanghai")),
+        ):
+            with self.assertRaises(suggestion_service.SuggestionExpiredError):
+                suggestion_service.accept(suggestion["id"])
+            result = suggestion_service.accept(
+                suggestion["id"],
+                overrides={
+                    "subject": "打加强针",
+                    "date": "2026-07-25",
+                    "start_time": "10:00",
+                    "end_time": "11:00",
+                },
+            )
+
+        self.assertEqual("accepted", result["suggestion"]["status"])
+        create_kwargs = service.create_calls[-1]
+        self.assertEqual("打加强针", create_kwargs["subject"])
+        self.assertEqual("2026-07-25", create_kwargs["event_date"].isoformat())
+        self.assertEqual("10:00", create_kwargs["start_time"].strftime("%H:%M"))
+        self.assertEqual("11:00", create_kwargs["end_time"].strftime("%H:%M"))
+        self.assertEqual(suggestion["id"], create_kwargs["client_request_id"])
+
+        row = db.query_one(
+            "SELECT payload_json, normalized_key FROM suggestions WHERE id = ?",
+            (suggestion["id"],),
+        )
+        self.assertEqual(original_key, row["normalized_key"])
+        self.assertEqual(original_payload_json, row["payload_json"])
+
+    def test_schedule_overrides_reject_non_overridable_field(self) -> None:
+        suggestion = self._create_schedule()
+        factory = Mock()
+        with patch("core.suggestion_service.ScheduleService", factory), patch(
+            "core.suggestion_service._now_local",
+            return_value=datetime(2026, 7, 17, 12, tzinfo=ZoneInfo("Asia/Shanghai")),
+        ):
+            with self.assertRaises(suggestion_service.SuggestionOverrideError):
+                suggestion_service.accept(suggestion["id"], overrides={"goal_id": "g_1"})
+        factory.assert_not_called()
+        self.assertEqual("pending", suggestion_service.get_suggestion(suggestion["id"])["status"])
+
+    def test_schedule_overrides_invalid_value_raises_override_error(self) -> None:
+        suggestion = self._create_schedule()
+        factory = Mock()
+        with patch("core.suggestion_service.ScheduleService", factory), patch(
+            "core.suggestion_service._now_local",
+            return_value=datetime(2026, 7, 17, 12, tzinfo=ZoneInfo("Asia/Shanghai")),
+        ):
+            with self.assertRaises(suggestion_service.SuggestionOverrideError):
+                suggestion_service.accept(
+                    suggestion["id"],
+                    overrides={"start_time": "15:00", "end_time": "14:00"},
+                )
+        factory.assert_not_called()
+        self.assertEqual("pending", suggestion_service.get_suggestion(suggestion["id"])["status"])
 
 
 if __name__ == "__main__":

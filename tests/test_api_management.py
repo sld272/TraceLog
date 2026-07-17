@@ -660,13 +660,63 @@ class ApiManagementTest(unittest.TestCase):
 
         self.assertEqual([schedule["id"]], [item["id"] for item in listed.json()])
         self.assertEqual(200, fallback.status_code, fallback.text)
-        accept.assert_called_once_with(schedule["id"], fallback_local=True)
+        accept.assert_called_once_with(schedule["id"], fallback_local=True, overrides=None)
         self.assertEqual(409, no_account.status_code)
         self.assertEqual({"code": "no_writable_account"}, no_account.json()["detail"])
         self.assertEqual(409, expired.status_code)
         self.assertEqual({"code": "suggestion_expired"}, expired.json()["detail"])
         self.assertEqual(502, upstream.status_code)
         self.assertEqual(404, missing.status_code)
+
+    def test_suggestion_accept_route_forwards_overrides_and_maps_invalid_to_422(self) -> None:
+        schedule = suggestion_service.create_suggestion(
+            "schedule",
+            {
+                "subject": "打疫苗",
+                "date": "2026-07-20",
+                "start_time": "15:00",
+                "end_time": "16:00",
+                "all_day": False,
+            },
+            "chat:1",
+            0.9,
+        )
+        goal = suggestion_service.create_suggestion(
+            "goal", {"title": "旧标题", "horizon": "long"}, "chat:2", 0.8
+        )
+        accepted = {
+            "suggestion": {**schedule, "status": "accepted"},
+            "created": {"id": "local-1"},
+        }
+        with self._client() as client:
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                return_value=accepted,
+            ) as accept:
+                override_response = client.post(
+                    f"/suggestions/{schedule['id']}/accept",
+                    json={"overrides": {"subject": "打加强针", "date": "2026-07-25"}},
+                )
+            invalid_value = client.post(
+                f"/suggestions/{goal['id']}/accept",
+                json={"overrides": {"horizon": "forever"}},
+            )
+            unknown_field = client.post(
+                f"/suggestions/{goal['id']}/accept",
+                json={"overrides": {"status": "done"}},
+            )
+
+        self.assertEqual(200, override_response.status_code, override_response.text)
+        accept.assert_called_once_with(
+            schedule["id"],
+            fallback_local=False,
+            overrides={"subject": "打加强针", "date": "2026-07-25"},
+        )
+        self.assertEqual(422, invalid_value.status_code, invalid_value.text)
+        self.assertEqual(422, unknown_field.status_code, unknown_field.text)
+        self.assertEqual(
+            "pending", suggestion_service.get_suggestion(goal["id"])["status"]
+        )
 
     def test_delete_post_route_hard_deletes_post_comments_and_cancels_pending_jobs(self) -> None:
         post_id = "post-delete-1"

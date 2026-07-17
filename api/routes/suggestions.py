@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
@@ -18,6 +18,7 @@ router = APIRouter(prefix="/suggestions", tags=["suggestions"])
 
 class AcceptSuggestionRequest(BaseModel):
     fallback_local: bool = False
+    overrides: dict[str, Any] | None = None
 
 
 @router.get("")
@@ -37,11 +38,14 @@ async def accept_suggestion(
             suggestion_service.accept,
             suggestion_id,
             fallback_local=request.fallback_local if request is not None else False,
+            overrides=request.overrides if request is not None else None,
         )
     except suggestion_service.SuggestionExpiredError as exc:
         raise HTTPException(
             status_code=409, detail={"code": "suggestion_expired"}
         ) from exc
+    except suggestion_service.SuggestionOverrideError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except NoWritableAccountError as exc:
         raise HTTPException(
             status_code=409, detail={"code": "no_writable_account"}

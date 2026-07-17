@@ -29,6 +29,17 @@ class SuggestionExpiredError(ValueError):
     """Raised when a schedule suggestion's local-time end has passed."""
 
 
+class SuggestionOverrideError(ValueError):
+    """Raised when accept-time overrides are invalid (illegal field or value)."""
+
+
+# Business fields each kind allows an accept-time override to replace.
+_OVERRIDE_FIELDS: dict[str, frozenset[str]] = {
+    "goal": frozenset({"title", "detail", "horizon", "focus"}),
+    "schedule": frozenset({"subject", "date", "start_time", "end_time", "all_day"}),
+}
+
+
 def create_suggestion(
     kind: str,
     payload: dict[str, Any],
@@ -128,19 +139,63 @@ def list_pending(kind: str | None = None) -> list[dict[str, Any]]:
     return [_row_to_dict(row) for row in rows]
 
 
-def accept(suggestion_id: str, *, fallback_local: bool = False) -> dict[str, Any]:
-    """Accept one pending suggestion and create its target object."""
+def accept(
+    suggestion_id: str,
+    *,
+    fallback_local: bool = False,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Accept one pending suggestion and create its target object.
+
+    When ``overrides`` is non-empty its allowed business fields are shallow
+    merged over the stored payload (overrides win) and the result is fully
+    revalidated before the target object is created. The suggestion row's
+    payload_json and normalized_key stay unchanged — only status/decided_at
+    move — so dedup semantics and the suggestion_id idempotency key hold.
+    """
     row = db.query_one("SELECT kind FROM suggestions WHERE id = ?", (suggestion_id,))
     if row is None or row["kind"] not in SUGGESTION_KINDS:
         raise ValueError("suggestion 不存在")
     kind = str(row["kind"])
     _validate_kind(kind)
     if kind == "schedule":
-        return _accept_schedule(suggestion_id, fallback_local=fallback_local)
-    return _accept_goal(suggestion_id)
+        return _accept_schedule(
+            suggestion_id, fallback_local=fallback_local, overrides=overrides
+        )
+    return _accept_goal(suggestion_id, overrides=overrides)
 
 
-def _accept_goal(suggestion_id: str) -> dict[str, Any]:
+def _apply_overrides(
+    kind: str,
+    payload: dict[str, Any],
+    overrides: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge allowed overrides over a stored payload and fully revalidate.
+
+    Empty/None overrides return the stored payload untouched (already
+    normalized at creation). Any unknown key or invalid value raises
+    ``SuggestionOverrideError`` so the route can map it to 422.
+    """
+    if not overrides:
+        return payload
+    if not isinstance(overrides, dict):
+        raise SuggestionOverrideError("overrides 必须是对象")
+    illegal = sorted(set(overrides) - _OVERRIDE_FIELDS[kind])
+    if illegal:
+        raise SuggestionOverrideError(
+            "overrides 不支持以下字段：" + "、".join(illegal)
+        )
+    try:
+        return _normalize_payload(kind, {**payload, **overrides})
+    except ValueError as exc:
+        raise SuggestionOverrideError(str(exc)) from exc
+
+
+def _accept_goal(
+    suggestion_id: str,
+    *,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create a goal and mark its suggestion in one SQLite transaction."""
     with db.immediate_transaction() as conn:
         row = conn.execute(
@@ -152,7 +207,7 @@ def _accept_goal(suggestion_id: str) -> dict[str, Any]:
         if row["status"] != "pending":
             raise ValueError("suggestion 已处理")
         suggestion = _row_to_dict(row)
-        payload = suggestion["payload"]
+        payload = _apply_overrides("goal", suggestion["payload"], overrides)
         created = goal_service.create_goal(
             payload["title"],
             payload.get("detail"),
@@ -174,6 +229,7 @@ def _accept_schedule(
     suggestion_id: str,
     *,
     fallback_local: bool,
+    overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create an event outside SQLite transactions, then finalize the row."""
     row = db.query_one("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,))
@@ -182,7 +238,9 @@ def _accept_schedule(
     if row["status"] != "pending":
         raise ValueError("suggestion 已处理")
     suggestion = _row_to_dict(row)
-    payload = suggestion["payload"]
+    # Merge overrides before the expiry check so rescheduling a past
+    # suggestion to a future time makes it acceptable again.
+    payload = _apply_overrides("schedule", suggestion["payload"], overrides)
     if _schedule_suggestion_expired(payload, now=_now_local()):
         raise SuggestionExpiredError("suggestion_expired")
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   ApiError,
+  type GoalHorizon,
   type Suggestion,
   acceptSuggestion,
   dismissSuggestion,
@@ -15,25 +16,87 @@ interface InlineSuggestionsProps {
   fromPrivateChat?: boolean
 }
 
+/** Inline edit form state — only one card edits at a time. */
+type GoalDraft = {
+  id: string
+  kind: 'goal'
+  title: string
+  detail: string
+  horizon: GoalHorizon
+}
+
+type ScheduleDraft = {
+  id: string
+  kind: 'schedule'
+  subject: string
+  date: string
+  startTime: string
+  endTime: string
+  allDay: boolean
+}
+
+type EditDraft = GoalDraft | ScheduleDraft
+
+function draftFromSuggestion(suggestion: Suggestion): EditDraft {
+  if (suggestion.kind === 'goal') {
+    return {
+      id: suggestion.id,
+      kind: 'goal',
+      title: suggestion.payload.title,
+      detail: suggestion.payload.detail ?? '',
+      horizon: suggestion.payload.horizon,
+    }
+  }
+  return {
+    id: suggestion.id,
+    kind: 'schedule',
+    subject: suggestion.payload.subject,
+    date: suggestion.payload.date,
+    startTime: suggestion.payload.start_time ?? '',
+    endTime: suggestion.payload.end_time ?? '',
+    allDay: suggestion.payload.all_day,
+  }
+}
+
+function overridesFromDraft(draft: EditDraft): Record<string, unknown> {
+  if (draft.kind === 'goal') {
+    return { title: draft.title, detail: draft.detail, horizon: draft.horizon }
+  }
+  return {
+    subject: draft.subject,
+    date: draft.date,
+    all_day: draft.allDay,
+    start_time: draft.allDay ? null : draft.startTime || null,
+    end_time: draft.allDay ? null : draft.endTime || null,
+  }
+}
+
 export function InlineSuggestions({ suggestions, fromPrivateChat }: InlineSuggestionsProps) {
   const [pending, setPending] = useState(suggestions)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [blocked, setBlocked] = useState<Record<string, 'no_writable_account' | 'suggestion_expired'>>({})
+  const [editing, setEditing] = useState<EditDraft | null>(null)
+  // Overrides remembered when an edit-save falls back to the local-account choice.
+  const [savedOverrides, setSavedOverrides] = useState<Record<string, Record<string, unknown>>>({})
   const suggestionKey = suggestions.map((item) => item.id).join('|')
 
   useEffect(() => {
     setPending(suggestions)
     setError(null)
     setBlocked({})
+    setEditing(null)
+    setSavedOverrides({})
   }, [suggestionKey])
 
   if (pending.length === 0) return null
 
+  const drop = (id: string) => setPending((current) => current.filter((item) => item.id !== id))
+
   const decide = async (
     suggestion: Suggestion,
     action: 'accept' | 'dismiss',
-    opts?: { fallbackLocal?: boolean },
+    opts?: { fallbackLocal?: boolean; overrides?: Record<string, unknown> },
   ) => {
     setBusyId(suggestion.id)
     setError(null)
@@ -43,7 +106,7 @@ export function InlineSuggestions({ suggestions, fromPrivateChat }: InlineSugges
       } else {
         await dismissSuggestion(suggestion.id)
       }
-      setPending((current) => current.filter((item) => item.id !== suggestion.id))
+      drop(suggestion.id)
     } catch (err) {
       const suggestionCode = err instanceof ApiError ? err.code : null
       if (
@@ -60,6 +123,37 @@ export function InlineSuggestions({ suggestions, fromPrivateChat }: InlineSugges
     }
   }
 
+  const startEdit = (suggestion: Suggestion) => {
+    setError(null)
+    setEditing(draftFromSuggestion(suggestion))
+  }
+
+  const saveEdit = async () => {
+    if (editing === null) return
+    const suggestion = pending.find((item) => item.id === editing.id)
+    if (!suggestion) return
+    const overrides = overridesFromDraft(editing)
+    setBusyId(editing.id)
+    setError(null)
+    try {
+      await acceptSuggestion(editing.id, { overrides })
+      drop(editing.id)
+      setEditing(null)
+    } catch (err) {
+      const suggestionCode = err instanceof ApiError ? err.code : null
+      if (suggestion.kind === 'schedule' && suggestionCode === 'no_writable_account') {
+        // Preserve the edits so the local-account fallback saves the new time.
+        setSavedOverrides((current) => ({ ...current, [editing.id]: overrides }))
+        setBlocked((current) => ({ ...current, [editing.id]: 'no_writable_account' }))
+        setEditing(null)
+        return
+      }
+      setError(err instanceof Error ? err.message : '处理失败')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   return (
     <div className={styles.stack}>
       {pending.map((suggestion) => {
@@ -67,6 +161,22 @@ export function InlineSuggestions({ suggestions, fromPrivateChat }: InlineSugges
         const block = blocked[suggestion.id]
         const expired = block === 'suggestion_expired'
         const noAccount = block === 'no_writable_account'
+        const isEditing = editing?.id === suggestion.id
+
+        if (isEditing && editing) {
+          return (
+            <div key={suggestion.id} className={`${styles.card} ${styles.cardEditing}`}>
+              <SuggestionEditForm
+                draft={editing}
+                busy={busy}
+                onChange={setEditing}
+                onSave={() => void saveEdit()}
+                onCancel={() => setEditing(null)}
+              />
+            </div>
+          )
+        }
+
         return (
           <div key={suggestion.id} className={styles.card}>
             <span className={styles.icon} aria-hidden>
@@ -80,6 +190,7 @@ export function InlineSuggestions({ suggestions, fromPrivateChat }: InlineSugges
               {suggestion.kind === 'schedule' && (
                 <span className={styles.meta}>{scheduleTimeLabel(suggestion)}</span>
               )}
+              {expired && <span className={styles.hint}>改时间后可采纳</span>}
             </div>
             <div className={styles.actions}>
               {noAccount ? (
@@ -96,7 +207,12 @@ export function InlineSuggestions({ suggestions, fromPrivateChat }: InlineSugges
                   <button
                     className={styles.localFallback}
                     disabled={busy}
-                    onClick={() => void decide(suggestion, 'accept', { fallbackLocal: true })}
+                    onClick={() =>
+                      void decide(suggestion, 'accept', {
+                        fallbackLocal: true,
+                        overrides: savedOverrides[suggestion.id],
+                      })
+                    }
                   >
                     先存在本地
                   </button>
@@ -112,6 +228,13 @@ export function InlineSuggestions({ suggestions, fromPrivateChat }: InlineSugges
                       采纳
                     </button>
                   )}
+                  <button
+                    className={styles.edit}
+                    disabled={busy}
+                    onClick={() => startEdit(suggestion)}
+                  >
+                    编辑
+                  </button>
                   <button
                     className={styles.dismiss}
                     disabled={busy}
@@ -130,6 +253,123 @@ export function InlineSuggestions({ suggestions, fromPrivateChat }: InlineSugges
       )}
       {error && <p className={styles.error}>{error}</p>}
     </div>
+  )
+}
+
+function SuggestionEditForm({
+  draft,
+  busy,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  draft: EditDraft
+  busy: boolean
+  onChange: (draft: EditDraft) => void
+  onSave: () => void
+  onCancel: () => void
+}) {
+  return (
+    <form
+      className={styles.form}
+      onSubmit={(event) => {
+        event.preventDefault()
+        onSave()
+      }}
+    >
+      {draft.kind === 'goal' ? (
+        <>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>标题</span>
+            <input
+              className={styles.input}
+              value={draft.title}
+              onChange={(event) => onChange({ ...draft, title: event.target.value })}
+              autoFocus
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>详情</span>
+            <textarea
+              className={styles.textarea}
+              value={draft.detail}
+              rows={2}
+              onChange={(event) => onChange({ ...draft, detail: event.target.value })}
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>期限</span>
+            <select
+              className={styles.input}
+              value={draft.horizon}
+              onChange={(event) => onChange({ ...draft, horizon: event.target.value as GoalHorizon })}
+            >
+              <option value="short">近期</option>
+              <option value="long">长期</option>
+            </select>
+          </label>
+        </>
+      ) : (
+        <>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>主题</span>
+            <input
+              className={styles.input}
+              value={draft.subject}
+              onChange={(event) => onChange({ ...draft, subject: event.target.value })}
+              autoFocus
+            />
+          </label>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>日期</span>
+            <input
+              type="date"
+              className={styles.input}
+              value={draft.date}
+              onChange={(event) => onChange({ ...draft, date: event.target.value })}
+            />
+          </label>
+          {!draft.allDay && (
+            <div className={styles.timeRow}>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>开始</span>
+                <input
+                  type="time"
+                  className={styles.input}
+                  value={draft.startTime}
+                  onChange={(event) => onChange({ ...draft, startTime: event.target.value })}
+                />
+              </label>
+              <label className={styles.field}>
+                <span className={styles.fieldLabel}>结束</span>
+                <input
+                  type="time"
+                  className={styles.input}
+                  value={draft.endTime}
+                  onChange={(event) => onChange({ ...draft, endTime: event.target.value })}
+                />
+              </label>
+            </div>
+          )}
+          <label className={styles.checkboxRow}>
+            <input
+              type="checkbox"
+              checked={draft.allDay}
+              onChange={(event) => onChange({ ...draft, allDay: event.target.checked })}
+            />
+            <span>全天</span>
+          </label>
+        </>
+      )}
+      <div className={styles.formActions}>
+        <button type="submit" className={styles.save} disabled={busy}>
+          保存并采纳
+        </button>
+        <button type="button" className={styles.cancel} disabled={busy} onClick={onCancel}>
+          取消
+        </button>
+      </div>
+    </form>
   )
 }
 
