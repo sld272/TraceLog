@@ -1261,6 +1261,41 @@ export interface ScheduleStatus {
   window_end: string
   /** 全部日历账号概要（本地 + 云端）。旧 sessionStorage 快照可能缺失。 */
   accounts?: ScheduleAccountInfo[]
+  /** 是否应弹出「本地→Outlook 迁移」一次性邀请（已连接 且 有本地日程 且未 dismiss）。 */
+  migration_prompt_pending?: boolean
+}
+
+/** 迁移预检 / 冲突对照里的单个事件摘要（本地或 Outlook 现有）。 */
+export interface MigrationEventRef {
+  id: string
+  subject: string
+  /** 'YYYY-MM-DDTHH:MM:SS' wall-clock in Asia/Shanghai. */
+  start_local: string
+  end_local: string
+  all_day: boolean
+}
+
+/** 一处迁移冲突：本地事件与 Outlook 中疑似已存在的事件对照。 */
+export interface MigrationConflict {
+  local: MigrationEventRef
+  existing: MigrationEventRef
+}
+
+/** 迁移预检结果：总数、无冲突可直接迁入数、逐条冲突。 */
+export interface MigrationPreview {
+  total: number
+  clean: number
+  conflicts: MigrationConflict[]
+}
+
+/** 迁移执行结果。partial 表示中途失败、尚有剩余可重试。 */
+export interface MigrationResult {
+  status: 'ok' | 'partial'
+  migrated: number
+  skipped: number
+  remaining: number
+  account_removed: boolean
+  error?: string
 }
 
 export interface ScheduleClientIdInfo {
@@ -1441,6 +1476,30 @@ export function deleteLocalCalendarAccount(deleteEvents: boolean) {
   return request<{ ok: boolean; deleted_events: number }>('/schedule/accounts/local', {
     method: 'DELETE',
     body: JSON.stringify({ delete_events: deleteEvents }),
+  })
+}
+
+/** 预检本地→Outlook 迁移（有 sync 副作用故用 POST）。未连接 / 无本地账号 / 0 条 → 409。 */
+export function previewLocalMigration() {
+  return request<MigrationPreview>('/schedule/accounts/local/migration/preview', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+/** 执行迁移。decisions 仅对冲突项有意义（'skip' | 'create'），缺省按 'skip'。 */
+export function migrateLocalEvents(decisions: Record<string, 'skip' | 'create'>) {
+  return request<MigrationResult>('/schedule/accounts/local/migration', {
+    method: 'POST',
+    body: JSON.stringify({ decisions }),
+  })
+}
+
+/** 抑制一次性迁移邀请弹窗（「暂不」永不再自动弹）。 */
+export function dismissMigrationPrompt() {
+  return request<{ ok: boolean }>('/schedule/accounts/local/migration/dismiss', {
+    method: 'POST',
+    body: JSON.stringify({}),
   })
 }
 

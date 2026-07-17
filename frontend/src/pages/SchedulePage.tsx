@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   type Goal,
   type ScheduleEvent,
@@ -13,10 +13,12 @@ import {
 import {
   getCachedScheduleStatus,
   hasLocalCalendarAccount,
+  invalidateScheduleStatusCache,
   setCachedScheduleStatus,
 } from '@/utils/scheduleStatusCache'
 import { Notice } from '@/components/Notice'
 import { ScheduleEventDrawer } from '@/components/ScheduleEventDrawer'
+import { ScheduleMigrationDialog } from '@/components/ScheduleMigrationDialog'
 import { ScheduleEventPopover } from '@/components/ScheduleEventPopover'
 import { ScheduleWeekGrid } from '@/components/ScheduleWeekGrid'
 import { ScheduleMonthGrid } from '@/components/ScheduleMonthGrid'
@@ -62,9 +64,14 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
   const [drawer, setDrawer] = useState<DrawerState | null>(null)
   const [reloadKey, setReloadKey] = useState(0)
   const [creatingLocal, setCreatingLocal] = useState(false)
+  const [migration, setMigration] = useState<{ source: 'prompt' | 'settings' } | null>(null)
+  /** 本次挂载是否已自动弹过迁移邀请（防 StrictMode / 重复触发）。 */
+  const migrationPromptShown = useRef(false)
 
   const connected = status?.connected ?? false
   const hasLocal = hasLocalCalendarAccount(status)
+  const localEventCount =
+    status?.accounts?.find((account) => account.provider === 'local')?.event_count ?? 0
   /** 有任一可写账号（Outlook 已连或本地日历已创建）即可使用日历。 */
   const usable = connected || hasLocal
   const today = todayKey()
@@ -93,6 +100,11 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
         setStatus(statusData)
         setCachedScheduleStatus(statusData)
         setGoals(goalData)
+        /* 已连接 且 有本地日程 且未 dismiss → 自动弹一次迁移邀请。 */
+        if (statusData.migration_prompt_pending && !migrationPromptShown.current) {
+          migrationPromptShown.current = true
+          setMigration({ source: 'prompt' })
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : '日程加载失败')
       } finally {
@@ -211,6 +223,20 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
   const handleDeleted = () => {
     setPopover(null)
     setNotice('日程已删除。')
+    setReloadKey((key) => key + 1)
+  }
+
+  /** 迁移完成 / 终态退出：失效缓存并重拉状态 + 事件（本地账号可能已移除）。 */
+  const handleMigrationFinished = async () => {
+    setMigration(null)
+    invalidateScheduleStatusCache()
+    try {
+      const statusData = await getScheduleStatus()
+      setStatus(statusData)
+      setCachedScheduleStatus(statusData)
+    } catch {
+      /* 状态刷新失败忽略：下次进页会重拉 */
+    }
     setReloadKey((key) => key + 1)
   }
 
@@ -393,6 +419,15 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
           event={drawer.mode === 'edit' ? drawer.event : undefined}
           onClose={() => setDrawer(null)}
           onSaved={handleSaved}
+        />
+      )}
+
+      {migration && (
+        <ScheduleMigrationDialog
+          source={migration.source}
+          localEventCount={localEventCount}
+          onClose={() => setMigration(null)}
+          onFinished={() => void handleMigrationFinished()}
         />
       )}
     </div>

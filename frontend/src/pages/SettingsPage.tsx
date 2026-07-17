@@ -33,6 +33,7 @@ import { formatSmartTime } from '@/utils/date'
 import { invalidateScheduleStatusCache, setCachedScheduleStatus } from '@/utils/scheduleStatusCache'
 import { Notice } from '@/components/Notice'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ScheduleMigrationDialog } from '@/components/ScheduleMigrationDialog'
 import { ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, PencilIcon } from '@/components/icons'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
@@ -640,6 +641,7 @@ function ScheduleSettingsPanel() {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [confirmRestore, setConfirmRestore] = useState(false)
   const [confirmDeleteLocal, setConfirmDeleteLocal] = useState(false)
+  const [showMigration, setShowMigration] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const pollRef = useRef<number | null>(null)
@@ -962,6 +964,16 @@ function ScheduleSettingsPanel() {
           <div className={styles.sectionBodyStack}>
             <p className={styles.sectionMeta}>共 {localAccount.event_count} 条本地日程。</p>
             <div className={styles.actionRow}>
+              {connected && localAccount.event_count > 0 && !confirmDeleteLocal && (
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={() => setShowMigration(true)}
+                  disabled={busy !== null}
+                >
+                  迁入 Outlook
+                </button>
+              )}
               <button
                 className={workspaceStyles.dangerButton}
                 type="button"
@@ -1067,6 +1079,19 @@ function ScheduleSettingsPanel() {
         onConfirm={() => void handleRestoreDefault()}
         onCancel={() => setConfirmRestore(false)}
       />
+
+      {showMigration && (
+        <ScheduleMigrationDialog
+          source="settings"
+          localEventCount={localAccount?.event_count ?? 0}
+          onClose={() => setShowMigration(false)}
+          onFinished={() => {
+            setShowMigration(false)
+            invalidateScheduleStatusCache()
+            void reload()
+          }}
+        />
+      )}
     </div>
   )
 }
