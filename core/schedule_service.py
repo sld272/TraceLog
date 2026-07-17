@@ -23,6 +23,8 @@ DELTA_LINK_META_KEY = "graph.delta_link"
 LAST_SYNC_AT_META_KEY = "graph.last_sync_at"
 WINDOW_START_META_KEY = "graph.window_start"
 WINDOW_END_META_KEY = "graph.window_end"
+LOCAL_MIGRATION_PROMPTED_META_KEY = "schedule_local_migration_prompted"
+MIGRATION_CONFLICT_WINDOW_SECONDS = 60.0
 _SYNC_LOCK = threading.Lock()
 
 
@@ -123,6 +125,17 @@ class ScheduleService:
             self._ensure_outlook_account(account)
         window_start, window_end = self._window_dates()
         last_sync = _meta_value(LAST_SYNC_AT_META_KEY)
+        accounts = self.list_accounts()
+        local_account = next(
+            (item for item in accounts if item["id"] == LOCAL_ACCOUNT_ID),
+            None,
+        )
+        migration_prompt_pending = (
+            connected
+            and local_account is not None
+            and local_account["event_count"] > 0
+            and _meta_value(LOCAL_MIGRATION_PROMPTED_META_KEY) != "1"
+        )
         return {
             "configured": configured,
             "connected": connected,
@@ -130,8 +143,115 @@ class ScheduleService:
             "last_sync_at": float(last_sync) if last_sync is not None else None,
             "window_start": window_start.isoformat(),
             "window_end": window_end.isoformat(),
-            "accounts": self.list_accounts(),
+            "accounts": accounts,
+            "migration_prompt_pending": migration_prompt_pending,
         }
+
+    def migration_preview(self) -> dict[str, Any]:
+        try:
+            self.sync()
+        except Exception:
+            # A stale Outlook cache is still useful for a best-effort preview.
+            pass
+        self._require_local_migration_ready()
+        local_events, outlook_events = self._migration_rows()
+        conflicts = _migration_conflicts(local_events, outlook_events)
+        return {
+            "total": len(local_events),
+            "clean": len(local_events) - len(conflicts),
+            "conflicts": [
+                {
+                    "local": _migration_event_summary(local_event),
+                    "existing": _migration_event_summary(existing),
+                }
+                for local_event, existing in conflicts.values()
+            ],
+        }
+
+    def migrate_local_events(self, decisions: dict[str, str]) -> dict[str, Any]:
+        token = self._require_local_migration_ready()
+        try:
+            self.sync()
+        except Exception:
+            # Migration can continue from the last successfully cached Outlook view.
+            pass
+
+        local_events, outlook_events = self._migration_rows()
+        conflicts = _migration_conflicts(local_events, outlook_events)
+        conflict_decisions: dict[str, str] = {}
+        for local_id in conflicts:
+            decision = decisions.get(local_id, "skip")
+            if decision not in {"skip", "create"}:
+                raise ValueError("冲突处理决定只支持 skip 或 create")
+            conflict_decisions[local_id] = decision
+
+        migrated = 0
+        skipped = 0
+        graph: Any | None = None
+        for local_event in local_events:
+            local_id = str(local_event["id"])
+            conflict = conflicts.get(local_id)
+            if conflict is not None and conflict_decisions[local_id] == "skip":
+                existing = conflict[1]
+                self._finish_migrated_event(
+                    local_id=local_id,
+                    target_event_id=str(existing["id"]),
+                )
+                skipped += 1
+                continue
+
+            try:
+                if graph is None:
+                    graph = self._graph_factory(lambda: token)
+                raw_event = graph.create_event(_local_event_graph_payload(local_event))
+                normalized = _normalize_graph_event(
+                    raw_event,
+                    synced_at=self._clock(),
+                )
+            except Exception as exc:
+                return {
+                    "status": "partial",
+                    "migrated": migrated,
+                    "skipped": skipped,
+                    "remaining": self._local_event_count(),
+                    "account_removed": False,
+                    "error": str(exc) or type(exc).__name__,
+                }
+
+            self._finish_migrated_event(
+                local_id=local_id,
+                target_event_id=str(normalized["id"]),
+                normalized_event=normalized,
+            )
+            migrated += 1
+
+        account_removed = False
+        with db.transaction() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS event_count FROM schedule_events WHERE account_id = ?",
+                (LOCAL_ACCOUNT_ID,),
+            ).fetchone()
+            remaining = int(row["event_count"]) if row is not None else 0
+            if remaining == 0:
+                cursor = conn.execute(
+                    "DELETE FROM calendar_accounts WHERE id = ? AND provider = 'local'",
+                    (LOCAL_ACCOUNT_ID,),
+                )
+                account_removed = cursor.rowcount > 0
+                if account_removed:
+                    _set_meta(conn, LOCAL_MIGRATION_PROMPTED_META_KEY, "1")
+        return {
+            "status": "ok",
+            "migrated": migrated,
+            "skipped": skipped,
+            "remaining": remaining,
+            "account_removed": account_removed,
+        }
+
+    def dismiss_migration_prompt(self) -> None:
+        self._require_local_migration_ready()
+        with db.transaction() as conn:
+            _set_meta(conn, LOCAL_MIGRATION_PROMPTED_META_KEY, "1")
 
     def list_events(self, start_date: date, end_date: date) -> dict[str, Any]:
         _validate_date_range(start_date, end_date)
@@ -412,6 +532,76 @@ class ScheduleService:
         self._ensure_outlook_account(self._account_info())
         return self._graph_factory(lambda: token)
 
+    def _require_local_migration_ready(self) -> str:
+        configured = self.auth.client_id() is not None
+        token = self._access_token() if configured else None
+        if token is None:
+            raise ValueError("Microsoft 日历尚未连接")
+        self._ensure_outlook_account(self._account_info())
+        account = db.query_one(
+            "SELECT 1 FROM calendar_accounts WHERE id = ? AND provider = 'local'",
+            (LOCAL_ACCOUNT_ID,),
+        )
+        if account is None:
+            raise ValueError("本地日历不存在")
+        if self._local_event_count() == 0:
+            raise ValueError("本地日历中没有可迁移的日程")
+        return token
+
+    def _migration_rows(self) -> tuple[list[Any], list[Any]]:
+        local_events = db.query_all(
+            """
+            SELECT * FROM schedule_events
+            WHERE account_id = ?
+            ORDER BY start_ts, id
+            """,
+            (LOCAL_ACCOUNT_ID,),
+        )
+        outlook_events = db.query_all(
+            """
+            SELECT * FROM schedule_events
+            WHERE account_id = ? AND is_cancelled = 0
+            ORDER BY start_ts, id
+            """,
+            (OUTLOOK_ACCOUNT_ID,),
+        )
+        return local_events, outlook_events
+
+    def _local_event_count(self) -> int:
+        row = db.query_one(
+            "SELECT COUNT(*) AS event_count FROM schedule_events WHERE account_id = ?",
+            (LOCAL_ACCOUNT_ID,),
+        )
+        return int(row["event_count"]) if row is not None else 0
+
+    def _finish_migrated_event(
+        self,
+        *,
+        local_id: str,
+        target_event_id: str,
+        normalized_event: Mapping[str, Any] | None = None,
+    ) -> None:
+        with db.transaction() as conn:
+            if normalized_event is not None:
+                _upsert_event(conn, normalized_event)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO goal_schedule_links(goal_id, event_id, created_at)
+                SELECT goal_id, ?, created_at
+                FROM goal_schedule_links
+                WHERE event_id = ?
+                """,
+                (target_event_id, local_id),
+            )
+            conn.execute(
+                "DELETE FROM goal_schedule_links WHERE event_id = ?",
+                (local_id,),
+            )
+            conn.execute(
+                "DELETE FROM schedule_events WHERE id = ? AND account_id = ?",
+                (local_id, LOCAL_ACCOUNT_ID),
+            )
+
     def _writable_target(self, requested_account_id: str | None) -> tuple[str, Any | None]:
         if requested_account_id is not None:
             row = db.query_one(
@@ -544,6 +734,59 @@ class ScheduleService:
                 }
             )
         return payload
+
+
+def _migration_conflicts(
+    local_events: list[Any],
+    outlook_events: list[Any],
+) -> dict[str, tuple[Any, Any]]:
+    conflicts: dict[str, tuple[Any, Any]] = {}
+    for local_event in local_events:
+        local_subject = str(local_event["subject"]).strip().casefold()
+        matches = [
+            outlook_event
+            for outlook_event in outlook_events
+            if str(outlook_event["subject"]).strip().casefold() == local_subject
+            and abs(float(outlook_event["start_ts"]) - float(local_event["start_ts"]))
+            <= MIGRATION_CONFLICT_WINDOW_SECONDS
+        ]
+        if not matches:
+            continue
+        existing = min(
+            matches,
+            key=lambda item: (
+                abs(float(item["start_ts"]) - float(local_event["start_ts"])),
+                float(item["start_ts"]),
+                str(item["id"]),
+            ),
+        )
+        conflicts[str(local_event["id"])] = (local_event, existing)
+    return conflicts
+
+
+def _migration_event_summary(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(event["id"]),
+        "subject": str(event["subject"]),
+        "start_local": str(event["start_local"]),
+        "end_local": str(event["end_local"]),
+        "all_day": bool(event["all_day"]),
+    }
+
+
+def _local_event_graph_payload(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "subject": str(event["subject"]),
+        "start": {
+            "dateTime": str(event["start_local"]),
+            "timeZone": LOCAL_TIMEZONE_NAME,
+        },
+        "end": {
+            "dateTime": str(event["end_local"]),
+            "timeZone": LOCAL_TIMEZONE_NAME,
+        },
+        "isAllDay": bool(event["all_day"]),
+    }
 
 
 def _validate_date_range(start_date: date, end_date: date) -> None:

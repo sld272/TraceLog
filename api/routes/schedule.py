@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from datetime import date as Date, time as Time
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Response
@@ -45,6 +45,10 @@ class CreateEventRequest(BaseModel):
 
 class DeleteLocalAccountRequest(BaseModel):
     delete_events: bool
+
+
+class LocalMigrationRequest(BaseModel):
+    decisions: dict[str, Literal["skip", "create"]] = Field(default_factory=dict)
 
 
 class UpdateEventRequest(BaseModel):
@@ -92,6 +96,34 @@ async def delete_local_account(request: DeleteLocalAccountRequest):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"ok": True, "deleted_events": deleted}
+
+
+@router.post("/accounts/local/migration/preview")
+async def preview_local_migration():
+    try:
+        return await run_sync(ScheduleService().migration_preview)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/accounts/local/migration")
+async def migrate_local_events(request: LocalMigrationRequest | None = None):
+    try:
+        return await run_sync(
+            ScheduleService().migrate_local_events,
+            request.decisions if request is not None else {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/accounts/local/migration/dismiss")
+async def dismiss_local_migration():
+    try:
+        await run_sync(ScheduleService().dismiss_migration_prompt)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @router.post("/auth/client-id")

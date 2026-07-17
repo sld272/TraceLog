@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from core import db
 from core import goal_schedule_service, goal_service
@@ -50,8 +51,9 @@ class FakeAuth:
 
 
 class FakeGraph:
-    def __init__(self, delta_results=None) -> None:
+    def __init__(self, delta_results=None, *, fail_create_at: int | None = None) -> None:
         self.delta_results = list(delta_results or [])
+        self.fail_create_at = fail_create_at
         self.delta_calls: list[dict] = []
         self.created_payloads: list[dict] = []
         self.updated_payloads: list[tuple[str, dict]] = []
@@ -66,7 +68,17 @@ class FakeGraph:
 
     def create_event(self, payload):
         self.created_payloads.append(payload)
-        return graph_event("created-1", payload["subject"], 14)
+        create_number = len(self.created_payloads)
+        if create_number == self.fail_create_at:
+            raise GraphHTTPError(503)
+        return {
+            "id": f"created-{create_number}",
+            "subject": payload["subject"],
+            "start": payload["start"],
+            "end": payload["end"],
+            "isAllDay": payload["isAllDay"],
+            "webLink": f"https://outlook.office.com/created-{create_number}",
+        }
 
     def update_event(self, event_id, payload):
         self.updated_payloads.append((event_id, payload))
@@ -86,7 +98,7 @@ class ScheduleServiceTest(unittest.TestCase):
         db.DB_PATH = db.WORKSPACE_DIR / "state.db"
         db.init_db()
         self.auth = FakeAuth()
-        self.clock_values = iter([1000.0, 2000.0, 3000.0, 4000.0])
+        self.clock_values = iter(float(value) for value in range(1000, 100_000, 1000))
 
     def tearDown(self) -> None:
         db.WORKSPACE_DIR = self.old_workspace
@@ -99,6 +111,38 @@ class ScheduleServiceTest(unittest.TestCase):
             graph_factory=lambda token_provider: graph,
             today=lambda: date(2026, 7, 16),
             clock=lambda: next(self.clock_values),
+        )
+
+    def _insert_outlook_event(
+        self,
+        event_id: str,
+        subject: str,
+        start: datetime,
+    ) -> None:
+        local_start = start.astimezone(ZoneInfo("Asia/Shanghai"))
+        local_end = local_start + timedelta(hours=1)
+        db.execute(
+            """
+            INSERT OR IGNORE INTO calendar_accounts(
+                id, provider, display_name, created_at
+            ) VALUES ('outlook', 'outlook', 'Outlook', 1)
+            """
+        )
+        db.execute(
+            """
+            INSERT INTO schedule_events(
+                id, account_id, subject, start_ts, end_ts, start_local, end_local,
+                synced_at
+            ) VALUES (?, 'outlook', ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                event_id,
+                subject,
+                local_start.timestamp(),
+                local_end.timestamp(),
+                local_start.replace(tzinfo=None).isoformat(timespec="seconds"),
+                local_end.replace(tzinfo=None).isoformat(timespec="seconds"),
+            ),
         )
 
     def test_initial_then_incremental_delta_updates_and_deletes_cache(self) -> None:
@@ -423,6 +467,255 @@ class ScheduleServiceTest(unittest.TestCase):
         self.assertEqual([], goal_schedule_service.links_for_goal(goal["id"]))
         self.assertIsNone(
             db.query_one("SELECT 1 FROM schedule_events WHERE id = ?", (local["id"],))
+        )
+
+    def test_migration_preview_detects_normalized_subject_and_sixty_second_boundary(self) -> None:
+        graph = FakeGraph()
+        service = self._service(graph)
+        service.create_local_account()
+        zone = ZoneInfo("Asia/Shanghai")
+        at_boundary = service.create_event(
+            subject="  Team Sync  ",
+            event_date=date(2026, 7, 16),
+            start_time=time(9, 0),
+            end_time=time(10, 0),
+            account_id="local",
+        )
+        inside = service.create_event(
+            subject="Case Match",
+            event_date=date(2026, 7, 16),
+            start_time=time(11, 0),
+            end_time=time(12, 0),
+            account_id="local",
+        )
+        outside = service.create_event(
+            subject="Outside",
+            event_date=date(2026, 7, 16),
+            start_time=time(13, 0),
+            end_time=time(14, 0),
+            account_id="local",
+        )
+        self._insert_outlook_event(
+            "existing-boundary",
+            "team sync",
+            datetime(2026, 7, 16, 9, 1, tzinfo=zone),
+        )
+        self._insert_outlook_event(
+            "existing-inside",
+            "  CASE MATCH ",
+            datetime(2026, 7, 16, 10, 59, 1, tzinfo=zone),
+        )
+        self._insert_outlook_event(
+            "existing-outside",
+            "outside",
+            datetime(2026, 7, 16, 13, 1, 1, tzinfo=zone),
+        )
+
+        preview = service.migration_preview()
+
+        self.assertEqual(3, preview["total"])
+        self.assertEqual(1, preview["clean"])
+        conflicts = {
+            item["local"]["id"]: item["existing"]["id"]
+            for item in preview["conflicts"]
+        }
+        self.assertEqual(
+            {
+                at_boundary["id"]: "existing-boundary",
+                inside["id"]: "existing-inside",
+            },
+            conflicts,
+        )
+        self.assertNotIn(outside["id"], conflicts)
+        self.assertEqual(
+            {"id", "subject", "start_local", "end_local", "all_day"},
+            set(preview["conflicts"][0]["local"]),
+        )
+
+    def test_migration_conflict_defaults_to_skip_and_repoints_goal_link(self) -> None:
+        graph = FakeGraph()
+        service = self._service(graph)
+        service.create_local_account()
+        goal = goal_service.create_goal("默认跳过仍保留绑定", None, "short")
+        local = service.create_event(
+            subject="已有会议",
+            event_date=date(2026, 7, 16),
+            start_time=time(9, 0),
+            end_time=time(10, 0),
+            account_id="local",
+            goal_id=goal["id"],
+        )
+        self._insert_outlook_event(
+            "existing-event",
+            " 已有会议 ",
+            datetime(2026, 7, 16, 9, 0, 30, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+
+        result = service.migrate_local_events({})
+
+        self.assertEqual(
+            {
+                "status": "ok",
+                "migrated": 0,
+                "skipped": 1,
+                "remaining": 0,
+                "account_removed": True,
+            },
+            result,
+        )
+        self.assertEqual([], graph.created_payloads)
+        self.assertIsNone(
+            db.query_one("SELECT 1 FROM schedule_events WHERE id = ?", (local["id"],))
+        )
+        self.assertEqual(
+            ["existing-event"],
+            [event["id"] for event in goal_schedule_service.links_for_goal(goal["id"])],
+        )
+        self.assertIsNone(
+            db.query_one("SELECT 1 FROM calendar_accounts WHERE id = 'local'")
+        )
+        self.assertEqual(
+            "1",
+            db.query_one(
+                "SELECT value FROM meta WHERE key = 'schedule_local_migration_prompted'"
+            )["value"],
+        )
+
+    def test_migration_create_decision_repoints_goal_link_to_new_event(self) -> None:
+        graph = FakeGraph()
+        service = self._service(graph)
+        service.create_local_account()
+        goal = goal_service.create_goal("强制新建仍保留绑定", None, "short")
+        local = service.create_event(
+            subject="重复但仍创建",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+            goal_id=goal["id"],
+        )
+        self._insert_outlook_event(
+            "existing-event",
+            "重复但仍创建",
+            datetime(2026, 7, 16, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+        )
+
+        result = service.migrate_local_events({local["id"]: "create"})
+
+        self.assertEqual(1, result["migrated"])
+        self.assertEqual(0, result["skipped"])
+        self.assertTrue(result["account_removed"])
+        self.assertEqual(
+            ["created-1"],
+            [event["id"] for event in goal_schedule_service.links_for_goal(goal["id"])],
+        )
+        self.assertIsNotNone(
+            db.query_one(
+                "SELECT 1 FROM schedule_events WHERE id = 'created-1' AND account_id = 'outlook'"
+            )
+        )
+
+    def test_migration_graph_failure_returns_partial_and_preserves_remaining_rows_and_links(self) -> None:
+        graph = FakeGraph(fail_create_at=2)
+        service = self._service(graph)
+        service.create_local_account()
+        goal = goal_service.create_goal("断点续传目标", None, "short")
+        local_events = [
+            service.create_event(
+                subject=f"迁移第 {index} 条",
+                event_date=date(2026, 7, 16),
+                start_time=time(7 + index, 0),
+                end_time=time(8 + index, 0),
+                account_id="local",
+                goal_id=goal["id"],
+            )
+            for index in range(1, 4)
+        ]
+
+        result = service.migrate_local_events({})
+
+        self.assertEqual("partial", result["status"])
+        self.assertEqual(1, result["migrated"])
+        self.assertEqual(0, result["skipped"])
+        self.assertEqual(2, result["remaining"])
+        self.assertFalse(result["account_removed"])
+        self.assertTrue(result["error"])
+        remaining_ids = {
+            str(row["id"])
+            for row in db.query_all(
+                "SELECT id FROM schedule_events WHERE account_id = 'local'"
+            )
+        }
+        self.assertEqual(
+            {local_events[1]["id"], local_events[2]["id"]},
+            remaining_ids,
+        )
+        linked_ids = {
+            event["id"] for event in goal_schedule_service.links_for_goal(goal["id"])
+        }
+        self.assertEqual({"created-1", *remaining_ids}, linked_ids)
+        self.assertIsNotNone(
+            db.query_one("SELECT 1 FROM calendar_accounts WHERE id = 'local'")
+        )
+        self.assertIsNone(
+            db.query_one(
+                "SELECT 1 FROM meta WHERE key = 'schedule_local_migration_prompted'"
+            )
+        )
+
+    def test_migration_prompt_pending_checks_each_condition_and_dismisses(self) -> None:
+        graph = FakeGraph()
+        service = self._service(graph)
+        service.create_local_account()
+        service.create_event(
+            subject="等待迁移",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+        )
+
+        self.assertTrue(service.status()["migration_prompt_pending"])
+
+        self.auth.connected = False
+        self.assertFalse(service.status()["migration_prompt_pending"])
+
+        self.auth.connected = True
+        service.delete_local_account(delete_events=True)
+        self.assertFalse(service.status()["migration_prompt_pending"])
+
+        service.create_local_account()
+        self.assertFalse(service.status()["migration_prompt_pending"])
+
+        service.create_event(
+            subject="再次等待迁移",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+        )
+        self.assertTrue(service.status()["migration_prompt_pending"])
+        service.dismiss_migration_prompt()
+        self.assertFalse(service.status()["migration_prompt_pending"])
+
+    def test_migration_keeps_weekly_goal_progress_and_ignores_clean_item_decision(self) -> None:
+        graph = FakeGraph()
+        service = self._service(graph)
+        service.create_local_account()
+        goal = goal_service.create_goal("迁移周进度", None, "short")
+        local = service.create_event(
+            subject="本周执行",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+            goal_id=goal["id"],
+        )
+        now = datetime(2026, 7, 15, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        before = goal_schedule_service.weekly_progress(goal["id"], now=now)
+
+        result = service.migrate_local_events({local["id"]: "skip"})
+        after = goal_schedule_service.weekly_progress(goal["id"], now=now)
+
+        self.assertEqual(1, before["current"])
+        self.assertEqual(before["current"], after["current"])
+        self.assertEqual(1, result["migrated"])
+        self.assertEqual(0, result["skipped"])
+        self.assertEqual(
+            ["created-1"],
+            [event["id"] for event in goal_schedule_service.links_for_goal(goal["id"])],
         )
 
     def test_outlook_logout_removes_only_outlook_events(self) -> None:

@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,6 +15,35 @@ from core import db, goal_service
 from core.graph.auth import GraphAuth, GraphAuthError
 from core.schedule_service import ScheduleService
 from tests.test_graph_auth import FakePublicClientApplication, FakeSerializableCache
+
+
+class MigrationAuth:
+    def __init__(self, *, connected: bool = True) -> None:
+        self.connected = connected
+
+    def client_id(self):
+        return "client-id"
+
+    def get_access_token(self):
+        return "access-token" if self.connected else None
+
+    def account_info(self):
+        return {"username": "person@example.com"} if self.connected else None
+
+
+class MigrationGraph:
+    def calendarview_delta(self, **kwargs):
+        del kwargs
+        raise RuntimeError("best-effort sync unavailable")
+
+    def create_event(self, payload):
+        return {
+            "id": "migrated-api",
+            "subject": payload["subject"],
+            "start": payload["start"],
+            "end": payload["end"],
+            "isAllDay": payload["isAllDay"],
+        }
 
 
 @unittest.skipUnless(importlib.util.find_spec("fastapi"), "FastAPI is not installed")
@@ -56,6 +86,15 @@ class ApiScheduleTest(unittest.TestCase):
         self.addCleanup(init_patch.stop)
         self.addCleanup(shutdown_patch.stop)
         return TestClient(create_app())
+
+    def _migration_responses(self, service: ScheduleService):
+        with patch("api.routes.schedule.ScheduleService", return_value=service):
+            with self._client() as client:
+                return [
+                    client.post("/schedule/accounts/local/migration/preview"),
+                    client.post("/schedule/accounts/local/migration", json={}),
+                    client.post("/schedule/accounts/local/migration/dismiss"),
+                ]
 
     def test_default_client_id_configures_backend_without_login(self) -> None:
         with self._client() as client:
@@ -126,6 +165,118 @@ class ApiScheduleTest(unittest.TestCase):
         self.assertEqual(422, missing_confirmation.status_code)
         self.assertEqual(422, rejected.status_code)
         self.assertEqual({"ok": True, "deleted_events": 1}, deleted.json())
+
+    def test_local_migration_preview_and_empty_decisions_route(self) -> None:
+        service = ScheduleService(
+            auth=MigrationAuth(),
+            graph_factory=lambda token_provider: MigrationGraph(),
+            clock=lambda: 1.0,
+        )
+        service.create_local_account()
+        local = service.create_event(
+            subject="API 冲突日程",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+        )
+        service.status()
+        row = db.query_one(
+            "SELECT * FROM schedule_events WHERE id = ?",
+            (local["id"],),
+        )
+        db.execute(
+            """
+            INSERT INTO schedule_events(
+                id, account_id, subject, start_ts, end_ts, start_local, end_local,
+                synced_at
+            ) VALUES ('existing-api', 'outlook', ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                row["subject"],
+                row["start_ts"],
+                row["end_ts"],
+                row["start_local"],
+                row["end_local"],
+            ),
+        )
+
+        with patch("api.routes.schedule.ScheduleService", return_value=service):
+            with self._client() as client:
+                preview = client.post("/schedule/accounts/local/migration/preview")
+                migrated = client.post("/schedule/accounts/local/migration", json={})
+
+        self.assertEqual(200, preview.status_code, preview.text)
+        self.assertEqual(1, preview.json()["total"])
+        self.assertEqual(1, len(preview.json()["conflicts"]))
+        self.assertEqual(200, migrated.status_code, migrated.text)
+        self.assertEqual("ok", migrated.json()["status"])
+        self.assertEqual(1, migrated.json()["skipped"])
+        self.assertTrue(migrated.json()["account_removed"])
+
+    def test_local_migration_dismiss_route_sets_prompt_flag(self) -> None:
+        service = ScheduleService(
+            auth=MigrationAuth(),
+            graph_factory=lambda token_provider: MigrationGraph(),
+            clock=lambda: 1.0,
+        )
+        service.create_local_account()
+        service.create_event(
+            subject="稍后再迁移",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+        )
+
+        with patch("api.routes.schedule.ScheduleService", return_value=service):
+            with self._client() as client:
+                response = client.post("/schedule/accounts/local/migration/dismiss")
+
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual({"ok": True}, response.json())
+        self.assertEqual(
+            "1",
+            db.query_one(
+                "SELECT value FROM meta WHERE key = 'schedule_local_migration_prompted'"
+            )["value"],
+        )
+
+    def test_local_migration_routes_return_409_when_outlook_is_not_connected(self) -> None:
+        service = ScheduleService(
+            auth=MigrationAuth(connected=False),
+            graph_factory=lambda token_provider: MigrationGraph(),
+            clock=lambda: 1.0,
+        )
+        service.create_local_account()
+        service.create_event(
+            subject="未连接",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+        )
+
+        responses = self._migration_responses(service)
+
+        self.assertEqual([409, 409, 409], [response.status_code for response in responses])
+
+    def test_local_migration_routes_return_409_without_local_account(self) -> None:
+        service = ScheduleService(
+            auth=MigrationAuth(),
+            graph_factory=lambda token_provider: MigrationGraph(),
+            clock=lambda: 1.0,
+        )
+
+        responses = self._migration_responses(service)
+
+        self.assertEqual([409, 409, 409], [response.status_code for response in responses])
+
+    def test_local_migration_routes_return_409_with_zero_local_events(self) -> None:
+        service = ScheduleService(
+            auth=MigrationAuth(),
+            graph_factory=lambda token_provider: MigrationGraph(),
+            clock=lambda: 1.0,
+        )
+        service.create_local_account()
+
+        responses = self._migration_responses(service)
+
+        self.assertEqual([409, 409, 409], [response.status_code for response in responses])
 
     def test_posts_activity_returns_raw_timestamps_without_bucketing(self) -> None:
         db.execute(
