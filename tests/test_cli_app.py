@@ -46,6 +46,7 @@ class CliAppTest(unittest.TestCase):
 
         with (
             patch("core.cli.app.load_config", return_value=config),
+            patch("core.cli.app.workspace_service.migrate_workspace_permissions") as migrate_permissions,
             patch("core.cli.app.workspace_service.init_workspace"),
             patch("core.cli.app.vectorstore.init_vectorstore", return_value=vector_result),
             patch("core.cli.app.vectorstore.current_embedding_config_hash", return_value="hash"),
@@ -59,6 +60,7 @@ class CliAppTest(unittest.TestCase):
 
         reindex.assert_called_once_with()
         retry_pending.assert_called_once_with()
+        migrate_permissions.assert_called_once_with()
 
     def test_cli_startup_reconciles_even_when_collection_has_existing_count(self) -> None:
         config = {
@@ -74,6 +76,7 @@ class CliAppTest(unittest.TestCase):
 
         with (
             patch("core.cli.app.load_config", return_value=config),
+            patch("core.cli.app.workspace_service.migrate_workspace_permissions") as migrate_permissions,
             patch("core.cli.app.workspace_service.init_workspace"),
             patch("core.cli.app.vectorstore.init_vectorstore", return_value=vector_result),
             patch("core.cli.app.vectorstore.current_embedding_config_hash", return_value="hash"),
@@ -87,6 +90,7 @@ class CliAppTest(unittest.TestCase):
 
         reindex.assert_called_once_with()
         retry_pending.assert_called_once_with()
+        migrate_permissions.assert_called_once_with()
 
 
 if __name__ == "__main__":

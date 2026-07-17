@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import stat
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -357,6 +358,16 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("web_search", status)
         self.assertIn("vector_index", status)
         self.assertIn("source_revision", status["vector_index"])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
+    def test_settings_atomic_write_replaces_existing_config_with_owner_only_permissions(self) -> None:
+        from api.routes.settings import _atomic_write_json
+
+        self.config_path.chmod(0o644)
+
+        _atomic_write_json(self.config_path, {"api_key": "updated-secret"})
+
+        self.assertEqual(0o600, stat.S_IMODE(self.config_path.stat().st_mode))
 
     def test_settings_secondary_model_roundtrip_and_clear(self) -> None:
         base_payload = {

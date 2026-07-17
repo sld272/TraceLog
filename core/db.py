@@ -20,6 +20,10 @@ def connect() -> sqlite3.Connection:
     """Open a configured SQLite connection."""
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        os.chmod(DB_PATH, 0o600)
+    except OSError:
+        pass
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")

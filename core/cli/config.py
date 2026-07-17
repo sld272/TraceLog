@@ -94,7 +94,8 @@ def load_config() -> dict:
         "web_search": default_web_search_config(),
     }
     tmp = CONFIG_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
     os.replace(tmp, CONFIG_FILE)
 

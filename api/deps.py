@@ -58,6 +58,7 @@ async def init_runtime() -> ApiRuntime:
     global _runtime
     config = _load_api_config(strict=False)
     logging_service.init_logging(config.get("logging"))
+    workspace_service.migrate_workspace_permissions()
     workspace_service.init_workspace()
     _start_schedule_sync_task()
 
@@ -82,6 +83,7 @@ async def reload_runtime() -> ApiRuntime:
     previous_runtime = _runtime
     config = _load_api_config(strict=False)
     logging_service.update_config(config.get("logging"))
+    workspace_service.migrate_workspace_permissions()
     workspace_service.init_workspace()
     next_runtime = (
         _unconfigured_runtime(config)

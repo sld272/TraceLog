@@ -229,6 +229,7 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch("api.deps._load_api_config", return_value={"api_key": "sk", "base_url": "https://example.invalid/v1", "model": "new-model", "embedding_model": "embed"}),
             patch("api.deps.logging_service.update_config"),
+            patch("api.deps.workspace_service.migrate_workspace_permissions") as migrate_permissions,
             patch("api.deps.workspace_service.init_workspace"),
             patch("api.deps._is_model_configured", return_value=True),
             patch("api.deps._build_configured_runtime", side_effect=RuntimeError("reload boom")),
@@ -238,6 +239,7 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(existing_runtime, deps._runtime)  # type: ignore[attr-defined]
         self.assertFalse(worker.stopped)
+        migrate_permissions.assert_called_once_with()
 
     async def test_reload_stops_previous_worker_before_starting_new_worker(self) -> None:
         events: list[str] = []
@@ -281,6 +283,7 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
         with (
             patch("api.deps._load_api_config", return_value={"api_key": "sk", "base_url": "https://example.invalid/v1", "model": "new-model", "embedding_model": "embed"}),
             patch("api.deps.logging_service.update_config"),
+            patch("api.deps.workspace_service.migrate_workspace_permissions") as migrate_permissions,
             patch("api.deps.workspace_service.init_workspace"),
             patch("api.deps._is_model_configured", return_value=True),
             patch("api.deps._build_configured_runtime", return_value=new_runtime),
@@ -293,6 +296,7 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(worker.stopped)
         self.assertTrue(new_worker.started)
         self.assertEqual(["old.stop", "new.start"], events)
+        migrate_permissions.assert_called_once_with()
 
 
 if __name__ == "__main__":

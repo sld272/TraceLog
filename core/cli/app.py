@@ -24,6 +24,7 @@ def main() -> None:
         return
 
     logging_service.init_logging(config.get("logging"))
+    workspace_service.migrate_workspace_permissions()
     logging_service.log_event(
         "cli_start",
         model=config.get("model"),

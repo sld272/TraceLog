@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core.cli import config as cli_config
 
@@ -71,6 +73,26 @@ class CliConfigTest(unittest.TestCase):
             },
             loaded["web_search"],
         )
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
+    def test_first_run_writes_config_with_owner_only_permissions(self) -> None:
+        with (
+            patch.object(cli_config.getpass, "getpass", return_value="sk-secret"),
+            patch.object(
+                cli_config,
+                "read_cli_input",
+                side_effect=[
+                    "https://example.invalid/v1",
+                    "test-model",
+                    "test-embedding",
+                    "",
+                ],
+            ),
+        ):
+            cli_config.load_config()
+
+        mode = stat.S_IMODE(Path(cli_config.CONFIG_FILE).stat().st_mode)
+        self.assertEqual(0o600, mode)
 
     def test_normalize_web_search_config_clamps_values_and_cleans_provider(self) -> None:
         normalized = cli_config.normalize_web_search_config(

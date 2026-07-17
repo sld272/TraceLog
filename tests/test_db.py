@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core import db, memory_events_service, memory_unit_service, memory_view_service
 from tests.helpers import require_not_none
@@ -22,6 +25,16 @@ class DbTest(unittest.TestCase):
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
+    def test_init_db_creates_state_db_with_owner_only_permissions(self) -> None:
+        self.assertEqual(0o600, stat.S_IMODE(db.DB_PATH.stat().st_mode))
+
+    def test_init_db_ignores_permission_hardening_failure(self) -> None:
+        with patch("core.db.os.chmod", side_effect=OSError("unsupported permissions")):
+            db.init_db()
+
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = 'schema_version'"))
 
     def test_legacy_table_gains_migrated_columns_on_init(self) -> None:
         # a DB created before contested_at existed: CREATE IF NOT EXISTS skips
