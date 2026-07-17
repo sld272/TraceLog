@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core import db, goal_service, suggestion_service
-from core.llm import goal_router
+from core.llm import suggestion_router
 
 
 class GoalServiceTest(unittest.TestCase):
@@ -141,7 +141,7 @@ class FakeClient:
         )
 
 
-class GoalRouterTest(unittest.TestCase):
+class SuggestionRouterTest(unittest.TestCase):
     def test_router_filters_low_confidence_invalid_and_duplicate_candidates(self) -> None:
         client = FakeClient(
             {
@@ -153,11 +153,14 @@ class GoalRouterTest(unittest.TestCase):
                 ]
             }
         )
-        goals = goal_router.call_goal_router(client, "fake-model", user_input="我决定考研")
+        result = suggestion_router.call_suggestion_router(
+            client, "fake-model", user_input="我决定考研"
+        )
         self.assertEqual(
             [{"title": "考研", "detail": None, "horizon": "long", "confidence": 0.9}],
-            goals,
+            result["goals"],
         )
+        self.assertEqual([], result["events"])
 
 
 if __name__ == "__main__":

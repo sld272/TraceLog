@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 
 from core import web_search_gate
-from core.llm import goal_router, query_rewrite_router, secondary_model
+from core.llm import query_rewrite_router, secondary_model, suggestion_router
 
 
 class FakeClient:
@@ -160,8 +160,10 @@ class SecondaryModelRoutingTest(unittest.TestCase):
 
         self._assert_routed_to_secondary()
 
-    def test_goal_router_uses_secondary_model(self) -> None:
-        goal_router.call_goal_router(self.main, "main-model", user_input="我决定这学期把绩点提到 3.7")
+    def test_suggestion_router_uses_secondary_model(self) -> None:
+        suggestion_router.call_suggestion_router(
+            self.main, "main-model", user_input="我决定这学期把绩点提到 3.7"
+        )
 
         self._assert_routed_to_secondary()
 
@@ -179,9 +181,9 @@ class TimeAnnotationInjectionTest(unittest.TestCase):
         self.assertEqual(1, len(client.calls))
         return client.calls[0]["messages"][1]["content"]
 
-    def test_goal_router_injects_time_annotation_block(self) -> None:
-        client = FakeClient({"goals": []})
-        goal_router.call_goal_router(
+    def test_suggestion_router_injects_time_annotation_block(self) -> None:
+        client = FakeClient({"goals": [], "events": []})
+        suggestion_router.call_suggestion_router(
             client, "m", user_input="打算周五前交报告，这学期还要把绩点提到 3.7"
         )
         user_msg = self._user_message(client)
@@ -189,8 +191,10 @@ class TimeAnnotationInjectionTest(unittest.TestCase):
         self.assertIn("周五＝", user_msg)
 
     def test_no_block_when_text_has_no_relative_time(self) -> None:
-        client = FakeClient({"goals": []})
-        goal_router.call_goal_router(client, "m", user_input="我决定认真准备研究生考试")
+        client = FakeClient({"goals": [], "events": []})
+        suggestion_router.call_suggestion_router(
+            client, "m", user_input="我决定认真准备研究生考试"
+        )
         self.assertNotIn("时间标注", self._user_message(client))
 
 

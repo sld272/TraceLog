@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import date, datetime, time, timedelta, timezone
+import hashlib
 import threading
 from typing import Any
 import uuid
@@ -448,8 +449,18 @@ class ScheduleService:
         )
         target, graph = self._writable_target(account_id)
         if target == LOCAL_ACCOUNT_ID:
+            normalized_request_id = (
+                _create_transaction_id(client_request_id)
+                if client_request_id is not None
+                else None
+            )
+            event_id = (
+                f"local_{hashlib.sha256(normalized_request_id.encode('utf-8')).hexdigest()[:32]}"
+                if normalized_request_id is not None
+                else f"local_{uuid.uuid4().hex}"
+            )
             normalized = _normalize_local_event(
-                event_id=f"local_{uuid.uuid4().hex}",
+                event_id=event_id,
                 payload=payload,
                 synced_at=self._clock(),
             )

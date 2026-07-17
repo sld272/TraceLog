@@ -80,7 +80,8 @@
 }
 
 .accept,
-.dismiss {
+.dismiss,
+.localFallback {
   min-height: 28px;
   padding: 0 14px;
   border-radius: var(--radius-full);
@@ -110,8 +111,21 @@
   color: var(--color-accent);
 }
 
+.localFallback {
+  padding-inline: 4px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.localFallback:hover:not(:disabled) {
+  color: var(--color-accent);
+}
+
 .accept:disabled,
-.dismiss:disabled {
+.dismiss:disabled,
+.localFallback:disabled {
   cursor: wait;
   opacity: 0.5;
 }

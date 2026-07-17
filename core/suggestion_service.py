@@ -1,4 +1,4 @@
-"""Pending, accepted, and dismissed goal suggestions."""
+"""Pending, accepted, and dismissed goal or schedule suggestions."""
 
 from __future__ import annotations
 
@@ -9,12 +9,24 @@ import secrets
 import sqlite3
 import time
 import unicodedata
+from datetime import date, datetime, time as datetime_time, timedelta
 from typing import Any
 
 from core import db, goal_service
+from core.graph.client import GraphHTTPError
+from core.schedule_service import (
+    LOCAL_ACCOUNT_ID,
+    LOCAL_TIMEZONE,
+    NoWritableAccountError,
+    ScheduleService,
+)
 
-SUGGESTION_KINDS = {"goal"}
+SUGGESTION_KINDS = {"goal", "schedule"}
 SUGGESTION_STATUSES = {"pending", "accepted", "dismissed"}
+
+
+class SuggestionExpiredError(ValueError):
+    """Raised when a schedule suggestion's local-time end has passed."""
 
 
 def create_suggestion(
@@ -77,40 +89,65 @@ def create_suggestion(
 def get_suggestion(suggestion_id: str, *, conn: sqlite3.Connection | None = None) -> dict[str, Any] | None:
     row = (
         conn.execute(
-            "SELECT * FROM suggestions WHERE id = ? AND kind = 'goal'",
+            "SELECT * FROM suggestions WHERE id = ?",
             (suggestion_id,),
         ).fetchone()
         if conn is not None
         else db.query_one(
-            "SELECT * FROM suggestions WHERE id = ? AND kind = 'goal'",
+            "SELECT * FROM suggestions WHERE id = ?",
             (suggestion_id,),
         )
     )
-    return _row_to_dict(row) if row is not None else None
+    return (
+        _row_to_dict(row)
+        if row is not None and row["kind"] in SUGGESTION_KINDS
+        else None
+    )
 
 
 def list_pending(kind: str | None = None) -> list[dict[str, Any]]:
     if kind is not None:
         _validate_kind(kind)
-    rows = db.query_all(
-        """
+    supported_kinds = tuple(sorted(SUGGESTION_KINDS))
+    sql = """
         SELECT *
         FROM suggestions
-        WHERE status = 'pending' AND kind = 'goal'
+        WHERE status = 'pending' AND kind IN (?, ?)
+    """
+    params: tuple[Any, ...] = supported_kinds
+    if kind is not None:
+        sql += " AND kind = ?"
+        params = (*params, kind)
+    rows = db.query_all(
+        sql
+        + """
         ORDER BY confidence DESC, created_at ASC, id ASC
-        """
+        """,
+        params,
     )
     return [_row_to_dict(row) for row in rows]
 
 
-def accept(suggestion_id: str) -> dict[str, Any]:
-    """Accept one pending suggestion and atomically create its target object."""
+def accept(suggestion_id: str, *, fallback_local: bool = False) -> dict[str, Any]:
+    """Accept one pending suggestion and create its target object."""
+    row = db.query_one("SELECT kind FROM suggestions WHERE id = ?", (suggestion_id,))
+    if row is None or row["kind"] not in SUGGESTION_KINDS:
+        raise ValueError("suggestion 不存在")
+    kind = str(row["kind"])
+    _validate_kind(kind)
+    if kind == "schedule":
+        return _accept_schedule(suggestion_id, fallback_local=fallback_local)
+    return _accept_goal(suggestion_id)
+
+
+def _accept_goal(suggestion_id: str) -> dict[str, Any]:
+    """Create a goal and mark its suggestion in one SQLite transaction."""
     with db.immediate_transaction() as conn:
         row = conn.execute(
-            "SELECT * FROM suggestions WHERE id = ? AND kind = 'goal'",
+            "SELECT * FROM suggestions WHERE id = ?",
             (suggestion_id,),
         ).fetchone()
-        if row is None:
+        if row is None or row["kind"] != "goal":
             raise ValueError("suggestion 不存在")
         if row["status"] != "pending":
             raise ValueError("suggestion 已处理")
@@ -133,14 +170,70 @@ def accept(suggestion_id: str) -> dict[str, Any]:
     return {"suggestion": _row_to_dict(updated), "created": created}
 
 
+def _accept_schedule(
+    suggestion_id: str,
+    *,
+    fallback_local: bool,
+) -> dict[str, Any]:
+    """Create an event outside SQLite transactions, then finalize the row."""
+    row = db.query_one("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,))
+    if row is None or row["kind"] != "schedule":
+        raise ValueError("suggestion 不存在")
+    if row["status"] != "pending":
+        raise ValueError("suggestion 已处理")
+    suggestion = _row_to_dict(row)
+    payload = suggestion["payload"]
+    if _schedule_suggestion_expired(payload, now=_now_local()):
+        raise SuggestionExpiredError("suggestion_expired")
+
+    service = ScheduleService()
+    create_kwargs = _schedule_create_kwargs(payload, suggestion_id=suggestion_id)
+    try:
+        created = service.create_event(**create_kwargs)
+    except NoWritableAccountError:
+        if not fallback_local:
+            raise
+        try:
+            service.create_local_account()
+        except ValueError:
+            if not any(
+                account.get("id") == LOCAL_ACCOUNT_ID
+                for account in service.list_accounts()
+            ):
+                raise
+        local_create_kwargs = {**create_kwargs, "account_id": LOCAL_ACCOUNT_ID}
+        created = service.create_event(**local_create_kwargs)
+    except GraphHTTPError as exc:
+        if exc.status_code != 409:
+            raise
+        created = _recover_graph_retry_event(service, payload)
+
+    with db.immediate_transaction() as conn:
+        current = conn.execute(
+            "SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)
+        ).fetchone()
+        if current is None:
+            raise ValueError("suggestion 不存在")
+        if current["status"] != "pending":
+            raise ValueError("suggestion 已处理")
+        conn.execute(
+            "UPDATE suggestions SET status = 'accepted', decided_at = ? WHERE id = ?",
+            (db.now_ts(), suggestion_id),
+        )
+        updated = conn.execute(
+            "SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)
+        ).fetchone()
+    return {"suggestion": _row_to_dict(updated), "created": created}
+
+
 def dismiss(suggestion_id: str) -> dict[str, Any]:
     """Dismiss a suggestion; its normalized key remains as a permanent tombstone."""
     with db.immediate_transaction() as conn:
         row = conn.execute(
-            "SELECT * FROM suggestions WHERE id = ? AND kind = 'goal'",
+            "SELECT * FROM suggestions WHERE id = ?",
             (suggestion_id,),
         ).fetchone()
-        if row is None:
+        if row is None or row["kind"] not in SUGGESTION_KINDS:
             raise ValueError("suggestion 不存在")
         if row["status"] == "accepted":
             raise ValueError("已采纳的 suggestion 不能忽略")
@@ -174,12 +267,22 @@ def delete_pending_for_evidence(evidence_ref: str) -> int:
 def normalized_key_for(kind: str, payload: dict[str, Any], evidence_ref: str | None) -> str:
     _validate_kind(kind)
     source_kind = _evidence_source_kind(evidence_ref)
-    material = {
-        "kind": kind,
-        "title": _normalize_key_text(payload.get("title")),
-        "horizon": payload.get("horizon"),
-        "source": source_kind,
-    }
+    if kind == "goal":
+        # Keep this material byte-for-byte compatible with existing rows.
+        material = {
+            "kind": kind,
+            "title": _normalize_key_text(payload.get("title")),
+            "horizon": payload.get("horizon"),
+            "source": source_kind,
+        }
+    else:
+        material = {
+            "kind": kind,
+            "subject": _normalize_key_text(payload.get("subject")),
+            "date": payload.get("date"),
+            "start_time": payload.get("start_time"),
+            "source": source_kind,
+        }
     encoded = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -188,6 +291,8 @@ def _normalize_payload(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     _validate_kind(kind)
     if not isinstance(payload, dict):
         raise ValueError("payload 必须是对象")
+    if kind == "schedule":
+        return _normalize_schedule_payload(payload)
     title = payload.get("title")
     horizon = payload.get("horizon")
     if not isinstance(title, str) or not title.strip():
@@ -207,7 +312,133 @@ def _normalize_payload(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _validate_kind(kind: Any) -> None:
     if kind not in SUGGESTION_KINDS:
-        raise ValueError("kind 只支持：goal")
+        raise ValueError("kind 只支持：goal、schedule")
+
+
+def _normalize_schedule_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    subject = payload.get("subject")
+    if not isinstance(subject, str) or not subject.strip():
+        raise ValueError("schedule suggestion subject 不能为空")
+    clean_subject = subject.strip()
+    if len(clean_subject) > 500:
+        raise ValueError("schedule suggestion subject 不能超过 500 个字符")
+    event_date = _parse_schedule_date(payload.get("date"))
+    all_day = payload.get("all_day", False)
+    if not isinstance(all_day, bool):
+        raise ValueError("schedule suggestion all_day 必须是布尔值")
+    start_time = _parse_schedule_time(payload.get("start_time"), field="start_time")
+    end_time = _parse_schedule_time(payload.get("end_time"), field="end_time")
+    if all_day:
+        start_time = None
+        end_time = None
+    else:
+        effective_start = start_time or datetime_time(hour=9)
+        if end_time is not None and end_time <= effective_start:
+            raise ValueError("schedule suggestion end_time 必须晚于 start_time")
+    goal_id = payload.get("goal_id")
+    if goal_id is not None:
+        if not isinstance(goal_id, str):
+            raise ValueError("schedule suggestion goal_id 必须是字符串或 null")
+        goal_id = goal_id.strip() or None
+    return {
+        "subject": clean_subject,
+        "date": event_date.isoformat(),
+        "start_time": start_time.strftime("%H:%M") if start_time is not None else None,
+        "end_time": end_time.strftime("%H:%M") if end_time is not None else None,
+        "all_day": all_day,
+        "goal_id": goal_id,
+    }
+
+
+def _parse_schedule_date(value: Any) -> date:
+    if not isinstance(value, str) or len(value) != 10:
+        raise ValueError("schedule suggestion date 必须是 YYYY-MM-DD")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("schedule suggestion date 无效") from exc
+
+
+def _parse_schedule_time(value: Any, *, field: str) -> datetime_time | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) is None:
+        raise ValueError(f"schedule suggestion {field} 必须是 HH:MM 或 null")
+    return datetime_time.fromisoformat(value)
+
+
+def _schedule_create_kwargs(
+    payload: dict[str, Any],
+    *,
+    suggestion_id: str,
+) -> dict[str, Any]:
+    return {
+        "subject": payload["subject"],
+        "event_date": date.fromisoformat(payload["date"]),
+        "start_time": _time_from_normalized(payload.get("start_time")),
+        "end_time": _time_from_normalized(payload.get("end_time")),
+        "all_day": bool(payload.get("all_day", False)),
+        "goal_id": payload.get("goal_id"),
+        "account_id": None,
+        "client_request_id": suggestion_id,
+    }
+
+
+def _time_from_normalized(value: Any) -> datetime_time | None:
+    return datetime_time.fromisoformat(value) if isinstance(value, str) else None
+
+
+def _schedule_suggestion_expired(payload: dict[str, Any], *, now: datetime) -> bool:
+    event_date = date.fromisoformat(payload["date"])
+    if payload.get("all_day"):
+        expires_at = datetime.combine(event_date, datetime_time.max, LOCAL_TIMEZONE)
+    else:
+        start_time = _time_from_normalized(payload.get("start_time")) or datetime_time(hour=9)
+        end_time = _time_from_normalized(payload.get("end_time"))
+        expires_at = (
+            datetime.combine(event_date, end_time, LOCAL_TIMEZONE)
+            if end_time is not None
+            else datetime.combine(event_date, start_time, LOCAL_TIMEZONE) + timedelta(hours=1)
+        )
+    local_now = now.replace(tzinfo=LOCAL_TIMEZONE) if now.tzinfo is None else now.astimezone(LOCAL_TIMEZONE)
+    return expires_at < local_now
+
+
+def _recover_graph_retry_event(
+    service: ScheduleService,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Best-effort cache recovery after Graph confirms a transaction duplicate."""
+    try:
+        service.sync()
+        event_date = date.fromisoformat(payload["date"])
+        expected_start = _schedule_start_datetime(payload).timestamp()
+        events = service.list_events(event_date, event_date).get("events", [])
+        return next(
+            (
+                event
+                for event in events
+                if event.get("subject") == payload["subject"]
+                and abs(float(event.get("start_ts")) - expected_start) < 0.5
+            ),
+            None,
+        )
+    except Exception:
+        return None
+
+
+def _schedule_start_datetime(payload: dict[str, Any]) -> datetime:
+    event_date = date.fromisoformat(payload["date"])
+    start_time = (
+        datetime_time.min
+        if payload.get("all_day")
+        else _time_from_normalized(payload.get("start_time")) or datetime_time(hour=9)
+    )
+    return datetime.combine(event_date, start_time, LOCAL_TIMEZONE)
+
+
+def _now_local() -> datetime:
+    return datetime.now(LOCAL_TIMEZONE)
 
 
 def _coerce_confidence(value: Any) -> float:

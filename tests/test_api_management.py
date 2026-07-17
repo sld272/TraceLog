@@ -19,6 +19,8 @@ from PIL import Image
 
 from core import chat_service, db, goal_service, logging_service, soul_service, suggestion_service
 from core.app_services import job_service
+from core.graph.client import GraphHTTPError
+from core.schedule_service import NoWritableAccountError
 
 
 @unittest.skipUnless(importlib.util.find_spec("fastapi"), "FastAPI is not installed")
@@ -611,6 +613,60 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("dismissed", dismiss_response.json()["status"])
         self.assertEqual([], list_after_response.json())
         self.assertEqual(409, repeat_response.status_code)
+
+    def test_schedule_suggestion_routes_support_kind_body_and_error_codes(self) -> None:
+        schedule = suggestion_service.create_suggestion(
+            "schedule",
+            {
+                "subject": "打疫苗",
+                "date": "2026-07-20",
+                "start_time": "15:00",
+                "end_time": "16:00",
+                "all_day": False,
+            },
+            "chat:1",
+            0.9,
+        )
+        accepted = {
+            "suggestion": {**schedule, "status": "accepted"},
+            "created": {"id": "local-1"},
+        }
+        with self._client() as client:
+            listed = client.get("/suggestions", params={"kind": "schedule"})
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                return_value=accepted,
+            ) as accept:
+                fallback = client.post(
+                    f"/suggestions/{schedule['id']}/accept",
+                    json={"fallback_local": True},
+                )
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                side_effect=NoWritableAccountError("none"),
+            ):
+                no_account = client.post(f"/suggestions/{schedule['id']}/accept")
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                side_effect=suggestion_service.SuggestionExpiredError("expired"),
+            ):
+                expired = client.post(f"/suggestions/{schedule['id']}/accept")
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                side_effect=GraphHTTPError(503),
+            ):
+                upstream = client.post(f"/suggestions/{schedule['id']}/accept")
+            missing = client.post("/suggestions/missing/accept")
+
+        self.assertEqual([schedule["id"]], [item["id"] for item in listed.json()])
+        self.assertEqual(200, fallback.status_code, fallback.text)
+        accept.assert_called_once_with(schedule["id"], fallback_local=True)
+        self.assertEqual(409, no_account.status_code)
+        self.assertEqual({"code": "no_writable_account"}, no_account.json()["detail"])
+        self.assertEqual(409, expired.status_code)
+        self.assertEqual({"code": "suggestion_expired"}, expired.json()["detail"])
+        self.assertEqual(502, upstream.status_code)
+        self.assertEqual(404, missing.status_code)
 
     def test_delete_post_route_hard_deletes_post_comments_and_cancels_pending_jobs(self) -> None:
         post_id = "post-delete-1"

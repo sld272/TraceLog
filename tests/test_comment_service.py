@@ -47,7 +47,10 @@ class CommentServiceTest(unittest.TestCase):
         # aren't about suggestions so it doesn't consume the FakeClient queue
         suggestions_off = patch.dict(
             os.environ,
-            {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0"},
+            {
+                suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
+                suggestion_pipeline.SCHEDULE_SUGGESTIONS_ENABLED_ENV: "0",
+            },
         )
         suggestions_off.start()
         self.addCleanup(suggestions_off.stop)
@@ -466,8 +469,8 @@ class CommentServiceTest(unittest.TestCase):
             "confidence": 0.88,
         }
         with patch.dict(os.environ, {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "1"}), patch(
-            "core.suggestion_pipeline.goal_router.call_goal_router",
-            return_value=[candidate],
+            "core.suggestion_pipeline.suggestion_router.call_suggestion_router",
+            return_value={"goals": [candidate], "events": []},
         ):
             result = comment_service.call_comment_reply(
                 "20260525-001",

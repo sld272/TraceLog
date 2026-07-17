@@ -4,11 +4,13 @@ const BASE = '/api'
 
 export class ApiError extends Error {
   readonly status: number
+  readonly code: string | null
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code: string | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -19,7 +21,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new ApiError(body.detail || `HTTP ${res.status}`, res.status)
+    const detail = body.detail
+    const code = detail && typeof detail === 'object' && typeof detail.code === 'string'
+      ? detail.code
+      : null
+    const message = typeof detail === 'string' ? detail : code ?? `HTTP ${res.status}`
+    throw new ApiError(message, res.status, code)
   }
   return res.json()
 }
@@ -120,10 +127,8 @@ export interface Goal {
   updated_at: number
 }
 
-export interface Suggestion {
+interface SuggestionBase {
   id: string
-  kind: 'goal'
-  payload: Record<string, unknown>
   evidence_ref: string | null
   confidence: number
   status: 'pending' | 'accepted' | 'dismissed'
@@ -131,6 +136,30 @@ export interface Suggestion {
   created_at: number
   decided_at: number | null
 }
+
+export interface GoalSuggestion extends SuggestionBase {
+  kind: 'goal'
+  payload: {
+    title: string
+    detail: string | null
+    horizon: GoalHorizon
+    focus: boolean
+  }
+}
+
+export interface ScheduleSuggestion extends SuggestionBase {
+  kind: 'schedule'
+  payload: {
+    subject: string
+    date: string
+    start_time: string | null
+    end_time: string | null
+    all_day: boolean
+    goal_id: string | null
+  }
+}
+
+export type Suggestion = GoalSuggestion | ScheduleSuggestion
 
 export interface ChatThread {
   id: number
@@ -559,7 +588,7 @@ function isSuggestion(value: unknown): value is Suggestion {
   if (!value || typeof value !== 'object') return false
   const item = value as Record<string, unknown>
   return typeof item.id === 'string'
-    && item.kind === 'goal'
+    && (item.kind === 'goal' || item.kind === 'schedule')
     && item.status === 'pending'
     && typeof item.payload === 'object'
     && item.payload !== null
@@ -766,7 +795,7 @@ export function deleteGoal(goalId: string) {
 }
 
 /* Suggestions */
-export function listPendingSuggestions(kind?: 'goal'): Promise<Suggestion[]> {
+export function listPendingSuggestions(kind?: Suggestion['kind']): Promise<Suggestion[]> {
   const suffix = kind ? `?kind=${kind}` : ''
   return request<Suggestion[]>(`/suggestions${suffix}`)
 }
@@ -778,10 +807,16 @@ export function postIdFromEvidenceRef(ref: string | null | undefined): string | 
   return match?.[1] ?? null
 }
 
-export function acceptSuggestion(suggestionId: string) {
-  return request<{ suggestion: Suggestion; created: Goal }>(
+export function acceptSuggestion(
+  suggestionId: string,
+  opts?: { fallbackLocal?: boolean },
+) {
+  return request<{ suggestion: Suggestion; created: Goal | ScheduleEvent | null }>(
     `/suggestions/${suggestionId}/accept`,
-    { method: 'POST', body: JSON.stringify({}) },
+    {
+      method: 'POST',
+      body: JSON.stringify({ fallback_local: opts?.fallbackLocal ?? false }),
+    },
   )
 }
 

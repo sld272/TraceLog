@@ -41,6 +41,7 @@ def init_db() -> None:
     try:
         _drop_retired_tables(conn)
         _migrate_columns(conn)
+        _migrate_suggestions_kind_constraint(conn)
         conn.executescript(sql)
         _backfill_schedule_event_accounts(conn)
         conn.execute("PRAGMA foreign_keys = ON")
@@ -89,6 +90,46 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    conn.commit()
+
+
+def _migrate_suggestions_kind_constraint(conn: sqlite3.Connection) -> None:
+    """Allow schedule suggestions in databases created by the goal-only schema."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'suggestions'"
+    ).fetchone()
+    if row is None or "schedule" in str(row[0] or "").casefold():
+        return
+    conn.execute(
+        """
+        CREATE TABLE suggestions_kind_v2 (
+            id             TEXT PRIMARY KEY,
+            kind           TEXT NOT NULL CHECK(kind IN ('goal', 'schedule')),
+            payload_json   TEXT NOT NULL,
+            evidence_ref   TEXT,
+            confidence     REAL NOT NULL DEFAULT 0.6
+                               CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            status         TEXT NOT NULL DEFAULT 'pending'
+                               CHECK(status IN ('pending', 'accepted', 'dismissed')),
+            normalized_key TEXT,
+            created_at     REAL NOT NULL,
+            decided_at     REAL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO suggestions_kind_v2(
+            id, kind, payload_json, evidence_ref, confidence, status,
+            normalized_key, created_at, decided_at
+        )
+        SELECT id, kind, payload_json, evidence_ref, confidence, status,
+               normalized_key, created_at, decided_at
+        FROM suggestions
+        """
+    )
+    conn.execute("DROP TABLE suggestions")
+    conn.execute("ALTER TABLE suggestions_kind_v2 RENAME TO suggestions")
     conn.commit()
 
 

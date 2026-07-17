@@ -246,6 +246,7 @@ export function App() {
         {route.kind === 'settings' && (
           <SettingsPage
             firstRun={modelConfigured === false}
+            initialTab={route.tab}
             onModelSettingsChanged={checkModelConfiguration}
             onSoulsChanged={fetchSouls}
           />

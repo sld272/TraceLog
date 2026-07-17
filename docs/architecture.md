@@ -61,6 +61,14 @@ TraceLog 是 **Microsoft Graph 的客户端，不是日历同步引擎**。Excha
 
 API runtime 初始化时启动独立 asyncio 任务：启动后先尝试同步一次，随后每 15 分钟运行 `ScheduleService.sync()`；未登录时安全跳过，失败只记警告，不影响 API。`POST /schedule/sync` 提供手动同步，设备码登录成功后也会立即同步。FastAPI lifespan 退出时由 `shutdown_runtime()` 取消周期任务和仍在等待的设备码登录。
 
+## 回复建议与一键采纳
+
+`core/llm/suggestion_router.py` 在回复完成后用一次 LLM 调用抽取两类待确认候选：持续追踪的 `goal` 与单次、日期明确的 `schedule`。候选只进入 `suggestions` 表，不会静默创建目标或日程；前端内联卡片必须由用户明确采纳或忽略。`core/suggestion_service.py` 负责两类 payload 的规范化、按 kind 去重和 tombstone，`GET /suggestions?kind=...` 可分别读取待处理项。
+
+goal 采纳与目标创建保持在同一个 SQLite 事务内。schedule 采纳则采用两阶段边界：先在本地时区校验事件尚未过期，再在任何 SQLite 写事务之外调用 `ScheduleService.create_event()`，成功后另开事务标记 suggestion accepted。默认写入路由是已连接 Outlook 优先、已有本地日历次之；两者都没有时返回 `no_writable_account`，只有用户明确选择“先存在本地”才创建本地账号并重试。
+
+采纳重试复用 suggestion id 作为 Graph `transactionId`；Graph 返回 409 表示同一事务已经创建，服务会触发一次同步并尽力从缓存回捞，而不是再建一条。SQLite 本地事件同样用 `sha256(client_request_id)` 派生确定性 id，使“事件已写入但 suggestion 尚未落状态”的崩溃重试收敛到同一行。
+
 ---
 
 # 记忆系统 memory-v2

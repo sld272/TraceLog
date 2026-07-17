@@ -248,7 +248,7 @@ CREATE TABLE IF NOT EXISTS goal_schedule_links (
 
 CREATE TABLE IF NOT EXISTS suggestions (
     id             TEXT PRIMARY KEY,
-    kind           TEXT NOT NULL CHECK(kind = 'goal'),
+    kind           TEXT NOT NULL CHECK(kind IN ('goal', 'schedule')),
     payload_json   TEXT NOT NULL,
     evidence_ref   TEXT,
     confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),

@@ -19,7 +19,10 @@ class ApiChatStreamTest(unittest.TestCase):
         # keep the suggestion pipeline off so it doesn't drive the fake client
         suggestions_off = patch.dict(
             os.environ,
-            {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0"},
+            {
+                suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
+                suggestion_pipeline.SCHEDULE_SUGGESTIONS_ENABLED_ENV: "0",
+            },
         )
         suggestions_off.start()
         self.addCleanup(suggestions_off.stop)

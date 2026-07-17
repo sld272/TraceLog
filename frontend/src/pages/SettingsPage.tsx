@@ -73,6 +73,7 @@ interface SoulEditing {
 
 interface SettingsPageProps {
   firstRun?: boolean
+  initialTab?: 'schedule'
   onModelSettingsChanged?: () => void
   onSoulsChanged?: () => void
 }
@@ -154,8 +155,8 @@ const TAB_SUBTITLES: Record<SettingsTab, string> = {
   about: '关于拾迹这个项目',
 }
 
-export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSoulsChanged }: SettingsPageProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('model')
+export function SettingsPage({ firstRun = false, initialTab, onModelSettingsChanged, onSoulsChanged }: SettingsPageProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'model')
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null)
   const [modelForm, setModelForm] = useState<ModelForm>(DEFAULT_MODEL_FORM)
   const [souls, setSouls] = useState<Soul[]>([])
@@ -178,6 +179,10 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const [logRevealPath, setLogRevealPath] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setActiveTab(initialTab ?? 'model')
+  }, [initialTab])
 
   const tabs = useMemo(
     () => [

@@ -206,7 +206,7 @@ class PublicPostPipelineTest(unittest.TestCase):
             ),
             patch("core.app_services.public_post_pipeline.reply_service.fanout", return_value=[result]),
             patch(
-                "core.app_services.public_post_pipeline.suggestion_pipeline.collect_goal_suggestions",
+                "core.app_services.public_post_pipeline.suggestion_pipeline.collect_reply_suggestions",
                 return_value=[suggestion],
             ),
             patch(
