@@ -40,6 +40,10 @@ class NoWritableAccountError(ScheduleNotConnectedError):
     """Raised when neither Outlook nor a local calendar can accept an event."""
 
 
+class ScheduleEventNotFoundError(ValueError):
+    """Raised when a write targets an event absent from the local cache."""
+
+
 class ScheduleService:
     def __init__(
         self,
@@ -489,7 +493,7 @@ class ScheduleService:
             "SELECT account_id FROM schedule_events WHERE id = ?", (event_id,)
         )
         if row is None:
-            raise ValueError("本地缓存中找不到该日程，请先同步")
+            raise ScheduleEventNotFoundError("本地缓存中找不到该日程，请先同步")
         account_id = str(row["account_id"] or OUTLOOK_ACCOUNT_ID)
         if account_id == OUTLOOK_ACCOUNT_ID:
             graph = self._connected_graph()

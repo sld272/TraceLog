@@ -61,7 +61,7 @@ class ApiScheduleTest(unittest.TestCase):
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
 
-    def _client(self):
+    def _client(self, *, raise_server_exceptions: bool = True):
         from fastapi.testclient import TestClient
         from api import deps
         from api.app import create_app
@@ -85,7 +85,9 @@ class ApiScheduleTest(unittest.TestCase):
         shutdown_patch.start()
         self.addCleanup(init_patch.stop)
         self.addCleanup(shutdown_patch.stop)
-        return TestClient(create_app())
+        return TestClient(
+            create_app(), raise_server_exceptions=raise_server_exceptions
+        )
 
     def _migration_responses(self, service: ScheduleService):
         with patch("api.routes.schedule.ScheduleService", return_value=service):
@@ -165,6 +167,15 @@ class ApiScheduleTest(unittest.TestCase):
         self.assertEqual(422, missing_confirmation.status_code)
         self.assertEqual(422, rejected.status_code)
         self.assertEqual({"ok": True, "deleted_events": 1}, deleted.json())
+
+    def test_delete_missing_event_returns_not_found(self) -> None:
+        with self._client(raise_server_exceptions=False) as client:
+            response = client.delete("/schedule/events/missing-id")
+
+        self.assertEqual(404, response.status_code, response.text)
+        self.assertEqual(
+            {"detail": "本地缓存中找不到该日程，请先同步"}, response.json()
+        )
 
     def test_local_migration_preview_and_empty_decisions_route(self) -> None:
         service = ScheduleService(

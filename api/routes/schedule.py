@@ -22,6 +22,7 @@ from core.graph.auth import (
 from core.graph.client import GraphHTTPError
 from core.schedule_service import (
     NoWritableAccountError,
+    ScheduleEventNotFoundError,
     ScheduleNotConnectedError,
     ScheduleService,
 )
@@ -291,6 +292,8 @@ async def update_event(event_id: str, request: UpdateEventRequest):
 async def delete_event(event_id: str):
     try:
         await run_sync(ScheduleService().delete_event, event_id)
+    except ScheduleEventNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ScheduleNotConnectedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (GraphHTTPError, httpx.HTTPError) as exc:
