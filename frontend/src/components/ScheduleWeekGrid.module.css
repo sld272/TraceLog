@@ -248,6 +248,14 @@
   pointer-events: none;
 }
 
+/* 后台提交在途：降透明 + progress 光标，禁点击由 JS 拦截（不用 pointer-events:none，
+   否则周网格点击会穿透到下层 ghostSlot 触发新建）。不加动画（静默原则）。 */
+.evtPending,
+.allDayPending {
+  opacity: 0.55;
+  cursor: progress;
+}
+
 /* 本地日历事件：虚线左边条（色彩语义不变，仅标注「家在本机」） */
 .evtLocal {
   border-left-style: dashed;

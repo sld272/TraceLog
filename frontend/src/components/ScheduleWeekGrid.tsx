@@ -19,6 +19,8 @@ interface ScheduleWeekGridProps {
   events: ScheduleEvent[]
   onEventClick: (event: ScheduleEvent, anchor: { x: number; y: number }) => void
   onCreateSlot: (date: string, startTime: string, endTime: string) => void
+  /** 后台提交在途的事件 id：降透明并禁点击。 */
+  pendingIds?: Set<string>
 }
 
 function pad2(value: number): string {
@@ -35,7 +37,7 @@ function useNow(intervalMs = 60000): Date {
   return now
 }
 
-export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCreateSlot }: ScheduleWeekGridProps) {
+export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCreateSlot, pendingIds }: ScheduleWeekGridProps) {
   const now = useNow()
   const [hover, setHover] = useState<{ date: string; min: number } | null>(null)
 
@@ -90,19 +92,23 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
         <div className={styles.allDayLabel}>全天</div>
         {weekDays.map((key) => (
           <div key={key} className={styles.allDayCell}>
-            {(allDayByDay.get(key) ?? []).map((event) => (
-              <button
-                key={event.id}
-                type="button"
-                className={`${styles.allDayChip} ${event.goal_links.length > 0 ? styles.allDayGoal : ''} ${event.provider === 'local' ? styles.chipLocal : ''}`}
-                onClick={(clickEvent) => {
-                  clickEvent.stopPropagation()
-                  onEventClick(event, { x: clickEvent.clientX, y: clickEvent.clientY })
-                }}
-              >
-                {event.subject || '(无标题)'}
-              </button>
-            ))}
+            {(allDayByDay.get(key) ?? []).map((event) => {
+              const pending = pendingIds?.has(event.id) ?? false
+              return (
+                <button
+                  key={event.id}
+                  type="button"
+                  className={`${styles.allDayChip} ${event.goal_links.length > 0 ? styles.allDayGoal : ''} ${event.provider === 'local' ? styles.chipLocal : ''} ${pending ? styles.allDayPending : ''}`}
+                  onClick={(clickEvent) => {
+                    clickEvent.stopPropagation()
+                    if (pending) return
+                    onEventClick(event, { x: clickEvent.clientX, y: clickEvent.clientY })
+                  }}
+                >
+                  {event.subject || '(无标题)'}
+                </button>
+              )
+            })}
           </div>
         ))}
       </div>
@@ -140,6 +146,7 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
             >
               {(timedByDay.get(key) ?? []).map((block) => {
                 const bound = block.event.goal_links.length > 0
+                const pending = pendingIds?.has(block.event.id) ?? false
                 const top = ((block.startMin - startH * 60) / 60) * HOUR_PX
                 const height = Math.max(((block.endMin - block.startMin) / 60) * HOUR_PX - 2, 18)
                 const compact = height < 36
@@ -147,7 +154,7 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
                 return (
                   <div
                     key={block.event.id}
-                    className={`${styles.evt} ${bound ? styles.evtGoal : ''} ${compact ? styles.evtCompact : ''} ${block.event.provider === 'local' ? styles.evtLocal : ''}`}
+                    className={`${styles.evt} ${bound ? styles.evtGoal : ''} ${compact ? styles.evtCompact : ''} ${block.event.provider === 'local' ? styles.evtLocal : ''} ${pending ? styles.evtPending : ''}`}
                     style={{
                       top,
                       height,
@@ -156,6 +163,7 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
                     }}
                     onClick={(clickEvent) => {
                       clickEvent.stopPropagation()
+                      if (pending) return
                       onEventClick(block.event, { x: clickEvent.clientX, y: clickEvent.clientY })
                     }}
                   >

@@ -1,16 +1,25 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
+  type CreateScheduleEventInput,
   type Goal,
   type ScheduleEvent,
-  ApiError,
-  createScheduleEvent,
-  linkGoalSchedule,
-  unlinkGoalSchedule,
-  updateScheduleEvent,
 } from '@/api/client'
 import { eventClock, eventDateKey, todayKey } from '@/utils/schedule'
 import workspaceStyles from '@/pages/WorkspacePages.module.css'
 import styles from './ScheduleEventDrawer.module.css'
+
+/** Drawer 确认后交给调用方的提交意图（不在 Drawer 内触碰任何 API）。 */
+export type ScheduleDrawerSubmission =
+  | { kind: 'create'; input: CreateScheduleEventInput }
+  | {
+      kind: 'update'
+      /** 编辑前的原事件（含原 goal_links，供乐观回滚与 diff）。 */
+      event: ScheduleEvent
+      /** 与旧 save() 相同的字段集：subject/date/all_day/start_time/end_time。 */
+      fields: Partial<CreateScheduleEventInput>
+      /** 目标绑定 diff；from === to 表示无绑定改动。 */
+      goalDiff: { from: string | null; to: string | null }
+    }
 
 interface ScheduleEventDrawerProps {
   /** 可绑定的目标列表（进行中）。 */
@@ -24,10 +33,8 @@ interface ScheduleEventDrawerProps {
   /** 传入则进入编辑态（预填现有事件字段）。 */
   event?: ScheduleEvent
   onClose: () => void
-  /** 创建 / 编辑成功后的回调（返回保存后的事件）。 */
-  onSaved?: (event: ScheduleEvent) => void
-  /** @deprecated onSaved 的别名，保留兼容现有调用点。 */
-  onCreated?: (event: ScheduleEvent) => void
+  /** 校验通过后同步交出提交意图；关闭由调用方负责（在 onSubmit 里 setDrawer(null)）。 */
+  onSubmit: (submission: ScheduleDrawerSubmission) => void
 }
 
 export function ScheduleEventDrawer({
@@ -37,11 +44,9 @@ export function ScheduleEventDrawer({
   prefill,
   event,
   onClose,
-  onSaved,
-  onCreated,
+  onSubmit,
 }: ScheduleEventDrawerProps) {
   const editing = event != null
-  const handleSaved = onSaved ?? onCreated ?? (() => undefined)
   const writable = accounts ?? []
 
   const [subject, setSubject] = useState(() => event?.subject ?? '')
@@ -58,8 +63,9 @@ export function ScheduleEventDrawer({
   )
   /** 保存到哪个账号（仅创建态；编辑态事件的家不可变）。 */
   const [accountId, setAccountId] = useState(() => writable[0]?.id ?? '')
-  const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** 防双击：交出提交意图后忽略后续点击（Drawer 随即被调用方关闭）。 */
+  const submittedRef = useRef(false)
 
   useEffect(() => {
     const handleKey = (keyEvent: KeyboardEvent) => {
@@ -71,45 +77,32 @@ export function ScheduleEventDrawer({
 
   const presetGoal = presetGoalId ? goals.find((goal) => goal.id === presetGoalId) ?? null : null
 
-  const save = async () => {
+  const submit = () => {
     if (!subject.trim()) {
       setError('日程标题不能为空')
       return
     }
-    setSaving(true)
-    setError(null)
-    try {
-      const fields = {
-        subject: subject.trim(),
-        date,
-        all_day: allDay,
-        start_time: allDay ? undefined : startTime,
-        end_time: allDay ? undefined : endTime,
-      }
-      if (editing) {
-        const updated = await updateScheduleEvent(event.id, fields)
-        // 目标绑定：只 diff UI 表示的那一条绑定，避免误删未展示的其它绑定。
-        const initialGoalId = event.goal_links[0]?.goal_id ?? ''
-        if (initialGoalId !== goalId) {
-          if (initialGoalId) await unlinkGoalSchedule(initialGoalId, event.id)
-          if (goalId) await linkGoalSchedule(goalId, event.id)
-        }
-        handleSaved(updated)
-      } else {
-        const created = await createScheduleEvent({
-          ...fields,
-          goal_id: goalId || undefined,
-          account_id: accountId || undefined,
-        })
-        handleSaved(created)
-      }
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        setError('没有可用的日历账号：请先在设置中登录 Microsoft，或创建本地日历。')
-      } else {
-        setError(err instanceof Error ? err.message : editing ? '保存日程失败' : '创建日程失败')
-      }
-      setSaving(false)
+    if (submittedRef.current) return
+    submittedRef.current = true
+    const fields = {
+      subject: subject.trim(),
+      date,
+      all_day: allDay,
+      start_time: allDay ? undefined : startTime,
+      end_time: allDay ? undefined : endTime,
+    }
+    if (editing) {
+      onSubmit({
+        kind: 'update',
+        event,
+        fields,
+        goalDiff: { from: event.goal_links[0]?.goal_id ?? null, to: goalId || null },
+      })
+    } else {
+      onSubmit({
+        kind: 'create',
+        input: { ...fields, goal_id: goalId || undefined, account_id: accountId || undefined },
+      })
     }
   }
 
@@ -140,7 +133,7 @@ export function ScheduleEventDrawer({
             <h2>{title}</h2>
             <p>{subtitle}</p>
           </div>
-          <button className={workspaceStyles.ghostButton} type="button" onClick={onClose} disabled={saving}>关闭</button>
+          <button className={workspaceStyles.ghostButton} type="button" onClick={onClose}>关闭</button>
         </div>
 
         {error && <div className={styles.error}>{error}</div>}
@@ -199,9 +192,9 @@ export function ScheduleEventDrawer({
         </label>
 
         <div className={styles.actions}>
-          <button className={workspaceStyles.ghostButton} type="button" onClick={onClose} disabled={saving}>取消</button>
-          <button className={workspaceStyles.button} type="button" onClick={() => void save()} disabled={saving}>
-            {saving ? (editing ? '保存中...' : '创建中...') : editing ? '保存改动' : '创建日程'}
+          <button className={workspaceStyles.ghostButton} type="button" onClick={onClose}>取消</button>
+          <button className={workspaceStyles.button} type="button" onClick={submit}>
+            {editing ? '保存改动' : '创建日程'}
           </button>
         </div>
       </aside>

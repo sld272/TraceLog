@@ -14,11 +14,13 @@ interface ScheduleMonthGridProps {
   events: ScheduleEvent[]
   onEventClick: (event: ScheduleEvent, anchor: { x: number; y: number }) => void
   onDayClick: (dateKey: string) => void
+  /** 后台提交在途的事件 id：降透明并禁点击。 */
+  pendingIds?: Set<string>
 }
 
 const MAX_CHIPS = 3
 
-export function ScheduleMonthGrid({ cells, today, events, onEventClick, onDayClick }: ScheduleMonthGridProps) {
+export function ScheduleMonthGrid({ cells, today, events, onEventClick, onDayClick, pendingIds }: ScheduleMonthGridProps) {
   const eventsByDay = useMemo(() => {
     const map = new Map<string, ScheduleEvent[]>()
     for (const event of events) {
@@ -56,18 +58,22 @@ export function ScheduleMonthGrid({ cells, today, events, onEventClick, onDayCli
               onClick={() => onDayClick(cell.key)}
             >
               <span className={styles.date}>{cell.day}</span>
-              {shown.map((event) => (
-                <span
-                  key={event.id}
-                  className={`${styles.chip} ${event.goal_links.length > 0 ? styles.chipGoal : ''} ${event.provider === 'local' ? styles.chipLocal : ''}`}
-                  onClick={(clickEvent) => {
-                    clickEvent.stopPropagation()
-                    onEventClick(event, { x: clickEvent.clientX, y: clickEvent.clientY })
-                  }}
-                >
-                  {event.all_day ? event.subject || '(无标题)' : `${eventClock(event.start_local)} ${event.subject || '(无标题)'}`}
-                </span>
-              ))}
+              {shown.map((event) => {
+                const pending = pendingIds?.has(event.id) ?? false
+                return (
+                  <span
+                    key={event.id}
+                    className={`${styles.chip} ${event.goal_links.length > 0 ? styles.chipGoal : ''} ${event.provider === 'local' ? styles.chipLocal : ''} ${pending ? styles.chipPending : ''}`}
+                    onClick={(clickEvent) => {
+                      clickEvent.stopPropagation()
+                      if (pending) return
+                      onEventClick(event, { x: clickEvent.clientX, y: clickEvent.clientY })
+                    }}
+                  >
+                    {event.all_day ? event.subject || '(无标题)' : `${eventClock(event.start_local)} ${event.subject || '(无标题)'}`}
+                  </span>
+                )
+              })}
               {more > 0 && <span className={styles.more}>还有 {more} 项</span>}
             </button>
           )

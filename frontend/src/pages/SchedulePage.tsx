@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  type CreateScheduleEventInput,
   type Goal,
   type ScheduleEvent,
   type ScheduleProgress,
   type ScheduleStatus,
+  ApiError,
   createLocalCalendarAccount,
+  createScheduleEvent,
+  deleteScheduleEvent,
   getScheduleStatus,
+  linkGoalSchedule,
   listGoals,
   listScheduleEvents,
   syncSchedule,
+  unlinkGoalSchedule,
+  updateScheduleEvent,
 } from '@/api/client'
 import {
   getCachedScheduleStatus,
@@ -26,6 +33,8 @@ import { PlusIcon, RefreshCwIcon } from '@/components/icons'
 import { formatSmartTime } from '@/utils/date'
 import {
   dateFromKey,
+  eventClock,
+  eventDateKey,
   fetchGoalProgress,
   monthCalendarCells,
   monthTitleLabel,
@@ -43,6 +52,22 @@ type PopoverState = { event: ScheduleEvent; anchor: { x: number; y: number } }
 type DrawerState =
   | { mode: 'create'; prefill?: { date: string; start_time?: string; end_time?: string } }
   | { mode: 'edit'; event: ScheduleEvent }
+
+/** 一笔后台在途的写操作及其乐观覆盖项。 */
+type PendingOp = {
+  /** 递增唯一，定位 op。 */
+  key: number
+  type: 'create' | 'update' | 'delete'
+  /** create 初始为 `pending_${key}`，成功后换成服务器真实 id。 */
+  eventId: string
+  /** create/update 的乐观事件；delete 为 null。 */
+  optimistic: ScheduleEvent | null
+  /** null=在飞；成功落定后 = ++epoch（用于对账清除）。 */
+  settledEpoch: number | null
+}
+
+/** 一条失败提示（失败后 op 已从覆盖层移除，仅剩这条横幅）。 */
+type FailedOp = { key: number; message: string; retry?: () => void }
 
 interface SchedulePageProps {
   onOpenSettings: () => void
@@ -67,6 +92,14 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
   const [migration, setMigration] = useState<{ source: 'prompt' | 'settings' } | null>(null)
   /** 本次挂载是否已自动弹过迁移邀请（防 StrictMode / 重复触发）。 */
   const migrationPromptShown = useRef(false)
+
+  /* 后台静默同步：乐观覆盖层 + 失败横幅 + epoch 对账。 */
+  const [pendingOps, setPendingOps] = useState<PendingOp[]>([])
+  const [failedOps, setFailedOps] = useState<FailedOp[]>([])
+  /** 单调递增的落定序号；对账凭它判断某次拉取是否已包含该改动。 */
+  const epochRef = useRef(0)
+  /** op / 失败横幅的唯一 key 源。 */
+  const opKeyRef = useRef(0)
 
   const connected = status?.connected ?? false
   const hasLocal = hasLocalCalendarAccount(status)
@@ -123,12 +156,20 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
       setProgressByGoal({})
       return
     }
+    /* 对账基线：只有「本次拉取开始时已 settle」的 op 才被这次响应证明落地。 */
+    const fetchEpoch = epochRef.current
     let cancelled = false
     void (async () => {
       try {
         const result = await listScheduleEvents(range.start, range.end)
         if (cancelled) return
         setEvents(result.events)
+        /* 摘掉覆盖层：仅清除落定序号 ≤ 本次拉取起点的 op（服务器基线已含该改动）。
+           在飞（settledEpoch===null）或「拉取起点之后才落定」的 op 一律保留，
+           避免 pending create 闪没 / pending delete 闪回。与 setEvents 同批渲染。 */
+        setPendingOps((ops) =>
+          ops.filter((op) => !(op.settledEpoch !== null && op.settledEpoch <= fetchEpoch)),
+        )
         const ids = new Set<string>()
         result.events.forEach((event) => event.goal_links.forEach((link) => ids.add(link.goal_id)))
         goals.forEach((goal) => ids.add(goal.id))
@@ -144,6 +185,24 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
       cancelled = true
     }
   }, [usable, range.start, range.end, goals, reloadKey])
+
+  /* 服务器基线 + 乐观覆盖层的合并结果，喂给网格。 */
+  const displayEvents = useMemo(() => {
+    let merged = events
+    for (const op of pendingOps) {
+      if (op.type === 'delete') merged = merged.filter((e) => e.id !== op.eventId)
+      else if (op.type === 'update') merged = merged.map((e) => (e.id === op.eventId ? op.optimistic! : e))
+      /* create：先按 id 去重再追加（settle 后真实 id 可能已被并发 sync 拉进基线）。 */
+      else merged = [...merged.filter((e) => e.id !== op.eventId), op.optimistic!]
+    }
+    return merged
+  }, [events, pendingOps])
+
+  /* 仍在飞的事件 id：降透明 + 禁点击；settle 后立即恢复可交互（此时已是真实 id）。 */
+  const pendingIds = useMemo(
+    () => new Set(pendingOps.filter((op) => op.settledEpoch === null).map((op) => op.eventId)),
+    [pendingOps],
+  )
 
   const goPrev = () => setAnchor((a) => (view === 'week' ? shiftDateKey(a, -7) : shiftMonthKey(a, -1)))
   const goNext = () => setAnchor((a) => (view === 'week' ? shiftDateKey(a, 7) : shiftMonthKey(a, 1)))
@@ -196,13 +255,6 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
     }
   }
 
-  const handleSaved = () => {
-    const editing = drawer?.mode === 'edit'
-    setDrawer(null)
-    setNotice(editing ? '日程已更新。' : '日程已保存。')
-    setReloadKey((key) => key + 1)
-  }
-
   /* 「先用本地日历」：创建本地账号后直接进入日历。 */
   const handleUseLocal = async () => {
     setCreatingLocal(true)
@@ -220,12 +272,6 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
     }
   }
 
-  const handleDeleted = () => {
-    setPopover(null)
-    setNotice('日程已删除。')
-    setReloadKey((key) => key + 1)
-  }
-
   /** 迁移完成 / 终态退出：失效缓存并重拉状态 + 事件（本地账号可能已移除）。 */
   const handleMigrationFinished = async () => {
     setMigration(null)
@@ -240,8 +286,11 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
     setReloadKey((key) => key + 1)
   }
 
-  const openEvent = (event: ScheduleEvent, at: { x: number; y: number }) =>
+  const openEvent = (event: ScheduleEvent, at: { x: number; y: number }) => {
+    /* 双保险：在飞事件不开 Popover（网格已禁点击，此处再拦一道）。 */
+    if (pendingIds.has(event.id)) return
     setPopover({ event, anchor: at })
+  }
   const openCreateSlot = (date: string, startTime: string, endTime: string) =>
     setDrawer({ mode: 'create', prefill: { date, start_time: startTime, end_time: endTime } })
   const openDayWeek = (dateKey: string) => {
@@ -273,6 +322,163 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
     if (hasLocal) list.push({ id: 'local', label: '本地日历' })
     return list
   }, [connected, hasLocal])
+
+  /* ===== 后台静默提交：乐观构造 + 失败横幅 + 三个提交函数 ===== */
+
+  const pushFailed = (message: string, retry?: () => void) => {
+    const key = ++opKeyRef.current
+    setFailedOps((list) => [...list, { key, message, retry }])
+  }
+  const dismissFailed = (key: number) => {
+    setFailedOps((list) => list.filter((item) => item.key !== key))
+  }
+
+  /** 由 goalId 查 goal_title 拼出单条绑定（或空）；对照 ScheduleGoalLink 形状。 */
+  const goalLinksFor = (goalId: string | null): ScheduleEvent['goal_links'] =>
+    goalId ? [{ goal_id: goalId, goal_title: goals.find((g) => g.id === goalId)?.title ?? '' }] : []
+
+  /** create 的乐观事件；字段名对齐 ScheduleEvent，时间字符串对齐后端墙钟。 */
+  const buildOptimisticCreate = (input: CreateScheduleEventInput, key: number): ScheduleEvent => {
+    const allDay = input.all_day ?? false
+    const startLocal = allDay ? `${input.date}T00:00:00` : `${input.date}T${input.start_time ?? '00:00'}:00`
+    const endLocal = allDay
+      ? `${shiftDateKey(input.date, 1)}T00:00:00`
+      : `${input.date}T${input.end_time ?? '00:00'}:00`
+    const accountId = input.account_id ?? writableAccounts[0]?.id ?? 'outlook'
+    return {
+      id: `pending_${key}`,
+      subject: input.subject,
+      body_preview: null,
+      start_ts: Math.floor(new Date(startLocal).getTime() / 1000),
+      end_ts: Math.floor(new Date(endLocal).getTime() / 1000),
+      start_local: startLocal,
+      end_local: endLocal,
+      all_day: allDay,
+      location: null,
+      web_link: null,
+      series_master_id: null,
+      is_cancelled: false,
+      change_key: null,
+      synced_at: Math.floor(Date.now() / 1000),
+      account_id: accountId,
+      provider: accountId === 'local' ? 'local' : 'outlook',
+      goal_link: null,
+      goal_links: goalLinksFor(input.goal_id ?? null),
+    }
+  }
+
+  /** update 的乐观事件：原事件覆盖 subject/all_day 与重算的四个时间字段，goal_links 按 diff 重写。 */
+  const buildOptimisticUpdate = (
+    event: ScheduleEvent,
+    fields: Partial<CreateScheduleEventInput>,
+    goalTo: string | null,
+  ): ScheduleEvent => {
+    const allDay = fields.all_day ?? event.all_day
+    const date = fields.date ?? eventDateKey(event)
+    const startLocal = allDay ? `${date}T00:00:00` : `${date}T${fields.start_time ?? eventClock(event.start_local)}:00`
+    const endLocal = allDay
+      ? `${shiftDateKey(date, 1)}T00:00:00`
+      : `${date}T${fields.end_time ?? eventClock(event.end_local)}:00`
+    return {
+      ...event,
+      subject: fields.subject ?? event.subject,
+      all_day: allDay,
+      start_local: startLocal,
+      end_local: endLocal,
+      start_ts: Math.floor(new Date(startLocal).getTime() / 1000),
+      end_ts: Math.floor(new Date(endLocal).getTime() / 1000),
+      goal_links: goalLinksFor(goalTo),
+    }
+  }
+
+  const submitCreate = (input: CreateScheduleEventInput) => {
+    const key = ++opKeyRef.current
+    const optimistic = buildOptimisticCreate(input, key)
+    setPendingOps((ops) => [...ops, { key, type: 'create', eventId: optimistic.id, optimistic, settledEpoch: null }])
+    void (async () => {
+      try {
+        const created = await createScheduleEvent(input)
+        epochRef.current += 1
+        const settledEpoch = epochRef.current
+        setPendingOps((ops) =>
+          ops.map((op) => (op.key === key ? { ...op, eventId: created.id, optimistic: created, settledEpoch } : op)),
+        )
+        setReloadKey((k) => k + 1)
+      } catch (err) {
+        setPendingOps((ops) => ops.filter((op) => op.key !== key))
+        if (err instanceof ApiError && err.status === 409) {
+          /* 无可用账号：给出去处指引，且不给 retry（重试仍会 409）。 */
+          pushFailed('没有可用的日历账号：请先在设置中登录 Microsoft，或创建本地日历。')
+        } else {
+          pushFailed(`「${input.subject}」创建失败：${errMessage(err)}`, () => submitCreate(input))
+        }
+      }
+    })()
+  }
+
+  const submitUpdate = (
+    event: ScheduleEvent,
+    fields: Partial<CreateScheduleEventInput>,
+    goalDiff: { from: string | null; to: string | null },
+  ) => {
+    const key = ++opKeyRef.current
+    const optimistic = buildOptimisticUpdate(event, fields, goalDiff.to)
+    setPendingOps((ops) => [...ops, { key, type: 'update', eventId: event.id, optimistic, settledEpoch: null }])
+    void (async () => {
+      let updated: ScheduleEvent
+      try {
+        updated = await updateScheduleEvent(event.id, fields)
+      } catch (err) {
+        /* PATCH 本身失败：回滚显示原事件，整体重跑可 retry。 */
+        setPendingOps((ops) => ops.filter((op) => op.key !== key))
+        pushFailed(`「${fields.subject ?? event.subject}」保存失败：${errMessage(err)}`, () =>
+          submitUpdate(event, fields, goalDiff),
+        )
+        return
+      }
+      /* PATCH 成功后顺序处理绑定；appliedGoalId 记录服务器实际生效到哪一步。 */
+      let linkFailed = false
+      let appliedGoalId = goalDiff.from
+      if (goalDiff.from !== goalDiff.to) {
+        try {
+          if (goalDiff.from) await unlinkGoalSchedule(goalDiff.from, event.id)
+          appliedGoalId = null
+          if (goalDiff.to) {
+            await linkGoalSchedule(goalDiff.to, event.id)
+            appliedGoalId = goalDiff.to
+          }
+        } catch {
+          linkFailed = true
+        }
+      }
+      const settledEvent: ScheduleEvent = { ...updated, goal_links: goalLinksFor(appliedGoalId) }
+      epochRef.current += 1
+      const settledEpoch = epochRef.current
+      setPendingOps((ops) => ops.map((op) => (op.key === key ? { ...op, optimistic: settledEvent, settledEpoch } : op)))
+      if (linkFailed) {
+        /* 部分成功：无 retry（盲目重跑 unlink 会对不存在的链接报错），对账拉取会带权威值。 */
+        pushFailed(`「${settledEvent.subject}」已保存，但目标绑定更新失败，请重新编辑`)
+      }
+      setReloadKey((k) => k + 1)
+    })()
+  }
+
+  const submitDelete = (event: ScheduleEvent) => {
+    const key = ++opKeyRef.current
+    setPendingOps((ops) => [...ops, { key, type: 'delete', eventId: event.id, optimistic: null, settledEpoch: null }])
+    void (async () => {
+      try {
+        await deleteScheduleEvent(event.id)
+        epochRef.current += 1
+        const settledEpoch = epochRef.current
+        setPendingOps((ops) => ops.map((op) => (op.key === key ? { ...op, settledEpoch } : op)))
+        setReloadKey((k) => k + 1)
+      } catch (err) {
+        setPendingOps((ops) => ops.filter((op) => op.key !== key))
+        pushFailed(`「${event.subject}」删除失败：${errMessage(err)}`, () => submitDelete(event))
+      }
+    })()
+  }
 
   return (
     <div className={workspaceStyles.page}>
@@ -320,6 +526,30 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
 
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
       {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
+      {failedOps.map((failed) => (
+        <Notice
+          key={failed.key}
+          kind="error"
+          actions={
+            failed.retry && (
+              <button
+                className={workspaceStyles.ghostButton}
+                type="button"
+                onClick={() => {
+                  /* 先撤掉本条，再重新提交，避免旧横幅残留。 */
+                  dismissFailed(failed.key)
+                  failed.retry?.()
+                }}
+              >
+                重试
+              </button>
+            )
+          }
+          onClose={() => dismissFailed(failed.key)}
+        >
+          {failed.message}
+        </Notice>
+      ))}
 
       {loading && status === null ? (
         <div className={workspaceStyles.empty}>加载中...</div>
@@ -373,17 +603,19 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
             <ScheduleWeekGrid
               weekDays={weekDays}
               today={today}
-              events={events}
+              events={displayEvents}
               onEventClick={openEvent}
               onCreateSlot={openCreateSlot}
+              pendingIds={pendingIds}
             />
           ) : (
             <ScheduleMonthGrid
               cells={monthCells}
               today={today}
-              events={events}
+              events={displayEvents}
               onEventClick={openEvent}
               onDayClick={openDayWeek}
+              pendingIds={pendingIds}
             />
           )}
 
@@ -407,7 +639,10 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
           progressByGoal={progressByGoal}
           onClose={() => setPopover(null)}
           onEdit={editFromPopover}
-          onDeleted={handleDeleted}
+          onDelete={(deleted) => {
+            setPopover(null)
+            submitDelete(deleted)
+          }}
         />
       )}
 
@@ -418,7 +653,11 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
           prefill={drawer.mode === 'create' ? drawer.prefill : undefined}
           event={drawer.mode === 'edit' ? drawer.event : undefined}
           onClose={() => setDrawer(null)}
-          onSaved={handleSaved}
+          onSubmit={(submission) => {
+            setDrawer(null)
+            if (submission.kind === 'create') submitCreate(submission.input)
+            else submitUpdate(submission.event, submission.fields, submission.goalDiff)
+          }}
         />
       )}
 
@@ -432,6 +671,10 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
       )}
     </div>
   )
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : '未知错误'
 }
 
 function CalendarBigIcon() {

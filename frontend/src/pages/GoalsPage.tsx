@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  type CreateScheduleEventInput,
   type Goal,
   type GoalHorizon,
   type GoalSchedule,
   type GoalStatus,
   type ScheduleEvent,
   createGoal,
+  createScheduleEvent,
   deleteGoal,
   getGoalSchedule,
   linkGoalSchedule,
@@ -491,6 +493,17 @@ function GoalScheduleSection({ goalId, goals }: { goalId: string; goals: Goal[] 
     }
   }
 
+  /* 后台创建（非阻塞）：此入口无日历网格，不做乐观渲染，成功后刷新本节。 */
+  const submitGoalScheduleCreate = async (input: CreateScheduleEventInput) => {
+    setError(null)
+    try {
+      await createScheduleEvent(input)
+      await load()
+    } catch (err) {
+      setError(`日程创建失败：${err instanceof Error ? err.message : '未知错误'}`)
+    }
+  }
+
   const progressText = data?.progress.expectation
     ? `${data.progress.expectation.label} · 本周 ${data.progress.text ?? '0/0'}`
     : '尚未设置期望'
@@ -560,9 +573,10 @@ function GoalScheduleSection({ goalId, goals }: { goalId: string; goals: Goal[] 
           goals={goals}
           presetGoalId={goalId}
           onClose={() => setCreateOpen(false)}
-          onCreated={() => {
+          onSubmit={(submission) => {
             setCreateOpen(false)
-            void load()
+            /* 此入口只会是 create；防御性忽略 update。 */
+            if (submission.kind === 'create') void submitGoalScheduleCreate(submission.input)
           }}
         />
       )}

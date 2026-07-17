@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { type ScheduleEvent, type ScheduleProgress, deleteScheduleEvent } from '@/api/client'
+import { type ScheduleEvent, type ScheduleProgress } from '@/api/client'
 import { eventClock, eventDateKey, monthDayLabel, weekdayShortLabel } from '@/utils/schedule'
 import styles from './ScheduleEventPopover.module.css'
 
@@ -12,16 +12,14 @@ interface ScheduleEventPopoverProps {
   progressByGoal: Record<string, ScheduleProgress>
   onClose: () => void
   onEdit: (event: ScheduleEvent) => void
-  /** 删除成功后回调，页面据此刷新当前区间。 */
-  onDeleted: () => void
+  /** armed 确认后交出删除意图（不 await）；关闭与后台执行由调用方负责。 */
+  onDelete: (event: ScheduleEvent) => void
 }
 
-export function ScheduleEventPopover({ event, anchor, progressByGoal, onClose, onEdit, onDeleted }: ScheduleEventPopoverProps) {
+export function ScheduleEventPopover({ event, anchor, progressByGoal, onClose, onEdit, onDelete }: ScheduleEventPopoverProps) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState<{ left: number; top: number }>({ left: anchor.x, top: anchor.y })
   const [armed, setArmed] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   /* 定位：贴近点击点，收敛到视口内。 */
   useLayoutEffect(() => {
@@ -45,21 +43,12 @@ export function ScheduleEventPopover({ event, anchor, progressByGoal, onClose, o
     ? `${monthDayLabel(dateKey)} ${weekdayShortLabel(dateKey)} · 全天`
     : `${monthDayLabel(dateKey)} ${weekdayShortLabel(dateKey)} · ${eventClock(event.start_local)} – ${eventClock(event.end_local)}`
 
-  const remove = async () => {
+  const remove = () => {
     if (!armed) {
       setArmed(true)
       return
     }
-    setDeleting(true)
-    setError(null)
-    try {
-      await deleteScheduleEvent(event.id)
-      onDeleted()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '删除失败')
-      setDeleting(false)
-      setArmed(false)
-    }
+    onDelete(event)
   }
 
   return (
@@ -98,17 +87,14 @@ export function ScheduleEventPopover({ event, anchor, progressByGoal, onClose, o
         )
       })}
 
-      {error && <div className={styles.error}>{error}</div>}
-
       <div className={styles.actions}>
-        <button className={styles.actBtn} type="button" onClick={() => onEdit(event)} disabled={deleting}>编辑</button>
+        <button className={styles.actBtn} type="button" onClick={() => onEdit(event)}>编辑</button>
         <button
           className={`${styles.actBtn} ${armed ? styles.actDanger : ''}`}
           type="button"
-          onClick={() => void remove()}
-          disabled={deleting}
+          onClick={remove}
         >
-          {deleting ? '删除中...' : armed ? '确认删除？' : '删除'}
+          {armed ? '确认删除？' : '删除'}
         </button>
         {event.web_link && (
           <a className={styles.actBtn} href={event.web_link} target="_blank" rel="noreferrer">在 Outlook 打开 ↗</a>
