@@ -14,6 +14,7 @@ import httpx
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
 PREFER_TIMEZONE = 'outlook.timezone="Asia/Shanghai"'
 REQUEST_TIMEOUT_SECONDS = 15.0
+DEFAULT_RETRY_DELAY_SECONDS = 1.0
 
 
 class GraphNotConnectedError(RuntimeError):
@@ -103,9 +104,10 @@ class GraphClient:
             "Accept": "application/json",
             "Prefer": PREFER_TIMEZONE,
         }
+        normalized_method = method.upper()
         for attempt in range(2):
             response = self._http.request(
-                method,
+                normalized_method,
                 url,
                 headers=headers,
                 json=dict(json) if json is not None else None,
@@ -119,24 +121,47 @@ class GraphClient:
                 if not isinstance(payload, dict):
                     raise GraphHTTPError(502)
                 return payload
-            if attempt == 0 and (status_code == 429 or 500 <= status_code <= 599):
+            if normalized_method == "DELETE" and status_code == 404:
+                return {}
+            if attempt == 0 and _is_retryable(
+                normalized_method,
+                status_code,
+                payload=json,
+            ):
                 self._sleep(_retry_after_seconds(response.headers))
                 continue
             raise GraphHTTPError(status_code)
-        raise GraphHTTPError(500)
+
+
+def _is_retryable(
+    method: str,
+    status_code: int,
+    *,
+    payload: Mapping[str, Any] | None,
+) -> bool:
+    if status_code == 429:
+        return True
+    if not 500 <= status_code <= 599:
+        return False
+    if method in {"GET", "HEAD", "PUT", "PATCH", "DELETE"}:
+        return True
+    if method != "POST" or payload is None:
+        return False
+    transaction_id = payload.get("transactionId")
+    return isinstance(transaction_id, str) and bool(transaction_id.strip())
 
 
 def _retry_after_seconds(headers: Mapping[str, str]) -> float:
     raw = headers.get("Retry-After") or headers.get("retry-after")
     if not raw:
-        return 0.0
+        return DEFAULT_RETRY_DELAY_SECONDS
     try:
         return max(0.0, float(raw))
     except ValueError:
         try:
             retry_at = email.utils.parsedate_to_datetime(raw)
         except (TypeError, ValueError):
-            return 0.0
+            return DEFAULT_RETRY_DELAY_SECONDS
         if retry_at.tzinfo is None:
             retry_at = retry_at.replace(tzinfo=timezone.utc)
         return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())

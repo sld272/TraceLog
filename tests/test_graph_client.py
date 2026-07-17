@@ -99,6 +99,77 @@ class GraphClientTest(unittest.TestCase):
         self.assertEqual("me", result["id"])
         self.assertEqual(2, len(http.calls))
 
+    def test_post_5xx_without_transaction_id_is_not_retried(self) -> None:
+        http = FakeHttp(
+            [
+                FakeResponse(503),
+                FakeResponse(201, {"id": "duplicate-risk"}),
+            ]
+        )
+        client = GraphClient(lambda: "token", http=http, sleep=lambda delay: None)
+
+        with self.assertRaises(GraphHTTPError) as raised:
+            client.create_event({"subject": "没有幂等键"})
+
+        self.assertEqual(503, raised.exception.status_code)
+        self.assertEqual(1, len(http.calls))
+
+    def test_post_5xx_with_transaction_id_retries_same_payload(self) -> None:
+        http = FakeHttp(
+            [
+                FakeResponse(503),
+                FakeResponse(201, {"id": "created-once"}),
+            ]
+        )
+        client = GraphClient(lambda: "token", http=http, sleep=lambda delay: None)
+
+        result = client.create_event(
+            {"subject": "可安全重试", "transactionId": "request-123"}
+        )
+
+        self.assertEqual("created-once", result["id"])
+        self.assertEqual(2, len(http.calls))
+        self.assertEqual(http.calls[0]["json"], http.calls[1]["json"])
+
+    def test_post_429_retries_even_without_transaction_id(self) -> None:
+        http = FakeHttp(
+            [
+                FakeResponse(429, headers={"Retry-After": "1"}),
+                FakeResponse(201, {"id": "created-after-throttle"}),
+            ]
+        )
+        delays: list[float] = []
+        client = GraphClient(lambda: "token", http=http, sleep=delays.append)
+
+        result = client.create_event({"subject": "限流后重试"})
+
+        self.assertEqual("created-after-throttle", result["id"])
+        self.assertEqual([1.0], delays)
+        self.assertEqual(2, len(http.calls))
+
+    def test_delete_5xx_then_404_is_treated_as_success(self) -> None:
+        http = FakeHttp([FakeResponse(503), FakeResponse(404)])
+        client = GraphClient(lambda: "token", http=http, sleep=lambda delay: None)
+
+        client.delete_event("already-deleted")
+
+        self.assertEqual(2, len(http.calls))
+        self.assertEqual(["DELETE", "DELETE"], [call["method"] for call in http.calls])
+
+    def test_patch_5xx_remains_retryable(self) -> None:
+        http = FakeHttp(
+            [
+                FakeResponse(503),
+                FakeResponse(200, {"id": "updated"}),
+            ]
+        )
+        client = GraphClient(lambda: "token", http=http, sleep=lambda delay: None)
+
+        result = client.update_event("updated", {"subject": "绝对值更新"})
+
+        self.assertEqual("updated", result["id"])
+        self.assertEqual(2, len(http.calls))
+
     def test_410_is_exposed_to_schedule_service(self) -> None:
         http = FakeHttp([FakeResponse(410)])
         client = GraphClient(lambda: "token", http=http)

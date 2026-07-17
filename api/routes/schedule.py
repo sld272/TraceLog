@@ -41,6 +41,7 @@ class CreateEventRequest(BaseModel):
     all_day: bool = False
     goal_id: str | None = None
     account_id: str | None = Field(default=None, min_length=1, max_length=200)
+    client_request_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class DeleteLocalAccountRequest(BaseModel):
@@ -257,6 +258,7 @@ async def create_event(request: CreateEventRequest):
             all_day=request.all_day,
             goal_id=request.goal_id,
             account_id=request.account_id,
+            client_request_id=request.client_request_id,
         )
     except goal_schedule_service.GoalNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

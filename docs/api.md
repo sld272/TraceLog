@@ -38,7 +38,7 @@
 | GET | `/schedule/auth/device-status` | 返回 `pending / ok / error`，成功时附账户，失败时附安全错误信息 |
 | POST | `/schedule/auth/logout` | 取消等待中的登录，清 token、delta 状态和事件缓存 |
 | GET | `/schedule/events?start=YYYY-MM-DD&end=YYYY-MM-DD` | 从本地缓存返回与闭区间相交的未取消事件数组；每项含 `goal_links`。连接状态放在 `X-Schedule-Configured`、`X-Schedule-Connected` 响应头 |
-| POST | `/schedule/events` | `{subject,date,start_time?,end_time?,all_day?,goal_id?}`；写穿 Graph，可在创建时绑定目标；未连接返回 409 |
+| POST | `/schedule/events` | `{subject,date,start_time?,end_time?,all_day?,goal_id?,account_id?,client_request_id?}`；写穿 Graph，可在创建时绑定目标；前端会在同一次创建及其重试中复用 `client_request_id`，避免 Outlook 重复创建；未连接返回 409 |
 | PATCH | `/schedule/events/{event_id}` | 可更新 `subject / date / start_time / end_time / all_day`，写穿 Graph 后刷新缓存 |
 | DELETE | `/schedule/events/{event_id}` | 从 Graph 删除事件，并清本地缓存与目标链接 |
 | POST | `/schedule/sync` | 手动执行 delta 同步，返回 `ok`、连接状态、`upserted`、`deleted`、`last_sync_at`；未连接时 `ok=false` |

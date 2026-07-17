@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import uuid
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -272,11 +273,13 @@ class ScheduleServiceTest(unittest.TestCase):
             start_time=time(14, 0),
             end_time=time(15, 0),
             goal_id=goal["id"],
+            client_request_id="request-123",
         )
         listed = service.list_events(date(2026, 7, 16), date(2026, 7, 16))
 
         self.assertEqual("created-1", created["id"])
         self.assertEqual("评审 P3", graph.created_payloads[0]["subject"])
+        self.assertEqual("request-123", graph.created_payloads[0]["transactionId"])
         self.assertEqual(["created-1"], [event["id"] for event in listed["events"]])
         expected_links = [{"goal_id": goal["id"], "goal_title": "完成 P4"}]
         self.assertEqual(expected_links, created["goal_links"])
@@ -660,6 +663,27 @@ class ScheduleServiceTest(unittest.TestCase):
                 "SELECT 1 FROM meta WHERE key = 'schedule_local_migration_prompted'"
             )
         )
+
+    def test_migration_retry_reuses_transaction_id_derived_from_local_event(self) -> None:
+        graph = FakeGraph(fail_create_at=1)
+        service = self._service(graph)
+        service.create_local_account()
+        local = service.create_event(
+            subject="超时后重跑迁移",
+            event_date=date(2026, 7, 16),
+            account_id="local",
+        )
+
+        first = service.migrate_local_events({})
+        second = service.migrate_local_events({})
+
+        self.assertEqual("partial", first["status"])
+        self.assertEqual("ok", second["status"])
+        transaction_ids = [payload["transactionId"] for payload in graph.created_payloads]
+        self.assertEqual(2, len(transaction_ids))
+        self.assertEqual(transaction_ids[0], transaction_ids[1])
+        uuid.UUID(transaction_ids[0])
+        self.assertNotEqual(local["id"], transaction_ids[0])
 
     def test_migration_prompt_pending_checks_each_condition_and_dismisses(self) -> None:
         graph = FakeGraph()

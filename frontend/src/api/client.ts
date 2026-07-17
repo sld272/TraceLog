@@ -1347,6 +1347,8 @@ export interface CreateScheduleEventInput {
   goal_id?: string
   /** 保存到的账号（'outlook' | 'local'）；缺省由后端路由（已连接→Outlook，否则本地）。 */
   account_id?: string
+  /** 同一次创建及其重试复用的幂等请求号，避免 Outlook 重复创建。 */
+  client_request_id?: string
 }
 
 /** A goal's weekly schedule expectation ({ period, target, label }). */

@@ -489,7 +489,11 @@ class ApiScheduleTest(unittest.TestCase):
                 return "access-token"
 
         class CreatingGraph:
+            def __init__(self):
+                self.created_payloads = []
+
             def create_event(self, payload):
+                self.created_payloads.append(payload)
                 return {
                     "id": "created-api",
                     "subject": payload["subject"],
@@ -499,9 +503,10 @@ class ApiScheduleTest(unittest.TestCase):
                 }
 
         goal = goal_service.create_goal("完成 P4", None, "short")
+        graph = CreatingGraph()
         service = ScheduleService(
             auth=ConnectedAuth(),
-            graph_factory=lambda token_provider: CreatingGraph(),
+            graph_factory=lambda token_provider: graph,
             clock=lambda: 1.0,
         )
 
@@ -513,6 +518,7 @@ class ApiScheduleTest(unittest.TestCase):
                         "subject": "API 创建日程",
                         "date": "2026-07-16",
                         "goal_id": goal["id"],
+                        "client_request_id": "request-api-123",
                     },
                 )
 
@@ -521,6 +527,7 @@ class ApiScheduleTest(unittest.TestCase):
             [{"goal_id": goal["id"], "goal_title": "完成 P4"}],
             response.json()["goal_links"],
         )
+        self.assertEqual("request-api-123", graph.created_payloads[0]["transactionId"])
 
 
 class ScheduleSyncLifecycleTest(unittest.IsolatedAsyncioTestCase):

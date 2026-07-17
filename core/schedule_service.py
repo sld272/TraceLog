@@ -25,6 +25,10 @@ WINDOW_START_META_KEY = "graph.window_start"
 WINDOW_END_META_KEY = "graph.window_end"
 LOCAL_MIGRATION_PROMPTED_META_KEY = "schedule_local_migration_prompted"
 MIGRATION_CONFLICT_WINDOW_SECONDS = 60.0
+LOCAL_MIGRATION_TRANSACTION_NAMESPACE = uuid.uuid5(
+    uuid.NAMESPACE_URL,
+    "tracelog:schedule:local-migration",
+)
 _SYNC_LOCK = threading.Lock()
 
 
@@ -427,6 +431,7 @@ class ScheduleService:
         all_day: bool = False,
         goal_id: str | None = None,
         account_id: str | None = None,
+        client_request_id: str | None = None,
     ) -> dict[str, Any]:
         if goal_id is not None and db.query_one("SELECT 1 FROM goals WHERE id = ?", (goal_id,)) is None:
             raise goal_schedule_service.GoalNotFoundError("goal not found")
@@ -446,6 +451,7 @@ class ScheduleService:
             )
         else:
             assert graph is not None
+            payload["transactionId"] = _create_transaction_id(client_request_id)
             raw_event = graph.create_event(payload)
             normalized = _normalize_graph_event(raw_event, synced_at=self._clock())
         with db.transaction() as conn:
@@ -786,7 +792,21 @@ def _local_event_graph_payload(event: Mapping[str, Any]) -> dict[str, Any]:
             "timeZone": LOCAL_TIMEZONE_NAME,
         },
         "isAllDay": bool(event["all_day"]),
+        "transactionId": str(
+            uuid.uuid5(LOCAL_MIGRATION_TRANSACTION_NAMESPACE, str(event["id"]))
+        ),
     }
+
+
+def _create_transaction_id(client_request_id: str | None) -> str:
+    if client_request_id is None:
+        return str(uuid.uuid4())
+    transaction_id = client_request_id.strip()
+    if not transaction_id:
+        raise ValueError("client_request_id 不能为空")
+    if len(transaction_id) > 200:
+        raise ValueError("client_request_id 不能超过 200 个字符")
+    return transaction_id
 
 
 def _validate_date_range(start_date: date, end_date: date) -> None:

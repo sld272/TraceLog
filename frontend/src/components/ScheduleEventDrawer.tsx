@@ -101,7 +101,12 @@ export function ScheduleEventDrawer({
     } else {
       onSubmit({
         kind: 'create',
-        input: { ...fields, goal_id: goalId || undefined, account_id: accountId || undefined },
+        input: {
+          ...fields,
+          goal_id: goalId || undefined,
+          account_id: accountId || undefined,
+          client_request_id: crypto.randomUUID(),
+        },
       })
     }
   }
