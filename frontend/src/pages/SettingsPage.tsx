@@ -809,7 +809,7 @@ function ScheduleSettingsPanel() {
     try {
       await scheduleLogout()
       invalidateScheduleStatusCache()
-      setNotice('已退出 Microsoft 登录。')
+      setNotice('已退出 Microsoft 登录。目标关联会在重新登录同一账户后自动恢复。')
       await reload()
     } catch (err) {
       setError(err instanceof Error ? err.message : '退出登录失败')

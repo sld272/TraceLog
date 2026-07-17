@@ -36,7 +36,7 @@
 | POST | `/schedule/auth/client-id` | `{client_id}`；保存新 ID，替换已有 ID 时先退出旧登录并清缓存 |
 | POST | `/schedule/auth/device-start` | 启动设备码流，返回 `user_code`、`verification_uri`、`expires_in`；已有登录流程时返回 409 |
 | GET | `/schedule/auth/device-status` | 返回 `pending / ok / error`，成功时附账户，失败时附安全错误信息 |
-| POST | `/schedule/auth/logout` | 取消等待中的登录，清 token、delta 状态和事件缓存 |
+| POST | `/schedule/auth/logout` | 取消等待中的登录，清 token、delta 状态和 Outlook 事件缓存；保留目标关联，重新登录同一账户并同步后自动恢复 |
 | GET | `/schedule/events?start=YYYY-MM-DD&end=YYYY-MM-DD` | 从本地缓存返回与闭区间相交的未取消事件数组；每项含 `goal_links`。连接状态放在 `X-Schedule-Configured`、`X-Schedule-Connected` 响应头 |
 | POST | `/schedule/events` | `{subject,date,start_time?,end_time?,all_day?,goal_id?,account_id?,client_request_id?}`；写穿 Graph，可在创建时绑定目标；前端会在同一次创建及其重试中复用 `client_request_id`，避免 Outlook 重复创建；未连接返回 409 |
 | PATCH | `/schedule/events/{event_id}` | 可更新 `subject / date / start_time / end_time / all_day`，写穿 Graph 后刷新缓存 |

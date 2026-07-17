@@ -508,15 +508,6 @@ class ScheduleService:
             self.auth.logout()
             with db.transaction() as conn:
                 conn.execute(
-                    """
-                    DELETE FROM goal_schedule_links
-                    WHERE event_id IN (
-                        SELECT id FROM schedule_events WHERE account_id = ?
-                    )
-                    """,
-                    (OUTLOOK_ACCOUNT_ID,),
-                )
-                conn.execute(
                     "DELETE FROM schedule_events WHERE account_id = ?",
                     (OUTLOOK_ACCOUNT_ID,),
                 )

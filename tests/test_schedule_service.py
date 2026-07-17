@@ -742,18 +742,21 @@ class ScheduleServiceTest(unittest.TestCase):
             [event["id"] for event in goal_schedule_service.links_for_goal(goal["id"])],
         )
 
-    def test_outlook_logout_removes_only_outlook_events(self) -> None:
+    def test_outlook_logout_preserves_links_for_same_account_relogin(self) -> None:
         graph = FakeGraph()
         service = self._service(graph)
         service.create_local_account()
+        goal = goal_service.create_goal("退出登录仍保留绑定", None, "short")
         local = service.create_event(
             subject="退出后保留",
             event_date=date(2026, 7, 16),
             account_id="local",
+            goal_id=goal["id"],
         )
         outlook = service.create_event(
             subject="退出后清理",
             event_date=date(2026, 7, 16),
+            goal_id=goal["id"],
         )
 
         service.logout()
@@ -764,6 +767,37 @@ class ScheduleServiceTest(unittest.TestCase):
         )
         self.assertIsNone(
             db.query_one("SELECT 1 FROM schedule_events WHERE id = ?", (outlook["id"],))
+        )
+        self.assertEqual(
+            {local["id"], outlook["id"]},
+            {
+                str(row["event_id"])
+                for row in db.query_all(
+                    "SELECT event_id FROM goal_schedule_links WHERE goal_id = ?",
+                    (goal["id"],),
+                )
+            },
+        )
+        self.assertEqual(
+            [local["id"]],
+            [event["id"] for event in goal_schedule_service.links_for_goal(goal["id"])],
+        )
+
+        self.auth.connected = True
+        graph.delta_results.append(
+            {
+                "events": [graph_event(outlook["id"], "退出后清理")],
+                "delta_link": "delta-after-relogin",
+            }
+        )
+        service.sync()
+
+        self.assertEqual(
+            {local["id"], outlook["id"]},
+            {
+                event["id"]
+                for event in goal_schedule_service.links_for_goal(goal["id"])
+            },
         )
 
 
