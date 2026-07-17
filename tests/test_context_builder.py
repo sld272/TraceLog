@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from unittest.mock import patch
 
-from core import context_builder, db, goal_schedule_service, goal_service, logging_service, memory_unit_service, memory_view_service, soul_service, web_search_gate, web_search_service
+from core import context_builder, db, goal_schedule_service, goal_service, logging_service, memory_unit_service, memory_view_service, query_rewriter, schedule_context, soul_service, turn_prep, web_search_gate, web_search_service
 from core.schedule_service import ScheduleService
 
 
@@ -92,6 +92,9 @@ class ContextBuilderTest(unittest.TestCase):
 
         event = self._last_event("context_assembly_result")
         self.assertEqual("public_post", event["context_type"])
+        # No calendar account exists in this fixture, so the schedule section is
+        # gated off entirely — a user who never enabled the schedule feature gets
+        # no schedule block.
         self.assertEqual(
             ["# 长期目标", "# 当前状态"],
             [item["title"] for item in event["sections"]],
@@ -156,6 +159,54 @@ class ContextBuilderTest(unittest.TestCase):
         call_turn_prep.assert_called_once()
         search.assert_called_once()
 
+    def test_public_context_injects_recent_before_prep_and_mentions_after_rewrite(self) -> None:
+        recent = schedule_context.RecentScheduleContext(
+            section="# 近期日程\n\n本周共 1 项安排",
+            event_ids=frozenset({"recent-event"}),
+        )
+        rewrite = query_rewriter.RewrittenQuery(
+            raw_query="聊聊马拉松",
+            semantic_query="聊聊马拉松",
+            keywords=["马拉松"],
+            used_rewrite=True,
+        )
+        prep = turn_prep.TurnPrep(
+            rewritten=rewrite,
+            search_decision=web_search_gate.default_decision("disabled"),
+        )
+        with (
+            patch(
+                "core.context_builder.schedule_context.build_recent_schedule_context",
+                return_value=recent,
+            ),
+            patch("core.context_builder.turn_prep.prepare_turn", return_value=prep) as prepare,
+            patch(
+                "core.context_builder.schedule_context.build_mentioned_schedule_section",
+                return_value="# 提及的日程\n\n- [3 天后] 马拉松",
+            ) as mentioned,
+        ):
+            built = context_builder.build_context(
+                query="聊聊马拉松",
+                client=object(),
+                model="fake-model",
+                today=date(2026, 7, 17),
+            )
+
+        hint = prepare.call_args.kwargs["context_hint"]
+        self.assertIn("# 近期日程", hint)
+        self.assertNotIn("# 提及的日程", hint)
+        mentioned.assert_called_once_with(
+            ["马拉松"],
+            exclude_event_ids=frozenset({"recent-event"}),
+            context_date=date(2026, 7, 17),
+        )
+        self.assertIn("# 近期日程", built.shared_context)
+        self.assertIn("# 提及的日程", built.shared_context)
+        self.assertLess(
+            built.shared_context.index("# 近期日程"),
+            built.shared_context.index("# 提及的日程"),
+        )
+
     def test_public_context_includes_upcoming_schedule_goals_and_weekly_progress(self) -> None:
         zone = ZoneInfo("Asia/Shanghai")
         goal = goal_service.create_goal("每周健身", None, "short")
@@ -172,7 +223,7 @@ class ContextBuilderTest(unittest.TestCase):
             goal_schedule_service.link(goal["id"], event_id)
 
         service = ScheduleService(auth=ConnectedScheduleAuth())
-        with patch("core.context_builder.ScheduleService", return_value=service):
+        with patch("core.schedule_context.ScheduleService", return_value=service):
             built = context_builder.build_context(today=date(2026, 7, 16))
 
         self.assertIn("# 近期日程", built.shared_context)
@@ -192,7 +243,7 @@ class ContextBuilderTest(unittest.TestCase):
             goal_id=goal["id"],
         )
 
-        with patch("core.context_builder.ScheduleService", return_value=service):
+        with patch("core.schedule_context.ScheduleService", return_value=service):
             built = context_builder.build_context(today=date(2026, 7, 16))
 
         self.assertEqual("local", local["provider"])
@@ -225,6 +276,12 @@ class ContextBuilderTest(unittest.TestCase):
 
     def _insert_schedule_event(self, event_id: str, subject: str, start: datetime) -> None:
         end = start + timedelta(hours=1)
+        db.execute(
+            """
+            INSERT OR IGNORE INTO calendar_accounts(id, provider, display_name, created_at)
+            VALUES ('outlook', 'outlook', 'Outlook', 1)
+            """
+        )
         db.execute(
             """
             INSERT INTO schedule_events(

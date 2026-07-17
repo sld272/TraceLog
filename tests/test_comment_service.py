@@ -16,6 +16,8 @@ from core import (
     memory_read,
     memory_unit_service,
     memory_view_service,
+    query_rewriter,
+    schedule_context,
     soul_relationship_memory,
     soul_service,
     suggestion_pipeline,
@@ -198,6 +200,54 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIn("我陪你继续拆", context.context)
         self.assertNotIn("继续聊练歌", context.context)
         self.assertEqual(["继续聊练歌"], [message.content for message in context.messages])
+
+    def test_build_comment_context_injects_recent_before_prep_and_mentions_after_rewrite(self) -> None:
+        recent = schedule_context.RecentScheduleContext(
+            section="# 近期日程\n\n本周共 1 项安排",
+            event_ids=frozenset({"recent-event"}),
+        )
+        rewrite = query_rewriter.RewrittenQuery(
+            raw_query="聊聊马拉松",
+            semantic_query="聊聊马拉松",
+            keywords=["马拉松"],
+            used_rewrite=True,
+        )
+        prep = turn_prep.TurnPrep(
+            rewritten=rewrite,
+            search_decision=web_search_gate.default_decision("disabled"),
+        )
+        with (
+            patch(
+                "core.comment_service.schedule_context.build_recent_schedule_context",
+                return_value=recent,
+            ),
+            patch(
+                "core.comment_service.reply_context.prepare_turn_with_prefetch",
+                return_value=(prep, None),
+            ) as prepare,
+            patch(
+                "core.comment_service.schedule_context.build_mentioned_schedule_section",
+                return_value="# 提及的日程\n\n- [3 天后] 马拉松",
+            ) as mentioned,
+            patch(
+                "core.comment_service.memory_read.memory_section_with_citations",
+                return_value=memory_read.MemorySection(""),
+            ),
+        ):
+            context = comment_service.build_comment_context(
+                "20260525-001", "拾迹者", "聊聊马拉松"
+            )
+
+        hint = prepare.call_args.kwargs["context_hint"]
+        self.assertIn("# 近期日程", hint)
+        self.assertNotIn("# 提及的日程", hint)
+        mentioned.assert_called_once_with(
+            ["马拉松"],
+            exclude_event_ids=frozenset({"recent-event"}),
+        )
+        self.assertIn("# 近期日程", context.context)
+        self.assertIn("# 提及的日程", context.context)
+        self.assertLess(context.context.index("# 近期日程"), context.context.index("# 提及的日程"))
 
     def test_other_soul_user_comment_excluded_from_memory_section(self) -> None:
         # All public-post comments share the global/public bucket, so without the

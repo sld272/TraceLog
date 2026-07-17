@@ -9,7 +9,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
-from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, soul_service, suggestion_pipeline, vision_service
+from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, schedule_context, soul_service, suggestion_pipeline, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -314,6 +314,9 @@ def build_chat_context(
     sections: list[str] = []
 
     sections.extend(goal_service.prompt_sections())
+    recent_schedule = schedule_context.build_recent_schedule_context()
+    if recent_schedule.section:
+        sections.append(recent_schedule.section)
 
     timings: dict[str, float | bool] = {}
     trace_ctx = {"thread_id": thread_id, "soul_name": thread.soul_name}
@@ -339,6 +342,12 @@ def build_chat_context(
         trace_context=trace_ctx,
     )
     rewrite = prep.rewritten
+    mentioned_schedule = schedule_context.build_mentioned_schedule_section(
+        rewrite.keywords,
+        exclude_event_ids=recent_schedule.event_ids,
+    )
+    if mentioned_schedule:
+        sections.append(mentioned_schedule)
     web_section = reply_context.run_web_search_section(
         prep.search_decision,
         channel="chat",

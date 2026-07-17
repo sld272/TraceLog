@@ -16,6 +16,7 @@ from core import (
     query_rewriter,
     record_service,
     reply_context,
+    schedule_context,
     soul_service,
     suggestion_pipeline,
     vision_service,
@@ -262,6 +263,9 @@ def build_comment_context(
     sections: list[str] = []
 
     sections.extend(goal_service.prompt_sections())
+    recent_schedule = schedule_context.build_recent_schedule_context()
+    if recent_schedule.section:
+        sections.append(recent_schedule.section)
 
     post = _get_post(post_id)
     if post is not None:
@@ -304,6 +308,12 @@ def build_comment_context(
         excluded_sources=excluded_comment_sources,
         trace_context=trace_ctx,
     )
+    mentioned_schedule = schedule_context.build_mentioned_schedule_section(
+        prep.rewritten.keywords,
+        exclude_event_ids=recent_schedule.event_ids,
+    )
+    if mentioned_schedule:
+        sections.append(mentioned_schedule)
     web_section = reply_context.run_web_search_section(
         prep.search_decision,
         channel="comment",
@@ -932,4 +942,3 @@ def _post_content_for_llm(post) -> str:
         return f"{content}\n\n{vision_context}" if content.strip() else vision_context
     attachment_count = len(attachment_service.list_post_attachments(str(post["id"])))
     return attachment_service.content_for_llm(content, attachment_count)
-

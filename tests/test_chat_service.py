@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, memory_read, memory_unit_service, memory_view_service, reply_context, soul_relationship_memory, soul_service, suggestion_pipeline, turn_prep, web_search_gate, web_search_service
+from core import chat_service, db, logging_service, memory_read, memory_unit_service, memory_view_service, query_rewriter, reply_context, schedule_context, soul_relationship_memory, soul_service, suggestion_pipeline, turn_prep, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
 from tests.helpers import FakeStreamingClient, require_not_none
@@ -203,6 +203,53 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIn("最近在准备期末考试", context.context)  # v2 memory in # 记忆
         self.assertNotIn("聊聊考试", context.context)      # prior turn not echoed as background
         self.assertEqual(["聊聊考试"], [message.content for message in context.messages])
+
+    def test_build_chat_context_injects_recent_before_prep_and_mentions_after_rewrite(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        recent = schedule_context.RecentScheduleContext(
+            section="# 近期日程\n\n本周共 1 项安排",
+            event_ids=frozenset({"recent-event"}),
+        )
+        rewrite = query_rewriter.RewrittenQuery(
+            raw_query="聊聊马拉松",
+            semantic_query="聊聊马拉松",
+            keywords=["马拉松"],
+            used_rewrite=True,
+        )
+        prep = turn_prep.TurnPrep(
+            rewritten=rewrite,
+            search_decision=web_search_gate.default_decision("disabled"),
+        )
+        with (
+            patch(
+                "core.chat_service.schedule_context.build_recent_schedule_context",
+                return_value=recent,
+            ),
+            patch(
+                "core.chat_service.reply_context.prepare_turn_with_prefetch",
+                return_value=(prep, None),
+            ) as prepare,
+            patch(
+                "core.chat_service.schedule_context.build_mentioned_schedule_section",
+                return_value="# 提及的日程\n\n- [3 天后] 马拉松",
+            ) as mentioned,
+            patch(
+                "core.chat_service.memory_read.memory_section_with_citations",
+                return_value=memory_read.MemorySection(""),
+            ),
+        ):
+            context = chat_service.build_chat_context(thread.id, "聊聊马拉松")
+
+        hint = prepare.call_args.kwargs["context_hint"]
+        self.assertIn("# 近期日程", hint)
+        self.assertNotIn("# 提及的日程", hint)
+        mentioned.assert_called_once_with(
+            ["马拉松"],
+            exclude_event_ids=frozenset({"recent-event"}),
+        )
+        self.assertIn("# 近期日程", context.context)
+        self.assertIn("# 提及的日程", context.context)
+        self.assertLess(context.context.index("# 近期日程"), context.context.index("# 提及的日程"))
 
     def test_build_chat_context_overlaps_prep_and_prefetch(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
