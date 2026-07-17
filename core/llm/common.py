@@ -60,6 +60,8 @@ def call_json_completion(
     parsed: dict | None = None
     status = "ok"
     error: dict | str | None = None
+    usage: dict | None = None
+    finish_reason: str | None = None
 
     try:
         kwargs: dict[str, Any] = {
@@ -70,6 +72,8 @@ def call_json_completion(
         if response_format is not None:
             kwargs["response_format"] = response_format
         response = client.chat.completions.create(**kwargs)
+        usage = _completion_usage(response)
+        finish_reason = _completion_finish_reason(response)
         response_content = response.choices[0].message.content
         parsed = parser(response_content)
         if parsed is None:
@@ -97,6 +101,8 @@ def call_json_completion(
             error=error,
             context=trace_context,
             response_format=response_format,
+            usage=usage,
+            finish_reason=finish_reason,
         )
 
 
@@ -123,6 +129,8 @@ def stream_completion(
     chunks: list[str] = []
     status = "ok"
     error: dict | str | None = None
+    usage: dict | None = None
+    finish_reason: str | None = None
 
     try:
         stream = client.chat.completions.create(
@@ -132,6 +140,12 @@ def stream_completion(
             stream=True,
         )
         for chunk in stream:
+            chunk_usage = _completion_usage(chunk)
+            if chunk_usage is not None:
+                usage = chunk_usage
+            chunk_finish_reason = _completion_finish_reason(chunk)
+            if chunk_finish_reason is not None:
+                finish_reason = chunk_finish_reason
             text = _stream_delta_text(chunk)
             if text:
                 chunks.append(text)
@@ -154,6 +168,8 @@ def stream_completion(
             response_content="".join(chunks),
             error=error,
             context=trace_context,
+            usage=usage,
+            finish_reason=finish_reason,
         )
 
 
@@ -168,6 +184,27 @@ def _stream_delta_text(chunk: Any) -> str:
     delta = getattr(choices[0], "delta", None)
     content = getattr(delta, "content", None) if delta is not None else None
     return content or ""
+
+
+def _completion_usage(response: Any) -> dict | None:
+    """Best-effort extraction across OpenAI and compatible response objects."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    result = {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+    return result if any(value is not None for value in result.values()) else None
+
+
+def _completion_finish_reason(response: Any) -> str | None:
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return None
+    value = getattr(choices[0], "finish_reason", None)
+    return str(value) if value is not None else None
 
 
 def _invalid_response_status(content: str | None) -> str:

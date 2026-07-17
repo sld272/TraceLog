@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,9 +14,9 @@ from pydantic import BaseModel, Field
 
 from api import deps
 from api.deps import run_sync
-from core import db, record_service, vector_index_service, vectorstore, vision_service, web_search_service
+from core import db, logging_service, record_service, vector_index_service, vectorstore, vision_service, web_search_service
 from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
-from core.logging_service import DEFAULT_HISTORY_RETENTION
+from core.logging_service import DEFAULT_HISTORY_MAX_BYTES, DEFAULT_HISTORY_MAX_DAYS, DEFAULT_ROTATE_MAX_BYTES
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
 
@@ -24,7 +26,10 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 class LoggingSettings(BaseModel):
     enabled: bool = True
     level: str = "INFO"
-    history_retention: int = Field(default=DEFAULT_HISTORY_RETENTION, ge=0, le=1000)
+    capture_content: bool = True
+    rotate_max_bytes: int = Field(default=DEFAULT_ROTATE_MAX_BYTES, ge=1024 * 1024, le=100 * 1024 * 1024)
+    history_max_bytes: int = Field(default=DEFAULT_HISTORY_MAX_BYTES, ge=10 * 1024 * 1024, le=1024 * 1024 * 1024)
+    history_max_days: int = Field(default=DEFAULT_HISTORY_MAX_DAYS, ge=1, le=365)
 
 
 class VisionSettings(BaseModel):
@@ -88,6 +93,21 @@ async def update_model_settings(request: ModelSettingsRequest):
 @router.get("/workspace")
 async def get_workspace_status():
     return await run_sync(_workspace_status)
+
+
+@router.get("/logs")
+async def get_log_status():
+    return await run_sync(logging_service.get_log_stats)
+
+
+@router.post("/logs/clear")
+async def clear_logs():
+    return await run_sync(logging_service.clear_logs)
+
+
+@router.post("/logs/reveal")
+async def reveal_logs():
+    return await run_sync(_reveal_logs)
 
 
 @router.post("/vector-index/retry")
@@ -256,6 +276,32 @@ def _workspace_status() -> dict[str, Any]:
             "history_count": len(list(history_dir.glob("*.jsonl"))) if history_dir.exists() else 0,
         },
     }
+
+
+def _reveal_logs() -> dict[str, Any]:
+    log_dir = db.WORKSPACE_DIR / "logs"
+    path = str(log_dir.resolve())
+    try:
+        log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            log_dir.chmod(0o700)
+        except OSError:
+            pass
+        if sys.platform == "darwin":
+            command = ["open", path]
+        elif sys.platform.startswith("win"):
+            command = ["explorer", path]
+        else:
+            command = ["xdg-open", path]
+        subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        return {"ok": True, "path": path}
+    except (OSError, subprocess.SubprocessError):
+        return {"ok": False, "path": path}
 
 
 def _vector_index_status() -> dict[str, Any]:

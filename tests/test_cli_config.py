@@ -27,7 +27,15 @@ class CliConfigTest(unittest.TestCase):
                     "base_url": "https://example.invalid/v1",
                     "model": "model",
                     "embedding_model": "embedding",
-                    "logging": {"llm_payload": "off", "preview_chars": 12, "history_retention": 2},
+                    "logging": {
+                        "llm_payload": "off",
+                        "preview_chars": 12,
+                        "history_retention": 2,
+                        "capture_content": False,
+                        "rotate_max_bytes": 1,
+                        "history_max_bytes": 10**20,
+                        "history_max_days": 999,
+                    },
                 }
             ),
             encoding="utf-8",
@@ -43,7 +51,11 @@ class CliConfigTest(unittest.TestCase):
         self.assertIsNone(loaded["secondary_base_url"])
         self.assertNotIn("llm_payload", loaded["logging"])
         self.assertNotIn("preview_chars", loaded["logging"])
-        self.assertEqual(2, loaded["logging"]["history_retention"])
+        self.assertNotIn("history_retention", loaded["logging"])
+        self.assertFalse(loaded["logging"]["capture_content"])
+        self.assertEqual(1024 * 1024, loaded["logging"]["rotate_max_bytes"])
+        self.assertEqual(1024 * 1024 * 1024, loaded["logging"]["history_max_bytes"])
+        self.assertEqual(365, loaded["logging"]["history_max_days"])
         self.assertEqual(
             {"enabled": False, "model": None, "api_key": None, "base_url": None},
             loaded["vision"],

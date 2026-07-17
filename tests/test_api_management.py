@@ -45,7 +45,14 @@ class ApiManagementTest(unittest.TestCase):
                     "base_url": "https://example.invalid/v1",
                     "model": "test-model",
                     "embedding_model": "test-embedding",
-                    "logging": {"enabled": False, "level": "INFO", "history_retention": 3},
+                    "logging": {
+                        "enabled": False,
+                        "level": "INFO",
+                        "capture_content": True,
+                        "rotate_max_bytes": 10 * 1024 * 1024,
+                        "history_max_bytes": 50 * 1024 * 1024,
+                        "history_max_days": 14,
+                    },
                 }
             ),
             encoding="utf-8",
@@ -277,7 +284,14 @@ class ApiManagementTest(unittest.TestCase):
                     "embedding_model": "updated-embedding",
                     "reuse_embedding_config": False,
                     "embedding_base_url": "https://embeddings.invalid/v1",
-                    "logging": {"enabled": True, "level": "DEBUG", "history_retention": 7},
+                    "logging": {
+                        "enabled": True,
+                        "level": "DEBUG",
+                        "capture_content": False,
+                        "rotate_max_bytes": 2 * 1024 * 1024,
+                        "history_max_bytes": 20 * 1024 * 1024,
+                        "history_max_days": 7,
+                    },
                     "vision": {
                         "enabled": True,
                         "model": "vision-model",
@@ -310,6 +324,17 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("sk-test-secret-123456", saved["api_key"])
         self.assertEqual("https://updated.invalid/v1", saved["base_url"])
         self.assertNotIn("job_worker_concurrency", saved)
+        self.assertEqual(
+            {
+                "enabled": True,
+                "level": "DEBUG",
+                "capture_content": False,
+                "rotate_max_bytes": 2 * 1024 * 1024,
+                "history_max_bytes": 20 * 1024 * 1024,
+                "history_max_days": 7,
+            },
+            saved["logging"],
+        )
         self.assertEqual({"enabled": True, "model": "vision-model", "api_key": None, "base_url": None}, saved["vision"])
         self.assertEqual(
             {
@@ -340,7 +365,14 @@ class ApiManagementTest(unittest.TestCase):
             "model": "updated-model",
             "embedding_model": "updated-embedding",
             "reuse_embedding_config": True,
-            "logging": {"enabled": False, "level": "INFO", "history_retention": 3},
+            "logging": {
+                "enabled": False,
+                "level": "INFO",
+                "capture_content": True,
+                "rotate_max_bytes": 10 * 1024 * 1024,
+                "history_max_bytes": 50 * 1024 * 1024,
+                "history_max_days": 14,
+            },
         }
 
         with self._client() as client:
@@ -411,6 +443,35 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIsNone(cleared["secondary_base_url"])
         self.assertFalse(clear_response.json()["secondary_configured"])
 
+    def test_logging_routes_report_reveal_and_clear_local_files(self) -> None:
+        logging_service.init_logging({"enabled": True, "capture_content": False})
+        logging_service.log_event("api_log_probe", text="payload")
+        history_dir = self.workspace / "logs" / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        (history_dir / "existing.jsonl").write_text("{}\n", encoding="utf-8")
+
+        with self._client() as client:
+            status_response = client.get("/settings/logs")
+            with patch("api.routes.settings.subprocess.Popen") as popen:
+                reveal_response = client.post("/settings/logs/reveal")
+            clear_response = client.post("/settings/logs/clear")
+            with patch("api.routes.settings.subprocess.Popen", side_effect=OSError("unavailable")):
+                reveal_failure = client.post("/settings/logs/reveal")
+
+        self.assertEqual(200, status_response.status_code)
+        status = status_response.json()
+        self.assertTrue(status["enabled"])
+        self.assertFalse(status["capture_content"])
+        self.assertEqual(2, status["file_count"])
+        self.assertGreater(status["total_bytes"], 0)
+        self.assertEqual(str((self.workspace / "logs").resolve()), status["path"])
+
+        self.assertEqual({"ok": True, "path": status["path"]}, reveal_response.json())
+        popen.assert_called_once()
+        self.assertEqual(1, clear_response.json()["file_count"])
+        self.assertEqual(0, clear_response.json()["total_bytes"])
+        self.assertEqual({"ok": False, "path": status["path"]}, reveal_failure.json())
+
     def test_settings_save_reports_reload_failure_without_requiring_restart(self) -> None:
         with self._client() as client:
             with patch("api.deps.reload_runtime", side_effect=RuntimeError("reload boom")):
@@ -422,7 +483,14 @@ class ApiManagementTest(unittest.TestCase):
                         "model": "updated-model",
                         "embedding_model": "updated-embedding",
                         "reuse_embedding_config": True,
-                        "logging": {"enabled": False, "level": "INFO", "history_retention": 3},
+                        "logging": {
+                            "enabled": False,
+                            "level": "INFO",
+                            "capture_content": True,
+                            "rotate_max_bytes": 10 * 1024 * 1024,
+                            "history_max_bytes": 50 * 1024 * 1024,
+                            "history_max_days": 14,
+                        },
                     },
                 )
 

@@ -2,14 +2,17 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type ModelSettings,
   type ModelSettingsUpdate,
+  type LogStats,
   type ScheduleClientIdInfo,
   type ScheduleStatus,
   type Soul,
   type WorkspaceStatus,
   ApiError,
   createSoul,
+  clearLogFiles,
   generateSoul,
   getAuthStatus,
+  getLogStats,
   getModelSettings,
   getScheduleClientId,
   getScheduleStatus,
@@ -17,6 +20,7 @@ import {
   getWorkspaceStatus,
   listSouls,
   reconcileVectorIndex,
+  revealLogFolder,
   reorderSouls,
   restoreDefaultClientId,
   retryVectorIndex,
@@ -119,7 +123,10 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   logging: {
     enabled: true,
     level: 'INFO',
-    history_retention: 100,
+    capture_content: true,
+    rotate_max_bytes: 10 * 1024 * 1024,
+    history_max_bytes: 50 * 1024 * 1024,
+    history_max_days: 14,
   },
   vision: {
     enabled: false,
@@ -153,6 +160,7 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const [modelForm, setModelForm] = useState<ModelForm>(DEFAULT_MODEL_FORM)
   const [souls, setSouls] = useState<Soul[]>([])
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null)
+  const [logStats, setLogStats] = useState<LogStats | null>(null)
   const [createSoulMode, setCreateSoulMode] = useState<CreateSoulMode>('ai')
   const [aiSoulDraft, setAiSoulDraft] = useState<AiSoulDraft>({ name: '', inspiration: '' })
   const [markdownSoulDraft, setMarkdownSoulDraft] = useState<MarkdownSoulDraft>({ name: '', content: '' })
@@ -165,6 +173,9 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const [savingSoul, setSavingSoul] = useState<string | null>(null)
   const [vectorAction, setVectorAction] = useState<'retry' | 'reconcile' | null>(null)
   const [vectorError, setVectorError] = useState<string | null>(null)
+  const [logAction, setLogAction] = useState<'toggle' | 'clear' | 'reveal' | null>(null)
+  const [confirmClearLogs, setConfirmClearLogs] = useState(false)
+  const [logRevealPath, setLogRevealPath] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -186,15 +197,17 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const refreshSettings = async () => {
     try {
       setLoading(true)
-      const [model, soulList, workspace] = await Promise.all([
+      const [model, soulList, workspace, logs] = await Promise.all([
         getModelSettings(),
         listSouls(false),
         getWorkspaceStatus(),
+        getLogStats(),
       ])
       setModelSettings(model)
       setModelForm(formFromModelSettings(model))
       setSouls(soulList)
       setWorkspaceStatus(workspace)
+      setLogStats(logs)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载设置失败')
@@ -224,6 +237,58 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       setError(err instanceof Error ? err.message : '保存模型配置失败')
     } finally {
       setSavingModel(false)
+    }
+  }
+
+  const handleCaptureContentChange = async (captureContent: boolean) => {
+    const savedForm = modelSettings ? formFromModelSettings(modelSettings) : modelForm
+    const nextForm: ModelForm = {
+      ...savedForm,
+      logging: { ...savedForm.logging, capture_content: captureContent },
+    }
+    setLogAction('toggle')
+    setNotice(null)
+    setError(null)
+    try {
+      const saved = await saveModelSettings(toModelUpdate(nextForm))
+      setModelSettings(saved)
+      setModelForm((current) => ({ ...current, logging: saved.logging }))
+      setLogStats(await getLogStats())
+      onModelSettingsChanged?.()
+      setNotice('调试日志设置已保存。')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存调试日志设置失败')
+    } finally {
+      setLogAction(null)
+    }
+  }
+
+  const handleClearLogs = async () => {
+    setLogAction('clear')
+    setNotice(null)
+    setError(null)
+    try {
+      setLogStats(await clearLogFiles())
+      setConfirmClearLogs(false)
+      setNotice('调试日志已清空。')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '清空调试日志失败')
+    } finally {
+      setLogAction(null)
+    }
+  }
+
+  const handleRevealLogs = async () => {
+    setLogAction('reveal')
+    setLogRevealPath(null)
+    setError(null)
+    try {
+      const result = await revealLogFolder()
+      if (!result.ok) setLogRevealPath(result.path)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '打开日志文件夹失败')
+    } finally {
+      setLogAction(null)
     }
   }
 
@@ -581,9 +646,18 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
               {activeTab === 'data' && (
                 <DataSettingsPanel
                   status={workspaceStatus}
+                  logStats={logStats}
+                  logAction={logAction}
+                  confirmClearLogs={confirmClearLogs}
+                  logRevealPath={logRevealPath}
                   vectorAction={vectorAction}
                   vectorError={vectorError}
                   onVectorAction={handleVectorAction}
+                  onCaptureContentChange={handleCaptureContentChange}
+                  onRequestClearLogs={() => setConfirmClearLogs(true)}
+                  onCancelClearLogs={() => setConfirmClearLogs(false)}
+                  onClearLogs={handleClearLogs}
+                  onRevealLogs={handleRevealLogs}
                 />
               )}
               {activeTab === 'about' && <AboutSettingsPanel />}
@@ -1673,14 +1747,32 @@ function SoulSettingsPanel({
 
 function DataSettingsPanel({
   status,
+  logStats,
+  logAction,
+  confirmClearLogs,
+  logRevealPath,
   vectorAction,
   vectorError,
   onVectorAction,
+  onCaptureContentChange,
+  onRequestClearLogs,
+  onCancelClearLogs,
+  onClearLogs,
+  onRevealLogs,
 }: {
   status: WorkspaceStatus | null
+  logStats: LogStats | null
+  logAction: 'toggle' | 'clear' | 'reveal' | null
+  confirmClearLogs: boolean
+  logRevealPath: string | null
   vectorAction: 'retry' | 'reconcile' | null
   vectorError: string | null
   onVectorAction: (action: 'retry' | 'reconcile') => void
+  onCaptureContentChange: (captureContent: boolean) => void
+  onRequestClearLogs: () => void
+  onCancelClearLogs: () => void
+  onClearLogs: () => void
+  onRevealLogs: () => void
 }) {
   if (!status) {
     return <div className={workspaceStyles.empty}>无法读取本地数据状态</div>
@@ -1768,6 +1860,65 @@ function DataSettingsPanel({
           <Stat label="数据库大小" value={formatBytes(status.db_size_bytes)} />
         </div>
       </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>调试日志</h2>
+          </div>
+        </div>
+        <div className={styles.sectionBodyStack}>
+          <div className={styles.logToggleRow}>
+            <div>
+              <p className={styles.logPrimary}>记录完整对话内容</p>
+              <p className={styles.sectionMeta}>用于本机调试，包含你与 AI 的全部对话内容，仅保存在这台设备。关闭后仍会记录调用统计（不含内容）；失败的调用会保留截断后的内容用于排障。</p>
+            </div>
+            <label className={styles.switch}>
+              <input
+                type="checkbox"
+                aria-label="记录完整对话内容"
+                checked={logStats?.capture_content ?? true}
+                disabled={!logStats || logAction !== null}
+                onChange={(event) => onCaptureContentChange(event.target.checked)}
+              />
+            </label>
+          </div>
+          <p className={styles.logStatus}>
+            当前日志：{logStats?.file_count ?? 0} 个文件 · {formatLogSize(logStats?.total_bytes ?? 0)}
+          </p>
+          <div className={styles.actionRow}>
+            <button
+              className={workspaceStyles.dangerButton}
+              type="button"
+              disabled={!logStats || logAction !== null}
+              onClick={onRequestClearLogs}
+            >
+              {logAction === 'clear' ? '清空中...' : '清空日志'}
+            </button>
+            <button
+              className={workspaceStyles.ghostButton}
+              type="button"
+              disabled={!logStats || logAction !== null}
+              onClick={onRevealLogs}
+            >
+              {logAction === 'reveal' ? '打开中...' : '打开日志文件夹'}
+            </button>
+          </div>
+          {logRevealPath && (
+            <p className={styles.logRevealFallback}>无法自动打开，请前往：<code>{logRevealPath}</code></p>
+          )}
+        </div>
+      </section>
+
+      <ConfirmDialog
+        isOpen={confirmClearLogs}
+        title="清空日志"
+        message="清空后所有调试日志将被永久删除，且不可恢复。确定继续吗？"
+        confirmText="清空日志"
+        danger
+        onConfirm={onClearLogs}
+        onCancel={onCancelClearLogs}
+      />
     </div>
   )
 }
@@ -2020,5 +2171,9 @@ function todayDate(): string {
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatLogSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }

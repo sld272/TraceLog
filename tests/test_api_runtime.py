@@ -228,7 +228,7 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("api.deps._load_api_config", return_value={"api_key": "sk", "base_url": "https://example.invalid/v1", "model": "new-model", "embedding_model": "embed"}),
-            patch("api.deps.logging_service.init_logging"),
+            patch("api.deps.logging_service.update_config"),
             patch("api.deps.workspace_service.init_workspace"),
             patch("api.deps._is_model_configured", return_value=True),
             patch("api.deps._build_configured_runtime", side_effect=RuntimeError("reload boom")),
@@ -280,7 +280,7 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("api.deps._load_api_config", return_value={"api_key": "sk", "base_url": "https://example.invalid/v1", "model": "new-model", "embedding_model": "embed"}),
-            patch("api.deps.logging_service.init_logging"),
+            patch("api.deps.logging_service.update_config"),
             patch("api.deps.workspace_service.init_workspace"),
             patch("api.deps._is_model_configured", return_value=True),
             patch("api.deps._build_configured_runtime", return_value=new_runtime),

@@ -81,7 +81,7 @@ async def reload_runtime() -> ApiRuntime:
     global _runtime
     previous_runtime = _runtime
     config = _load_api_config(strict=False)
-    logging_service.init_logging(config.get("logging"))
+    logging_service.update_config(config.get("logging"))
     workspace_service.init_workspace()
     next_runtime = (
         _unconfigured_runtime(config)

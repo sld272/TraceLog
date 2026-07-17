@@ -304,7 +304,10 @@ export interface ModelSettings {
   logging: {
     enabled: boolean
     level: string
-    history_retention: number
+    capture_content: boolean
+    rotate_max_bytes: number
+    history_max_bytes: number
+    history_max_days: number
   }
   vision: {
     enabled: boolean
@@ -408,6 +411,19 @@ export interface WorkspaceStatus {
 export interface VectorIndexActionResult {
   processed: number
   vector_index: WorkspaceStatus['vector_index']
+}
+
+export interface LogStats {
+  enabled: boolean
+  capture_content: boolean
+  file_count: number
+  total_bytes: number
+  path: string
+}
+
+export interface LogRevealResult {
+  ok: boolean
+  path: string
 }
 
 /* Posts */
@@ -972,6 +988,24 @@ export function saveModelSettings(settings: ModelSettingsUpdate) {
 
 export function getWorkspaceStatus() {
   return request<WorkspaceStatus>('/settings/workspace')
+}
+
+export function getLogStats() {
+  return request<LogStats>('/settings/logs')
+}
+
+export function clearLogFiles() {
+  return request<LogStats>('/settings/logs/clear', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function revealLogFolder() {
+  return request<LogRevealResult>('/settings/logs/reveal', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
 }
 
 export function retryVectorIndex() {
