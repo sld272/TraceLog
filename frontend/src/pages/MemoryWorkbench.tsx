@@ -28,7 +28,8 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Notice } from '@/components/Notice'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import { CheckIcon, PencilIcon, TrashIcon } from '@/components/icons'
-import { formatSmartTime } from '@/utils/date'
+import { formatRoute } from '@/router'
+import { formatAbsoluteTime, formatSmartTime } from '@/utils/date'
 import styles from './MemoryWorkbench.module.css'
 
 type UnitFilter = 'active' | 'pending' | 'forgotten' | 'all'
@@ -787,29 +788,71 @@ function EvidenceDrawer({
     }
   }, [unitId, onError])
 
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [onClose])
+
+  /* Lock body scroll while the overlay drawer is open */
+  useEffect(() => {
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previous
+    }
+  }, [])
+
+  // 按时间正序排：证据追溯讲的是"这条记忆是怎么长出来的"，从最早的痕迹讲起
+  const sortedEvidence = useMemo(
+    () => (detail ? [...detail.evidence].sort((a, b) => a.occurred_at - b.occurred_at) : []),
+    [detail],
+  )
+
   return (
-    <aside className={styles.drawer} aria-label="证据追溯">
-      <div className={styles.drawerHeader}>
-        <h3>证据追溯</h3>
-        <button className={styles.drawerClose} onClick={onClose} title="关闭">×</button>
-      </div>
-      <p className={styles.drawerSub}>这条记忆背后的原始证据</p>
-      {loading ? (
-        <p className={styles.muted}>加载中...</p>
-      ) : !detail ? (
-        <p className={styles.muted}>没有可显示的证据。</p>
-      ) : (
-        <>
-          <div className={styles.drawerUnit}>{detail.content}</div>
-          <div className={styles.evHead}>证据 · {detail.evidence.length} 条</div>
-          {detail.evidence.length === 0 ? (
-            <p className={styles.muted}>这条记忆暂时没有关联到原始证据。</p>
-          ) : (
-            detail.evidence.map((ev) => <EvidenceRow key={ev.event_id} ev={ev} />)
-          )}
-        </>
-      )}
-    </aside>
+    <div className={styles.drawerOverlay} onClick={onClose}>
+      <aside
+        className={styles.drawer}
+        role="dialog"
+        aria-modal="true"
+        aria-label="证据追溯"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className={styles.drawerHeader}>
+          <div>
+            <h3>证据追溯</h3>
+            <p className={styles.drawerSub}>这条记忆背后的原始记录</p>
+          </div>
+          <button className={styles.drawerClose} onClick={onClose} title="关闭" aria-label="关闭">×</button>
+        </div>
+        {loading ? (
+          <p className={styles.drawerHint}>加载中...</p>
+        ) : !detail ? (
+          <p className={styles.drawerHint}>没有可显示的证据。</p>
+        ) : (
+          <>
+            <div className={styles.drawerUnit}>
+              <div className={styles.drawerUnitLabel}>记忆 · {typeLabel(detail.type)}</div>
+              <p className={styles.drawerUnitText}>{detail.content}</p>
+            </div>
+            <div className={styles.evHead}>原始证据 · {sortedEvidence.length} 条</div>
+            {sortedEvidence.length === 0 ? (
+              <p className={styles.drawerHint}>
+                {detail.source === 'user_authored'
+                  ? '这条记忆由你亲手添加，没有需要追溯的原始记录。'
+                  : '这条记忆暂时没有关联到原始证据。'}
+              </p>
+            ) : (
+              <div className={styles.evList}>
+                {sortedEvidence.map((ev) => <EvidenceRow key={ev.event_id} ev={ev} />)}
+              </div>
+            )}
+          </>
+        )}
+      </aside>
+    </div>
   )
 }
 
@@ -822,21 +865,51 @@ const SOURCE_TYPE_LABELS: Record<string, string> = {
 }
 
 function EvidenceRow({ ev }: { ev: MemoryEvidenceRef }) {
+  /* 「当前」是常态，不标；只有异常态（核对中 / 原文已改 / 原文已删）才值得打标签 */
   const stateLabel = ev.review_pending
     ? '核对中'
     : ev.state === 'superseded'
-      ? '已有新版本'
+      ? '原文已修改'
       : ev.state === 'deleted'
         ? '原文已删除'
-        : '当前'
+        : null
   const dim = ev.state === 'superseded' || ev.state === 'deleted'
+  const authorLabel = ev.author === 'user' ? '你' : ev.author === 'assistant' ? 'TA' : null
+  const postId = (ev.source_type === 'post' || ev.source_type === 'post_vision') && ev.state !== 'deleted'
+    ? ev.source_id
+    : null
+  const openPost = () => {
+    if (postId) window.location.hash = formatRoute({ kind: 'post', postId })
+  }
   return (
     <div className={`${styles.ev} ${dim ? styles.evDim : ''}`}>
-      <div className={styles.evSrc}>
+      <span className={styles.evDot} aria-hidden="true" />
+      <div className={styles.evMeta}>
         <span>{SOURCE_TYPE_LABELS[ev.source_type] ?? '记录'}</span>
-        <span className={styles.evTag}>{stateLabel}</span>
+        {authorLabel && (
+          <>
+            <span className={styles.evSep}>·</span>
+            <span>{authorLabel}</span>
+          </>
+        )}
+        <span className={styles.evSep}>·</span>
+        <time title={formatAbsoluteTime(ev.occurred_at)}>{formatSmartTime(ev.occurred_at)}</time>
+        {stateLabel && (
+          <span className={`${styles.evTag} ${ev.review_pending ? styles.evTagPending : ''}`}>
+            {stateLabel}
+          </span>
+        )}
+        {postId && (
+          <button className={styles.evJump} onClick={openPost}>查看原帖 ↗</button>
+        )}
       </div>
-      <div className={styles.evText}>{ev.content}</div>
+      {postId ? (
+        <button className={`${styles.evText} ${styles.evTextLink}`} onClick={openPost} title="查看原帖">
+          {ev.content}
+        </button>
+      ) : (
+        <div className={styles.evText}>{ev.content}</div>
+      )}
     </div>
   )
 }
