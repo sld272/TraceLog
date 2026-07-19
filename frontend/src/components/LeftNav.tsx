@@ -1,6 +1,20 @@
 import { type Soul } from '@/api/client'
+import { useMeasuredHeight } from '@/hooks/useMeasuredHeight'
+import { ChevronRightIcon } from '@/components/icons'
 import { SoulAvatar } from './SoulAvatar'
 import styles from './LeftNav.module.css'
+
+/* 私聊区不滚动：按实测可用高度决定显示几个私聊入口。
+ * 高度常量与 LeftNav.module.css 对应：dmItem 38px 头像 + 上下 8px padding，列表 gap 4px。 */
+const DM_ITEM_HEIGHT = 54
+const DM_GAP = 4
+const VIEW_ALL_HEIGHT = 40
+/** 再高的屏幕也最多显示这么多私聊，保持导航清爽。 */
+const MAX_VISIBLE_DMS = 8
+
+function dmFitCount(height: number): number {
+  return Math.max(0, Math.floor((height + DM_GAP) / (DM_ITEM_HEIGHT + DM_GAP)))
+}
 
 interface LeftNavProps {
   souls: Soul[]
@@ -26,6 +40,19 @@ export function LeftNav({
   const navigate = (page: string) => {
     onNavigate(page)
     onAfterNavigate?.()
+  }
+
+  const [dmListRef, dmListHeight] = useMeasuredHeight<HTMLDivElement>()
+  const fitAll = Math.min(dmFitCount(dmListHeight), MAX_VISIBLE_DMS)
+  const needsViewAll = souls.length > fitAll
+  let visibleSouls = needsViewAll
+    ? souls.slice(0, Math.min(dmFitCount(dmListHeight - VIEW_ALL_HEIGHT - DM_GAP), MAX_VISIBLE_DMS))
+    : souls
+  /* 正在聊的好友被裁掉时顶进最后一个可见位置，保证左栏始终有高亮 */
+  const activeSoulName = activePage.startsWith('chat:') ? activePage.slice('chat:'.length) : null
+  if (activeSoulName && visibleSouls.length > 0 && !visibleSouls.some((soul) => soul.name === activeSoulName)) {
+    const activeSoul = souls.find((soul) => soul.name === activeSoulName)
+    if (activeSoul) visibleSouls = [...visibleSouls.slice(0, -1), activeSoul]
   }
 
   return (
@@ -63,34 +90,46 @@ export function LeftNav({
         />
       </section>
 
-      <section className={styles.section}>
+      <section className={`${styles.section} ${styles.dmSection}`}>
         <h3 className={styles.sectionTitle}>私聊</h3>
-        {souls.map((soul) => {
-          const active = activePage === `chat:${soul.name}`
-          return (
+        <div className={styles.dmList} ref={dmListRef}>
+          {visibleSouls.map((soul) => {
+            const active = activePage === `chat:${soul.name}`
+            return (
+              <button
+                key={soul.name}
+                className={`${styles.dmItem} ${active ? styles.dmItemActive : ''}`}
+                onClick={() => navigate(`chat:${soul.name}`)}
+                aria-current={active ? 'page' : undefined}
+              >
+                <SoulAvatar name={soul.name} className={styles.dmAvatar} />
+                <span className={styles.dmBody}>
+                  <span className={styles.dmName}>{soul.name}</span>
+                  {soul.description && <span className={styles.dmPreview}>{soul.description}</span>}
+                </span>
+              </button>
+            )
+          })}
+          {needsViewAll && (
             <button
-              key={soul.name}
-              className={`${styles.dmItem} ${active ? styles.dmItemActive : ''}`}
-              onClick={() => navigate(`chat:${soul.name}`)}
-              aria-current={active ? 'page' : undefined}
+              className={`${styles.viewAll} ${activePage === 'chats' ? styles.viewAllActive : ''}`}
+              onClick={() => navigate('chats')}
+              aria-current={activePage === 'chats' ? 'page' : undefined}
             >
-              <SoulAvatar name={soul.name} className={styles.dmAvatar} />
-              <span className={styles.dmBody}>
-                <span className={styles.dmName}>{soul.name}</span>
-                {soul.description && <span className={styles.dmPreview}>{soul.description}</span>}
-              </span>
+              查看全部 {souls.length} 位好友
+              <ChevronRightIcon width={13} height={13} />
             </button>
-          )
-        })}
-        {souls.length === 0 && soulsLoadState === 'loading' && (
-          <p className={styles.emptySoul}>加载中...</p>
-        )}
-        {souls.length === 0 && soulsLoadState === 'error' && (
-          <p className={styles.emptySoul} role="alert">加载失败</p>
-        )}
-        {souls.length === 0 && soulsLoadState === 'ready' && (
-          <p className={styles.emptySoul}>还没有人格，去设置里创建</p>
-        )}
+          )}
+          {souls.length === 0 && soulsLoadState === 'loading' && (
+            <p className={styles.emptySoul}>加载中...</p>
+          )}
+          {souls.length === 0 && soulsLoadState === 'error' && (
+            <p className={styles.emptySoul} role="alert">加载失败</p>
+          )}
+          {souls.length === 0 && soulsLoadState === 'ready' && (
+            <p className={styles.emptySoul}>还没有人格，去设置里创建</p>
+          )}
+        </div>
       </section>
 
       <section className={`${styles.section} ${styles.bottomSection}`}>

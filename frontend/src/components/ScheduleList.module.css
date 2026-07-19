@@ -51,6 +51,11 @@
 .schedTitle {
   color: var(--color-text-primary);
   font-size: var(--text-sm);
+  /* 单行省略：右栏紧凑态条目保持等高，长标题不撑破不滚动的面板 */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .schedLoc {

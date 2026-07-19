@@ -9,6 +9,7 @@ import {
   listScheduleEvents,
 } from '@/api/client'
 import { formatSmartTime } from '@/utils/date'
+import { useMeasuredHeight } from '@/hooks/useMeasuredHeight'
 import { fetchGoalProgress, monthDayLabel, todayKey } from '@/utils/schedule'
 import {
   type ScheduleConnectionState,
@@ -64,8 +65,12 @@ export function RightPanel({
 
   const connection = scheduleConnectionState(status, statusFailed)
 
+  /* 面板不滚动：日程条数按面板高度取 2–4 条，记忆变化卡吃掉剩余空间并自行测高裁剪。 */
+  const [panelRef, panelHeight] = useMeasuredHeight<HTMLDivElement>()
+  const scheduleLimit = scheduleLimitFor(panelHeight)
+
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} ref={panelRef}>
       <div className={styles.panelSearch}>
         <SearchIcon />
         <input
@@ -89,6 +94,7 @@ export function RightPanel({
         isToday={selectedDate === null}
         connection={connection}
         outlookConnected={status?.connected ?? false}
+        limit={scheduleLimit}
         onOpenSchedule={onOpenSchedule}
         onOpenSettings={onOpenSettings}
       />
@@ -97,11 +103,20 @@ export function RightPanel({
   )
 }
 
+/** 日程卡条数随面板高度走：矮窗口 2 条，常规 3–4 条，溢出部分给「还有 N 项」提示。 */
+function scheduleLimitFor(panelHeight: number): number {
+  if (panelHeight === 0) return 3
+  if (panelHeight < 720) return 2
+  if (panelHeight < 880) return 3
+  return 4
+}
+
 function ScheduleDayCard({
   targetDate,
   isToday,
   connection,
   outlookConnected,
+  limit,
   onOpenSchedule,
   onOpenSettings,
 }: {
@@ -110,6 +125,7 @@ function ScheduleDayCard({
   connection: ScheduleConnectionState
   /** 是否真连了 Outlook（本地日历也算 connected，但不该显示同步角标）。 */
   outlookConnected: boolean
+  limit: number
   onOpenSchedule: () => void
   onOpenSettings: () => void
 }) {
@@ -159,7 +175,13 @@ function ScheduleDayCard({
         </p>
       ) : (
         <>
-          <ScheduleList events={events.slice(0, 4)} progressByGoal={progressByGoal} emptyText={emptyText} />
+          <ScheduleList events={events.slice(0, limit)} progressByGoal={progressByGoal} emptyText={emptyText} />
+          {events.length > limit && (
+            <button type="button" className={styles.schedMore} onClick={onOpenSchedule}>
+              还有 {events.length - limit} 项日程
+              <ChevronRightIcon width={12} height={12} />
+            </button>
+          )}
           {events.length > 0 && outlookConnected && (
             <div className={styles.schedSource}>
               <SyncIcon />
@@ -181,14 +203,22 @@ function SyncIcon() {
   )
 }
 
+/* 记忆变化条目单行标题 + meta，高度基本恒定（与 RightPanel.module.css 的 .pulse 对应）。 */
+const PULSE_ITEM_HEIGHT = 62
+const MAX_PULSE_ENTRIES = 8
+
 function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
   const [entries, setEntries] = useState<PulseEntry[]>([])
+  /* 卡片吃掉面板剩余空间，按实测列表高度决定渲染条数，保证面板不滚动。 */
+  const [listRef, listHeight] = useMeasuredHeight<HTMLDivElement>()
+  /* 放不下一条就不显示，避免半截条目（极矮窗口下卡片只剩标题） */
+  const visibleCount = Math.min(Math.floor(listHeight / PULSE_ITEM_HEIGHT), MAX_PULSE_ENTRIES)
 
   useEffect(() => {
     let cancelled = false
     void listMemoryOperations(30)
       .then((data) => {
-        if (!cancelled) setEntries(pulseEntries(data))
+        if (!cancelled) setEntries(pulseEntries(data, MAX_PULSE_ENTRIES))
       })
       .catch(() => {
         /* 右栏保持安静：拿不到记忆变化时不打扰用户 */
@@ -199,12 +229,12 @@ function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
   }, [])
 
   return (
-    <section className={styles.card}>
+    <section className={`${styles.card} ${styles.cardGrow}`}>
       <PanelHeader title="最近记忆变化" onMore={onOpenMemory} />
-      <div className={styles.itemList}>
+      <div className={styles.itemList} ref={listRef}>
         {entries.length > 0 ? (
           <div className={styles.pulseList}>
-            {entries.map((entry) => (
+            {entries.slice(0, visibleCount).map((entry) => (
               <button key={entry.key} type="button" className={styles.pulse} onClick={onOpenMemory}>
                 <span className={styles.pulseTitle}>{entry.title}</span>
                 <span className={styles.pulseMeta}>{entry.meta}</span>

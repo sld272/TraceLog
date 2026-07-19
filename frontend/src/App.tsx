@@ -11,6 +11,7 @@ import { AppShell } from '@/components/AppShell'
 import { LeftNav } from '@/components/LeftNav'
 import { RightPanel } from '@/components/RightPanel'
 import { ChatPage } from '@/pages/ChatPage'
+import { ChatsPage } from '@/pages/ChatsPage'
 import { GoalsPage } from '@/pages/GoalsPage'
 import { MemoryWorkbench } from '@/pages/MemoryWorkbench'
 import { PostDetailPage } from '@/pages/PostDetailPage'
@@ -241,6 +242,13 @@ export function App() {
           />
         )}
         {route.kind === 'goals' && <GoalsPage />}
+        {route.kind === 'chats' && (
+          <ChatsPage
+            souls={souls}
+            loadState={soulsLoadState}
+            onOpenChat={(soulName) => navigate({ kind: 'chat', soulName })}
+          />
+        )}
         {route.kind === 'schedule' && <SchedulePage onOpenSettings={openSettings} />}
         {route.kind === 'memory' && <MemoryWorkbench />}
         {route.kind === 'settings' && (
@@ -303,6 +311,7 @@ function routeFromNavKey(page: string): Route {
   if (page === 'schedule') return { kind: 'schedule' }
   if (page === 'memory') return { kind: 'memory' }
   if (page === 'settings') return { kind: 'settings' }
+  if (page === 'chats') return { kind: 'chats' }
   if (page.startsWith('chat:')) return { kind: 'chat', soulName: page.slice('chat:'.length) }
   return { kind: 'home' }
 }

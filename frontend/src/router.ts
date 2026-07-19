@@ -4,6 +4,7 @@ export type Route =
   | { kind: 'schedule' }
   | { kind: 'memory' }
   | { kind: 'settings'; tab?: 'schedule' }
+  | { kind: 'chats' }
   | { kind: 'chat'; soulName: string }
   | { kind: 'post'; postId: string; highlight?: string }
 
@@ -23,6 +24,7 @@ export function parseRoute(hash: string): Route {
     const tab = parseRouteQuery(query).get('tab')
     return tab === 'schedule' ? { kind: 'settings', tab } : { kind: 'settings' }
   }
+  if (path === 'chats') return { kind: 'chats' }
   if (path.startsWith('chat/')) {
     const soulName = decodeRouteSegment(path.slice('chat/'.length))
     return soulName ? { kind: 'chat', soulName } : { kind: 'home' }
@@ -48,6 +50,8 @@ export function formatRoute(route: Route): string {
       return '#/memory'
     case 'settings':
       return route.tab === 'schedule' ? '#/settings?tab=schedule' : '#/settings'
+    case 'chats':
+      return '#/chats'
     case 'chat':
       return `#/chat/${encodeURIComponent(route.soulName)}`
     case 'post': {

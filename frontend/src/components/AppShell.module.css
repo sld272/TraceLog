@@ -42,7 +42,8 @@
   width: var(--nav-width);
   flex-shrink: 0;
   padding: var(--space-5) var(--space-4);
-  overflow-y: auto;
+  /* 侧栏不滚动：私聊列表按可用高度裁剪条数（LeftNav 内自适应） */
+  overflow: hidden;
   background: var(--color-bg-primary);
   border-right: 1px solid var(--color-border);
 }
@@ -70,7 +71,8 @@
   width: var(--panel-width);
   flex-shrink: 0;
   padding: var(--space-5) var(--space-4) var(--space-6);
-  overflow-y: auto;
+  /* 侧栏不滚动：卡片条数按可用高度自适应（RightPanel 内控制） */
+  overflow: hidden;
   background: var(--color-bg-primary);
   border-left: 1px solid var(--color-border);
 }
@@ -96,6 +98,8 @@
     width: min(280px, 84vw);
     height: 100vh;
     padding: var(--space-5) var(--space-4);
+    /* 移动端抽屉是覆盖层而非常驻侧栏，保留滚动兜底（横屏矮窗口时固定导航项也可能放不下） */
+    overflow-y: auto;
     background: var(--color-bg-card);
     border-right: 1px solid var(--color-border);
     box-shadow: var(--shadow-lg);
