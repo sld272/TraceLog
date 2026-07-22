@@ -266,8 +266,9 @@ function isUserVisible(operation: MemoryOperation): boolean {
 }
 
 function pulseEntries(operations: MemoryOperation[], limit = 6): PulseEntry[] {
-  const visible = operations.filter(isUserVisible)
-  // newest first from the API; group runs with many changes into one summary
+  // 不依赖 API 返回顺序：显式按 id 由新到旧排，保证卡片在所有情况下从上到下由新到旧。
+  const visible = operations.filter(isUserVisible).sort((a, b) => b.id - a.id)
+  // group runs with many changes into one summary
   const byRun = new Map<number, MemoryOperation[]>()
   for (const op of visible) {
     if (op.reconcile_run_id !== null) {
