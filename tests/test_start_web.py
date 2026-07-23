@@ -3,13 +3,84 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from core.web import app as web_app
 
 
 class StartWebTest(unittest.TestCase):
+    def test_default_mode_serves_production_app(self) -> None:
+        with patch("core.web.app._serve", return_value=0) as serve:
+            result = web_app.main(["--no-open"])
+
+        self.assertEqual(0, result)
+        serve.assert_called_once_with(["--no-open"])
+
+    def test_dev_subcommand_uses_existing_dev_mode(self) -> None:
+        with patch("core.web.app._dev", return_value=0) as dev:
+            result = web_app.main(["dev", "--skip-install"])
+
+        self.assertEqual(0, result)
+        dev.assert_called_once_with(["--skip-install"])
+
+    def test_missing_dist_reports_build_and_dev_instructions(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(web_app, "DIST_INDEX", Path(tmp) / "dist" / "index.html"),
+            redirect_stderr(StringIO()) as stderr,
+        ):
+            result = web_app.main(["--no-open"])
+
+        self.assertEqual(1, result)
+        output = stderr.getvalue()
+        self.assertIn("cd frontend && npm run build", output)
+        self.assertIn("python main.py dev", output)
+
+    def test_no_open_starts_production_without_browser_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frontend_dir = Path(tmp) / "frontend"
+            dist_dir = frontend_dir / "dist"
+            src_dir = frontend_dir / "src"
+            dist_dir.mkdir(parents=True)
+            src_dir.mkdir()
+            index = dist_dir / "index.html"
+            index.write_text("<main>TraceLog</main>", encoding="utf-8")
+            production_app = object()
+
+            with (
+                patch.object(web_app, "DIST_DIR", dist_dir),
+                patch.object(web_app, "DIST_INDEX", index),
+                patch.object(web_app, "FRONTEND_SRC_DIR", src_dir),
+                patch("core.web.app._find_available_port", return_value=8123),
+                patch("core.web.app.create_production_app", return_value=production_app),
+                patch("core.web.app.uvicorn.run") as run,
+                patch("core.web.app.threading.Thread") as thread,
+                redirect_stdout(StringIO()),
+            ):
+                result = web_app.main(["serve", "--port", "8123", "--no-open"])
+
+        self.assertEqual(0, result)
+        thread.assert_not_called()
+        run.assert_called_once_with(production_app, host="127.0.0.1", port=8123)
+
+    def test_browser_opens_after_health_check_succeeds(self) -> None:
+        stop_event = web_app.threading.Event()
+        with (
+            patch("core.web.app.urllib.request.urlopen") as urlopen,
+            patch("core.web.app.webbrowser.open") as open_browser,
+        ):
+            urlopen.return_value.__enter__.return_value.status = 200
+
+            web_app._open_browser_when_ready("http://127.0.0.1:8123", stop_event)
+
+        urlopen.assert_called_once_with("http://127.0.0.1:8123/api/health", timeout=1)
+        open_browser.assert_called_once_with("http://127.0.0.1:8123/")
+
     def test_backend_command_uses_current_python_without_conda_wrapper(self) -> None:
         args = argparse.Namespace(host="127.0.0.1", backend_port=8000)
 
