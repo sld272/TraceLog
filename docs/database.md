@@ -1,6 +1,6 @@
 # 数据库设计
 
-SQLite 是本地业务与记忆的持久化真相源；ChromaDB 向量索引随时可以由 SQLite 重建。日程是例外：Exchange / Outlook 是真相源，SQLite 中的 `schedule_events` 只是 Graph 读取缓存。
+SQLite 是本地业务与记忆的持久化真相源；embedding 向量同样存在 SQLite 里（`vector_index_items` 的 BLOB 列），丢失时可随时重嵌重建。日程是例外：Exchange / Outlook 是真相源，SQLite 中的 `schedule_events` 只是 Graph 读取缓存。
 
 ## 业务表
 
@@ -56,8 +56,9 @@ OAuth token 不进入 `meta`，只存在权限为 `0600` 的 `workspace/graph_to
 ## 向量账本
 
 - `vector_docs`：期望存在的向量文档清单
-- `vector_outbox`：待同步到 ChromaDB 的操作
+- `vector_outbox`：待执行的向量嵌入 / 删除操作
 - `vector_index_collections`：collection 同步状态
+- `vector_index_items`：每个 collection 内已索引的文档及其向量（`dim` + L2 归一化 float32 `embedding` BLOB）；查询用 numpy 精确余弦
 
 只有账本确认 ready 的 collection 才参与语义检索。
 

@@ -17,7 +17,7 @@ Web 前端 / CLI
   -> 15 分钟日程同步任务
 ```
 
-除日程外，持久化以 SQLite 为准，ChromaDB 向量索引可随时由 SQLite 重建。日程以用户的 Exchange / Outlook 日历为准，SQLite 只保留 Graph 事件的读取缓存。后台工作走一条 SQLite job 队列，由 API 进程内的 worker 消费；日程轮询是独立的 API 进程内周期任务，不进入 job 队列。
+除日程外，持久化以 SQLite 为准；embedding 向量也直接存在 SQLite 里（`vector_index_items` BLOB 列，numpy 精确余弦检索），可随时重嵌重建。日程以用户的 Exchange / Outlook 日历为准，SQLite 只保留 Graph 事件的读取缓存。后台工作走一条 SQLite job 队列，由 API 进程内的 worker 消费；日程轮询是独立的 API 进程内周期任务，不进入 job 队列。
 
 **调度铁律：后台维护不挡用户。** 单 worker 下，认领 job 时交互类（回复、embedding）永远优先于 memory reconcile；reconcile 自己跑到一半发现有交互 job 在等，也会在桶间让路、提前收工，由续跑 job 无损接续。
 
