@@ -7,13 +7,14 @@ import sqlite3
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-WORKSPACE_DIR = BASE_DIR / "workspace"
+from core import paths
+
+BASE_DIR = paths.RESOURCE_DIR
+WORKSPACE_DIR = paths.WORKSPACE_DIR
 DB_PATH = WORKSPACE_DIR / "state.db"
-INIT_SQL_PATH = BASE_DIR / "schema.sql"
+INIT_SQL_PATH = paths.SCHEMA_FILE
 
 
 def connect() -> sqlite3.Connection:

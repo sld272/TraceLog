@@ -14,11 +14,15 @@ from core.cli import config as cli_config
 class CliConfigTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.old_cwd = os.getcwd()
-        os.chdir(self.tmp.name)
+        self.config_patch = patch.object(
+            cli_config,
+            "CONFIG_FILE",
+            str(Path(self.tmp.name) / "config.json"),
+        )
+        self.config_patch.start()
 
     def tearDown(self) -> None:
-        os.chdir(self.old_cwd)
+        self.config_patch.stop()
         self.tmp.cleanup()
 
     def test_load_config_reads_existing_config_and_defaults_optional_embedding_fields(self) -> None:
@@ -93,6 +97,8 @@ class CliConfigTest(unittest.TestCase):
 
         mode = stat.S_IMODE(Path(cli_config.CONFIG_FILE).stat().st_mode)
         self.assertEqual(0o600, mode)
+        saved = json.loads(Path(cli_config.CONFIG_FILE).read_text(encoding="utf-8"))
+        self.assertFalse(saved["logging"]["capture_content"])
 
     def test_normalize_web_search_config_clamps_values_and_cleans_provider(self) -> None:
         normalized = cli_config.normalize_web_search_config(

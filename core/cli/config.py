@@ -9,8 +9,9 @@ import os
 from core.cli_input import read_cli_input
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_settings
+from core.paths import CONFIG_FILE as CONFIG_PATH
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = str(CONFIG_PATH)
 DEFAULT_VISION_CONFIG = {
     "enabled": False,
     "model": None,
