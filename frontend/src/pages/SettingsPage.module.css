@@ -849,3 +849,17 @@
 .aboutMeta a {
   color: var(--color-accent);
 }
+
+.apUpdateCheck {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--color-accent);
+  cursor: pointer;
+}
+
+.apUpdateCheck:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+}

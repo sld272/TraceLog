@@ -8,6 +8,7 @@ import {
   type Soul,
   type WorkspaceStatus,
   ApiError,
+  fetchHealth,
   createSoul,
   clearLogFiles,
   generateSoul,
@@ -674,7 +675,66 @@ export function SettingsPage({ firstRun = false, initialTab, onModelSettingsChan
   )
 }
 
+const RELEASES_URL = 'https://github.com/sld272/TraceLog/releases'
+
+/** 比较 'v1.2.3' 风格版本号；返回正数表示 a 更新。 */
+function compareVersions(a: string, b: string): number {
+  const parse = (value: string) => value.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
+  const pa = parse(a)
+  const pb = parse(b)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+type UpdateCheck =
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'latest' }
+  | { state: 'update'; tag: string; url: string }
+  | { state: 'error' }
+
 function AboutSettingsPanel() {
+  const [version, setVersion] = useState<string | null>(null)
+  const [update, setUpdate] = useState<UpdateCheck>({ state: 'idle' })
+
+  useEffect(() => {
+    let cancelled = false
+    fetchHealth()
+      .then((health) => {
+        if (!cancelled) setVersion(health.version)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const checkForUpdates = async () => {
+    setUpdate({ state: 'checking' })
+    try {
+      const res = await fetch('https://api.github.com/repos/sld272/TraceLog/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' },
+      })
+      if (res.status === 404) {
+        setUpdate({ state: 'latest' })
+        return
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const release = await res.json()
+      const tag = String(release.tag_name ?? '')
+      if (version && tag && compareVersions(tag, version) > 0) {
+        setUpdate({ state: 'update', tag, url: String(release.html_url ?? RELEASES_URL) })
+      } else {
+        setUpdate({ state: 'latest' })
+      }
+    } catch {
+      setUpdate({ state: 'error' })
+    }
+  }
+
   return (
     <div className={styles.aboutPage}>
       <img className={styles.apIcon} src="/brand/tracelog-icon-transparent-512.png" alt="拾迹" />
@@ -697,7 +757,26 @@ function AboutSettingsPanel() {
         <span className={styles.ft}>本地优先</span>
       </div>
       <div className={styles.aboutMeta}>
-        <span>版本 v2.0</span>
+        <span>{version ? `版本 v${version}` : '版本 —'}</span>
+        <button
+          type="button"
+          className={styles.apUpdateCheck}
+          onClick={checkForUpdates}
+          disabled={update.state === 'checking'}
+        >
+          {update.state === 'checking' ? '检查中…' : '检查更新'}
+        </button>
+        {update.state === 'latest' && <span>已是最新版本</span>}
+        {update.state === 'update' && (
+          <a href={update.url} target="_blank" rel="noreferrer">
+            发现新版本 {update.tag}，前往下载
+          </a>
+        )}
+        {update.state === 'error' && (
+          <a href={RELEASES_URL} target="_blank" rel="noreferrer">
+            检查失败，去发布页看看
+          </a>
+        )}
         <a href="https://github.com/sld272/TraceLog" target="_blank" rel="noreferrer">
           GitHub 仓库
         </a>
