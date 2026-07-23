@@ -21,6 +21,12 @@ Web 前端 / CLI
 
 **调度铁律：后台维护不挡用户。** 单 worker 下，认领 job 时交互类（回复、embedding）永远优先于 memory reconcile；reconcile 自己跑到一半发现有交互 job 在等，也会在桶间让路、提前收工，由续跑 job 无损接续。
 
+## 向量索引与 embedding 配置
+
+向量按 collection 隔离，collection 名由 embedding 模型 + base_url 的配置哈希决定；换配置即新建 collection 全量重嵌，旧 collection 保留，改回旧配置时瞬时就绪。集合状态（pending / failed / missing / stale）记在 `vector_index_collections` 账本里，只有 query-ready 的集合参与语义检索，未就绪时检索自动降级为 FTS。设置页 Embedding 卡片下有一行索引状态（就绪 / 重建中 N/M / 失败自动重试）。
+
+**已知限制**：换 embedding 配置触发的全量重嵌目前在保存设置的请求线程内同步完成（`api/deps.py` 重建 runtime 时直接抽干 outbox），期间 API 无响应——百条量级约十几秒，千条量级会阻塞数分钟；且保存请求返回的索引状态是重载前计算的，会短暂显示旧集合的就绪态。改进方向：重嵌转后台 job，前端轮询"重建中 N/M"状态行显示进度。
+
 ---
 
 # 运行与调试日志
