@@ -1,0 +1,21 @@
+{
+  "name": "tracelog-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TraceLog 拾迹 macOS desktop shell",
+  "main": "shell/main.cjs",
+  "author": "TraceLog",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack:mac": "electron-builder --config electron-builder.config.cjs --mac --dir",
+    "dist:mac": "electron-builder --config electron-builder.config.cjs --mac --publish never"
+  },
+  "dependencies": {
+    "semver": "^7.7.2"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^26.11.1"
+  }
+}
