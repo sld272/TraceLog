@@ -15,6 +15,7 @@ from starlette.responses import StreamingResponse
 from api.deps import get_runtime, require_configured_runtime_or_409, run_sync
 from core import attachment_service, db, retrieval, vectorstore
 from core.app_services import event_service, job_service, post_mutation, public_post_pipeline
+from core.version import APP_VERSION
 from core.system_timezone import SYSTEM_TIMEZONE
 
 router = APIRouter(tags=["posts"])
@@ -38,6 +39,7 @@ async def health():
         "db": db_status,
         "configured": runtime.configured,
         "vectorstore_initialized": vectorstore.is_initialized() or runtime.vectorstore_initialized,
+        "version": APP_VERSION,
     }
 
 

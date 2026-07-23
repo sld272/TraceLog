@@ -31,6 +31,18 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json()
 }
 
+export interface HealthStatus {
+  ok: boolean
+  db: string
+  configured: boolean
+  vectorstore_initialized: boolean
+  version: string
+}
+
+export function fetchHealth(): Promise<HealthStatus> {
+  return request('/health')
+}
+
 /* Types */
 export interface Post {
   post_id: string

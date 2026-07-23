@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from api import deps
 from api.routes import attachments, chat, comments, feedback, goals, jobs, memory, posts, schedule, settings, souls, suggestions
+from core.version import APP_VERSION
 
 
 @asynccontextmanager
@@ -20,7 +21,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="TraceLog API", lifespan=lifespan)
+    app = FastAPI(title="TraceLog API", version=APP_VERSION, lifespan=lifespan)
     app.include_router(posts.router)
     app.include_router(jobs.router)
     app.include_router(souls.router)
