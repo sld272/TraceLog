@@ -277,15 +277,6 @@ class VectorStoreTest(unittest.TestCase):
         self.assertEqual("embedding endpoint unavailable", event["exception_message"])
         self.assertIn("配置 embedding_base_url", " ".join(event["suggestions"]))
 
-    def test_query_post_ids_preserves_existing_behavior(self) -> None:
-        self._activate({"焦虑": [1.0, 0.0], "一": [1.0, 0.0], "二": [0.0, 1.0]})
-        self._index_docs(
-            vector_index_service.build_post_doc("p-1", "一"),
-            vector_index_service.build_post_doc("p-2", "二"),
-        )
-
-        self.assertEqual(["p-1", "p-2"], vectorstore.query_post_ids("焦虑", n_results=20))
-
     def _activate(self, vectors: dict[str, list[float]]) -> FakeEmbeddingClient:
         client = FakeEmbeddingClient(vectors)
         vectorstore._embedding_client = client

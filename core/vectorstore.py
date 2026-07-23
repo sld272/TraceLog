@@ -235,10 +235,6 @@ def delete_documents(doc_ids: list[str]) -> None:
     )
 
 
-def list_document_ids() -> list[str]:
-    return list(list_document_records().keys())
-
-
 def list_document_records() -> dict[str, dict]:
     collection_name = current_collection_name()
     if collection_name is None:
@@ -270,62 +266,6 @@ def list_document_records() -> dict[str, dict]:
         )
         records[str(row["doc_id"])] = metadata
     return records
-
-
-def index_document(doc_id: str, content: str, metadata: dict) -> None:
-    collection_name = current_collection_name()
-    body = content.strip()
-    if collection_name is None or not body:
-        return
-    vectors = embed_texts([body])
-    # 单条 input 若被 provider 返回 0 条或 2 条 embedding，就无法对应当前 doc_id。
-    if len(vectors) != 1:
-        raise RuntimeError(f"embedding response count mismatch: expected 1, got {len(vectors)}")
-    dim, blob = serialize_embedding(vectors[0])
-    now = db.now_ts()
-    with db.transaction() as conn:
-        dimensions = {
-            int(row["dim"])
-            for row in conn.execute(
-                """
-                SELECT DISTINCT dim
-                FROM vector_index_items
-                WHERE collection_name = ?
-                  AND dim IS NOT NULL
-                  AND embedding IS NOT NULL
-                """,
-                (collection_name,),
-            ).fetchall()
-        }
-        # 同一集合已有 2 维行、provider 此次返回 3 维向量时会触发该错误。
-        if dimensions and dimensions != {dim}:
-            existing = ", ".join(str(value) for value in sorted(dimensions))
-            raise ValueError(
-                f"embedding dimension mismatch for {collection_name}: existing {existing}, new {dim}"
-            )
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO vector_index_items(
-                collection_name, doc_id, content_hash, source_revision,
-                indexed_at, dim, embedding
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                collection_name,
-                doc_id,
-                str(metadata["content_hash"]),
-                int(metadata["source_revision"]),
-                now,
-                dim,
-                blob,
-            ),
-        )
-
-
-def query_post_ids(query: str, n_results: int = 20) -> list[str]:
-    """语义检索相关帖子，返回按相关性排序的 post_id 列表。"""
-    return [hit.post_id for hit in query_post_hits(query, n_results)]
 
 
 def query_post_hits(query: str, n_results: int = 20) -> list[VectorHit]:

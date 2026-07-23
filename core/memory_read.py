@@ -502,7 +502,6 @@ class SemanticHit:
     unit_id: str
     sim: float           # cosine similarity = 1 - distance (ANN-order proxy if missing)
     passed: bool         # cleared the adaptive strict gate (or kept fail-open)
-    distance_missing: bool
 
 
 def adaptive_sim_cutoff(sims: list[float]) -> float:
@@ -535,8 +534,8 @@ def _semantic_unit_hits(query: str) -> list[SemanticHit]:
     adaptive strict gate (adaptive_sim_cutoff). Sub-cutoff neighbours are
     RETAINED here (passed=False) so callers can audit/log the rejected-but-near
     band for tuning — the gate is applied by _semantic_unit_sims, not here. A
-    hit with no distance is kept fail-open (passed=True,
-    distance_missing=True) with an ANN-order proxy sim. Empty when the query is
+    hit with no distance is kept fail-open (passed=True) with an ANN-order
+    proxy sim. Empty when the query is
     blank or the index is unavailable / not query-ready. Scope is NOT applied
     here; the caller intersects these with its scope-filtered SQL candidates."""
     if not str(query or "").strip():
@@ -570,10 +569,10 @@ def _semantic_unit_hits(query: str) -> list[SemanticHit]:
     for uid, distance, rank in raw:
         if distance is None:
             sim = 1.0 / (1 + rank)
-            out.append(SemanticHit(uid, sim, passed=True, distance_missing=True))
+            out.append(SemanticHit(uid, sim, passed=True))
         else:
             sim = 1.0 - distance
-            out.append(SemanticHit(uid, sim, passed=sim >= cutoff, distance_missing=False))
+            out.append(SemanticHit(uid, sim, passed=sim >= cutoff))
     return out
 
 
