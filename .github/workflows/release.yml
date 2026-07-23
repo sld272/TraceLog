@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches app versions
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            desktop="$(node -p "require('./desktop/package.json').version")"
+            frontend="$(node -p "require('./frontend/package.json').version")"
+            core="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' core/version.py)"
+            if [[ "${desktop}" != "${tag}" || "${frontend}" != "${tag}" || "${core}" != "${tag}" ]]; then
+              echo "Version mismatch: tag=v${tag} desktop=${desktop} frontend=${frontend} core/version.py=${core}" >&2
+              exit 1
+            fi
+          else
+            echo "Not a tag build; skipping the version check."
+          fi
+
+  build-macos:
+    needs: preflight
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            desktop/requirements-build.txt
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt -r desktop/requirements-build.txt
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+      - name: Build, smoke-test, and package
+        env:
+          TRACELOG_PYTHON: python
+        run: ./desktop/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: desktop/dist/shell/*.dmg
+          if-no-files-found: error
+
+  build-windows:
+    needs: preflight
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            desktop/requirements-build.txt
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt -r desktop/requirements-build.txt
+      - name: Build, smoke-test, and package
+        shell: pwsh
+        run: ./desktop/build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: desktop/dist/shell/*.exe
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft \
+            --title "TraceLog ${GITHUB_REF_NAME}" \
+            --generate-notes
