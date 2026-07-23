@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Iterable, Mapping, Sequence
-from zoneinfo import ZoneInfo
 
 from core import db, goal_schedule_service
 from core.schedule_service import ScheduleService
+from core.system_timezone import SYSTEM_TIMEZONE
 
-LOCAL_TIMEZONE = ZoneInfo("Asia/Shanghai")
+LOCAL_TIMEZONE = SYSTEM_TIMEZONE
 RECENT_PAST_DAYS = 2
 RECENT_FUTURE_DAYS = 7
 RECENT_SCHEDULE_LIMIT = 20

@@ -7,7 +7,6 @@ import json
 from dataclasses import asdict
 from datetime import date as Date, datetime, time, timedelta
 from typing import Any, Literal
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -16,6 +15,7 @@ from starlette.responses import StreamingResponse
 from api.deps import get_runtime, require_configured_runtime_or_409, run_sync
 from core import attachment_service, db, retrieval, vectorstore
 from core.app_services import event_service, job_service, post_mutation, public_post_pipeline
+from core.system_timezone import SYSTEM_TIMEZONE
 
 router = APIRouter(tags=["posts"])
 
@@ -142,9 +142,8 @@ def _post_exists(post_id: str) -> bool:
 
 
 def _list_post_activity(start: Date, end: Date) -> list[dict[str, str]]:
-    timezone = ZoneInfo("Asia/Shanghai")
-    start_dt = datetime.combine(start, time.min, timezone)
-    end_dt = datetime.combine(end + timedelta(days=1), time.min, timezone)
+    start_dt = datetime.combine(start, time.min, SYSTEM_TIMEZONE)
+    end_dt = datetime.combine(end + timedelta(days=1), time.min, SYSTEM_TIMEZONE)
     rows = db.query_all(
         """
         SELECT id, ts FROM posts

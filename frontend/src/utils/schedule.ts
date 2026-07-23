@@ -6,6 +6,9 @@ export const WEEKDAY_HEADERS = ['一', '二', '三', '四', '五', '六', '日']
 /** getDay() 索引（0=周日）对应的中文单字。 */
 const WEEKDAY_CN = ['日', '一', '二', '三', '四', '五', '六'] as const
 
+/** 浏览器当前跟随的系统时区。 */
+export const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone
+
 function pad2(value: number): string {
   return String(value).padStart(2, '0')
 }
@@ -22,7 +25,7 @@ export function localDateKey(value: string | number | Date): string {
   return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
 }
 
-/** 事件按其 Asia/Shanghai 墙钟日期分桶（start_local 已是本地时间字符串）。 */
+/** 事件按当前系统时区的墙钟日期分桶（start_local 已是本地时间字符串）。 */
 export function eventDateKey(event: Pick<ScheduleEvent, 'start_local'>): string {
   return String(event.start_local).slice(0, 10)
 }
@@ -99,7 +102,7 @@ export function monthGrid(year: number, month: number): CalendarCell[] {
   return cells
 }
 
-/** 本周（周一至周日）的 7 个日期 key，含 Asia/Shanghai 语义（用本地时区近似）。 */
+/** 当前系统时区里，本周（周一至周日）的 7 个日期 key。 */
 export function weekKeys(now: Date = new Date()): string[] {
   const monday = new Date(now)
   const offset = (now.getDay() + 6) % 7

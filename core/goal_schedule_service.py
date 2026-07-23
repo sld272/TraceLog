@@ -6,11 +6,11 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, time, timedelta
 import json
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from core import db
+from core.system_timezone import SYSTEM_TIMEZONE
 
-LOCAL_TIMEZONE = ZoneInfo("Asia/Shanghai")
+LOCAL_TIMEZONE = SYSTEM_TIMEZONE
 
 
 class GoalNotFoundError(LookupError):
@@ -124,7 +124,7 @@ def weekly_progress(
     *,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Count linked events in the current Asia/Shanghai Monday-based week."""
+    """Count linked events in the current system-local Monday-based week."""
     goal = db.query_one(
         "SELECT schedule_expectation FROM goals WHERE id = ?",
         (goal_id,),

@@ -11,8 +11,10 @@ from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 
+from core.system_timezone import SYSTEM_TIMEZONE_NAME
+
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
-PREFER_TIMEZONE = 'outlook.timezone="Asia/Shanghai"'
+PREFER_TIMEZONE = f'outlook.timezone="{SYSTEM_TIMEZONE_NAME}"'
 REQUEST_TIMEOUT_SECONDS = 15.0
 DEFAULT_RETRY_DELAY_SECONDS = 1.0
 

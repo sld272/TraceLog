@@ -13,9 +13,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core import db, goal_schedule_service
 from core.graph.auth import GraphAuth, GraphAuthError
 from core.graph.client import GraphClient, GraphHTTPError
+from core.system_timezone import SYSTEM_TIMEZONE, SYSTEM_TIMEZONE_NAME
 
-LOCAL_TIMEZONE_NAME = "Asia/Shanghai"
-LOCAL_TIMEZONE = ZoneInfo(LOCAL_TIMEZONE_NAME)
+LOCAL_TIMEZONE_NAME = SYSTEM_TIMEZONE_NAME
+LOCAL_TIMEZONE = SYSTEM_TIMEZONE
 OUTLOOK_ACCOUNT_ID = "outlook"
 LOCAL_ACCOUNT_ID = "local"
 OUTLOOK_DISPLAY_NAME = "Outlook"
@@ -975,7 +976,7 @@ def _parse_graph_datetime(value: Mapping[str, Any]) -> datetime:
     if parsed.tzinfo is None:
         zone_name = str(value.get("timeZone") or LOCAL_TIMEZONE_NAME)
         aliases = {
-            "China Standard Time": LOCAL_TIMEZONE_NAME,
+            "China Standard Time": "Asia/Shanghai",
             "UTC": "UTC",
         }
         try:

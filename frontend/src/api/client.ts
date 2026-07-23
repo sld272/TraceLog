@@ -1299,7 +1299,7 @@ export interface ScheduleEvent {
   body_preview: string | null
   start_ts: number
   end_ts: number
-  /** 'YYYY-MM-DDTHH:MM:SS' wall-clock in Asia/Shanghai. */
+  /** 'YYYY-MM-DDTHH:MM:SS' wall-clock in the current system timezone. */
   start_local: string
   end_local: string
   all_day: boolean
@@ -1348,7 +1348,7 @@ export interface ScheduleStatus {
 export interface MigrationEventRef {
   id: string
   subject: string
-  /** 'YYYY-MM-DDTHH:MM:SS' wall-clock in Asia/Shanghai. */
+  /** 'YYYY-MM-DDTHH:MM:SS' wall-clock in the current system timezone. */
   start_local: string
   end_local: string
   all_day: boolean
