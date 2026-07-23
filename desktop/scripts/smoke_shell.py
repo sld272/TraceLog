@@ -64,10 +64,18 @@ def smoke(shell_executable: Path) -> None:
     engine_data_dir = temporary_root / "data"
     smoke_marker = temporary_root / "shell-loaded"
     environment = os.environ.copy()
-    environment["APPDATA"] = str(temporary_root / "appdata")
     environment["TRACELOG_DATA_DIR"] = str(engine_data_dir)
     environment["TRACELOG_DESKTOP_SMOKE"] = "1"
     environment["TRACELOG_DESKTOP_SMOKE_MARKER"] = str(smoke_marker)
+    # Electron derives userData from the per-user config root: %APPDATA% on
+    # Windows, $HOME/Library/Application Support on macOS. Redirect whichever
+    # one applies so the packaged shell never touches real user data.
+    if os.name == "nt":
+        environment["APPDATA"] = str(temporary_root / "appdata")
+    else:
+        electron_home = temporary_root / "home"
+        electron_home.mkdir(parents=True, exist_ok=True)
+        environment["HOME"] = str(electron_home)
     popen_options: dict[str, object] = {
         "cwd": temporary_root,
         "env": environment,
