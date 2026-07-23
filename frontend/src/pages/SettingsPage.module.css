@@ -153,6 +153,13 @@
   gap: var(--space-3);
 }
 
+.vectorIndexStatus {
+  margin-top: var(--space-3);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
 .field {
   display: flex;
   flex-direction: column;

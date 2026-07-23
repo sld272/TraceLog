@@ -1415,6 +1415,11 @@ function ModelSettingsPanel({
             </>
           )}
         </div>
+        {settings && (
+          <p className={styles.vectorIndexStatus}>
+            {vectorIndexStatusLabel(settings.vector_index)}
+          </p>
+        )}
       </section>
 
       <div className={styles.saveBar}>
@@ -2134,6 +2139,15 @@ function webSearchStatusLabel(settings: ModelSettings | null): string {
   if (webSearch.selected_provider === 'tavily') return '可用：Tavily'
   if (webSearch.selected_provider === 'duckduckgo') return '可用：DuckDuckGo'
   return '可用'
+}
+
+function vectorIndexStatusLabel(status: ModelSettings['vector_index']): string {
+  const main = status.ready
+    ? `向量索引已就绪（${status.indexed} 条）`
+    : `向量索引重建中 ${status.indexed}/${status.total}，期间记忆检索可能不完整`
+  return status.failed > 0
+    ? `${main}；有 ${status.failed} 条失败将自动重试`
+    : main
 }
 
 function newSoulMarkdownTemplate(name: string): string {

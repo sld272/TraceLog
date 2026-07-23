@@ -140,6 +140,7 @@ def _read_model_settings() -> dict[str, Any]:
         "embedding_api_key_masked": _mask_secret(config.get("embedding_api_key")),
         "embedding_base_url": config.get("embedding_base_url"),
         "reuse_embedding_config": not bool(config.get("embedding_api_key") or config.get("embedding_base_url")),
+        "vector_index": _vector_index_summary(),
         "secondary_model": _clean_optional(config.get("secondary_model")),
         "secondary_configured": bool(_clean_optional(config.get("secondary_model"))),
         "has_secondary_api_key": bool(config.get("secondary_api_key")),
@@ -316,6 +317,17 @@ def _vector_index_status() -> dict[str, Any]:
         "failed_count": state.failed_count if state is not None else 0,
         "missing_count": state.missing_count if state is not None else 0,
         "stale_count": state.stale_count if state is not None else 0,
+    }
+
+
+def _vector_index_summary() -> dict[str, Any]:
+    state = vector_index_service.current_collection_state()
+    return {
+        "ready": state.query_ready if state is not None else False,
+        "indexed": state.indexed_count if state is not None else 0,
+        "total": state.total_count if state is not None else _count_table("vector_docs"),
+        "pending": state.pending_count if state is not None else 0,
+        "failed": state.failed_count if state is not None else 0,
     }
 
 

@@ -323,6 +323,13 @@ export interface ModelSettings {
   embedding_api_key_masked: string | null
   embedding_base_url: string | null
   reuse_embedding_config: boolean
+  vector_index: {
+    ready: boolean
+    indexed: number
+    total: number
+    pending: number
+    failed: number
+  }
   secondary_model: string | null
   secondary_configured: boolean
   has_secondary_api_key: boolean

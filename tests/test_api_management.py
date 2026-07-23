@@ -316,6 +316,16 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, get_response.status_code)
         self.assertTrue(get_response.json()["has_api_key"])
         self.assertNotIn("sk-test-secret", json.dumps(get_response.json()))
+        self.assertEqual(
+            {
+                "ready": False,
+                "indexed": 0,
+                "total": 0,
+                "pending": 0,
+                "failed": 0,
+            },
+            get_response.json()["vector_index"],
+        )
 
         self.assertEqual(200, put_response.status_code)
         updated = put_response.json()
@@ -839,6 +849,33 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, reconcile_response.status_code)
         self.assertEqual(3, reconcile_response.json()["processed"])
         self.assertIn("vector_index", reconcile_response.json())
+
+    def test_model_settings_vector_summary_uses_current_collection_state(self) -> None:
+        from api.routes import settings
+
+        state = SimpleNamespace(
+            query_ready=False,
+            indexed_count=7,
+            total_count=10,
+            pending_count=2,
+            failed_count=1,
+        )
+        with patch(
+            "api.routes.settings.vector_index_service.current_collection_state",
+            return_value=state,
+        ):
+            summary = settings._vector_index_summary()
+
+        self.assertEqual(
+            {
+                "ready": False,
+                "indexed": 7,
+                "total": 10,
+                "pending": 2,
+                "failed": 1,
+            },
+            summary,
+        )
 
     def test_chat_route_sends_message_and_persists_reply(self) -> None:
         soul_name = quote("拾迹者")
