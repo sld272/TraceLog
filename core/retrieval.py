@@ -1,4 +1,4 @@
-"""Hybrid retrieval over SQLite FTS5 and ChromaDB."""
+"""Hybrid retrieval over SQLite FTS5 and the SQLite vector index."""
 
 from __future__ import annotations
 
@@ -152,7 +152,7 @@ def fts_search_scored(
 
 
 def vector_search_scored(query: str, k: int = 20) -> list[RetrievalHit]:
-    """Return vector hits with rank and Chroma distance when available."""
+    """Return vector hits with rank and cosine distance when available."""
     try:
         from core import vectorstore
 
@@ -268,7 +268,7 @@ def hybrid_search_scored(
     trace_context: dict | None = None,
     exclusion: RetrievalExclusion | None = None,
 ) -> list[HybridHit]:
-    """Combine FTS5 and ChromaDB with dynamic weights and explainable scores."""
+    """Combine FTS5 and exact vector search with dynamic weights and explainable scores."""
     fts_hits = fts_search_scored(query, k=candidate_k, trace_context=trace_context)
     vector_hits = vector_search_scored(query, k=candidate_k)
     fts_hits, vector_hits = _filter_excluded_post_candidates(

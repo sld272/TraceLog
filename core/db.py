@@ -73,6 +73,8 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("chat_messages", "client_request_id", "TEXT"),
     ("goals", "schedule_expectation", "TEXT"),
     ("schedule_events", "account_id", "TEXT"),
+    ("vector_index_items", "dim", "INTEGER"),
+    ("vector_index_items", "embedding", "BLOB"),
 )
 
 

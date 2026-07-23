@@ -72,6 +72,41 @@ class DbTest(unittest.TestCase):
             db.WORKSPACE_DIR = old_ws
             db.DB_PATH = old_path
 
+    def test_legacy_vector_items_gain_embedding_columns_on_init(self) -> None:
+        legacy = Path(self.tmp.name) / "legacy-vector-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            conn.execute(
+                """
+                CREATE TABLE vector_index_items (
+                    collection_name TEXT NOT NULL,
+                    doc_id TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    source_revision INTEGER NOT NULL,
+                    indexed_at REAL NOT NULL,
+                    PRIMARY KEY (collection_name, doc_id)
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            db.init_db()
+
+            columns = {
+                row["name"]: row["type"]
+                for row in db.query_all("PRAGMA table_info(vector_index_items)")
+            }
+            self.assertEqual("INTEGER", columns["dim"])
+            self.assertEqual("BLOB", columns["embedding"])
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
     def test_validate_fts5_trigram_uses_unique_probe_and_cleans_up(self) -> None:
         db.execute(
             """

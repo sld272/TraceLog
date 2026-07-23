@@ -48,6 +48,8 @@ class CollectionState:
     failed_count: int
     missing_count: int
     stale_count: int
+    indexed_count: int
+    total_count: int
 
     @property
     def query_ready(self) -> bool:
@@ -327,6 +329,8 @@ def collection_state(collection_name: str) -> CollectionState:
             failed_count=0,
             missing_count=0,
             stale_count=0,
+            indexed_count=0,
+            total_count=_count_total_docs(),
         )
     return _collection_state_from_row(row)
 
@@ -550,16 +554,48 @@ def _process_outbox_row(vectorstore, row) -> None:
             "source_revision": int(doc["source_revision"]),
         }
     )
-    vectorstore.index_document(doc_id, doc["content"], metadata)
+    vectors = vectorstore.embed_texts([str(doc["content"])])
+    # 单条 outbox 文档若被 provider 返回 0 条或 2 条 embedding，就不能安全落账。
+    if len(vectors) != 1:
+        raise RuntimeError(f"embedding response count mismatch: expected 1, got {len(vectors)}")
+    dim, embedding = vectorstore.serialize_embedding(vectors[0])
     with db.transaction() as conn:
+        dimensions = {
+            int(item["dim"])
+            for item in conn.execute(
+                """
+                SELECT DISTINCT dim
+                FROM vector_index_items
+                WHERE collection_name = ?
+                  AND dim IS NOT NULL
+                  AND embedding IS NOT NULL
+                """,
+                (collection_name,),
+            ).fetchall()
+        }
+        # 同一集合已有 2 维行、provider 此次返回 3 维向量时会触发该错误。
+        if dimensions and dimensions != {dim}:
+            existing = ", ".join(str(value) for value in sorted(dimensions))
+            raise ValueError(
+                f"embedding dimension mismatch for {collection_name}: existing {existing}, new {dim}"
+            )
         conn.execute(
             """
             INSERT OR REPLACE INTO vector_index_items(
-                collection_name, doc_id, content_hash, source_revision, indexed_at
+                collection_name, doc_id, content_hash, source_revision,
+                indexed_at, dim, embedding
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (collection_name, doc_id, doc["content_hash"], int(doc["source_revision"]), now),
+            (
+                collection_name,
+                doc_id,
+                doc["content_hash"],
+                int(doc["source_revision"]),
+                now,
+                dim,
+                embedding,
+            ),
         )
         _mark_outbox_succeeded_conn(conn, outbox_id, now)
 
@@ -674,6 +710,8 @@ def _collection_state_from_row(row) -> CollectionState:
     failed_count = _count_outbox(collection_name, STATUS_FAILED)
     missing_count = _count_missing(collection_name)
     stale_count = _count_stale(collection_name)
+    indexed_count = _count_indexed(collection_name)
+    total_count = _count_total_docs()
     return CollectionState(
         collection_name=collection_name,
         embedding_config_hash=str(row["embedding_config_hash"]),
@@ -687,6 +725,8 @@ def _collection_state_from_row(row) -> CollectionState:
         failed_count=failed_count,
         missing_count=missing_count,
         stale_count=stale_count,
+        indexed_count=indexed_count,
+        total_count=total_count,
     )
 
 
@@ -707,6 +747,8 @@ def _count_missing(collection_name: str) -> int:
           ON vector_index_items.collection_name = ?
          AND vector_index_items.doc_id = vector_docs.doc_id
         WHERE vector_index_items.doc_id IS NULL
+           OR vector_index_items.dim IS NULL
+           OR vector_index_items.embedding IS NULL
         """,
         (collection_name,),
     )
@@ -726,6 +768,29 @@ def _count_stale(collection_name: str) -> int:
         """,
         (collection_name,),
     )
+    return int(row["count"]) if row is not None else 0
+
+
+def _count_indexed(collection_name: str) -> int:
+    row = db.query_one(
+        """
+        SELECT COUNT(*) AS count
+        FROM vector_docs
+        JOIN vector_index_items
+          ON vector_index_items.collection_name = ?
+         AND vector_index_items.doc_id = vector_docs.doc_id
+        WHERE vector_index_items.dim IS NOT NULL
+          AND vector_index_items.embedding IS NOT NULL
+          AND vector_index_items.content_hash = vector_docs.content_hash
+          AND vector_index_items.source_revision >= vector_docs.source_revision
+        """,
+        (collection_name,),
+    )
+    return int(row["count"]) if row is not None else 0
+
+
+def _count_total_docs() -> int:
+    row = db.query_one("SELECT COUNT(*) AS count FROM vector_docs")
     return int(row["count"]) if row is not None else 0
 
 
@@ -761,6 +826,8 @@ def _enqueue_collection_drift(conn: sqlite3.Connection, collection_name: str) ->
           ON vector_index_items.collection_name = ?
          AND vector_index_items.doc_id = vector_docs.doc_id
         WHERE vector_index_items.doc_id IS NULL
+           OR vector_index_items.dim IS NULL
+           OR vector_index_items.embedding IS NULL
            OR vector_index_items.content_hash != vector_docs.content_hash
            OR vector_index_items.source_revision < vector_docs.source_revision
         ORDER BY vector_docs.source_revision ASC, vector_docs.doc_id ASC
@@ -991,6 +1058,8 @@ def _count_missing_conn(conn: sqlite3.Connection, collection_name: str) -> int:
           ON vector_index_items.collection_name = ?
          AND vector_index_items.doc_id = vector_docs.doc_id
         WHERE vector_index_items.doc_id IS NULL
+           OR vector_index_items.dim IS NULL
+           OR vector_index_items.embedding IS NULL
         """,
         (collection_name,),
     ).fetchone()
@@ -1019,6 +1088,8 @@ def _synced_revision_floor_conn(conn: sqlite3.Connection, collection_name: str) 
         SELECT MIN(source_revision) AS revision
         FROM vector_index_items
         WHERE collection_name = ?
+          AND dim IS NOT NULL
+          AND embedding IS NOT NULL
         """,
         (collection_name,),
     ).fetchone()

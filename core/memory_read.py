@@ -116,7 +116,7 @@ DAY_SECONDS = 86400.0
 
 # unit retrieval
 RETRIEVE_DEFAULT_K = 8
-# Semantic (ANN) gate. Chroma always returns the k nearest neighbours even when
+# Semantic gate. Vector search always returns the k nearest neighbours even when
 # the nearest is barely related; ungated, every one passes the relevance gate
 # and fills [相关记忆] with noise. A single absolute floor is not a stable
 # yardstick either — cosine bands shift across embedding models and across
@@ -535,7 +535,7 @@ def _semantic_unit_hits(query: str) -> list[SemanticHit]:
     adaptive strict gate (adaptive_sim_cutoff). Sub-cutoff neighbours are
     RETAINED here (passed=False) so callers can audit/log the rejected-but-near
     band for tuning — the gate is applied by _semantic_unit_sims, not here. A
-    hit with no distance (rare Chroma fallback) is kept fail-open (passed=True,
+    hit with no distance is kept fail-open (passed=True,
     distance_missing=True) with an ANN-order proxy sim. Empty when the query is
     blank or the index is unavailable / not query-ready. Scope is NOT applied
     here; the caller intersects these with its scope-filtered SQL candidates."""
@@ -862,7 +862,7 @@ def prefetch_semantic_recall(
     ANN→units), so a caller can overlap the embedding+ANN round trips with other
     pre-reply work and pass the result to memory_section_with_citations.
 
-    A pure read (Chroma query + SQLite reads), safe to call from a worker thread.
+    A pure read (vector query + SQLite reads), safe to call from a worker thread.
     It applies NO scope/tombstone/fold semantics — those remain in the assembly
     stage — so on its own it can only stage candidates, never widen visibility."""
     q = str(query or "")

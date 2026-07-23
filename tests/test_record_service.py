@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
+
 from core import db, record_service, vector_index_service
 from tests.helpers import require_not_none
 
@@ -14,9 +16,8 @@ class FakeVectorStore:
     def __init__(self, *, initialized: bool = True, error: BaseException | None = None) -> None:
         self.initialized = initialized
         self.error = error
-        self.indexed: list[tuple[str, str]] = []
+        self.indexed: list[str] = []
         self.deleted: list[str] = []
-        self.document_records: dict[str, dict] = {}
 
     def is_initialized(self) -> bool:
         return self.initialized
@@ -24,29 +25,22 @@ class FakeVectorStore:
     def current_collection_name(self) -> str:
         return "tracelog_test"
 
-    def index_document(self, doc_id: str, content: str, metadata: dict) -> None:
+    def embed_texts(self, texts: list[str]) -> list[np.ndarray]:
         if self.error is not None:
             raise self.error
-        self.indexed.append((str(metadata.get("post_id") or doc_id), content))
-        self.document_records[doc_id] = dict(metadata)
+        self.indexed.extend(texts)
+        return [np.asarray([1.0, 0.0], dtype=np.float32) for _ in texts]
 
     def delete_document(self, doc_id: str) -> None:
         if self.error is not None:
             raise self.error
         self.deleted.append(doc_id)
-        self.document_records.pop(doc_id, None)
 
     def delete_documents(self, doc_ids: list[str]) -> None:
         if self.error is not None:
             raise self.error
         for doc_id in doc_ids:
             self.delete_document(doc_id)
-
-    def list_document_records(self) -> dict[str, dict]:
-        if self.error is not None:
-            raise self.error
-        return {doc_id: dict(metadata) for doc_id, metadata in self.document_records.items()}
-
 
 class RecordServiceTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -68,10 +62,9 @@ class RecordServiceTest(unittest.TestCase):
         self.patches = [
             patch("core.vectorstore.is_initialized", self.fake_vectorstore.is_initialized),
             patch("core.vectorstore.current_collection_name", self.fake_vectorstore.current_collection_name),
-            patch("core.vectorstore.index_document", self.fake_vectorstore.index_document),
+            patch("core.vectorstore.embed_texts", self.fake_vectorstore.embed_texts),
             patch("core.vectorstore.delete_document", self.fake_vectorstore.delete_document),
             patch("core.vectorstore.delete_documents", self.fake_vectorstore.delete_documents),
-            patch("core.vectorstore.list_document_records", self.fake_vectorstore.list_document_records),
         ]
         for item in self.patches:
             item.start()
@@ -86,7 +79,7 @@ class RecordServiceTest(unittest.TestCase):
     def test_save_post_indexes_and_marks_collection_ready(self) -> None:
         post_id = record_service.save_post("今天想练歌")
 
-        self.assertEqual([(post_id, "今天想练歌")], self.fake_vectorstore.indexed)
+        self.assertEqual(["今天想练歌"], self.fake_vectorstore.indexed)
         post = require_not_none(db.query_one("SELECT content FROM posts WHERE id = ?", (post_id,)))
         vector_doc = require_not_none(db.query_one("SELECT * FROM vector_docs WHERE doc_id = ?", (f"post-{post_id}",)))
         self.assertEqual("今天想练歌", post["content"])
@@ -163,7 +156,7 @@ class RecordServiceTest(unittest.TestCase):
         fixed = record_service.retry_pending_vector_docs()
 
         self.assertEqual(1, fixed)
-        self.assertEqual([("p-1", "待补索引")], self.fake_vectorstore.indexed)
+        self.assertEqual(["待补索引"], self.fake_vectorstore.indexed)
         self.assertTrue(vector_index_service.collection_state("tracelog_test").query_ready)
 
     def test_retry_pending_vector_docs_keeps_outbox_failed_on_error(self) -> None:

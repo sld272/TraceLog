@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
+import numpy as np
 from PIL import Image
 
 from core import attachment_service, db, reply_service, vector_index_service, vision_service
@@ -16,8 +17,7 @@ from tests.helpers import require_not_none
 
 class FakeVectorStore:
     def __init__(self) -> None:
-        self.indexed: list[tuple[str, str]] = []
-        self.document_records: dict[str, dict] = {}
+        self.indexed: list[str] = []
 
     def is_initialized(self) -> bool:
         return True
@@ -25,16 +25,12 @@ class FakeVectorStore:
     def current_collection_name(self) -> str:
         return "tracelog_test"
 
-    def index_document(self, doc_id: str, content: str, metadata: dict) -> None:
-        self.indexed.append((str(metadata.get("post_id") or doc_id), content))
-        self.document_records[doc_id] = dict(metadata)
+    def embed_texts(self, texts: list[str]) -> list[np.ndarray]:
+        self.indexed.extend(texts)
+        return [np.asarray([1.0, 0.0], dtype=np.float32) for _ in texts]
 
     def delete_documents(self, doc_ids: list[str]) -> None:
-        for doc_id in doc_ids:
-            self.document_records.pop(doc_id, None)
-
-    def list_document_records(self) -> dict[str, dict]:
-        return {doc_id: dict(metadata) for doc_id, metadata in self.document_records.items()}
+        del doc_ids
 
 
 class PublicPostPipelineTest(unittest.TestCase):
@@ -141,13 +137,12 @@ class PublicPostPipelineTest(unittest.TestCase):
         with (
             patch("core.vectorstore.is_initialized", fake_vectorstore.is_initialized),
             patch("core.vectorstore.current_collection_name", fake_vectorstore.current_collection_name),
-            patch("core.vectorstore.index_document", fake_vectorstore.index_document),
+            patch("core.vectorstore.embed_texts", fake_vectorstore.embed_texts),
             patch("core.vectorstore.delete_documents", fake_vectorstore.delete_documents),
-            patch("core.vectorstore.list_document_records", fake_vectorstore.list_document_records),
         ):
             public_post_pipeline.execute_job(job, client=None, model="fake")  # type: ignore[arg-type]
 
-        self.assertEqual([(created.post_id, "今天想练歌")], fake_vectorstore.indexed)
+        self.assertEqual(["今天想练歌"], fake_vectorstore.indexed)
         self.assertEqual(
             ["post_created", "embedding_started", "embedding_succeeded"],
             [event["event_type"] for event in event_service.list_post_events(created.post_id)],

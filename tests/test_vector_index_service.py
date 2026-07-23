@@ -40,6 +40,44 @@ class VectorIndexServiceTest(unittest.TestCase):
         )
         self.assertEqual("今天想练歌", stored["content"])
         self.assertEqual("upsert", queued["op"])
+        state = vector_index_service.collection_state("tracelog_test")
+        self.assertEqual(0, state.indexed_count)
+        self.assertEqual(1, state.total_count)
+
+    def test_collection_state_counts_only_current_blob_as_indexed(self) -> None:
+        first = vector_index_service.build_post_doc("p-1", "第一条")
+        second = vector_index_service.build_post_doc("p-2", "第二条")
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        vector_index_service.upsert_doc(first)
+        vector_index_service.upsert_doc(second)
+        stored = db.query_one(
+            "SELECT content_hash, source_revision FROM vector_docs WHERE doc_id = ?",
+            ("post-p-1",),
+        )
+        db.execute(
+            """
+            INSERT INTO vector_index_items(
+                collection_name, doc_id, content_hash, source_revision,
+                indexed_at, dim, embedding
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "tracelog_test",
+                "post-p-1",
+                stored["content_hash"],
+                stored["source_revision"],
+                1.0,
+                2,
+                b"\x00\x00\x80?\x00\x00\x00\x00",
+            ),
+        )
+
+        state = vector_index_service.collection_state("tracelog_test")
+
+        self.assertEqual(1, state.indexed_count)
+        self.assertEqual(2, state.total_count)
 
     def test_rebuild_expected_docs_tracks_sqlite_posts(self) -> None:
         db.execute(

@@ -349,6 +349,8 @@ CREATE TABLE IF NOT EXISTS vector_index_items (
     content_hash    TEXT NOT NULL,
     source_revision INTEGER NOT NULL,
     indexed_at      REAL NOT NULL,
+    dim             INTEGER,
+    embedding       BLOB,
     PRIMARY KEY (collection_name, doc_id)
 );
 
