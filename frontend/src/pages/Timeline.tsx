@@ -38,7 +38,7 @@ import {
   withPendingCommentRerun,
 } from '@/utils/commentState'
 import { API_LIMITS } from '@/utils/constants'
-import { localDateKey, monthDayLabel, weekdayLabel } from '@/utils/schedule'
+import { localDateKey, monthDayLabel, SYSTEM_TIME_ZONE, weekdayLabel } from '@/utils/schedule'
 import styles from './Timeline.module.css'
 
 interface TimelineProps {
@@ -661,6 +661,17 @@ export function Timeline({
     <div className={styles.timeline}>
       <TimelineHeader />
 
+      {modelUnavailable && onOpenSettings && (
+        <section className={styles.firstRunGuide}>
+          <div>
+            <h2>欢迎来到 TraceLog</h2>
+            <p>先去设置里填好 API Key，就可以开始记录，让拾迹陪你回看一路走来的变化。</p>
+            <p className={styles.firstRunPrivacy}>调试日志默认不记录对话内容，你随时可以在设置里调整。</p>
+          </div>
+          <button type="button" onClick={onOpenSettings}>去设置</button>
+        </section>
+      )}
+
       {dateLensActive && selectedDate && (
         <div className={styles.filterBar} role="status">
           <span className={styles.filterBarIcon}><FilterCalendarIcon /></span>
@@ -724,17 +735,12 @@ export function Timeline({
           ) : posts.length === 0 ? (
             <div className={styles.empty}>
               <EmptyIcon />
-              <p className={styles.emptyTitle}>{modelUnavailable ? '先配置模型' : '还没有记录'}</p>
+              <p className={styles.emptyTitle}>还没有记录</p>
               <p className={styles.emptyHint}>
                 {modelUnavailable
-                  ? '配置主模型和 Embedding 后，就可以开始记录并生成回应。'
+                  ? '完成上方设置后，写下你的第一条想法。'
                   : '写下你的第一条想法，TA 们会回应你'}
               </p>
-              {modelUnavailable && onOpenSettings && (
-                <button className={styles.emptyAction} onClick={onOpenSettings}>
-                  去设置
-                </button>
-              )}
             </div>
           ) : (
             <div className={styles.feed}>
@@ -962,7 +968,12 @@ function TimelineHeader() {
   const hour = now.getHours()
   const greeting =
     hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
-  const today = now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })
+  const today = now.toLocaleDateString('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+    timeZone: SYSTEM_TIME_ZONE,
+  })
   return (
     <header className={styles.header}>
       <div>

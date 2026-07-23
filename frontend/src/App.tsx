@@ -115,9 +115,8 @@ export function App() {
   const loadModelConfiguration = useCallback(async () => {
     const settings = await getModelSettings()
     setModelConfigured(settings.configured)
-    if (!settings.configured) navigateToPage('settings')
     return settings.configured
-  }, [navigateToPage])
+  }, [])
 
   const checkModelConfiguration = useCallback(() => {
     void loadModelConfiguration().catch(() => {
