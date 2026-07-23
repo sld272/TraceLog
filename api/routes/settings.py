@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from api import deps
 from api.deps import run_sync
-from core import db, logging_service, record_service, vector_index_service, vectorstore, vision_service, web_search_service
+from core import db, file_security, logging_service, record_service, vector_index_service, vectorstore, vision_service, web_search_service
 from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
 from core.logging_service import DEFAULT_HISTORY_MAX_BYTES, DEFAULT_HISTORY_MAX_DAYS, DEFAULT_ROTATE_MAX_BYTES
 from core.logging_service import default_config as default_logging_config
@@ -381,6 +381,7 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
     os.replace(tmp, path)
+    file_security.make_private(path)
 
 
 def _path_size(path: Path) -> int:

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core import db
+from core import db, file_security
 
 DEFAULT_GRAPH_CLIENT_ID = "a5811bbd-80ac-4bad-bafe-77ea8714b173"
 CLIENT_ID_META_KEY = "graph.client_id"
@@ -224,7 +224,7 @@ class GraphAuth:
             raise GraphAuthError("无法读取 Microsoft 登录缓存") from exc
         try:
             cache.deserialize(serialized)
-            os.chmod(path, 0o600)
+            file_security.make_private(path)
         except (OSError, ValueError) as exc:
             raise GraphAuthError("Microsoft 登录缓存已损坏") from exc
 
@@ -240,6 +240,7 @@ class GraphAuth:
                 f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
             )
             try:
+                file_security.make_private(path.parent)
                 fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                 try:
                     with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -253,7 +254,7 @@ class GraphAuth:
                         pass
                     raise
                 os.replace(temp_path, path)
-                os.chmod(path, 0o600)
+                file_security.make_private(path)
             except OSError as exc:
                 try:
                     temp_path.unlink()

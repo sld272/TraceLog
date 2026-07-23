@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db, soul_service, workspace_service
+from core import db, file_security, soul_service, workspace_service
 from core.cli import config as cli_config
 
 
@@ -34,6 +34,12 @@ class WorkspaceServiceTest(unittest.TestCase):
         self.assertTrue(db.DB_PATH.exists())
         self.assertGreater(len(soul_service.list_souls()), 0)
 
+    def test_init_workspace_protects_new_workspace(self) -> None:
+        with patch("core.workspace_service.file_security.make_private") as make_private:
+            workspace_service.init_workspace()
+
+        make_private.assert_any_call(self.workspace)
+
     @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
     def test_migrate_workspace_permissions_updates_all_targets_and_is_idempotent(self) -> None:
         paths = self._create_public_permission_targets()
@@ -53,16 +59,19 @@ class WorkspaceServiceTest(unittest.TestCase):
     def test_migrate_workspace_permissions_continues_after_one_chmod_failure(self) -> None:
         paths = self._create_public_permission_targets()
         failed_path = paths["wal"]
-        real_chmod = os.chmod
+        real_make_private = file_security.make_private
 
-        def chmod_with_failure(path, mode):
+        def make_private_with_failure(path):
             if Path(path) == failed_path:
                 raise OSError("unsupported permissions")
-            real_chmod(path, mode)
+            real_make_private(path)
 
         with (
             patch.object(cli_config, "CONFIG_FILE", str(self.config_path)),
-            patch("core.workspace_service.os.chmod", side_effect=chmod_with_failure),
+            patch(
+                "core.workspace_service.file_security.make_private",
+                side_effect=make_private_with_failure,
+            ),
         ):
             workspace_service.migrate_workspace_permissions()
 

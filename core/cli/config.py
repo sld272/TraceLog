@@ -6,6 +6,7 @@ import getpass
 import json
 import os
 
+from core import file_security
 from core.cli_input import read_cli_input
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_settings
@@ -99,6 +100,7 @@ def load_config() -> dict:
     with os.fdopen(descriptor, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
     os.replace(tmp, CONFIG_FILE)
+    file_security.make_private(CONFIG_FILE)
 
     print(f"\n配置已保存到 {CONFIG_FILE} 。\n")
     return config

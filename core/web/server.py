@@ -21,10 +21,14 @@ class SPAStaticFiles(StaticFiles):
         try:
             return await super().get_response(path, scope)
         except HTTPException as exc:
+            request_path = scope.get("path", "")
+            is_asset_request = request_path == "/assets" or request_path.startswith(
+                "/assets/"
+            )
             if (
                 exc.status_code != 404
                 or scope["method"] != "GET"
-                or path.startswith("assets/")
+                or is_asset_request
                 or Path(path).suffix
             ):
                 raise

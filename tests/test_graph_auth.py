@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import tempfile
 import threading
@@ -96,7 +97,7 @@ class GraphAuthCacheTest(unittest.TestCase):
             cache_factory=FakeSerializableCache,
         )
 
-    def test_device_flow_persists_cache_with_0600_and_next_instance_reads_it(self) -> None:
+    def test_device_flow_persists_cache_and_next_instance_reads_it(self) -> None:
         auth = self._auth()
         auth.set_client_id("00000000-0000-0000-0000-123456789abc")
         flow = auth.start_device_flow()
@@ -105,12 +106,21 @@ class GraphAuthCacheTest(unittest.TestCase):
 
         cache_path = db.WORKSPACE_DIR / "graph_token_cache.json"
         self.assertTrue(cache_path.exists())
-        self.assertEqual(0o600, stat.S_IMODE(cache_path.stat().st_mode))
         self.assertEqual("person@example.com", account["username"])
 
         reloaded = self._auth()
         self.assertEqual("test-token", reloaded.get_access_token())
         self.assertEqual("person@example.com", reloaded.account_info()["username"])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
+    def test_device_flow_persists_cache_with_owner_only_permissions(self) -> None:
+        auth = self._auth()
+        auth.set_client_id("00000000-0000-0000-0000-123456789abc")
+
+        auth.complete_device_flow(auth.start_device_flow())
+
+        cache_path = db.WORKSPACE_DIR / "graph_token_cache.json"
+        self.assertEqual(0o600, stat.S_IMODE(cache_path.stat().st_mode))
 
     def test_same_client_id_reuses_application_across_auth_instances(self) -> None:
         first_auth = self._auth()
