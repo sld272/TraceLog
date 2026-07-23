@@ -29,7 +29,7 @@ MAX_STRING_LENGTH = 16_000
 DEFAULT_LOGGING_CONFIG = {
     "enabled": True,
     "level": "INFO",
-    "capture_content": True,
+    "capture_content": False,
     "rotate_max_bytes": DEFAULT_ROTATE_MAX_BYTES,
     "history_max_bytes": DEFAULT_HISTORY_MAX_BYTES,
     "history_max_days": DEFAULT_HISTORY_MAX_DAYS,
@@ -38,7 +38,7 @@ DEFAULT_LOGGING_CONFIG = {
 _lock = threading.RLock()
 _enabled = False
 _level = logging.INFO
-_capture_content = True
+_capture_content = False
 _rotate_max_bytes = DEFAULT_ROTATE_MAX_BYTES
 _history_max_bytes = DEFAULT_HISTORY_MAX_BYTES
 _history_max_days = DEFAULT_HISTORY_MAX_DAYS
@@ -92,7 +92,7 @@ def normalize_config(config: dict | None) -> dict:
     level_name = str(merged.get("level", "INFO")).upper()
     merged["level"] = level_name if hasattr(logging, level_name) else "INFO"
     merged["enabled"] = bool(merged.get("enabled", True))
-    merged["capture_content"] = bool(merged.get("capture_content", True))
+    merged["capture_content"] = bool(merged.get("capture_content", False))
     return merged
 
 

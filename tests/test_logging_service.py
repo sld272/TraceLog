@@ -85,6 +85,10 @@ class LoggingServiceTest(unittest.TestCase):
         self.assertEqual(10 * 1024 * 1024, upper["history_max_bytes"])
         self.assertEqual(365, upper["history_max_days"])
 
+    def test_content_capture_defaults_to_off(self) -> None:
+        self.assertFalse(logging_service.default_config()["capture_content"])
+        self.assertFalse(logging_service.normalize_config({})["capture_content"])
+
     def test_log_event_redacts_sensitive_values(self) -> None:
         logging_service.init_logging({"enabled": True})
 

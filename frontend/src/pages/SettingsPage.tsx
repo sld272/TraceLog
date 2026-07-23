@@ -124,7 +124,7 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   logging: {
     enabled: true,
     level: 'INFO',
-    capture_content: true,
+    capture_content: false,
     rotate_max_bytes: 10 * 1024 * 1024,
     history_max_bytes: 50 * 1024 * 1024,
     history_max_days: 14,
@@ -1881,13 +1881,13 @@ function DataSettingsPanel({
           <div className={styles.logToggleRow}>
             <div>
               <p className={styles.logPrimary}>记录完整对话内容</p>
-              <p className={styles.sectionMeta}>用于本机调试，包含你与 AI 的全部对话内容，仅保存在这台设备。关闭后仍会记录调用统计（不含内容）；失败的调用会保留截断后的内容用于排障。</p>
+              <p className={styles.sectionMeta}>默认关闭。开启后会在本机保存你与 AI 的完整对话内容；关闭时仍会记录不含内容的调用统计，失败调用会保留截断片段用于排障。</p>
             </div>
             <label className={styles.switch}>
               <input
                 type="checkbox"
                 aria-label="记录完整对话内容"
-                checked={logStats?.capture_content ?? true}
+                checked={logStats?.capture_content ?? false}
                 disabled={!logStats || logAction !== null}
                 onChange={(event) => onCaptureContentChange(event.target.checked)}
               />
