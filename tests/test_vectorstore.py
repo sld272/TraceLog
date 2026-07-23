@@ -1,29 +1,30 @@
 from __future__ import annotations
 
-import builtins
 import json
-import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from core import db, logging_service, vectorstore
+import numpy as np
+
+from core import db, logging_service, vector_index_service, vectorstore
 
 
-class FakeCollection:
-    def __init__(self, results, *, fail_with_include: bool = False) -> None:
-        self.results = results
-        self.fail_with_include = fail_with_include
+class FakeEmbeddingClient:
+    def __init__(self, vectors: dict[str, list[float]] | None = None) -> None:
+        self.vectors = vectors or {}
+        self.error_for: set[str] = set()
+        self.calls: list[list[str]] = []
 
-    def count(self) -> int:
-        return len(self.results.get("ids", [[]])[0])
-
-    def query(self, **kwargs):
-        if self.fail_with_include and "include" in kwargs:
-            raise RuntimeError("include unsupported")
-        return self.results
+    def embed_texts(self, texts: list[str]) -> list[np.ndarray]:
+        self.calls.append(list(texts))
+        if any(text in self.error_for for text in texts):
+            raise RuntimeError("embedding endpoint unavailable")
+        return [
+            np.asarray(self.vectors.get(text, [1.0, 0.0]), dtype=np.float32)
+            for text in texts
+        ]
 
 
 class VectorStoreTest(unittest.TestCase):
@@ -31,9 +32,12 @@ class VectorStoreTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.workspace = Path(self.tmp.name) / "workspace"
         self.old_workspace = db.WORKSPACE_DIR
+        self.old_db_path = db.DB_PATH
         db.WORKSPACE_DIR = self.workspace
+        db.DB_PATH = self.workspace / "state.db"
+        db.init_db()
         logging_service.init_logging({"enabled": True})
-        self.old_collection = vectorstore._collection
+        self.old_embedding_client = vectorstore._embedding_client
         self.old_embedding_diagnostics = vectorstore._embedding_diagnostics
         self.old_collection_name = vectorstore._collection_name
         self.old_embedding_config_hash = vectorstore._embedding_config_hash
@@ -41,21 +45,15 @@ class VectorStoreTest(unittest.TestCase):
     def tearDown(self) -> None:
         logging_service.init_logging({"enabled": False})
         db.WORKSPACE_DIR = self.old_workspace
-        vectorstore._collection = self.old_collection
+        db.DB_PATH = self.old_db_path
+        vectorstore._embedding_client = self.old_embedding_client
         vectorstore._embedding_diagnostics = self.old_embedding_diagnostics
         vectorstore._collection_name = self.old_collection_name
         vectorstore._embedding_config_hash = self.old_embedding_config_hash
         self.tmp.cleanup()
 
     def test_init_failure_raises_without_exiting_process(self) -> None:
-        original_import = builtins.__import__
-
-        def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "chromadb":
-                raise ImportError("chromadb unavailable")
-            return original_import(name, globals, locals, fromlist, level)
-
-        with patch("builtins.__import__", side_effect=fake_import):
+        with patch("core.vectorstore.EmbeddingClient", side_effect=ImportError("openai unavailable")):
             with self.assertRaises(vectorstore.VectorStoreInitError) as raised:
                 vectorstore.init_vectorstore(
                     api_key="test-key",
@@ -70,55 +68,34 @@ class VectorStoreTest(unittest.TestCase):
         self.assertIn("embedding_model=test-embedding", message)
         self.assertIn("embedding_base_url=https://example.invalid/v1", message)
         self.assertIn("embedding_base_url_source=base_url", message)
-        self.assertIn("ImportError: chromadb unavailable", message)
+        self.assertIn("ImportError: openai unavailable", message)
         self.assertIn("配置 embedding_base_url", message)
+        event = self._last_log_event("external_api_error")
+        self.assertEqual("vectorstore_init", event["operation"])
+        self.assertEqual("ImportError", event["exception_type"])
 
     def test_init_uses_configured_base_url_without_adding_v1(self) -> None:
         captured: list[dict] = []
-        collections: list[dict] = []
 
-        class FakeOpenAIEmbeddingFunction:
-            def __init__(self, **kwargs):
+        class CapturingEmbeddingClient(FakeEmbeddingClient):
+            def __init__(self, **kwargs) -> None:
+                super().__init__()
                 captured.append(kwargs)
 
-        class FakeEmbeddingFunction:
-            def __class_getitem__(cls, item):
-                del item
-                return cls
-
-        class FakeClient:
-            def __init__(self, path):
-                self.path = path
-
-            def get_or_create_collection(self, **kwargs):
-                collections.append(kwargs)
-                return FakeCollection({"ids": [[]]})
-
-        modules = {
-            "chromadb": types.SimpleNamespace(PersistentClient=FakeClient),
-            "chromadb.api": types.SimpleNamespace(),
-            "chromadb.api.types": types.SimpleNamespace(Embeddable=object, EmbeddingFunction=FakeEmbeddingFunction),
-            "chromadb.utils": types.SimpleNamespace(),
-            "chromadb.utils.embedding_functions": types.SimpleNamespace(),
-            "chromadb.utils.embedding_functions.openai_embedding_function": types.SimpleNamespace(
-                OpenAIEmbeddingFunction=FakeOpenAIEmbeddingFunction
-            ),
-        }
-
-        with patch.dict(sys.modules, modules):
-            vectorstore.init_vectorstore(
+        with patch("core.vectorstore.EmbeddingClient", CapturingEmbeddingClient):
+            first = vectorstore.init_vectorstore(
                 api_key="main-key",
                 base_url="https://api.openai.com",
                 embedding_model="text-embedding-3-small",
             )
-            vectorstore.init_vectorstore(
+            second = vectorstore.init_vectorstore(
                 api_key="main-key",
                 base_url="https://api.deepseek.com",
                 embedding_model="text-embedding-3-small",
                 embedding_base_url="https://api.openai.com/v1",
                 embedding_api_key="embedding-key",
             )
-            vectorstore.init_vectorstore(
+            third = vectorstore.init_vectorstore(
                 api_key="rotated-main-key",
                 base_url="https://api.deepseek.com",
                 embedding_model="text-embedding-3-small",
@@ -126,18 +103,17 @@ class VectorStoreTest(unittest.TestCase):
                 embedding_api_key="rotated-embedding-key",
             )
 
-        self.assertEqual("https://api.openai.com", captured[0]["api_base"])
+        self.assertEqual("https://api.openai.com", captured[0]["base_url"])
         self.assertEqual("main-key", captured[0]["api_key"])
-        self.assertEqual("https://api.openai.com/v1", captured[1]["api_base"])
+        self.assertEqual("https://api.openai.com/v1", captured[1]["base_url"])
         self.assertEqual("embedding-key", captured[1]["api_key"])
         self.assertEqual("rotated-embedding-key", captured[2]["api_key"])
-        self.assertNotEqual(collections[0]["name"], collections[1]["name"])
-        self.assertEqual(collections[1]["name"], collections[2]["name"])
-        self.assertEqual("text-embedding-3-small", collections[0]["metadata"]["embedding_model"])
-        self.assertEqual("https://api.openai.com", collections[0]["metadata"]["embedding_base_url"])
-        self.assertEqual("cosine", collections[0]["metadata"]["hnsw:space"])
-        self.assertEqual("https://api.openai.com/v1", collections[1]["metadata"]["embedding_base_url"])
-        self.assertEqual("cosine", collections[1]["metadata"]["hnsw:space"])
+        self.assertNotEqual(first.collection_name, second.collection_name)
+        self.assertEqual(second.collection_name, third.collection_name)
+        state = vector_index_service.collection_state(second.collection_name)
+        self.assertEqual("text-embedding-3-small", state.embedding_model)
+        self.assertEqual("https://api.openai.com/v1", state.embedding_base_url)
+        self.assertEqual(str(db.DB_PATH), third.path)
 
     def test_collection_name_isolated_by_embedding_model_and_base_url(self) -> None:
         first = vectorstore._collection_name_for_embedding_config(
@@ -179,66 +155,120 @@ class VectorStoreTest(unittest.TestCase):
 
         self.assertNotEqual(old_fingerprint, new_fingerprint)
 
-    def test_query_post_hits_returns_ranks_and_distances(self) -> None:
-        vectorstore._collection = FakeCollection(
-            {"ids": [["p-1", "p-2"]], "distances": [[0.2, 0.7]]}
+    def test_outbox_stores_normalized_little_endian_float32_blob(self) -> None:
+        client = self._activate({"今天想练歌": [3.0, 4.0]})
+        doc = vector_index_service.build_post_doc("p-1", "今天想练歌")
+        self.assertIsNotNone(doc)
+        vector_index_service.upsert_doc(doc)
+
+        self.assertEqual(1, vector_index_service.process_outbox())
+
+        item = db.query_one(
+            """
+            SELECT dim, embedding
+            FROM vector_index_items
+            WHERE collection_name = ? AND doc_id = ?
+            """,
+            ("tracelog_test", "post-p-1"),
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(2, item["dim"])
+        stored = np.frombuffer(item["embedding"], dtype="<f4")
+        np.testing.assert_allclose(np.asarray([0.6, 0.8], dtype=np.float32), stored)
+        self.assertEqual([["今天想练歌"]], client.calls)
+        self.assertTrue(vector_index_service.collection_state("tracelog_test").query_ready)
+
+    def test_outbox_rejects_dimension_change_within_collection(self) -> None:
+        self._activate({"二维": [1.0, 0.0], "三维": [1.0, 0.0, 0.0]})
+        first = vector_index_service.build_post_doc("p-1", "二维")
+        second = vector_index_service.build_post_doc("p-2", "三维")
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        vector_index_service.upsert_doc(first)
+        self.assertEqual(1, vector_index_service.process_outbox())
+        vector_index_service.upsert_doc(second)
+
+        self.assertEqual(0, vector_index_service.process_outbox())
+
+        failed = db.query_one(
+            "SELECT status, error FROM vector_outbox WHERE doc_id = ?",
+            ("post-p-2",),
+        )
+        self.assertEqual("failed", failed["status"])
+        self.assertIn("dimension mismatch", failed["error"])
+        self.assertEqual(1, vectorstore.indexed_count())
+
+    def test_query_post_hits_returns_exact_cosine_ranks_and_distances(self) -> None:
+        self._activate(
+            {
+                "焦虑": [1.0, 0.0],
+                "很相关": [1.0, 0.0],
+                "较相关": [0.8, 0.6],
+                "无关": [0.0, 1.0],
+            }
+        )
+        self._index_docs(
+            vector_index_service.build_post_doc("p-1", "很相关"),
+            vector_index_service.build_post_vision_doc("p-2", "较相关", ["a-1"]),
+            vector_index_service.build_post_doc("p-3", "无关"),
         )
 
-        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=True):
-            hits = vectorstore.query_post_hits("焦虑", n_results=20)
+        hits = vectorstore.query_post_hits("焦虑", n_results=2)
 
-        self.assertEqual(
-            [
-                vectorstore.VectorHit("p-1", 1, 0.2),
-                vectorstore.VectorHit("p-2", 2, 0.7),
-            ],
-            hits,
+        self.assertEqual(["p-1", "p-2"], [hit.post_id for hit in hits])
+        self.assertEqual([1, 2], [hit.rank for hit in hits])
+        self.assertAlmostEqual(0.0, hits[0].distance)
+        self.assertAlmostEqual(0.2, hits[1].distance, places=6)
+
+    def test_query_documents_translates_existing_type_filters_to_sql(self) -> None:
+        self._activate(
+            {
+                "偏好": [1.0, 0.0],
+                "unit": [1.0, 0.0],
+                "chat": [0.9, 0.1],
+                "post": [0.8, 0.2],
+                "tombstone": [0.7, 0.3],
+            }
+        )
+        self._index_docs(
+            vector_index_service.build_unit_doc("u-1", "unit", "global", "public", "preference"),
+            vector_index_service.build_chat_doc(1, 1, "拾迹者", "user", "chat"),
+            vector_index_service.build_post_doc("p-1", "post"),
+            vector_index_service.build_tombstone_doc("u-2", "tombstone", "global", "public", "false"),
         )
 
-    def test_query_post_hits_falls_back_when_distances_unavailable(self) -> None:
-        vectorstore._collection = FakeCollection(
-            {"ids": [["p-1", "p-2"]]},
-            fail_with_include=True,
+        unit_hits = vectorstore.query_documents("偏好", where={"type": "unit"})
+        evidence_hits = vectorstore.query_documents(
+            "偏好",
+            where={"type": {"$in": ["post", "chat"]}},
         )
 
-        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=True):
-            hits = vectorstore.query_post_hits("焦虑", n_results=20)
-
-        self.assertEqual(
-            [
-                vectorstore.VectorHit("p-1", 1, None),
-                vectorstore.VectorHit("p-2", 2, None),
-            ],
-            hits,
-        )
+        self.assertEqual(["unit-u-1"], [hit.doc_id for hit in unit_hits])
+        self.assertEqual(["chat-1", "post-p-1"], [hit.doc_id for hit in evidence_hits])
+        self.assertEqual("unit", unit_hits[0].type)
+        self.assertEqual("u-1", unit_hits[0].source_id)
+        self.assertEqual("unit", unit_hits[0].document)
 
     def test_query_documents_skips_vector_search_when_collection_not_ready(self) -> None:
-        vectorstore._collection = FakeCollection(
-            {"ids": [["p-1"]], "distances": [[0.2]]}
-        )
+        client = self._activate({"焦虑": [1.0, 0.0]})
 
         with patch("core.vector_index_service.is_current_collection_query_ready", return_value=False):
             hits = vectorstore.query_documents("焦虑", n_results=20)
 
         self.assertEqual([], hits)
+        self.assertEqual([], client.calls)
 
-    def test_query_post_hits_logs_when_query_fails_after_fallback(self) -> None:
-        class FailingCollection:
-            def count(self) -> int:
-                return 1
-
-            def query(self, **kwargs):
-                raise RuntimeError("embedding endpoint unavailable")
-
-        vectorstore._collection = FailingCollection()
+    def test_query_post_hits_logs_when_embedding_query_fails(self) -> None:
+        client = self._activate({"帖子": [1.0, 0.0]})
+        self._index_docs(vector_index_service.build_post_doc("p-1", "帖子"))
+        client.error_for.add("焦虑")
         vectorstore._embedding_diagnostics = {
             "embedding_model": "text-embedding-3-small",
             "embedding_base_url": "https://api.deepseek.com",
             "embedding_base_url_source": "base_url",
         }
 
-        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=True):
-            hits = vectorstore.query_post_hits("焦虑", n_results=20)
+        hits = vectorstore.query_post_hits("焦虑", n_results=20)
         event = self._last_log_event("vector_query_failed")
 
         self.assertEqual([], hits)
@@ -247,13 +277,24 @@ class VectorStoreTest(unittest.TestCase):
         self.assertEqual("embedding endpoint unavailable", event["exception_message"])
         self.assertIn("配置 embedding_base_url", " ".join(event["suggestions"]))
 
-    def test_query_post_ids_preserves_existing_behavior(self) -> None:
-        vectorstore._collection = FakeCollection(
-            {"ids": [["p-1", "p-2"]], "distances": [[0.2, 0.7]]}
+    def _activate(self, vectors: dict[str, list[float]]) -> FakeEmbeddingClient:
+        client = FakeEmbeddingClient(vectors)
+        vectorstore._embedding_client = client
+        vectorstore._collection_name = "tracelog_test"
+        vectorstore._embedding_config_hash = "hash"
+        vector_index_service.ensure_collection(
+            collection_name="tracelog_test",
+            embedding_config_hash="hash",
+            embedding_model="embedding",
+            embedding_base_url="https://example.invalid/v1",
         )
+        return client
 
-        with patch("core.vector_index_service.is_current_collection_query_ready", return_value=True):
-            self.assertEqual(["p-1", "p-2"], vectorstore.query_post_ids("焦虑", n_results=20))
+    def _index_docs(self, *docs) -> None:
+        for doc in docs:
+            self.assertIsNotNone(doc)
+            vector_index_service.upsert_doc(doc)
+        self.assertEqual(len(docs), vector_index_service.process_outbox())
 
     def _last_log_event(self, event_name: str) -> dict:
         log_path = self.workspace / "logs" / "current.jsonl"

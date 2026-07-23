@@ -1,7 +1,7 @@
 .nav {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  height: 100%;
   gap: var(--space-5);
 }
 
@@ -108,6 +108,47 @@
   font-size: var(--text-xs);
 }
 
+/* 私聊区吃掉主导航与底部设置之间的全部空间，列表按实测高度裁剪条数（LeftNav.tsx） */
+.dmSection {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dmList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.viewAll {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  text-align: left;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.viewAll:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.viewAllActive {
+  background: #ffffff;
+  color: var(--color-accent);
+  font-weight: var(--weight-medium);
+  box-shadow: var(--shadow-sm);
+}
+
 /* 私聊 entries — avatar + name + one-line persona preview */
 .dmItem {
   display: flex;
@@ -170,4 +211,11 @@
   margin-top: auto;
   padding-top: var(--space-4);
   border-top: 1px solid var(--color-border);
+}
+
+/* 移动端抽屉可整体滚动（AppShell），保证「查看全部」入口在矮窗口下也有一行可见 */
+@media (max-width: 767px) {
+  .dmList {
+    min-height: 44px;
+  }
 }

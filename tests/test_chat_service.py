@@ -3,20 +3,21 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core import chat_service, db, logging_service, memory_unit_service, memory_view_service, soul_relationship_memory, soul_service, suggestion_pipeline, tool_config_service, web_search_gate, web_search_service
+from core import chat_service, db, logging_service, memory_read, memory_unit_service, memory_view_service, query_rewriter, reply_context, schedule_context, soul_relationship_memory, soul_service, suggestion_pipeline, turn_prep, web_search_gate, web_search_service
 from core.llm import reply_router
 from core.soul_service import SoulContext
-from tests.helpers import require_not_none
+from tests.helpers import FakeStreamingClient, require_not_none
 
 
 class FakeClient:
     def __init__(self, payload: dict | None = None, content: str | None = None) -> None:
-        self.payload = payload or {"reply": "收到，我陪你捋一下。", "todos_to_upsert": [], "todos_to_delete": []}
+        self.payload = payload or {"reply": "收到，我陪你捋一下。"}
         self.content = content
         self.calls: list[dict] = []
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
@@ -29,6 +30,66 @@ class FakeClient:
         )
 
 
+class ReplyRouterStreamTest(unittest.TestCase):
+    """Router-level streaming: accumulation + on_delta order, empty stream, and
+    mid-stream failure — all without touching the DB."""
+
+    def _context(self, *, context: str = "", messages=None):
+        messages = messages or [SimpleNamespace(role="user", content="在吗")]
+        return SimpleNamespace(context=context, messages=messages)
+
+    def _soul(self) -> SoulContext:
+        return SoulContext("测试", None, 0, "测试人格")
+
+    def test_stream_accumulates_and_calls_on_delta_in_order(self) -> None:
+        client = FakeStreamingClient(["你", "好", "呀"])
+        seen: list[str] = []
+        with patch.object(reply_router, "_relationship_memory", return_value="（暂无）"):
+            data = reply_router.call_soul_chat_reply_stream(
+                client, "fake-model", self._context(), self._soul(), on_delta=seen.append
+            )
+
+        self.assertEqual(["你", "好", "呀"], seen)
+        self.assertEqual({"reply": "你好呀"}, data)
+        stream_call = client.stream_calls[-1]
+        self.assertTrue(stream_call["stream"])
+        self.assertNotIn("response_format", stream_call)  # plain text, no JSON mode
+
+    def test_empty_stream_returns_none(self) -> None:
+        client = FakeStreamingClient([])
+        seen: list[str] = []
+        with patch.object(reply_router, "_relationship_memory", return_value="（暂无）"):
+            data = reply_router.call_soul_chat_reply_stream(
+                client, "fake-model", self._context(), self._soul(), on_delta=seen.append
+            )
+
+        self.assertIsNone(data)
+        self.assertEqual([], seen)
+
+    def test_mid_stream_error_raises_chat_reply_stream_error(self) -> None:
+        client = FakeStreamingClient(["部分文本"], raise_after=1)
+        seen: list[str] = []
+        with patch.object(reply_router, "_relationship_memory", return_value="（暂无）"):
+            with self.assertRaises(reply_router.ChatReplyStreamError) as ctx:
+                reply_router.call_soul_chat_reply_stream(
+                    client, "fake-model", self._context(), self._soul(), on_delta=seen.append
+                )
+
+        self.assertEqual(["部分文本"], seen)  # delta delivered before the break
+        self.assertEqual(len("部分文本"), ctx.exception.accumulated_length)
+
+    def test_stream_without_current_user_message_returns_none(self) -> None:
+        client = FakeStreamingClient(["无关"])
+        context = self._context(messages=[SimpleNamespace(role="assistant", content="旧回复")])
+        with patch.object(reply_router, "_relationship_memory", return_value="（暂无）"):
+            data = reply_router.call_soul_chat_reply_stream(
+                client, "fake-model", context, self._soul(), on_delta=lambda _text: None
+            )
+
+        self.assertIsNone(data)
+        self.assertEqual([], client.stream_calls)  # never reached the LLM
+
+
 class ChatServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         # suggestion extraction is on by default; disable it for tests that
@@ -37,7 +98,7 @@ class ChatServiceTest(unittest.TestCase):
             os.environ,
             {
                 suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
-                suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "0",
+                suggestion_pipeline.SCHEDULE_SUGGESTIONS_ENABLED_ENV: "0",
             },
         )
         suggestions_off.start()
@@ -122,7 +183,7 @@ class ChatServiceTest(unittest.TestCase):
         self.assertEqual(["测试好友", "拾迹者"], [thread.soul_name for thread in threads])
 
     def test_build_chat_context_separates_memory_and_messages(self) -> None:
-        # background (portrait + v2 memory + todo) lands in context.context;
+        # background (portrait + v2 memory) lands in context.context;
         # the live conversation stays in context.messages, never duplicated into
         # the background block.
         thread = chat_service.get_or_create_thread("拾迹者")
@@ -138,22 +199,118 @@ class ChatServiceTest(unittest.TestCase):
             source="user_authored",
             actor="user",
         )
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "复习数学", "未完成", 1.0, 1.0),
-        )
-
         context = chat_service.build_chat_context(thread.id, "考试怎么办")
 
         self.assertIn("拾迹者像一个一直陪你翻旧相册的老朋友", context.soul.soul)
         self.assertIn("测试用户", context.context)       # portrait baseline
         self.assertIn("最近在准备期末考试", context.context)  # v2 memory in # 记忆
-        self.assertIn("复习数学", context.context)         # todo
         self.assertNotIn("聊聊考试", context.context)      # prior turn not echoed as background
         self.assertEqual(["聊聊考试"], [message.content for message in context.messages])
+
+    def test_build_chat_context_injects_recent_before_prep_and_mentions_after_rewrite(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        recent = schedule_context.RecentScheduleContext(
+            section="# 近期日程\n\n本周共 1 项安排",
+            event_ids=frozenset({"recent-event"}),
+        )
+        rewrite = query_rewriter.RewrittenQuery(
+            raw_query="聊聊马拉松",
+            semantic_query="聊聊马拉松",
+            keywords=["马拉松"],
+            used_rewrite=True,
+        )
+        prep = turn_prep.TurnPrep(
+            rewritten=rewrite,
+            search_decision=web_search_gate.default_decision("disabled"),
+        )
+        with (
+            patch(
+                "core.chat_service.schedule_context.build_recent_schedule_context",
+                return_value=recent,
+            ),
+            patch(
+                "core.chat_service.reply_context.prepare_turn_with_prefetch",
+                return_value=(prep, None),
+            ) as prepare,
+            patch(
+                "core.chat_service.schedule_context.build_mentioned_schedule_section",
+                return_value="# 提及的日程\n\n- [3 天后] 马拉松",
+            ) as mentioned,
+            patch(
+                "core.chat_service.memory_read.memory_section_with_citations",
+                return_value=memory_read.MemorySection(""),
+            ),
+        ):
+            context = chat_service.build_chat_context(thread.id, "聊聊马拉松")
+
+        hint = prepare.call_args.kwargs["context_hint"]
+        self.assertIn("# 近期日程", hint)
+        self.assertNotIn("# 提及的日程", hint)
+        mentioned.assert_called_once_with(
+            ["马拉松"],
+            exclude_event_ids=frozenset({"recent-event"}),
+        )
+        self.assertIn("# 近期日程", context.context)
+        self.assertIn("# 提及的日程", context.context)
+        self.assertLess(context.context.index("# 近期日程"), context.context.index("# 提及的日程"))
+
+    def test_build_chat_context_overlaps_prep_and_prefetch(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        chat_service.append_user_message(thread.id, "聊聊考试")
+
+        # A 2-party barrier releases only if prepare_turn and the recall prefetch are
+        # BOTH in flight at once; a serial submission would leave one side waiting and
+        # trip the timeout (BrokenBarrierError) -> the turn fails the test.
+        barrier = threading.Barrier(2, timeout=5)
+        real_prepare_turn = turn_prep.prepare_turn
+        real_prefetch = memory_read.prefetch_semantic_recall
+        real_section = memory_read.memory_section_with_citations
+        seen = {"prep": False, "prefetch": False, "consumed": None}
+        produced = {}
+
+        def fake_prep(*args, **kwargs):
+            seen["prep"] = True
+            barrier.wait()
+            return real_prepare_turn(*args, **kwargs)
+
+        def fake_prefetch(*args, **kwargs):
+            seen["prefetch"] = True
+            barrier.wait()
+            produced["value"] = real_prefetch(*args, **kwargs)
+            return produced["value"]
+
+        def spy_section(*args, **kwargs):
+            seen["consumed"] = kwargs.get("prefetched")
+            return real_section(*args, **kwargs)
+
+        with patch("core.turn_prep.prepare_turn", side_effect=fake_prep), \
+             patch("core.memory_read.prefetch_semantic_recall", side_effect=fake_prefetch), \
+             patch("core.memory_read.memory_section_with_citations", side_effect=spy_section):
+            context = chat_service.build_chat_context(thread.id, "考试怎么办")
+
+        self.assertTrue(seen["prep"])                          # gate+rewrite ran
+        self.assertTrue(seen["prefetch"])                      # recall prefetch ran concurrently
+        self.assertIs(seen["consumed"], produced["value"])     # its result fed memory assembly
+        self.assertTrue(context.timings["recall_prefetch_reused"])  # reused (rewrite unchanged)
+
+    def test_prepare_turn_with_prefetch_downgrades_prefetch_failure_to_none(self) -> None:
+        # The prefetch is best-effort: a worker-thread crash must be swallowed to a
+        # WARNING + None, never surfacing as a new failure mode for the turn.
+        logged: list[str] = []
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("chroma down")
+
+        with patch("core.memory_read.prefetch_semantic_recall", side_effect=boom), \
+             patch.object(reply_context.logging_service, "log_event",
+                          side_effect=lambda event, **fields: logged.append(event)):
+            prep, prefetched = reply_context.prepare_turn_with_prefetch(
+                None, None, user_message="考试怎么办", channel="chat",
+            )
+
+        self.assertIsNone(prefetched)                                  # failure -> None, not raised
+        self.assertEqual("考试怎么办", prep.rewritten.semantic_query)   # turn prep still returned
+        self.assertIn("recall_prefetch_failed", logged)                # logged as WARNING
 
     def test_build_chat_context_loads_current_soul_relationship_view_only(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
@@ -189,13 +346,13 @@ class ChatServiceTest(unittest.TestCase):
         thread = chat_service.get_or_create_thread("拾迹者")
 
         with (
-            patch("core.reply_context.web_search_gate.decide") as decide,
+            patch("core.llm.turn_prep_router.call_turn_prep") as call_turn_prep,
             patch("core.reply_context.web_search_service.search") as search,
         ):
             context = chat_service.build_chat_context(thread.id, "短句")
 
         self.assertNotIn("# 网页搜索结果", context.context)
-        decide.assert_not_called()
+        call_turn_prep.assert_not_called()
         search.assert_not_called()
 
     def test_build_chat_context_injects_web_search_results_when_gate_requests_search(self) -> None:
@@ -230,9 +387,19 @@ class ChatServiceTest(unittest.TestCase):
             elapsed_ms=1,
         )
 
+        # Gate + rewrite now share one merged turn-prep call; the merged JSON carries
+        # both halves, and the chat path must fire it exactly once.
+        merged = {
+            "should_search": True,
+            "queries": ["OpenAI latest model"],
+            "reason": "当前事实",
+            "freshness_required": True,
+            "semantic_query": "用户询问 OpenAI 最新模型",
+            "keywords": ["OpenAI"],
+        }
         with (
             patch("core.reply_context.web_search_service.effective_config", return_value=settings),
-            patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
+            patch("core.llm.turn_prep_router.call_turn_prep", return_value=merged) as call_turn_prep,
             patch("core.reply_context.web_search_service.search", return_value=run) as search,
         ):
             context = chat_service.build_chat_context(
@@ -245,12 +412,12 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIn("# 网页搜索结果", context.context)
         self.assertIn("OpenAI news", context.context)
         self.assertIn("最新公开信息", context.context)
-        decide.assert_called_once()
+        call_turn_prep.assert_called_once()
         search.assert_called_once()
 
     def test_chat_reply_success_writes_assistant_message(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
-        client = FakeClient({"reply": "先睡一下也行。", "todos_to_upsert": [], "todos_to_delete": []})
+        client = FakeClient({"reply": "先睡一下也行。"})
 
         result = chat_service.call_chat_reply(thread.id, "我好累", client, "fake-model")
         messages = chat_service.list_thread_messages(thread.id)
@@ -259,6 +426,147 @@ class ChatServiceTest(unittest.TestCase):
         self.assertIsNotNone(result.assistant_message_id)
         self.assertEqual(["user", "assistant"], [message.role for message in messages])
         self.assertEqual("先睡一下也行。", messages[-1].content)
+
+    def test_chat_reply_accepts_plain_text_without_json_wrapper(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeClient(content="就直接说这句，没有 JSON。")
+
+        result = chat_service.call_chat_reply(thread.id, "在吗", client, "fake-model")
+
+        self.assertTrue(result.ok)
+        self.assertEqual("就直接说这句，没有 JSON。", chat_service.list_thread_messages(thread.id)[-1].content)
+        # plain-text contract: the reply call must not send response_format
+        self.assertNotIn("response_format", client.calls[-1])
+
+    def test_chat_reply_unwraps_stray_json_wrapper_and_fences(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeClient(content='```json\n{"reply": "被包起来的正文"}\n```')
+
+        result = chat_service.call_chat_reply(thread.id, "在吗", client, "fake-model")
+
+        self.assertTrue(result.ok)
+        self.assertEqual("被包起来的正文", chat_service.list_thread_messages(thread.id)[-1].content)
+
+    def test_stream_chat_reply_emits_deltas_then_done_and_persists(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeStreamingClient(["先", "睡", "一下"])
+
+        events = list(chat_service.stream_chat_reply(thread.id, "我好累", client, "fake-model"))
+
+        self.assertEqual(["delta", "delta", "delta", "done"], [event["type"] for event in events])
+        self.assertEqual(["先", "睡", "一下"], [event["text"] for event in events if event["type"] == "delta"])
+        done = events[-1]["result"]
+        self.assertTrue(done["ok"])
+        self.assertEqual("先睡一下", done["reply"])
+        # done arrives only after post-processing: assistant message is persisted,
+        # and the evidence has been recorded (memory accounting ran).
+        messages = chat_service.list_thread_messages(thread.id)
+        self.assertEqual(["user", "assistant"], [message.role for message in messages])
+        self.assertEqual("先睡一下", messages[-1].content)
+        self.assertEqual(done["assistant_message_id"], messages[-1].id)
+        self.assertGreater(
+            require_not_none(db.query_one("SELECT COUNT(*) AS count FROM memory_ingest_events"))["count"],
+            0,
+        )
+
+    def test_non_stream_retry_reuses_completed_stream_request(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeStreamingClient(["第一", "次回复"])
+        request_id = "chat-turn-1"
+
+        events = list(chat_service.stream_chat_reply(
+            thread.id,
+            "在吗",
+            client,
+            "fake-model",
+            request_id=request_id,
+        ))
+        streamed = events[-1]["result"]
+        calls_after_stream = len(client.calls)
+        retried = chat_service.call_chat_reply(
+            thread.id,
+            "在吗",
+            client,
+            "fake-model",
+            request_id=request_id,
+        )
+
+        self.assertEqual(streamed["user_message_id"], retried.user_message_id)
+        self.assertEqual(streamed["assistant_message_id"], retried.assistant_message_id)
+        self.assertEqual(calls_after_stream, len(client.calls))
+        self.assertEqual(
+            ["user", "assistant"],
+            [message.role for message in chat_service.list_thread_messages(thread.id)],
+        )
+
+    def test_request_id_cannot_be_reused_for_different_content(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeClient({"reply": "第一次回复"})
+        chat_service.call_chat_reply(
+            thread.id,
+            "第一句",
+            client,
+            "fake-model",
+            request_id="same-request",
+        )
+
+        with self.assertRaisesRegex(ValueError, "同一 request_id"):
+            chat_service.call_chat_reply(
+                thread.id,
+                "第二句",
+                client,
+                "fake-model",
+                request_id="same-request",
+            )
+
+    def test_stream_chat_reply_attaches_suggestions_in_done(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        candidate = {"title": "准备考研", "detail": None, "horizon": "long", "confidence": 0.92}
+        client = FakeStreamingClient(["那我们", "认真规划"])
+
+        with patch.dict(os.environ, {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "1"}), patch(
+            "core.suggestion_pipeline.suggestion_router.call_suggestion_router",
+            return_value={"goals": [candidate], "events": []},
+        ):
+            events = list(chat_service.stream_chat_reply(thread.id, "我决定准备考研", client, "fake-model"))
+
+        done = events[-1]["result"]
+        self.assertEqual("准备考研", done["suggestions"][0]["payload"]["title"])
+        assistant = chat_service.get_message(require_not_none(done["assistant_message_id"]))
+        metadata = json.loads(assistant.metadata or "{}")
+        self.assertEqual(done["suggestions"], metadata["suggestions"])
+
+    def test_stream_chat_reply_falls_back_to_non_stream_on_mid_stream_error(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        client = FakeStreamingClient(["部分文本"], raise_after=1, non_stream_reply="完整降级回复")
+
+        events = list(chat_service.stream_chat_reply(thread.id, "我好累", client, "fake-model"))
+
+        # the partial delta streamed before the break, then a fallback done replaces it
+        self.assertIn("部分文本", [event.get("text") for event in events if event["type"] == "delta"])
+        done = events[-1]
+        self.assertEqual("done", done["type"])
+        self.assertTrue(done["result"]["ok"])
+        self.assertEqual("完整降级回复", done["result"]["reply"])
+        self.assertTrue(client.stream_calls)      # streaming attempted first
+        self.assertTrue(client.non_stream_calls)  # then a non-streaming fallback
+        self.assertEqual("完整降级回复", chat_service.list_thread_messages(thread.id)[-1].content)
+        self.assertEqual("reply_stream_fallback", self._last_log_event("reply_stream_fallback")["event"])
+
+    def test_stream_chat_reply_double_failure_yields_failed_done(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        # empty stream -> fallback; fallback returns an empty reply -> failed result
+        client = FakeStreamingClient([], non_stream_reply="")
+
+        events = list(chat_service.stream_chat_reply(thread.id, "我好累", client, "fake-model"))
+
+        done = events[-1]
+        self.assertEqual("done", done["type"])
+        self.assertFalse(done["result"]["ok"])
+        self.assertIsNotNone(done["result"]["assistant_message_id"])
+        messages = chat_service.list_thread_messages(thread.id)
+        self.assertEqual(["user", "assistant"], [message.role for message in messages])
+        self.assertEqual("failed", json.loads(messages[-1].metadata or "{}")["status"])
 
     def test_chat_reply_attaches_inline_goal_suggestion_when_enabled(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
@@ -269,8 +577,8 @@ class ChatServiceTest(unittest.TestCase):
             "confidence": 0.92,
         }
         with patch.dict(os.environ, {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "1"}), patch(
-            "core.suggestion_pipeline.goal_router.call_goal_router",
-            return_value=[candidate],
+            "core.suggestion_pipeline.suggestion_router.call_suggestion_router",
+            return_value={"goals": [candidate], "events": []},
         ):
             result = chat_service.call_chat_reply(
                 thread.id,
@@ -586,48 +894,6 @@ class ChatServiceTest(unittest.TestCase):
                 db.query_one("SELECT COUNT(*) AS count FROM memory_reconcile_runs")
             )["count"],
         )
-
-    def test_private_chat_reply_ignores_todo_fields(self) -> None:
-        thread = chat_service.get_or_create_thread("拾迹者")
-        client = FakeClient(
-            {
-                "reply": "我记下来了。",
-                "todos_to_upsert": [
-                    {
-                        "id": None,
-                        "task": "明天交作业",
-                        "date": "2026-05-26",
-                        "start_time": None,
-                        "end_time": None,
-                        "status": "未完成",
-                    }
-                ],
-                "todos_to_delete": [],
-            }
-        )
-
-        result = chat_service.call_chat_reply(thread.id, "提醒我明天交作业", client, "fake-model")
-        row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM todos"))
-
-        self.assertTrue(result.ok)
-        self.assertIsNotNone(result.assistant_message_id)
-        self.assertEqual(0, row["count"])
-
-    def test_build_chat_context_omits_todos_when_tool_disabled(self) -> None:
-        tool_config_service.set_tool_enabled("todo", False)
-        thread = chat_service.get_or_create_thread("拾迹者")
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "复习数学", "未完成", 1.0, 1.0),
-        )
-
-        context = chat_service.build_chat_context(thread.id, "考试怎么办")
-
-        self.assertNotIn("复习数学", context.context)
-        self.assertNotIn("# 待办事项", context.context)
 
     def _last_log_event(self, event_name: str) -> dict:
         log_path = self.workspace / "logs" / "current.jsonl"

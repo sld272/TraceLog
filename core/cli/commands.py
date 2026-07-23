@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core import chat_service, comment_service, soul_service, tool_config_service
+from core import chat_service, comment_service, soul_service
 from core.cli import sessions
 from core.llm.types import LLMClient
 
@@ -11,68 +11,64 @@ def handle_chat_command(
     user_input: str,
     client: LLMClient | None,
     model: str,
-    todos: list,
-) -> tuple[bool, list, bool]:
-    """Handle /chat commands. Returns handled, todos, quit_requested."""
+) -> tuple[bool, bool]:
+    """Handle /chat commands. Returns handled and quit_requested."""
     if user_input == "/chat list":
         print_chat_threads()
-        return True, todos, False
+        return True, False
     if user_input != "/chat" and not user_input.startswith("/chat "):
-        return False, todos, False
+        return False, False
 
     parts = user_input.split(maxsplit=1)
     if len(parts) == 1 or not parts[1].strip():
         print_chat_help()
-        return True, todos, False
+        return True, False
 
     soul_name = parts[1].strip()
     if soul_name == "list":
         print_chat_threads()
-        return True, todos, False
+        return True, False
 
     try:
         thread = chat_service.get_or_create_thread(soul_name)
     except ValueError as exc:
         print(f"[私聊] {exc}\n")
-        return True, todos, False
+        return True, False
 
     if client is None:
         raise ValueError("LLM client is required for chat commands")
-    updated_todos, quit_requested = sessions.run_chat_session(thread, client, model, todos)
-    return True, updated_todos, quit_requested
+    return True, sessions.run_chat_session(thread, client, model)
 
 
 def handle_comment_command(
     user_input: str,
     client: LLMClient | None,
     model: str,
-    todos: list,
-) -> tuple[bool, list, bool]:
-    """Handle /comment commands. Returns handled, todos, quit_requested."""
+) -> tuple[bool, bool]:
+    """Handle /comment commands. Returns handled and quit_requested."""
     if user_input != "/comment" and not user_input.startswith("/comment "):
-        return False, todos, False
+        return False, False
 
     parts = user_input.split(maxsplit=2)
     if len(parts) < 3:
         print_comment_help()
-        return True, todos, False
+        return True, False
 
     post_id = parts[1].strip()
     soul_name = parts[2].strip()
     if not post_id or not soul_name:
         print_comment_help()
-        return True, todos, False
+        return True, False
 
     try:
         conversation = comment_service.get_conversation(post_id, soul_name)
     except ValueError as exc:
         print(f"[评论] {exc}\n")
-        return True, todos, False
+        return True, False
 
     if client is None:
         raise ValueError("LLM client is required for comment commands")
-    updated_todos, quit_requested = sessions.run_comment_session(conversation, client, model, todos)
-    return True, updated_todos, quit_requested
+    return True, sessions.run_comment_session(conversation, client, model)
 
 
 def handle_soul_command(user_input: str) -> bool:
@@ -121,35 +117,6 @@ def handle_soul_command(user_input: str) -> bool:
     return True
 
 
-def handle_tool_command(user_input: str) -> bool:
-    """Handle optional tool commands. Returns True if input was a command."""
-    if user_input == "/tools":
-        print_tools()
-        return True
-    if user_input != "/tool" and not user_input.startswith("/tool "):
-        return False
-
-    parts = user_input.split(maxsplit=2)
-    if len(parts) < 3:
-        print_tool_help()
-        return True
-
-    name = parts[1].strip()
-    action = parts[2].strip().lower()
-    try:
-        if action in {"on", "enable", "enabled", "开启"}:
-            tool_config_service.set_tool_enabled(name, True)
-            print(f"[工具] 已开启：{name}\n")
-        elif action in {"off", "disable", "disabled", "关闭"}:
-            tool_config_service.set_tool_enabled(name, False)
-            print(f"[工具] 已关闭：{name}\n")
-        else:
-            print_tool_help()
-    except ValueError as exc:
-        print(f"[工具] {exc}\n")
-    return True
-
-
 def print_comment_help() -> None:
     print(
         "[评论] 可用命令：\n"
@@ -176,20 +143,6 @@ def print_chat_help() -> None:
         "  /chat list\n"
         "  /chat <soul>\n"
         "私聊中输入 /back 返回发帖模式，/quit 退出。\n"
-    )
-
-
-def print_tools() -> None:
-    status = "开启" if tool_config_service.is_tool_enabled("todo") else "关闭"
-    print(f"\n[工具]\n  todo: {status}\n")
-
-
-def print_tool_help() -> None:
-    print(
-        "[工具] 可用命令：\n"
-        "  /tools\n"
-        "  /tool todo on\n"
-        "  /tool todo off\n"
     )
 
 

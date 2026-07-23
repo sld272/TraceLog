@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,9 +14,9 @@ from pydantic import BaseModel, Field
 
 from api import deps
 from api.deps import run_sync
-from core import db, record_service, vector_index_service, vectorstore, vision_service, web_search_service
+from core import db, logging_service, record_service, vector_index_service, vectorstore, vision_service, web_search_service
 from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
-from core.logging_service import DEFAULT_HISTORY_RETENTION
+from core.logging_service import DEFAULT_HISTORY_MAX_BYTES, DEFAULT_HISTORY_MAX_DAYS, DEFAULT_ROTATE_MAX_BYTES
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
 
@@ -24,7 +26,10 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 class LoggingSettings(BaseModel):
     enabled: bool = True
     level: str = "INFO"
-    history_retention: int = Field(default=DEFAULT_HISTORY_RETENTION, ge=0, le=1000)
+    capture_content: bool = True
+    rotate_max_bytes: int = Field(default=DEFAULT_ROTATE_MAX_BYTES, ge=1024 * 1024, le=100 * 1024 * 1024)
+    history_max_bytes: int = Field(default=DEFAULT_HISTORY_MAX_BYTES, ge=10 * 1024 * 1024, le=1024 * 1024 * 1024)
+    history_max_days: int = Field(default=DEFAULT_HISTORY_MAX_DAYS, ge=1, le=365)
 
 
 class VisionSettings(BaseModel):
@@ -51,6 +56,11 @@ class ModelSettingsRequest(BaseModel):
     embedding_api_key: str | None = None
     embedding_base_url: str | None = None
     reuse_embedding_config: bool = False
+    secondary_model: str | None = None
+    secondary_api_key: str | None = None
+    secondary_base_url: str | None = None
+    reuse_secondary_config: bool = True
+    reuse_secondary_api_key: bool = True
     logging: LoggingSettings | None = None
     vision: VisionSettings | None = None
     web_search: WebSearchSettings | None = None
@@ -85,6 +95,21 @@ async def get_workspace_status():
     return await run_sync(_workspace_status)
 
 
+@router.get("/logs")
+async def get_log_status():
+    return await run_sync(logging_service.get_log_stats)
+
+
+@router.post("/logs/clear")
+async def clear_logs():
+    return await run_sync(logging_service.clear_logs)
+
+
+@router.post("/logs/reveal")
+async def reveal_logs():
+    return await run_sync(_reveal_logs)
+
+
 @router.post("/vector-index/retry")
 async def retry_vector_index():
     processed = await run_sync(record_service.retry_pending_vector_docs)
@@ -115,6 +140,14 @@ def _read_model_settings() -> dict[str, Any]:
         "embedding_api_key_masked": _mask_secret(config.get("embedding_api_key")),
         "embedding_base_url": config.get("embedding_base_url"),
         "reuse_embedding_config": not bool(config.get("embedding_api_key") or config.get("embedding_base_url")),
+        "vector_index": _vector_index_summary(),
+        "secondary_model": _clean_optional(config.get("secondary_model")),
+        "secondary_configured": bool(_clean_optional(config.get("secondary_model"))),
+        "has_secondary_api_key": bool(config.get("secondary_api_key")),
+        "secondary_api_key_masked": _mask_secret(config.get("secondary_api_key")),
+        "secondary_base_url": config.get("secondary_base_url"),
+        "reuse_secondary_config": not bool(config.get("secondary_api_key") or config.get("secondary_base_url")),
+        "reuse_secondary_api_key": not bool(config.get("secondary_api_key")),
         "logging": logging_config,
         "vision": {
             "enabled": bool(vision.get("enabled")),
@@ -160,6 +193,22 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
             embedding_api_key = existing.get("embedding_api_key")
         embedding_base_url = _clean_optional(payload.get("embedding_base_url"))
 
+    secondary_model = _clean_optional(payload.get("secondary_model"))
+    if secondary_model is None or payload.get("reuse_secondary_config", True):
+        # 未配置副模型，或选择复用主模型密钥：不保留独立凭据。
+        secondary_api_key = None
+        secondary_base_url = None
+    else:
+        secondary_api_key = _clean_optional(payload.get("secondary_api_key"))
+        if secondary_api_key is None:
+            if payload.get("reuse_secondary_api_key", True):
+                secondary_api_key = None
+            else:
+                # The user explicitly chose an independent key but left the
+                # masked password field untouched: preserve the existing secret.
+                secondary_api_key = existing.get("secondary_api_key")
+        secondary_base_url = _clean_optional(payload.get("secondary_base_url"))
+
     incoming_vision = normalize_vision_config(payload.get("vision"))
     existing_vision = normalize_vision_config(existing.get("vision"))
     if incoming_vision.get("api_key") is None:
@@ -178,6 +227,9 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "embedding_model": str(payload["embedding_model"]).strip(),
         "embedding_api_key": embedding_api_key,
         "embedding_base_url": embedding_base_url,
+        "secondary_model": secondary_model,
+        "secondary_api_key": secondary_api_key,
+        "secondary_base_url": secondary_base_url,
         "logging": normalize_logging_config(payload.get("logging")),
         "vision": incoming_vision,
         "web_search": incoming_web_search,
@@ -210,7 +262,6 @@ def _workspace_status() -> dict[str, Any]:
             "comments": _count_table("comments"),
             "souls": _count_table("souls"),
             "enabled_souls": _count_enabled_souls(),
-            "todos": _count_table("todos"),
             "jobs": _count_table("jobs"),
             "vision_cache": _count_table("vision_cache"),
             "memory_units": _count_table("memory_units"),
@@ -228,6 +279,32 @@ def _workspace_status() -> dict[str, Any]:
     }
 
 
+def _reveal_logs() -> dict[str, Any]:
+    log_dir = db.WORKSPACE_DIR / "logs"
+    path = str(log_dir.resolve())
+    try:
+        log_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            log_dir.chmod(0o700)
+        except OSError:
+            pass
+        if sys.platform == "darwin":
+            command = ["open", path]
+        elif sys.platform.startswith("win"):
+            command = ["explorer", path]
+        else:
+            command = ["xdg-open", path]
+        subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        return {"ok": True, "path": path}
+    except (OSError, subprocess.SubprocessError):
+        return {"ok": False, "path": path}
+
+
 def _vector_index_status() -> dict[str, Any]:
     state = vector_index_service.current_collection_state()
     return {
@@ -240,6 +317,17 @@ def _vector_index_status() -> dict[str, Any]:
         "failed_count": state.failed_count if state is not None else 0,
         "missing_count": state.missing_count if state is not None else 0,
         "stale_count": state.stale_count if state is not None else 0,
+    }
+
+
+def _vector_index_summary() -> dict[str, Any]:
+    state = vector_index_service.current_collection_state()
+    return {
+        "ready": state.query_ready if state is not None else False,
+        "indexed": state.indexed_count if state is not None else 0,
+        "total": state.total_count if state is not None else _count_table("vector_docs"),
+        "pending": state.pending_count if state is not None else 0,
+        "failed": state.failed_count if state is not None else 0,
     }
 
 
@@ -288,7 +376,8 @@ def _normalize_concurrency(value: Any) -> int:
 
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
+    descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
     os.replace(tmp, path)

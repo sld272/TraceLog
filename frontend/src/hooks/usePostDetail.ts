@@ -41,7 +41,7 @@ export interface UsePostDetailResult {
   refresh(): Promise<PostDetail | null>
 }
 
-export function usePostDetail(postId: string, onTodosChanged?: () => void): UsePostDetailResult {
+export function usePostDetail(postId: string): UsePostDetailResult {
   const [post, setPost] = useState<PostDetail['post'] | null>(null)
   const [comments, setComments] = useState<Comment[]>([])
   const [conversations, setConversations] = useState<Record<string, CommentConversationState>>({})
@@ -108,7 +108,6 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
       (event) => {
         setPost((current) => current ? { ...current, latest_event_type: event.event_type } : current)
         if (shouldRefreshPostDetail(event)) void refresh()
-        if (event.event_type === 'todo_succeeded') onTodosChanged?.()
       },
       () => {
         setPost((current) => current ? { ...current, latest_event_type: 'pipeline_done' } : current)
@@ -116,7 +115,7 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
       },
       { afterEventId: latestEventId(detail.events) },
     )
-  }, [onTodosChanged, postId, refresh, stopStream])
+  }, [postId, refresh, stopStream])
 
   useEffect(() => {
     let cancelled = false
@@ -242,7 +241,6 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
         (event) => {
           setPost((current) => current ? { ...current, latest_event_type: event.event_type } : current)
           if (shouldRefreshPostDetail(event)) void refresh()
-          if (event.event_type === 'todo_succeeded') onTodosChanged?.()
         },
         () => {
           setPost((current) => current ? { ...current, latest_event_type: 'pipeline_done' } : current)
@@ -256,7 +254,7 @@ export function usePostDetail(postId: string, onTodosChanged?: () => void): UseP
     } finally {
       setRetryingJobId(null)
     }
-  }, [onTodosChanged, pollPostPipelineUntilSettled, postId, refresh, stopStream])
+  }, [pollPostPipelineUntilSettled, postId, refresh, stopStream])
 
   return {
     post,

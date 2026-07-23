@@ -7,19 +7,24 @@ import sqlite3
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-WORKSPACE_DIR = BASE_DIR / "workspace"
+from core import paths
+
+BASE_DIR = paths.RESOURCE_DIR
+WORKSPACE_DIR = paths.WORKSPACE_DIR
 DB_PATH = WORKSPACE_DIR / "state.db"
-INIT_SQL_PATH = BASE_DIR / "schema.sql"
+INIT_SQL_PATH = paths.SCHEMA_FILE
 
 
 def connect() -> sqlite3.Connection:
     """Open a configured SQLite connection."""
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        os.chmod(DB_PATH, 0o600)
+    except OSError:
+        pass
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
@@ -35,8 +40,11 @@ def init_db() -> None:
     sql = INIT_SQL_PATH.read_text(encoding="utf-8")
     conn = connect()
     try:
+        _drop_retired_tables(conn)
         _migrate_columns(conn)
+        _migrate_suggestions_kind_constraint(conn)
         conn.executescript(sql)
+        _backfill_schedule_event_accounts(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         if str(mode).lower() != "wal":
@@ -63,7 +71,16 @@ def init_db() -> None:
 # defaults, which SQLite ADD COLUMN cannot take).
 _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("memory_units", "contested_at", "REAL"),
+    ("chat_messages", "client_request_id", "TEXT"),
+    ("goals", "schedule_expectation", "TEXT"),
+    ("schedule_events", "account_id", "TEXT"),
+    ("vector_index_items", "dim", "INTEGER"),
+    ("vector_index_items", "embedding", "BLOB"),
 )
+
+
+def _drop_retired_tables(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE IF EXISTS todos")
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:
@@ -77,6 +94,64 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     conn.commit()
+
+
+def _migrate_suggestions_kind_constraint(conn: sqlite3.Connection) -> None:
+    """Allow schedule suggestions in databases created by the goal-only schema."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'suggestions'"
+    ).fetchone()
+    if row is None or "schedule" in str(row[0] or "").casefold():
+        return
+    conn.execute(
+        """
+        CREATE TABLE suggestions_kind_v2 (
+            id             TEXT PRIMARY KEY,
+            kind           TEXT NOT NULL CHECK(kind IN ('goal', 'schedule')),
+            payload_json   TEXT NOT NULL,
+            evidence_ref   TEXT,
+            confidence     REAL NOT NULL DEFAULT 0.6
+                               CHECK(confidence >= 0.0 AND confidence <= 1.0),
+            status         TEXT NOT NULL DEFAULT 'pending'
+                               CHECK(status IN ('pending', 'accepted', 'dismissed')),
+            normalized_key TEXT,
+            created_at     REAL NOT NULL,
+            decided_at     REAL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO suggestions_kind_v2(
+            id, kind, payload_json, evidence_ref, confidence, status,
+            normalized_key, created_at, decided_at
+        )
+        SELECT id, kind, payload_json, evidence_ref, confidence, status,
+               normalized_key, created_at, decided_at
+        FROM suggestions
+        """
+    )
+    conn.execute("DROP TABLE suggestions")
+    conn.execute("ALTER TABLE suggestions_kind_v2 RENAME TO suggestions")
+    conn.commit()
+
+
+def _backfill_schedule_event_accounts(conn: sqlite3.Connection) -> None:
+    legacy_count = conn.execute(
+        "SELECT COUNT(*) FROM schedule_events WHERE account_id IS NULL"
+    ).fetchone()[0]
+    if legacy_count <= 0:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO calendar_accounts(id, provider, display_name, created_at)
+        VALUES ('outlook', 'outlook', 'Outlook', ?)
+        """,
+        (now_ts(),),
+    )
+    conn.execute(
+        "UPDATE schedule_events SET account_id = 'outlook' WHERE account_id IS NULL"
+    )
 
 
 def _validate_fts5_trigram(conn: sqlite3.Connection) -> None:

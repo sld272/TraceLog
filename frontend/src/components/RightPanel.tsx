@@ -1,38 +1,76 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   type MemoryOperation,
-  type Todo,
+  type ScheduleEvent,
+  type ScheduleProgress,
+  type ScheduleStatus,
+  getScheduleStatus,
   listMemoryOperations,
+  listScheduleEvents,
 } from '@/api/client'
-import { isTodoDone, getTodayKey } from '@/utils/todo'
-import { formatDateLabel, formatSmartTime } from '@/utils/date'
+import { formatSmartTime } from '@/utils/date'
+import { useMeasuredHeight } from '@/hooks/useMeasuredHeight'
+import { fetchGoalProgress, monthDayLabel, todayKey } from '@/utils/schedule'
+import {
+  type ScheduleConnectionState,
+  getCachedScheduleStatus,
+  scheduleConnectionState,
+  setCachedScheduleStatus,
+} from '@/utils/scheduleStatusCache'
 import { ChevronRightIcon } from '@/components/icons'
+import { MiniCalendar } from '@/components/MiniCalendar'
+import { ScheduleList } from '@/components/ScheduleList'
 import styles from './RightPanel.module.css'
 
-interface PendingCompletedTodo {
-  todo: Todo
-  timeoutId: number
-}
-
 interface RightPanelProps {
-  todos: Todo[]
   searchQuery: string
   onSearchQueryChange: (value: string) => void
-  onTodoToggle: (todo: Todo) => Promise<void> | void
-  onOpenTodos: () => void
   onOpenMemory: () => void
+  /** 日期透镜当前选中的日期（null = 最新流）。 */
+  selectedDate: string | null
+  onSelectDate: (date: string) => void
+  onOpenSchedule: () => void
+  onOpenSettings: () => void
 }
 
 export function RightPanel({
-  todos,
   searchQuery,
   onSearchQueryChange,
-  onTodoToggle,
-  onOpenTodos,
   onOpenMemory,
+  selectedDate,
+  onSelectDate,
+  onOpenSchedule,
+  onOpenSettings,
 }: RightPanelProps) {
+  /* 先用上次已知状态渲染（跨页切换不闪"未连接"），后台刷新校正。 */
+  const [status, setStatus] = useState<ScheduleStatus | null>(() => getCachedScheduleStatus())
+  const [statusFailed, setStatusFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void getScheduleStatus()
+      .then((data) => {
+        if (cancelled) return
+        setStatus(data)
+        setStatusFailed(false)
+        setCachedScheduleStatus(data)
+      })
+      .catch(() => {
+        if (!cancelled) setStatusFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const connection = scheduleConnectionState(status, statusFailed)
+
+  /* 面板不滚动：日程条数按面板高度取 2–4 条，记忆变化卡吃掉剩余空间并自行测高裁剪。 */
+  const [panelRef, panelHeight] = useMeasuredHeight<HTMLDivElement>()
+  const scheduleLimit = scheduleLimitFor(panelHeight)
+
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} ref={panelRef}>
       <div className={styles.panelSearch}>
         <SearchIcon />
         <input
@@ -50,155 +88,137 @@ export function RightPanel({
           </button>
         )}
       </div>
-      <TodayTodosCard todos={todos} onTodoToggle={onTodoToggle} onOpenTodos={onOpenTodos} />
+      <MiniCalendar selectedDate={selectedDate} connected={connection === 'connected'} onSelectDate={onSelectDate} />
+      <ScheduleDayCard
+        targetDate={selectedDate ?? todayKey()}
+        isToday={selectedDate === null}
+        connection={connection}
+        outlookConnected={status?.connected ?? false}
+        limit={scheduleLimit}
+        onOpenSchedule={onOpenSchedule}
+        onOpenSettings={onOpenSettings}
+      />
       <MemoryPulseCard onOpenMemory={onOpenMemory} />
     </div>
   )
 }
 
-function TodayTodosCard({
-  todos,
-  onTodoToggle,
-  onOpenTodos,
+/** 日程卡条数随面板高度走：矮窗口 2 条，常规 3–4 条，溢出部分给「还有 N 项」提示。 */
+function scheduleLimitFor(panelHeight: number): number {
+  if (panelHeight === 0) return 3
+  if (panelHeight < 720) return 2
+  if (panelHeight < 880) return 3
+  return 4
+}
+
+function ScheduleDayCard({
+  targetDate,
+  isToday,
+  connection,
+  outlookConnected,
+  limit,
+  onOpenSchedule,
+  onOpenSettings,
 }: {
-  todos: Todo[]
-  onTodoToggle: (todo: Todo) => Promise<void> | void
-  onOpenTodos: () => void
+  targetDate: string
+  isToday: boolean
+  connection: ScheduleConnectionState
+  /** 是否真连了 Outlook（本地日历也算 connected，但不该显示同步角标）。 */
+  outlookConnected: boolean
+  limit: number
+  onOpenSchedule: () => void
+  onOpenSettings: () => void
 }) {
-  const [savingId, setSavingId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [pendingCompleted, setPendingCompleted] = useState<Record<string, PendingCompletedTodo>>({})
-  const pendingTimeoutsRef = useRef<Record<string, number>>({})
-  const todayTodos = selectTodayTodos(todos)
-  const displayTodos = [
-    ...todayTodos.filter((todo) => !pendingCompleted[todo.id]),
-    ...Object.values(pendingCompleted).map((entry) => entry.todo),
-  ]
+  const [events, setEvents] = useState<ScheduleEvent[]>([])
+  const [progressByGoal, setProgressByGoal] = useState<Record<string, ScheduleProgress>>({})
 
   useEffect(() => {
-    return () => {
-      Object.values(pendingTimeoutsRef.current).forEach((timeoutId) => window.clearTimeout(timeoutId))
+    if (connection !== 'connected') {
+      setEvents([])
+      setProgressByGoal({})
+      return
     }
-  }, [])
-
-  const removePendingCompleted = (todoId: string) => {
-    setPendingCompleted((prev) => {
-      const entry = prev[todoId]
-      if (entry) window.clearTimeout(entry.timeoutId)
-      delete pendingTimeoutsRef.current[todoId]
-      const next = { ...prev }
-      delete next[todoId]
-      return next
-    })
-  }
-
-  const holdCompletedTodo = (todo: Todo) => {
-    const completedTodo = { ...todo, status: '已完成' }
-    const timeoutId = window.setTimeout(() => {
-      setPendingCompleted((prev) => {
-        const next = { ...prev }
-        delete next[todo.id]
-        return next
+    let cancelled = false
+    void listScheduleEvents(targetDate, targetDate)
+      .then(async (result) => {
+        if (cancelled) return
+        setEvents(result.events)
+        const goalIds = result.events.flatMap((event) => event.goal_links.map((link) => link.goal_id))
+        const progress = await fetchGoalProgress(goalIds)
+        if (!cancelled) setProgressByGoal(progress)
       })
-      delete pendingTimeoutsRef.current[todo.id]
-    }, 3000)
-
-    setPendingCompleted((prev) => {
-      const existing = prev[todo.id]
-      if (existing) window.clearTimeout(existing.timeoutId)
-      pendingTimeoutsRef.current[todo.id] = timeoutId
-      return {
-        ...prev,
-        [todo.id]: { todo: completedTodo, timeoutId },
-      }
-    })
-  }
-
-  const completeTodo = async (todo: Todo) => {
-    setSavingId(todo.id)
-    setError(null)
-    try {
-      await onTodoToggle(todo)
-      holdCompletedTodo(todo)
-    } catch {
-      setError('更新失败，稍后再试')
-    } finally {
-      setSavingId(null)
+      .catch(() => {
+        if (!cancelled) {
+          setEvents([])
+          setProgressByGoal({})
+        }
+      })
+    return () => {
+      cancelled = true
     }
-  }
+  }, [targetDate, connection])
 
-  const undoCompleteTodo = async (todo: Todo) => {
-    setSavingId(todo.id)
-    setError(null)
-    try {
-      await onTodoToggle(todo)
-      removePendingCompleted(todo.id)
-    } catch {
-      setError('撤销失败，稍后再试')
-    } finally {
-      setSavingId(null)
-    }
-  }
+  const title = isToday ? '今日日程' : `${monthDayLabel(targetDate)}日程`
+  const emptyText = isToday ? '今天没有日程，安心记录就好。' : '这天没有日程。'
 
   return (
     <section className={styles.card}>
-      <PanelHeader title="待办速览" onMore={onOpenTodos} />
-      <div className={styles.itemList}>
-        {displayTodos.length > 0 ? (
-          displayTodos.map((todo) => {
-            const meta = todoMeta(todo)
-            const completedPending = Boolean(pendingCompleted[todo.id])
-
-            return (
-              <div
-                key={todo.id}
-                className={`${styles.todoItem} ${completedPending ? styles.todoItemCompleted : ''}`}
-              >
-                <button
-                  type="button"
-                  className={`${styles.todoCheckbox} ${completedPending ? styles.todoCheckboxDone : ''}`}
-                  disabled={savingId === todo.id || completedPending}
-                  aria-label={completedPending ? `已完成待办：${todo.task}` : `完成待办：${todo.task}`}
-                  onClick={() => {
-                    if (!completedPending) completeTodo(todo)
-                  }}
-                >
-                  {savingId === todo.id ? '...' : completedPending ? '✓' : ''}
-                </button>
-                <div className={styles.todoBody}>
-                  <p className={completedPending ? styles.todoDoneText : undefined}>{todo.task}</p>
-                  {meta && <span>{meta}</span>}
-                  {completedPending && (
-                    <button
-                      type="button"
-                      className={styles.undoButton}
-                      disabled={savingId === todo.id}
-                      onClick={() => undoCompleteTodo(todo)}
-                    >
-                      撤销
-                    </button>
-                  )}
-                </div>
-              </div>
-            )
-          })
-        ) : (
-          <p className={styles.empty}>今天没有待办。记录里提到的事会自动出现在这里。</p>
-        )}
-        {error && <p className={styles.inlineError}>{error}</p>}
-      </div>
+      <PanelHeader title={title} onMore={onOpenSchedule} />
+      {connection === 'loading' ? (
+        <p className={styles.empty}>正在检查连接…</p>
+      ) : connection === 'error' ? (
+        <p className={styles.empty}>连接状态获取失败，稍后再试。</p>
+      ) : connection === 'disconnected' ? (
+        <p className={styles.schedGuide}>
+          连接 Outlook 日历或启用本地日历后，这里会显示你的日程。
+          <button type="button" className={styles.schedGuideLink} onClick={onOpenSettings}>去设置连接</button>
+        </p>
+      ) : (
+        <>
+          <ScheduleList events={events.slice(0, limit)} progressByGoal={progressByGoal} emptyText={emptyText} />
+          {events.length > limit && (
+            <button type="button" className={styles.schedMore} onClick={onOpenSchedule}>
+              还有 {events.length - limit} 项日程
+              <ChevronRightIcon width={12} height={12} />
+            </button>
+          )}
+          {events.length > 0 && outlookConnected && (
+            <div className={styles.schedSource}>
+              <SyncIcon />
+              同步自 Outlook 日历
+            </div>
+          )}
+        </>
+      )}
     </section>
   )
 }
 
+function SyncIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21.5 12a9.5 9.5 0 1 1-9.5-9.5" />
+      <path d="M21.5 2.5 12 12" />
+    </svg>
+  )
+}
+
+/* 记忆变化条目单行标题 + meta，高度基本恒定（与 RightPanel.module.css 的 .pulse 对应）。 */
+const PULSE_ITEM_HEIGHT = 62
+const MAX_PULSE_ENTRIES = 8
+
 function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
   const [entries, setEntries] = useState<PulseEntry[]>([])
+  /* 卡片吃掉面板剩余空间，按实测列表高度决定渲染条数，保证面板不滚动。 */
+  const [listRef, listHeight] = useMeasuredHeight<HTMLDivElement>()
+  /* 放不下一条就不显示，避免半截条目（极矮窗口下卡片只剩标题） */
+  const visibleCount = Math.min(Math.floor(listHeight / PULSE_ITEM_HEIGHT), MAX_PULSE_ENTRIES)
 
   useEffect(() => {
     let cancelled = false
     void listMemoryOperations(30)
       .then((data) => {
-        if (!cancelled) setEntries(pulseEntries(data))
+        if (!cancelled) setEntries(pulseEntries(data, MAX_PULSE_ENTRIES))
       })
       .catch(() => {
         /* 右栏保持安静：拿不到记忆变化时不打扰用户 */
@@ -209,12 +229,12 @@ function MemoryPulseCard({ onOpenMemory }: { onOpenMemory: () => void }) {
   }, [])
 
   return (
-    <section className={styles.card}>
+    <section className={`${styles.card} ${styles.cardGrow}`}>
       <PanelHeader title="最近记忆变化" onMore={onOpenMemory} />
-      <div className={styles.itemList}>
+      <div className={styles.itemList} ref={listRef}>
         {entries.length > 0 ? (
           <div className={styles.pulseList}>
-            {entries.map((entry) => (
+            {entries.slice(0, visibleCount).map((entry) => (
               <button key={entry.key} type="button" className={styles.pulse} onClick={onOpenMemory}>
                 <span className={styles.pulseTitle}>{entry.title}</span>
                 <span className={styles.pulseMeta}>{entry.meta}</span>
@@ -246,8 +266,9 @@ function isUserVisible(operation: MemoryOperation): boolean {
 }
 
 function pulseEntries(operations: MemoryOperation[], limit = 6): PulseEntry[] {
-  const visible = operations.filter(isUserVisible)
-  // newest first from the API; group runs with many changes into one summary
+  // 不依赖 API 返回顺序：显式按 id 由新到旧排，保证卡片在所有情况下从上到下由新到旧。
+  const visible = operations.filter(isUserVisible).sort((a, b) => b.id - a.id)
+  // group runs with many changes into one summary
   const byRun = new Map<number, MemoryOperation[]>()
   for (const op of visible) {
     if (op.reconcile_run_id !== null) {
@@ -341,16 +362,3 @@ function PanelHeader({ title, onMore }: { title: string; onMore?: () => void }) 
   )
 }
 
-function selectTodayTodos(todos: Todo[]): Todo[] {
-  const active = todos.filter((todo) => !isTodoDone(todo))
-  const today = active.filter((todo) => todo.date === getTodayKey())
-  const undated = active.filter((todo) => !todo.date)
-  return [...today, ...undated].slice(0, 3)
-}
-
-function todoMeta(todo: Todo): string {
-  const time = [todo.start_time, todo.end_time].filter(Boolean).join(' - ')
-  if (!todo.date) return time ? `无日期 · ${time}` : '无日期'
-  const dateLabel = formatDateLabel(todo.date, getTodayKey())
-  return time ? `${dateLabel} ${time}` : dateLabel
-}

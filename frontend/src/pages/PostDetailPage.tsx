@@ -33,7 +33,6 @@ interface PostDetailPageProps {
   modelConfigured?: boolean | null
   onOpenSettings?: () => void
   onPostMutated?: (postId: string, kind: 'updated' | 'deleted') => void
-  onTodosChanged?: () => void
 }
 
 export function PostDetailPage({
@@ -42,9 +41,8 @@ export function PostDetailPage({
   modelConfigured,
   onOpenSettings,
   onPostMutated,
-  onTodosChanged,
 }: PostDetailPageProps) {
-  const detail = usePostDetail(postId, onTodosChanged)
+  const detail = usePostDetail(postId)
   const [deletingPost, setDeletingPost] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
@@ -126,7 +124,7 @@ export function PostDetailPage({
     const impact = await memoryImpactNote('post', postId)
     setConfirmDialog({
       title: '删除记录',
-      message: `删除这条记录会同时删除 TA 们的所有回应和追问，关联待办会保留但不再指向来源记录，且不会自动恢复。${impact}确定删除吗？`,
+      message: `删除这条记录会同时删除 TA 们的所有回应和追问，且不会自动恢复。${impact}确定删除吗？`,
       onConfirm: async () => {
         setConfirmDialog(null)
         setDeletingPost(true)
@@ -134,7 +132,6 @@ export function PostDetailPage({
         try {
           await deletePost(postId)
           onPostMutated?.(postId, 'deleted')
-          onTodosChanged?.()
           goHome()
         } catch (err) {
           setActionError(err instanceof Error ? err.message : '删除失败')

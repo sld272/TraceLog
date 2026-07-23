@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
+from core.llm import secondary_model
 from core.llm.common import call_json_completion, clean_json_content, now_str
 from core.llm.types import LLMClient
 
@@ -33,7 +35,7 @@ QUERY_REWRITE_PROMPT = """\
 """
 
 
-def _format_recent_turns(recent_turns: list[dict] | None) -> str:
+def format_recent_turns(recent_turns: list[dict] | None) -> str:
     if not recent_turns:
         return ""
     lines = []
@@ -56,10 +58,11 @@ def call_query_rewrite(
     recent_turns: list[dict] | None = None,
     trace_context: dict | None = None,
 ) -> dict | None:
+    client, model = secondary_model.resolve(client, model)
     user_content = (
         f"channel: {channel}\n\n"
         "---\n\n"
-        f"{_format_recent_turns(recent_turns)}"
+        f"{format_recent_turns(recent_turns)}"
         f"raw_query:\n{raw_query}"
     )
     return call_json_completion(
@@ -78,11 +81,17 @@ def call_query_rewrite(
 
 
 def _parse_query_rewrite_content(content: str | None) -> dict | None:
-    content = clean_json_content(content)
     try:
-        data = json.loads(content)
+        data = json.loads(clean_json_content(content))
     except json.JSONDecodeError:
         return None
+    return rewrite_fields_from_payload(data)
+
+
+def rewrite_fields_from_payload(data: Any) -> dict | None:
+    """Extract the query-rewrite half (semantic_query + string keywords) from an
+    already-parsed JSON payload. Shared by the standalone rewrite call and the
+    merged turn-prep parser; length caps/thresholds stay in ``query_rewriter``."""
     if not isinstance(data, dict):
         return None
     semantic_query = data.get("semantic_query")

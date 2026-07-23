@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core import db, memory_events_service, memory_unit_service, memory_view_service
 from tests.helpers import require_not_none
@@ -22,6 +25,16 @@ class DbTest(unittest.TestCase):
         db.WORKSPACE_DIR = self.old_workspace
         db.DB_PATH = self.old_db_path
         self.tmp.cleanup()
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
+    def test_init_db_creates_state_db_with_owner_only_permissions(self) -> None:
+        self.assertEqual(0o600, stat.S_IMODE(db.DB_PATH.stat().st_mode))
+
+    def test_init_db_ignores_permission_hardening_failure(self) -> None:
+        with patch("core.db.os.chmod", side_effect=OSError("unsupported permissions")):
+            db.init_db()
+
+        self.assertIsNotNone(db.query_one("SELECT value FROM meta WHERE key = 'schema_version'"))
 
     def test_legacy_table_gains_migrated_columns_on_init(self) -> None:
         # a DB created before contested_at existed: CREATE IF NOT EXISTS skips
@@ -59,6 +72,41 @@ class DbTest(unittest.TestCase):
             db.WORKSPACE_DIR = old_ws
             db.DB_PATH = old_path
 
+    def test_legacy_vector_items_gain_embedding_columns_on_init(self) -> None:
+        legacy = Path(self.tmp.name) / "legacy-vector-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            conn.execute(
+                """
+                CREATE TABLE vector_index_items (
+                    collection_name TEXT NOT NULL,
+                    doc_id TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    source_revision INTEGER NOT NULL,
+                    indexed_at REAL NOT NULL,
+                    PRIMARY KEY (collection_name, doc_id)
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            db.init_db()
+
+            columns = {
+                row["name"]: row["type"]
+                for row in db.query_all("PRAGMA table_info(vector_index_items)")
+            }
+            self.assertEqual("INTEGER", columns["dim"])
+            self.assertEqual("BLOB", columns["embedding"])
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
     def test_validate_fts5_trigram_uses_unique_probe_and_cleans_up(self) -> None:
         db.execute(
             """
@@ -81,6 +129,90 @@ class DbTest(unittest.TestCase):
         self.assertIsNotNone(probe)
         self.assertEqual([], generated)
 
+    def test_legacy_goals_gain_schedule_expectation_and_link_table(self) -> None:
+        legacy = Path(self.tmp.name) / "legacy-goals-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            conn.execute(
+                """
+                CREATE TABLE goals (
+                    id TEXT PRIMARY KEY,
+                    horizon TEXT NOT NULL,
+                    status TEXT NOT NULL
+                )
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            db.init_db()
+
+            columns = {row["name"] for row in db.query_all("PRAGMA table_info(goals)")}
+            link_table = db.query_one(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("goal_schedule_links",),
+            )
+            self.assertIn("schedule_expectation", columns)
+            self.assertIsNotNone(link_table)
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
+    def test_legacy_schedule_events_gain_account_id_and_backfill_idempotently(self) -> None:
+        legacy = Path(self.tmp.name) / "legacy-schedule-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            conn.execute(
+                """
+                CREATE TABLE schedule_events (
+                    id TEXT PRIMARY KEY,
+                    start_ts REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO schedule_events(id, start_ts) VALUES ('legacy-event', 1)"
+            )
+            conn.commit()
+            conn.close()
+
+            db.init_db()
+            db.init_db()
+
+            columns = {
+                row["name"] for row in db.query_all("PRAGMA table_info(schedule_events)")
+            }
+            indexes = {
+                row["name"] for row in db.query_all("PRAGMA index_list(schedule_events)")
+            }
+            event = db.query_one(
+                "SELECT account_id FROM schedule_events WHERE id = 'legacy-event'"
+            )
+            accounts = db.query_all(
+                "SELECT id, provider, display_name FROM calendar_accounts ORDER BY id"
+            )
+            self.assertIn("account_id", columns)
+            self.assertIn("idx_schedule_events_account", indexes)
+            self.assertEqual("outlook", event["account_id"])
+            self.assertEqual(
+                [("outlook", "outlook", "Outlook")],
+                [
+                    (row["id"], row["provider"], row["display_name"])
+                    for row in accounts
+                ],
+            )
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
     def test_schema_version_is_current_and_observation_tables_are_absent(self) -> None:
         tables = {
             row["name"]
@@ -98,6 +230,7 @@ class DbTest(unittest.TestCase):
         self.assertNotIn("observation_sources", tables)
         self.assertNotIn("observations_fts", tables)
         self.assertNotIn("observation_cursors", tables)
+        self.assertNotIn("todos", tables)
         self.assertEqual("1", version["value"])
         self.assertIn("jobs", tables)
         self.assertIn("post_events", tables)
@@ -107,6 +240,31 @@ class DbTest(unittest.TestCase):
         self.assertIn("vector_index_items", tables)
         self.assertIn("vector_outbox", tables)
         self.assertIn("post_soul_orders", tables)
+        self.assertIn("goal_schedule_links", tables)
+
+    def test_init_drops_retired_todos_table(self) -> None:
+        conn = db.connect()
+        try:
+            conn.execute(
+                """
+                CREATE TABLE todos (
+                    id TEXT PRIMARY KEY,
+                    task TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute("INSERT INTO todos(id, task) VALUES ('legacy-1', '旧数据')")
+            conn.commit()
+        finally:
+            conn.close()
+
+        db.init_db()
+
+        self.assertIsNone(
+            db.query_one(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'todos'"
+            )
+        )
 
     def test_message_mutation_marker_columns_exist(self) -> None:
         comment_columns = {row["name"] for row in db.query_all("PRAGMA table_info(comments)")}
@@ -117,6 +275,7 @@ class DbTest(unittest.TestCase):
         self.assertIn("edited_at", chat_columns)
         self.assertIn("rerun_at", chat_columns)
         self.assertIn("metadata", chat_columns)
+        self.assertIn("client_request_id", chat_columns)
 
     def _insert_post(self, post_id: str) -> None:
         db.execute(

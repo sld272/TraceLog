@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from typing import Any, TypeVar
@@ -10,16 +11,19 @@ from openai import OpenAI
 from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
-from core import db, logging_service, memory_events_service, memory_unit_service, record_service, vector_index_service, vectorstore, workspace_service
+from core import db, logging_service, memory_events_service, memory_unit_service, record_service, schedule_service, vector_index_service, vectorstore, workspace_service
 from core.app_services import job_service
 from core.app_services.api_runtime import ApiRuntime, JobWorker
 from core.cli.config import CONFIG_FILE, normalize_vision_config, normalize_web_search_config
+from core.llm import secondary_model
 from core.logging_service import normalize_config as normalize_logging_settings
 
 T = TypeVar("T")
 
 _runtime: ApiRuntime | None = None
+_schedule_sync_task: asyncio.Task[None] | None = None
 MODEL_NOT_CONFIGURED_MESSAGE = "请先在设置页完成模型配置"
+SCHEDULE_SYNC_INTERVAL_SECONDS = 15 * 60
 
 
 async def run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
@@ -54,7 +58,9 @@ async def init_runtime() -> ApiRuntime:
     global _runtime
     config = _load_api_config(strict=False)
     logging_service.init_logging(config.get("logging"))
+    workspace_service.migrate_workspace_permissions()
     workspace_service.init_workspace()
+    _start_schedule_sync_task()
 
     if not _is_model_configured(config):
         _runtime = ApiRuntime(
@@ -76,7 +82,8 @@ async def reload_runtime() -> ApiRuntime:
     global _runtime
     previous_runtime = _runtime
     config = _load_api_config(strict=False)
-    logging_service.init_logging(config.get("logging"))
+    logging_service.update_config(config.get("logging"))
+    workspace_service.migrate_workspace_permissions()
     workspace_service.init_workspace()
     next_runtime = (
         _unconfigured_runtime(config)
@@ -91,6 +98,7 @@ async def reload_runtime() -> ApiRuntime:
 
 
 def _unconfigured_runtime(config: dict) -> ApiRuntime:
+    secondary_model.reset()
     return ApiRuntime(
         config=config,
         client=None,
@@ -124,6 +132,11 @@ def _build_configured_runtime(config: dict) -> ApiRuntime:
         logging_service.log_event("vectorstore_init_failed", level="ERROR", error=str(exc))
 
     client = OpenAI(api_key=config["api_key"], base_url=config.get("base_url", "https://api.openai.com/v1"))
+    secondary_model.install_from_config(
+        config,
+        main_client=client,
+        client_factory=lambda api_key, base_url: OpenAI(api_key=api_key, base_url=base_url),
+    )
     worker = JobWorker(client, config["model"], concurrency=_job_worker_concurrency(config))
     runtime = ApiRuntime(
         config=config,
@@ -154,10 +167,43 @@ def _start_configured_runtime(config: dict) -> ApiRuntime:
 
 
 async def shutdown_runtime() -> None:
-    global _runtime
+    global _runtime, _schedule_sync_task
+    task = _schedule_sync_task
+    _schedule_sync_task = None
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    from api.routes import schedule as schedule_routes
+
+    await schedule_routes.cancel_device_login()
     if _runtime is not None and _runtime.worker is not None:
         await _runtime.worker.stop()
     _runtime = None
+    secondary_model.reset()
+
+
+def _start_schedule_sync_task() -> None:
+    global _schedule_sync_task
+    if _schedule_sync_task is None or _schedule_sync_task.done():
+        _schedule_sync_task = asyncio.create_task(_schedule_sync_loop())
+
+
+async def _schedule_sync_loop() -> None:
+    while True:
+        try:
+            await run_sync(schedule_service.ScheduleService().sync)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging_service.log_event(
+                "schedule_sync_failed",
+                level="WARNING",
+                error_type=type(exc).__name__,
+            )
+        await asyncio.sleep(SCHEDULE_SYNC_INTERVAL_SECONDS)
 
 
 def _load_api_config(*, strict: bool = True) -> dict:
@@ -175,6 +221,9 @@ def _load_api_config(*, strict: bool = True) -> dict:
         raise RuntimeError(f"{CONFIG_FILE} 缺少必要配置：{', '.join(missing)}")
     config.setdefault("embedding_api_key", None)
     config.setdefault("embedding_base_url", None)
+    config.setdefault("secondary_model", None)
+    config.setdefault("secondary_api_key", None)
+    config.setdefault("secondary_base_url", None)
     config["logging"] = normalize_logging_settings(config.get("logging"))
     config["vision"] = normalize_vision_config(config.get("vision"))
     config["web_search"] = normalize_web_search_config(config.get("web_search"))

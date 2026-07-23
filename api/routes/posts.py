@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict
+from datetime import date as Date, datetime, time, timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -14,6 +15,8 @@ from starlette.responses import StreamingResponse
 from api.deps import get_runtime, require_configured_runtime_or_409, run_sync
 from core import attachment_service, db, retrieval, vectorstore
 from core.app_services import event_service, job_service, post_mutation, public_post_pipeline
+from core.version import APP_VERSION
+from core.system_timezone import SYSTEM_TIMEZONE
 
 router = APIRouter(tags=["posts"])
 
@@ -36,6 +39,7 @@ async def health():
         "db": db_status,
         "configured": runtime.configured,
         "vectorstore_initialized": vectorstore.is_initialized() or runtime.vectorstore_initialized,
+        "version": APP_VERSION,
     }
 
 
@@ -71,6 +75,13 @@ async def search_posts(
     mode: Literal["keyword", "hybrid"] = Query(default="keyword"),
 ):
     return await run_sync(_search_posts, q, limit, mode)
+
+
+@router.get("/posts/activity")
+async def list_post_activity(start: Date, end: Date):
+    if end < start:
+        raise HTTPException(status_code=422, detail="end 不能早于 start")
+    return await run_sync(_list_post_activity, start, end)
 
 
 @router.get("/posts/{post_id}")
@@ -130,6 +141,20 @@ def _check_db() -> str:
 
 def _post_exists(post_id: str) -> bool:
     return db.query_one("SELECT 1 FROM posts WHERE id = ?", (post_id,)) is not None
+
+
+def _list_post_activity(start: Date, end: Date) -> list[dict[str, str]]:
+    start_dt = datetime.combine(start, time.min, SYSTEM_TIMEZONE)
+    end_dt = datetime.combine(end + timedelta(days=1), time.min, SYSTEM_TIMEZONE)
+    rows = db.query_all(
+        """
+        SELECT id, ts FROM posts
+        WHERE julianday(ts) >= julianday(?) AND julianday(ts) < julianday(?)
+        ORDER BY julianday(ts), id
+        """,
+        (start_dt.isoformat(), end_dt.isoformat()),
+    )
+    return [{"id": str(row["id"]), "ts": str(row["ts"])} for row in rows]
 
 
 def _list_posts(

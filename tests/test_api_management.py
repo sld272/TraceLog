@@ -5,17 +5,22 @@ import importlib.util
 import io
 import json
 import os
+import stat
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from PIL import Image
 
-from core import chat_service, db, logging_service, soul_service, suggestion_service
+from core import chat_service, db, goal_service, logging_service, soul_service, suggestion_service
 from core.app_services import job_service
+from core.graph.client import GraphHTTPError
+from core.schedule_service import NoWritableAccountError
 
 
 @unittest.skipUnless(importlib.util.find_spec("fastapi"), "FastAPI is not installed")
@@ -43,7 +48,14 @@ class ApiManagementTest(unittest.TestCase):
                     "base_url": "https://example.invalid/v1",
                     "model": "test-model",
                     "embedding_model": "test-embedding",
-                    "logging": {"enabled": False, "level": "INFO", "history_retention": 3},
+                    "logging": {
+                        "enabled": False,
+                        "level": "INFO",
+                        "capture_content": True,
+                        "rotate_max_bytes": 10 * 1024 * 1024,
+                        "history_max_bytes": 50 * 1024 * 1024,
+                        "history_max_days": 14,
+                    },
                 }
             ),
             encoding="utf-8",
@@ -275,7 +287,14 @@ class ApiManagementTest(unittest.TestCase):
                     "embedding_model": "updated-embedding",
                     "reuse_embedding_config": False,
                     "embedding_base_url": "https://embeddings.invalid/v1",
-                    "logging": {"enabled": True, "level": "DEBUG", "history_retention": 7},
+                    "logging": {
+                        "enabled": True,
+                        "level": "DEBUG",
+                        "capture_content": False,
+                        "rotate_max_bytes": 2 * 1024 * 1024,
+                        "history_max_bytes": 20 * 1024 * 1024,
+                        "history_max_days": 7,
+                    },
                     "vision": {
                         "enabled": True,
                         "model": "vision-model",
@@ -297,6 +316,16 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, get_response.status_code)
         self.assertTrue(get_response.json()["has_api_key"])
         self.assertNotIn("sk-test-secret", json.dumps(get_response.json()))
+        self.assertEqual(
+            {
+                "ready": False,
+                "indexed": 0,
+                "total": 0,
+                "pending": 0,
+                "failed": 0,
+            },
+            get_response.json()["vector_index"],
+        )
 
         self.assertEqual(200, put_response.status_code)
         updated = put_response.json()
@@ -308,6 +337,17 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("sk-test-secret-123456", saved["api_key"])
         self.assertEqual("https://updated.invalid/v1", saved["base_url"])
         self.assertNotIn("job_worker_concurrency", saved)
+        self.assertEqual(
+            {
+                "enabled": True,
+                "level": "DEBUG",
+                "capture_content": False,
+                "rotate_max_bytes": 2 * 1024 * 1024,
+                "history_max_bytes": 20 * 1024 * 1024,
+                "history_max_days": 7,
+            },
+            saved["logging"],
+        )
         self.assertEqual({"enabled": True, "model": "vision-model", "api_key": None, "base_url": None}, saved["vision"])
         self.assertEqual(
             {
@@ -331,6 +371,130 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("vector_index", status)
         self.assertIn("source_revision", status["vector_index"])
 
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
+    def test_settings_atomic_write_replaces_existing_config_with_owner_only_permissions(self) -> None:
+        from api.routes.settings import _atomic_write_json
+
+        self.config_path.chmod(0o644)
+
+        _atomic_write_json(self.config_path, {"api_key": "updated-secret"})
+
+        self.assertEqual(0o600, stat.S_IMODE(self.config_path.stat().st_mode))
+
+    def test_settings_secondary_model_roundtrip_and_clear(self) -> None:
+        base_payload = {
+            "api_key": "",
+            "base_url": "https://updated.invalid/v1",
+            "model": "updated-model",
+            "embedding_model": "updated-embedding",
+            "reuse_embedding_config": True,
+            "logging": {
+                "enabled": False,
+                "level": "INFO",
+                "capture_content": True,
+                "rotate_max_bytes": 10 * 1024 * 1024,
+                "history_max_bytes": 50 * 1024 * 1024,
+                "history_max_days": 14,
+            },
+        }
+
+        with self._client() as client:
+            save_response = client.put(
+                "/settings/model",
+                json={
+                    **base_payload,
+                    "secondary_model": "fast-mini",
+                    "reuse_secondary_config": False,
+                    "secondary_api_key": "sk-secondary-secret",
+                    "secondary_base_url": "https://fast.invalid/v1",
+                },
+            )
+            saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+            get_response = client.get("/settings/model")
+            preserve_response = client.put(
+                "/settings/model",
+                json={
+                    **base_payload,
+                    "secondary_model": "fast-mini",
+                    "reuse_secondary_config": False,
+                    "reuse_secondary_api_key": False,
+                    "secondary_base_url": "https://faster.invalid/v1",
+                },
+            )
+            preserved = json.loads(self.config_path.read_text(encoding="utf-8"))
+            reuse_key_response = client.put(
+                "/settings/model",
+                json={
+                    **base_payload,
+                    "secondary_model": "fast-mini",
+                    "reuse_secondary_config": False,
+                    "reuse_secondary_api_key": True,
+                    "secondary_base_url": "https://fastest.invalid/v1",
+                },
+            )
+            reused = json.loads(self.config_path.read_text(encoding="utf-8"))
+            clear_response = client.put("/settings/model", json=base_payload)
+
+        self.assertEqual(200, save_response.status_code)
+        self.assertEqual("fast-mini", saved["secondary_model"])
+        self.assertEqual("sk-secondary-secret", saved["secondary_api_key"])
+        self.assertEqual("https://fast.invalid/v1", saved["secondary_base_url"])
+
+        self.assertEqual(200, get_response.status_code)
+        payload = get_response.json()
+        self.assertTrue(payload["secondary_configured"])
+        self.assertEqual("fast-mini", payload["secondary_model"])
+        self.assertTrue(payload["has_secondary_api_key"])
+        self.assertFalse(payload["reuse_secondary_config"])
+        self.assertFalse(payload["reuse_secondary_api_key"])
+        self.assertNotIn("sk-secondary-secret", json.dumps(payload))
+        self.assertNotIn("sk-secondary-secret", json.dumps(save_response.json()))
+
+        self.assertEqual(200, preserve_response.status_code)
+        self.assertEqual("sk-secondary-secret", preserved["secondary_api_key"])
+        self.assertEqual("https://faster.invalid/v1", preserved["secondary_base_url"])
+
+        self.assertEqual(200, reuse_key_response.status_code)
+        self.assertIsNone(reused["secondary_api_key"])
+        self.assertEqual("https://fastest.invalid/v1", reused["secondary_base_url"])
+        self.assertTrue(reuse_key_response.json()["reuse_secondary_api_key"])
+
+        self.assertEqual(200, clear_response.status_code)
+        cleared = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertIsNone(cleared["secondary_model"])
+        self.assertIsNone(cleared["secondary_api_key"])
+        self.assertIsNone(cleared["secondary_base_url"])
+        self.assertFalse(clear_response.json()["secondary_configured"])
+
+    def test_logging_routes_report_reveal_and_clear_local_files(self) -> None:
+        logging_service.init_logging({"enabled": True, "capture_content": False})
+        logging_service.log_event("api_log_probe", text="payload")
+        history_dir = self.workspace / "logs" / "history"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        (history_dir / "existing.jsonl").write_text("{}\n", encoding="utf-8")
+
+        with self._client() as client:
+            status_response = client.get("/settings/logs")
+            with patch("api.routes.settings.subprocess.Popen") as popen:
+                reveal_response = client.post("/settings/logs/reveal")
+            clear_response = client.post("/settings/logs/clear")
+            with patch("api.routes.settings.subprocess.Popen", side_effect=OSError("unavailable")):
+                reveal_failure = client.post("/settings/logs/reveal")
+
+        self.assertEqual(200, status_response.status_code)
+        status = status_response.json()
+        self.assertTrue(status["enabled"])
+        self.assertFalse(status["capture_content"])
+        self.assertEqual(2, status["file_count"])
+        self.assertGreater(status["total_bytes"], 0)
+        self.assertEqual(str((self.workspace / "logs").resolve()), status["path"])
+
+        self.assertEqual({"ok": True, "path": status["path"]}, reveal_response.json())
+        popen.assert_called_once()
+        self.assertEqual(1, clear_response.json()["file_count"])
+        self.assertEqual(0, clear_response.json()["total_bytes"])
+        self.assertEqual({"ok": False, "path": status["path"]}, reveal_failure.json())
+
     def test_settings_save_reports_reload_failure_without_requiring_restart(self) -> None:
         with self._client() as client:
             with patch("api.deps.reload_runtime", side_effect=RuntimeError("reload boom")):
@@ -342,7 +506,14 @@ class ApiManagementTest(unittest.TestCase):
                         "model": "updated-model",
                         "embedding_model": "updated-embedding",
                         "reuse_embedding_config": True,
-                        "logging": {"enabled": False, "level": "INFO", "history_retention": 3},
+                        "logging": {
+                            "enabled": False,
+                            "level": "INFO",
+                            "capture_content": True,
+                            "rotate_max_bytes": 10 * 1024 * 1024,
+                            "history_max_bytes": 50 * 1024 * 1024,
+                            "history_max_days": 14,
+                        },
                     },
                 )
 
@@ -352,70 +523,6 @@ class ApiManagementTest(unittest.TestCase):
         self.assertFalse(payload["runtime_reloaded"])
         self.assertFalse(payload["restart_required"])
         self.assertEqual("reload boom", payload["reload_error"])
-
-    def test_todo_routes_list_and_patch_status(self) -> None:
-        db.execute(
-            """
-            INSERT INTO posts(id, ts, content, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("post-1", "2026-06-04T00:00:00+00:00", "来源记录", 1.0, 1.0),
-        )
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, source_post, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "复习数学", "未完成", "post-1", 1.0, 1.0),
-        )
-
-        with self._client() as client:
-            list_response = client.get("/todos")
-            patch_response = client.patch("/todos/todo-1", json={"status": "已完成"})
-            create_response = client.post(
-                "/todos",
-                json={
-                    "task": "手动整理错题",
-                    "date": "2026-06-05",
-                    "start_time": "20:00",
-                    "end_time": "",
-                },
-            )
-            delete_response = client.delete("/todos/todo-1")
-            list_after_delete_response = client.get("/todos")
-
-        self.assertEqual(200, list_response.status_code)
-        self.assertEqual("复习数学", list_response.json()[0]["task"])
-        self.assertEqual("post-1", list_response.json()[0]["source_post"])
-        self.assertEqual(200, patch_response.status_code)
-        self.assertEqual("已完成", patch_response.json()["status"])
-        self.assertIsNotNone(patch_response.json()["completed_at"])
-
-        self.assertEqual(200, create_response.status_code)
-        created = create_response.json()
-        self.assertTrue(created["id"].startswith("manual-"))
-        self.assertEqual("手动整理错题", created["task"])
-        self.assertEqual("2026-06-05", created["date"])
-        self.assertEqual("20:00", created["start_time"])
-        self.assertIsNone(created["end_time"])
-        self.assertEqual("未完成", created["status"])
-        self.assertIsNone(created["source_post"])
-
-        self.assertEqual(200, delete_response.status_code)
-        self.assertEqual({"ok": True}, delete_response.json())
-        self.assertEqual([created["id"]], [todo["id"] for todo in list_after_delete_response.json()])
-
-    def test_todo_routes_validate_create_update_delete(self) -> None:
-        with self._client() as client:
-            empty_create = client.post("/todos", json={"task": " "})
-            invalid_status = client.post("/todos", json={"task": "有效任务", "status": "doing"})
-            missing_patch = client.patch("/todos/missing", json={"status": "已完成"})
-            missing_delete = client.delete("/todos/missing")
-
-        self.assertEqual(422, empty_create.status_code)
-        self.assertEqual(422, invalid_status.status_code)
-        self.assertEqual(404, missing_patch.status_code)
-        self.assertEqual(404, missing_delete.status_code)
 
     def test_goal_routes_cover_crud_status_focus_and_progress(self) -> None:
         with self._client() as client:
@@ -447,26 +554,67 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, delete_response.status_code)
         self.assertEqual(404, missing_response.status_code)
 
-    def test_suggestion_routes_accept_and_dismiss_both_kinds(self) -> None:
-        goal_suggestion = suggestion_service.create_suggestion(
+    def test_goal_schedule_routes_cover_links_expectation_and_progress(self) -> None:
+        goal = goal_service.create_goal("每周健身", None, "short")
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        db.execute(
+            """
+            INSERT INTO schedule_events(
+                id, subject, start_ts, end_ts, start_local, end_local, synced_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "event-api-1",
+                "练背",
+                now.timestamp(),
+                now.timestamp() + 3600,
+                now.replace(tzinfo=None).isoformat(timespec="seconds"),
+                (now + timedelta(hours=1)).replace(tzinfo=None).isoformat(timespec="seconds"),
+                now.timestamp(),
+            ),
+        )
+
+        with self._client() as client:
+            linked = client.post(
+                f"/goals/{goal['id']}/schedule/links",
+                json={"event_id": "event-api-1"},
+            )
+            expectation = client.put(
+                f"/goals/{goal['id']}/schedule/expectation",
+                json={"period": "week", "target": 3, "label": "每周健身 3 次"},
+            )
+            schedule = client.get(f"/goals/{goal['id']}/schedule")
+            unlinked = client.delete(
+                f"/goals/{goal['id']}/schedule/links/event-api-1"
+            )
+
+        self.assertEqual(200, linked.status_code, linked.text)
+        self.assertEqual(200, expectation.status_code, expectation.text)
+        self.assertEqual(["event-api-1"], [event["id"] for event in schedule.json()["events"]])
+        self.assertEqual(1, schedule.json()["progress"]["current"])
+        self.assertEqual("1/3", schedule.json()["progress"]["text"])
+        self.assertEqual(200, unlinked.status_code, unlinked.text)
+
+    def test_suggestion_routes_accept_and_dismiss_goals(self) -> None:
+        accepted_suggestion = suggestion_service.create_suggestion(
             "goal",
             {"title": "准备考研", "horizon": "long"},
             "chat:1",
             0.9,
         )
-        todo_suggestion = suggestion_service.create_suggestion(
-            "todo",
-            {"task": "整理错题", "date": "2026-06-20"},
+        dismissed_suggestion = suggestion_service.create_suggestion(
+            "goal",
+            {"title": "完成课程项目", "horizon": "short"},
             "comment:2",
             0.8,
         )
 
         with self._client() as client:
             list_response = client.get("/suggestions")
-            accept_response = client.post(f"/suggestions/{goal_suggestion['id']}/accept")
-            dismiss_response = client.post(f"/suggestions/{todo_suggestion['id']}/dismiss")
+            accept_response = client.post(f"/suggestions/{accepted_suggestion['id']}/accept")
+            dismiss_response = client.post(f"/suggestions/{dismissed_suggestion['id']}/dismiss")
             list_after_response = client.get("/suggestions")
-            repeat_response = client.post(f"/suggestions/{goal_suggestion['id']}/accept")
+            repeat_response = client.post(f"/suggestions/{accepted_suggestion['id']}/accept")
 
         self.assertEqual(2, len(list_response.json()))
         self.assertEqual("goal", accept_response.json()["suggestion"]["kind"])
@@ -475,6 +623,110 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual("dismissed", dismiss_response.json()["status"])
         self.assertEqual([], list_after_response.json())
         self.assertEqual(409, repeat_response.status_code)
+
+    def test_schedule_suggestion_routes_support_kind_body_and_error_codes(self) -> None:
+        schedule = suggestion_service.create_suggestion(
+            "schedule",
+            {
+                "subject": "打疫苗",
+                "date": "2026-07-20",
+                "start_time": "15:00",
+                "end_time": "16:00",
+                "all_day": False,
+            },
+            "chat:1",
+            0.9,
+        )
+        accepted = {
+            "suggestion": {**schedule, "status": "accepted"},
+            "created": {"id": "local-1"},
+        }
+        with self._client() as client:
+            listed = client.get("/suggestions", params={"kind": "schedule"})
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                return_value=accepted,
+            ) as accept:
+                fallback = client.post(
+                    f"/suggestions/{schedule['id']}/accept",
+                    json={"fallback_local": True},
+                )
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                side_effect=NoWritableAccountError("none"),
+            ):
+                no_account = client.post(f"/suggestions/{schedule['id']}/accept")
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                side_effect=suggestion_service.SuggestionExpiredError("expired"),
+            ):
+                expired = client.post(f"/suggestions/{schedule['id']}/accept")
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                side_effect=GraphHTTPError(503),
+            ):
+                upstream = client.post(f"/suggestions/{schedule['id']}/accept")
+            missing = client.post("/suggestions/missing/accept")
+
+        self.assertEqual([schedule["id"]], [item["id"] for item in listed.json()])
+        self.assertEqual(200, fallback.status_code, fallback.text)
+        accept.assert_called_once_with(schedule["id"], fallback_local=True, overrides=None)
+        self.assertEqual(409, no_account.status_code)
+        self.assertEqual({"code": "no_writable_account"}, no_account.json()["detail"])
+        self.assertEqual(409, expired.status_code)
+        self.assertEqual({"code": "suggestion_expired"}, expired.json()["detail"])
+        self.assertEqual(502, upstream.status_code)
+        self.assertEqual(404, missing.status_code)
+
+    def test_suggestion_accept_route_forwards_overrides_and_maps_invalid_to_422(self) -> None:
+        schedule = suggestion_service.create_suggestion(
+            "schedule",
+            {
+                "subject": "打疫苗",
+                "date": "2026-07-20",
+                "start_time": "15:00",
+                "end_time": "16:00",
+                "all_day": False,
+            },
+            "chat:1",
+            0.9,
+        )
+        goal = suggestion_service.create_suggestion(
+            "goal", {"title": "旧标题", "horizon": "long"}, "chat:2", 0.8
+        )
+        accepted = {
+            "suggestion": {**schedule, "status": "accepted"},
+            "created": {"id": "local-1"},
+        }
+        with self._client() as client:
+            with patch(
+                "api.routes.suggestions.suggestion_service.accept",
+                return_value=accepted,
+            ) as accept:
+                override_response = client.post(
+                    f"/suggestions/{schedule['id']}/accept",
+                    json={"overrides": {"subject": "打加强针", "date": "2026-07-25"}},
+                )
+            invalid_value = client.post(
+                f"/suggestions/{goal['id']}/accept",
+                json={"overrides": {"horizon": "forever"}},
+            )
+            unknown_field = client.post(
+                f"/suggestions/{goal['id']}/accept",
+                json={"overrides": {"status": "done"}},
+            )
+
+        self.assertEqual(200, override_response.status_code, override_response.text)
+        accept.assert_called_once_with(
+            schedule["id"],
+            fallback_local=False,
+            overrides={"subject": "打加强针", "date": "2026-07-25"},
+        )
+        self.assertEqual(422, invalid_value.status_code, invalid_value.text)
+        self.assertEqual(422, unknown_field.status_code, unknown_field.text)
+        self.assertEqual(
+            "pending", suggestion_service.get_suggestion(goal["id"])["status"]
+        )
 
     def test_delete_post_route_hard_deletes_post_comments_and_cancels_pending_jobs(self) -> None:
         post_id = "post-delete-1"
@@ -597,6 +849,33 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, reconcile_response.status_code)
         self.assertEqual(3, reconcile_response.json()["processed"])
         self.assertIn("vector_index", reconcile_response.json())
+
+    def test_model_settings_vector_summary_uses_current_collection_state(self) -> None:
+        from api.routes import settings
+
+        state = SimpleNamespace(
+            query_ready=False,
+            indexed_count=7,
+            total_count=10,
+            pending_count=2,
+            failed_count=1,
+        )
+        with patch(
+            "api.routes.settings.vector_index_service.current_collection_state",
+            return_value=state,
+        ):
+            summary = settings._vector_index_summary()
+
+        self.assertEqual(
+            {
+                "ready": False,
+                "indexed": 7,
+                "total": 10,
+                "pending": 2,
+                "failed": 1,
+            },
+            summary,
+        )
 
     def test_chat_route_sends_message_and_persists_reply(self) -> None:
         soul_name = quote("拾迹者")

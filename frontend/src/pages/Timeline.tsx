@@ -38,25 +38,30 @@ import {
   withPendingCommentRerun,
 } from '@/utils/commentState'
 import { API_LIMITS } from '@/utils/constants'
+import { localDateKey, monthDayLabel, SYSTEM_TIME_ZONE, weekdayLabel } from '@/utils/schedule'
 import styles from './Timeline.module.css'
 
 interface TimelineProps {
   onActivitySettled?: () => void
-  onTodosChanged?: () => void
   modelConfigured?: boolean | null
   onOpenSettings?: () => void
   postMutationSignal?: PostMutationSignal | null
   /** Search is driven by the right panel input; query is lifted to App. */
   searchQuery: string
+  /** 日期透镜选中的日期（null = 最新流）。 */
+  selectedDate?: string | null
+  /** 退出日期透镜（×、Esc、点收起条时调用）。 */
+  onExitDateLens?: () => void
 }
 
 export function Timeline({
   onActivitySettled,
-  onTodosChanged,
   modelConfigured,
   onOpenSettings,
   postMutationSignal,
   searchQuery,
+  selectedDate = null,
+  onExitDateLens,
 }: TimelineProps) {
   const [posts, setPosts] = useState<Post[]>([])
   const [postComments, setPostComments] = useState<Record<string, Comment[]>>({})
@@ -91,6 +96,20 @@ export function Timeline({
   const modelUnavailable = modelConfigured === false
   const trimmedSearchQuery = searchQuery.trim()
   const searching = trimmedSearchQuery.length > 0
+  const dateLensActive = selectedDate !== null && !searching
+  const filteredPosts = dateLensActive
+    ? posts.filter((post) => localDateKey(post.ts) === selectedDate)
+    : posts
+
+  /* Esc 退出日期透镜（搜索态下不劫持 Esc，交给搜索框）。 */
+  useEffect(() => {
+    if (!dateLensActive) return
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onExitDateLens?.()
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [dateLensActive, onExitDateLens])
 
   /* Pending suggestions belong to the post (not its comments), so they are
      fetched independently and keyed by post id — this keeps the prompt under
@@ -288,10 +307,6 @@ export function Timeline({
         if (shouldRefreshPostDetail(event)) {
           void refreshPostDetail(postId, event.event_type)
           void refreshSuggestions()
-        }
-
-        if (event.event_type === 'todo_succeeded') {
-          onTodosChanged?.()
         }
       },
       () => {
@@ -513,7 +528,6 @@ export function Timeline({
             delete next[postId]
             return next
           })
-          onTodosChanged?.()
           onActivitySettled?.()
         } catch (err) {
           setError(err instanceof Error ? err.message : '删除失败')
@@ -621,14 +635,69 @@ export function Timeline({
     )
   }
 
+  const renderPostCard = (post: Post) => (
+    <TimelinePostCard
+      key={post.post_id}
+      post={post}
+      comments={postComments[post.post_id]}
+      suggestions={postSuggestions[post.post_id]}
+      commentConversations={postCommentConversations[post.post_id]}
+      busyCommentId={busyCommentId}
+      deletingPost={deletingPostId === post.post_id}
+      retryingJobId={retryingJobId}
+      modelConfigured={modelConfigured}
+      expandLoading={expandingPostIds[post.post_id] ?? false}
+      expandError={expandErrors[post.post_id] ?? null}
+      onExpandPost={handleExpand}
+      onReplyPost={handleCommentReply}
+      onDeletePostById={handleDeletePost}
+      onDeleteCommentById={handleDeleteComment}
+      onRerunCommentById={handleRerunComment}
+      onRetryPostJobs={handleRetryPostJobs}
+    />
+  )
+
   return (
     <div className={styles.timeline}>
       <TimelineHeader />
-      <Composer
-        onSubmit={handleSubmit}
-        disabled={modelUnavailable}
-        disabledReason="主模型和 Embedding 尚未配置，配置完成后才能发布记录。"
-      />
+
+      {modelUnavailable && onOpenSettings && (
+        <section className={styles.firstRunGuide}>
+          <div>
+            <h2>欢迎来到 TraceLog</h2>
+            <p>先去设置里填好 API Key，就可以开始记录，让拾迹陪你回看一路走来的变化。</p>
+            <p className={styles.firstRunPrivacy}>调试日志默认不记录对话内容，你随时可以在设置里调整。</p>
+          </div>
+          <button type="button" onClick={onOpenSettings}>去设置</button>
+        </section>
+      )}
+
+      {dateLensActive && selectedDate && (
+        <div className={styles.filterBar} role="status">
+          <span className={styles.filterBarIcon}><FilterCalendarIcon /></span>
+          <span className={styles.filterBarText}>
+            <strong>{monthDayLabel(selectedDate)} {weekdayLabel(selectedDate)}</strong>
+            <span className={styles.filterCount}>
+              {filteredPosts.length > 0 ? `${filteredPosts.length} 条帖子` : '没有帖子'}
+            </span>
+          </span>
+          <span className={styles.filterBarHint}>Esc 退出</span>
+          <button className={styles.filterExit} type="button" onClick={onExitDateLens}>× 回到最新</button>
+        </div>
+      )}
+
+      {dateLensActive ? (
+        <button className={styles.composerCollapsed} type="button" onClick={onExitDateLens}>
+          <BackArrowIcon />
+          正在回看过去的一天 — 回到最新，发布此刻的动态
+        </button>
+      ) : (
+        <Composer
+          onSubmit={handleSubmit}
+          disabled={modelUnavailable}
+          disabledReason="主模型和 Embedding 尚未配置，配置完成后才能发布记录。"
+        />
+      )}
 
       {error && posts.length === 0 ? (
         <div className={styles.error}>
@@ -654,44 +723,28 @@ export function Timeline({
               onDeepSearch={runDeepSearch}
               onRetry={() => runSearch(searchQuery, searchMode)}
             />
+          ) : dateLensActive ? (
+            filteredPosts.length === 0 ? (
+              <div className={styles.feedEmpty}>
+                <strong>{selectedDate && monthDayLabel(selectedDate)}没有帖子</strong>
+                右边可以看看这天的日程，或者回到最新动态。
+              </div>
+            ) : (
+              <div className={styles.feed}>{filteredPosts.map(renderPostCard)}</div>
+            )
           ) : posts.length === 0 ? (
             <div className={styles.empty}>
               <EmptyIcon />
-              <p className={styles.emptyTitle}>{modelUnavailable ? '先配置模型' : '还没有记录'}</p>
+              <p className={styles.emptyTitle}>还没有记录</p>
               <p className={styles.emptyHint}>
                 {modelUnavailable
-                  ? '配置主模型和 Embedding 后，就可以开始记录并生成回应。'
+                  ? '完成上方设置后，写下你的第一条想法。'
                   : '写下你的第一条想法，TA 们会回应你'}
               </p>
-              {modelUnavailable && onOpenSettings && (
-                <button className={styles.emptyAction} onClick={onOpenSettings}>
-                  去设置
-                </button>
-              )}
             </div>
           ) : (
             <div className={styles.feed}>
-              {posts.map((post) => (
-                <TimelinePostCard
-                  key={post.post_id}
-                  post={post}
-                  comments={postComments[post.post_id]}
-                  suggestions={postSuggestions[post.post_id]}
-                  commentConversations={postCommentConversations[post.post_id]}
-                  busyCommentId={busyCommentId}
-                  deletingPost={deletingPostId === post.post_id}
-                  retryingJobId={retryingJobId}
-                  modelConfigured={modelConfigured}
-                  expandLoading={expandingPostIds[post.post_id] ?? false}
-                  expandError={expandErrors[post.post_id] ?? null}
-                  onExpandPost={handleExpand}
-                  onReplyPost={handleCommentReply}
-                  onDeletePostById={handleDeletePost}
-                  onDeleteCommentById={handleDeleteComment}
-                  onRerunCommentById={handleRerunComment}
-                  onRetryPostJobs={handleRetryPostJobs}
-                />
-              ))}
+              {posts.map(renderPostCard)}
               <div className={styles.loadMoreRow} ref={loadMoreSentinelRef}>
                 {loadingMore ? (
                   <span>加载更早的记录...</span>
@@ -915,7 +968,12 @@ function TimelineHeader() {
   const hour = now.getHours()
   const greeting =
     hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
-  const today = now.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })
+  const today = now.toLocaleDateString('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+    timeZone: SYSTEM_TIME_ZONE,
+  })
   return (
     <header className={styles.header}>
       <div>
@@ -934,6 +992,25 @@ function CalendarIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
+    </svg>
+  )
+}
+
+function FilterCalendarIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  )
+}
+
+function BackArrowIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 12h18M3 12l6-6M3 12l6 6" />
     </svg>
   )
 }

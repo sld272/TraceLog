@@ -199,9 +199,10 @@ class MemoryReconcileJobTest(unittest.TestCase):
         self.assertEqual([int(row["id"]) for row in pending], [pending_id])
         self.assertEqual(current["id"], current_id)
 
-    def test_reconcile_job_end_to_end_builds_unit_and_view(self) -> None:
+    def test_reconcile_job_end_to_end_builds_unit_via_template(self) -> None:
         # The full v2 spine through one job: evidence -> reconcile -> unit ->
-        # recompute slice -> view synthesis -> fresh portrait.
+        # recompute slice -> view. With only one core unit, gate 1 keeps the LLM
+        # out of synthesis and the deterministic template renders the portrait.
         with db.transaction() as conn:
             mes.record_post_mutation(conn, post_id="p1", op="create", content="我在准备考研", occurred_at=1.0)
         job_id = job_service.enqueue_memory_reconcile_once()
@@ -218,17 +219,26 @@ class MemoryReconcileJobTest(unittest.TestCase):
                 }],
             }
 
+        synth_calls = {"n": 0}
+
+        def fake_synth(*a, **k):
+            synth_calls["n"] += 1
+            return "不应被调用"
+
         with patch.object(memory_router, "call_memory_reconcile", fake_reconcile), \
-                patch.object(memory_router, "call_view_synthesis", lambda *a, **k: "你正在备考考研。"):
+                patch.object(memory_router, "call_view_synthesis", fake_synth):
             public_post_pipeline.execute_job(job, client=object(), model="m")
 
         units = mus.list_active_units_in_bucket("global", "public")
         self.assertEqual(len(units), 1)
         self.assertEqual(units[0]["content"], "用户在准备考研")
+        # gate 1: one unit < MIN_UNITS_FOR_LLM, so synthesis never touched the LLM
+        self.assertEqual(synth_calls["n"], 0)
         view = mvs.get_view("global", "public", mvs.VIEW_USER_PORTRAIT)
         self.assertIsNotNone(view)
         self.assertEqual(view["status"], "fresh")
-        self.assertIn("备考考研", view["content_md"])
+        self.assertIn("用户在准备考研", view["content_md"])  # deterministic template body
+        self.assertIn("## 洞察", view["content_md"])  # insight -> 洞察 section
 
 
 if __name__ == "__main__":

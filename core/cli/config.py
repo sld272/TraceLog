@@ -9,8 +9,9 @@ import os
 from core.cli_input import read_cli_input
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_settings
+from core.paths import CONFIG_FILE as CONFIG_PATH
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = str(CONFIG_PATH)
 DEFAULT_VISION_CONFIG = {
     "enabled": False,
     "model": None,
@@ -39,6 +40,9 @@ def load_config() -> dict:
         if not missing:
             config.setdefault("embedding_api_key", None)
             config.setdefault("embedding_base_url", None)
+            config.setdefault("secondary_model", None)
+            config.setdefault("secondary_api_key", None)
+            config.setdefault("secondary_base_url", None)
             config["logging"] = _normalize_logging_config(config.get("logging"))
             config["vision"] = normalize_vision_config(config.get("vision"))
             config["web_search"] = normalize_web_search_config(config.get("web_search"))
@@ -83,12 +87,16 @@ def load_config() -> dict:
         "embedding_model": embedding_model,
         "embedding_api_key": embedding_api_key,
         "embedding_base_url": embedding_base_url,
+        "secondary_model": None,
+        "secondary_api_key": None,
+        "secondary_base_url": None,
         "logging": default_logging_config(),
         "vision": default_vision_config(),
         "web_search": default_web_search_config(),
     }
     tmp = CONFIG_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
     os.replace(tmp, CONFIG_FILE)
 

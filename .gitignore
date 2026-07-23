@@ -230,6 +230,10 @@ frontend/.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
 frontend/tsconfig.node.tsbuildinfo
 
+# Desktop packaging outputs and dependencies
+!desktop/engine.spec
+desktop/node_modules/
+
 
 #Agent
 AGENTS.md

@@ -27,7 +27,7 @@ class VisionServiceTest(unittest.TestCase):
         db.DB_PATH = self.workspace / "state.db"
         vision_service.CONFIG_FILE = str(self.config_path)
         db.init_db()
-        logging_service.init_logging({"enabled": True})
+        logging_service.init_logging({"enabled": True, "capture_content": True})
 
     def tearDown(self) -> None:
         logging_service.init_logging({"enabled": False})

@@ -1,28 +1,50 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type ModelSettings,
   type ModelSettingsUpdate,
+  type LogStats,
+  type ScheduleClientIdInfo,
+  type ScheduleStatus,
   type Soul,
   type WorkspaceStatus,
+  ApiError,
+  fetchHealth,
   createSoul,
+  clearLogFiles,
   generateSoul,
+  getAuthStatus,
+  getLogStats,
   getModelSettings,
+  getScheduleClientId,
+  getScheduleStatus,
   getSoulContent,
   getWorkspaceStatus,
   listSouls,
   reconcileVectorIndex,
+  revealLogFolder,
   reorderSouls,
+  restoreDefaultClientId,
   retryVectorIndex,
   saveModelSettings,
+  saveScheduleClientId,
+  createLocalCalendarAccount,
+  deleteLocalCalendarAccount,
+  scheduleLogout,
+  startInteractiveAuth,
+  startScheduleDeviceLogin,
   updateSoul,
 } from '@/api/client'
+import { formatSmartTime } from '@/utils/date'
+import { invalidateScheduleStatusCache, setCachedScheduleStatus } from '@/utils/scheduleStatusCache'
 import { Notice } from '@/components/Notice'
-import { ArrowDownIcon, ArrowUpIcon, PencilIcon } from '@/components/icons'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ScheduleMigrationDialog } from '@/components/ScheduleMigrationDialog'
+import { ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, PencilIcon } from '@/components/icons'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import workspaceStyles from './WorkspacePages.module.css'
 import styles from './SettingsPage.module.css'
 
-type SettingsTab = 'model' | 'souls' | 'data' | 'about'
+type SettingsTab = 'model' | 'souls' | 'schedule' | 'data' | 'about'
 type CreateSoulMode = 'ai' | 'markdown'
 type WebSearchProvider = ModelSettings['web_search']['provider']
 
@@ -52,6 +74,7 @@ interface SoulEditing {
 
 interface SettingsPageProps {
   firstRun?: boolean
+  initialTab?: 'schedule'
   onModelSettingsChanged?: () => void
   onSoulsChanged?: () => void
 }
@@ -64,6 +87,11 @@ interface ModelForm {
   embedding_api_key: string
   embedding_base_url: string
   reuse_embedding_config: boolean
+  secondary_model: string
+  secondary_api_key: string
+  secondary_base_url: string
+  reuse_secondary_config: boolean
+  reuse_secondary_api_key: boolean
   logging: ModelSettings['logging']
   vision: {
     enabled: boolean
@@ -89,10 +117,18 @@ const DEFAULT_MODEL_FORM: ModelForm = {
   embedding_api_key: '',
   embedding_base_url: '',
   reuse_embedding_config: true,
+  secondary_model: '',
+  secondary_api_key: '',
+  secondary_base_url: '',
+  reuse_secondary_config: true,
+  reuse_secondary_api_key: true,
   logging: {
     enabled: true,
     level: 'INFO',
-    history_retention: 100,
+    capture_content: false,
+    rotate_max_bytes: 10 * 1024 * 1024,
+    history_max_bytes: 50 * 1024 * 1024,
+    history_max_days: 14,
   },
   vision: {
     enabled: false,
@@ -115,16 +151,18 @@ const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语
 const TAB_SUBTITLES: Record<SettingsTab, string> = {
   model: '模型、图片识别、网页搜索与 Embedding 配置',
   souls: '排序决定首页并发回应顺序，禁用后不进入回应队列',
+  schedule: '管理日历账号：Outlook 云端与本地日历',
   data: '本地 workspace 状态、数据概览与记忆检索索引',
   about: '关于拾迹这个项目',
 }
 
-export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSoulsChanged }: SettingsPageProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('model')
+export function SettingsPage({ firstRun = false, initialTab, onModelSettingsChanged, onSoulsChanged }: SettingsPageProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'model')
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null)
   const [modelForm, setModelForm] = useState<ModelForm>(DEFAULT_MODEL_FORM)
   const [souls, setSouls] = useState<Soul[]>([])
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus | null>(null)
+  const [logStats, setLogStats] = useState<LogStats | null>(null)
   const [createSoulMode, setCreateSoulMode] = useState<CreateSoulMode>('ai')
   const [aiSoulDraft, setAiSoulDraft] = useState<AiSoulDraft>({ name: '', inspiration: '' })
   const [markdownSoulDraft, setMarkdownSoulDraft] = useState<MarkdownSoulDraft>({ name: '', content: '' })
@@ -137,13 +175,21 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const [savingSoul, setSavingSoul] = useState<string | null>(null)
   const [vectorAction, setVectorAction] = useState<'retry' | 'reconcile' | null>(null)
   const [vectorError, setVectorError] = useState<string | null>(null)
+  const [logAction, setLogAction] = useState<'toggle' | 'clear' | 'reveal' | null>(null)
+  const [confirmClearLogs, setConfirmClearLogs] = useState(false)
+  const [logRevealPath, setLogRevealPath] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setActiveTab(initialTab ?? 'model')
+  }, [initialTab])
 
   const tabs = useMemo(
     () => [
       { id: 'model' as const, label: '基本' },
       { id: 'souls' as const, label: '人格' },
+      { id: 'schedule' as const, label: '日程' },
       { id: 'data' as const, label: '数据' },
       { id: 'about' as const, label: '关于' },
     ],
@@ -157,15 +203,17 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   const refreshSettings = async () => {
     try {
       setLoading(true)
-      const [model, soulList, workspace] = await Promise.all([
+      const [model, soulList, workspace, logs] = await Promise.all([
         getModelSettings(),
         listSouls(false),
         getWorkspaceStatus(),
+        getLogStats(),
       ])
       setModelSettings(model)
       setModelForm(formFromModelSettings(model))
       setSouls(soulList)
       setWorkspaceStatus(workspace)
+      setLogStats(logs)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载设置失败')
@@ -195,6 +243,58 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
       setError(err instanceof Error ? err.message : '保存模型配置失败')
     } finally {
       setSavingModel(false)
+    }
+  }
+
+  const handleCaptureContentChange = async (captureContent: boolean) => {
+    const savedForm = modelSettings ? formFromModelSettings(modelSettings) : modelForm
+    const nextForm: ModelForm = {
+      ...savedForm,
+      logging: { ...savedForm.logging, capture_content: captureContent },
+    }
+    setLogAction('toggle')
+    setNotice(null)
+    setError(null)
+    try {
+      const saved = await saveModelSettings(toModelUpdate(nextForm))
+      setModelSettings(saved)
+      setModelForm((current) => ({ ...current, logging: saved.logging }))
+      setLogStats(await getLogStats())
+      onModelSettingsChanged?.()
+      setNotice('调试日志设置已保存。')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存调试日志设置失败')
+    } finally {
+      setLogAction(null)
+    }
+  }
+
+  const handleClearLogs = async () => {
+    setLogAction('clear')
+    setNotice(null)
+    setError(null)
+    try {
+      setLogStats(await clearLogFiles())
+      setConfirmClearLogs(false)
+      setNotice('调试日志已清空。')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '清空调试日志失败')
+    } finally {
+      setLogAction(null)
+    }
+  }
+
+  const handleRevealLogs = async () => {
+    setLogAction('reveal')
+    setLogRevealPath(null)
+    setError(null)
+    try {
+      const result = await revealLogFolder()
+      if (!result.ok) setLogRevealPath(result.path)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '打开日志文件夹失败')
+    } finally {
+      setLogAction(null)
     }
   }
 
@@ -548,12 +648,22 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
                   onCancelEditSoul={handleCancelEditSoul}
                 />
               )}
+              {activeTab === 'schedule' && <ScheduleSettingsPanel />}
               {activeTab === 'data' && (
                 <DataSettingsPanel
                   status={workspaceStatus}
+                  logStats={logStats}
+                  logAction={logAction}
+                  confirmClearLogs={confirmClearLogs}
+                  logRevealPath={logRevealPath}
                   vectorAction={vectorAction}
                   vectorError={vectorError}
                   onVectorAction={handleVectorAction}
+                  onCaptureContentChange={handleCaptureContentChange}
+                  onRequestClearLogs={() => setConfirmClearLogs(true)}
+                  onCancelClearLogs={() => setConfirmClearLogs(false)}
+                  onClearLogs={handleClearLogs}
+                  onRevealLogs={handleRevealLogs}
                 />
               )}
               {activeTab === 'about' && <AboutSettingsPanel />}
@@ -565,7 +675,66 @@ export function SettingsPage({ firstRun = false, onModelSettingsChanged, onSouls
   )
 }
 
+const RELEASES_URL = 'https://github.com/sld272/TraceLog/releases'
+
+/** 比较 'v1.2.3' 风格版本号；返回正数表示 a 更新。 */
+function compareVersions(a: string, b: string): number {
+  const parse = (value: string) => value.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
+  const pa = parse(a)
+  const pb = parse(b)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+type UpdateCheck =
+  | { state: 'idle' }
+  | { state: 'checking' }
+  | { state: 'latest' }
+  | { state: 'update'; tag: string; url: string }
+  | { state: 'error' }
+
 function AboutSettingsPanel() {
+  const [version, setVersion] = useState<string | null>(null)
+  const [update, setUpdate] = useState<UpdateCheck>({ state: 'idle' })
+
+  useEffect(() => {
+    let cancelled = false
+    fetchHealth()
+      .then((health) => {
+        if (!cancelled) setVersion(health.version)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const checkForUpdates = async () => {
+    setUpdate({ state: 'checking' })
+    try {
+      const res = await fetch('https://api.github.com/repos/sld272/TraceLog/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' },
+      })
+      if (res.status === 404) {
+        setUpdate({ state: 'latest' })
+        return
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const release = await res.json()
+      const tag = String(release.tag_name ?? '')
+      if (version && tag && compareVersions(tag, version) > 0) {
+        setUpdate({ state: 'update', tag, url: String(release.html_url ?? RELEASES_URL) })
+      } else {
+        setUpdate({ state: 'latest' })
+      }
+    } catch {
+      setUpdate({ state: 'error' })
+    }
+  }
+
   return (
     <div className={styles.aboutPage}>
       <img className={styles.apIcon} src="/brand/tracelog-icon-transparent-512.png" alt="拾迹" />
@@ -588,11 +757,499 @@ function AboutSettingsPanel() {
         <span className={styles.ft}>本地优先</span>
       </div>
       <div className={styles.aboutMeta}>
-        <span>版本 v2.0</span>
+        <span>{version ? `版本 v${version}` : '版本 —'}</span>
+        <button
+          type="button"
+          className={styles.apUpdateCheck}
+          onClick={checkForUpdates}
+          disabled={update.state === 'checking'}
+        >
+          {update.state === 'checking' ? '检查中…' : '检查更新'}
+        </button>
+        {update.state === 'latest' && <span>已是最新版本</span>}
+        {update.state === 'update' && (
+          <a href={update.url} target="_blank" rel="noreferrer">
+            发现新版本 {update.tag}，前往下载
+          </a>
+        )}
+        {update.state === 'error' && (
+          <a href={RELEASES_URL} target="_blank" rel="noreferrer">
+            检查失败，去发布页看看
+          </a>
+        )}
         <a href="https://github.com/sld272/TraceLog" target="_blank" rel="noreferrer">
           GitHub 仓库
         </a>
       </div>
+    </div>
+  )
+}
+
+type ScheduleBusy = 'login' | 'device' | 'save' | 'restore' | 'logout' | 'createLocal' | 'deleteLocal' | null
+type LoginPhase = 'interactive' | 'device' | null
+
+function ScheduleSettingsPanel() {
+  const [status, setStatus] = useState<ScheduleStatus | null>(null)
+  const [clientIdInfo, setClientIdInfo] = useState<ScheduleClientIdInfo | null>(null)
+  const [clientIdInput, setClientIdInput] = useState('')
+  const [device, setDevice] = useState<{ user_code: string; verification_uri: string } | null>(null)
+  const [busy, setBusy] = useState<ScheduleBusy>(null)
+  const [loginPhase, setLoginPhase] = useState<LoginPhase>(null)
+  const [polling, setPolling] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [confirmRestore, setConfirmRestore] = useState(false)
+  const [confirmDeleteLocal, setConfirmDeleteLocal] = useState(false)
+  const [showMigration, setShowMigration] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const pollRef = useRef<number | null>(null)
+
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+    setPolling(false)
+  }
+
+  // 两个请求各自独立落地：client-id 几乎瞬时（决定内置/自定义应用标签），
+  // status 可能较慢（首次需要唤起 Graph/MSAL），互不阻塞。
+  const reload = async () => {
+    await Promise.allSettled([
+      getScheduleStatus()
+        .then((data) => {
+          setStatus(data)
+          setCachedScheduleStatus(data)
+        })
+        .catch(() => {}),
+      getScheduleClientId().then(setClientIdInfo).catch(() => {}),
+    ])
+  }
+
+  useEffect(() => {
+    void reload()
+    return () => {
+      if (pollRef.current !== null) window.clearInterval(pollRef.current)
+    }
+  }, [])
+
+  // 轮询统一的登录状态（interactive 与 device 共用后端 _auth_state）。
+  // interactive 失败且 fallback==='device_code' 时自动切入设备码流。
+  const startPolling = (phase: 'interactive' | 'device') => {
+    setPolling(true)
+    pollRef.current = window.setInterval(() => {
+      void getAuthStatus()
+        .then(async (result) => {
+          if (result.status === 'ok') {
+            stopPolling()
+            setDevice(null)
+            setLoginPhase(null)
+            setNotice('已连接 Microsoft 账户。')
+            await reload()
+          } else if (result.status === 'error') {
+            stopPolling()
+            if (phase === 'interactive' && result.fallback === 'device_code') {
+              await beginDeviceFlow()
+            } else {
+              setDevice(null)
+              setLoginPhase(null)
+              setError(result.error || 'Microsoft 登录失败')
+            }
+          }
+        })
+        .catch(() => {
+          /* 轮询期间的瞬时错误忽略，继续等待 */
+        })
+    }, 2500)
+  }
+
+  const beginDeviceFlow = async () => {
+    setError(null)
+    setLoginPhase('device')
+    try {
+      const flow = await startScheduleDeviceLogin()
+      setDevice({ user_code: flow.user_code, verification_uri: flow.verification_uri })
+      startPolling('device')
+    } catch (err) {
+      setLoginPhase(null)
+      if (err instanceof ApiError && err.status === 409) {
+        setError('Microsoft 登录正在进行中，请稍候重试。')
+      } else {
+        setError(err instanceof Error ? err.message : '启动设备码登录失败')
+      }
+    }
+  }
+
+  const handleInteractiveLogin = async () => {
+    setBusy('login')
+    setError(null)
+    setNotice(null)
+    setDevice(null)
+    setLoginPhase('interactive')
+    try {
+      await startInteractiveAuth()
+      startPolling('interactive')
+    } catch (err) {
+      setLoginPhase(null)
+      if (err instanceof ApiError && err.status === 409) {
+        setError('Microsoft 登录正在进行中，请稍候重试。')
+      } else {
+        setError(err instanceof Error ? err.message : '启动登录失败')
+      }
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const handleDeviceLogin = async () => {
+    setBusy('device')
+    setNotice(null)
+    setDevice(null)
+    await beginDeviceFlow()
+    setBusy(null)
+  }
+
+  const handleSaveClientId = async () => {
+    const value = clientIdInput.trim()
+    if (!value) {
+      setError('client_id 不能为空')
+      return
+    }
+    setBusy('save')
+    setError(null)
+    setNotice(null)
+    stopPolling()
+    setDevice(null)
+    setLoginPhase(null)
+    try {
+      const info = await saveScheduleClientId(value)
+      invalidateScheduleStatusCache()
+      setClientIdInfo(info)
+      setClientIdInput('')
+      setNotice('已保存自定义应用 ID，请重新登录。')
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存 client_id 失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const handleRestoreDefault = async () => {
+    setConfirmRestore(false)
+    setBusy('restore')
+    setError(null)
+    setNotice(null)
+    stopPolling()
+    setDevice(null)
+    setLoginPhase(null)
+    try {
+      const info = await restoreDefaultClientId()
+      invalidateScheduleStatusCache()
+      setClientIdInfo(info)
+      setClientIdInput('')
+      setNotice('已恢复内置应用，请重新登录。')
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '恢复内置应用失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const handleLogout = async () => {
+    setBusy('logout')
+    setError(null)
+    setNotice(null)
+    stopPolling()
+    setDevice(null)
+    setLoginPhase(null)
+    try {
+      await scheduleLogout()
+      invalidateScheduleStatusCache()
+      setNotice('已退出 Microsoft 登录。目标关联会在重新登录同一账户后自动恢复。')
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '退出登录失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const copy = (text: string) => {
+    void navigator.clipboard?.writeText(text).then(
+      () => setNotice('已复制到剪贴板。'),
+      () => undefined,
+    )
+  }
+
+  const localAccount = status?.accounts?.find((account) => account.provider === 'local') ?? null
+
+  const handleCreateLocal = async () => {
+    setBusy('createLocal')
+    setError(null)
+    setNotice(null)
+    try {
+      await createLocalCalendarAccount()
+      invalidateScheduleStatusCache()
+      setNotice('已创建本地日历。日程仅保存在这台设备。')
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '创建本地日历失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const handleDeleteLocal = async () => {
+    if (!confirmDeleteLocal) {
+      setConfirmDeleteLocal(true)
+      return
+    }
+    setBusy('deleteLocal')
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await deleteLocalCalendarAccount(true)
+      invalidateScheduleStatusCache()
+      setConfirmDeleteLocal(false)
+      setNotice(`已删除本地日历（连同 ${result.deleted_events} 条日程）。`)
+      await reload()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '删除本地日历失败')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const connected = status?.connected ?? false
+  const accountName = status?.account?.username ?? status?.account?.name ?? null
+  const usingDefault = clientIdInfo?.using_default ?? true
+  const clientTail = clientIdInfo?.client_id_tail ?? ''
+  const advancedState = usingDefault
+    ? `使用拾迹内置应用（···${clientTail}）`
+    : `自定义应用（···${clientTail}）`
+  // 登录进行中（轮询、已弹出设备码或等待浏览器授权）时锁住入口。
+  const loginInFlight = polling || loginPhase !== null
+
+  return (
+    <div className={styles.settingsStack}>
+      {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
+      {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>Outlook 日历</h2>
+            <p className={styles.sectionMeta}>登录 Microsoft 后日程多端同步，推荐使用。</p>
+          </div>
+          <StatusPill ok={connected} label={connected ? '已连接' : '未连接'} />
+        </div>
+        {connected ? (
+          <div className={styles.sectionBodyStack}>
+            <p className={styles.sectionMeta}>
+              当前账户：{accountName || '（未知）'}
+              {status?.last_sync_at ? ` · 上次同步 ${formatSmartTime(status.last_sync_at)}` : ''}
+            </p>
+            <div className={styles.actionRow}>
+              <button
+                className={workspaceStyles.dangerButton}
+                type="button"
+                onClick={() => void handleLogout()}
+                disabled={busy !== null}
+              >
+                {busy === 'logout' ? '退出中...' : '退出登录'}
+              </button>
+            </div>
+          </div>
+        ) : device ? (
+          <div className={styles.deviceBox}>
+            <p className={styles.deviceHint}>
+              在浏览器打开下面的地址，输入验证码完成登录。登录成功后本页会自动刷新。
+            </p>
+            <div className={styles.deviceRow}>
+              <span className={styles.deviceLabel}>验证码</span>
+              <code className={styles.deviceCode}>{device.user_code}</code>
+              <button className={styles.copyBtn} type="button" onClick={() => copy(device.user_code)}>复制</button>
+            </div>
+            <div className={styles.deviceRow}>
+              <span className={styles.deviceLabel}>登录地址</span>
+              <a className={styles.deviceUrl} href={device.verification_uri} target="_blank" rel="noreferrer">
+                {device.verification_uri}
+              </a>
+              <button className={styles.copyBtn} type="button" onClick={() => copy(device.verification_uri)}>复制</button>
+            </div>
+            <p className={styles.deviceStatus}>{polling ? '正在等待你完成登录…' : '登录会话已结束。'}</p>
+          </div>
+        ) : loginPhase === 'interactive' ? (
+          <div className={styles.deviceBox}>
+            <p className={styles.deviceHint}>
+              浏览器将弹出微软登录页，完成授权后会自动返回。若没有弹出窗口，会自动切换到设备码登录。
+            </p>
+            <p className={styles.deviceStatus}>正在等待浏览器授权…</p>
+          </div>
+        ) : (
+          <div className={styles.connectStack}>
+            <button
+              className={workspaceStyles.button}
+              type="button"
+              onClick={() => void handleInteractiveLogin()}
+              disabled={busy !== null || loginInFlight}
+            >
+              {busy === 'login' ? '启动中...' : '登录 Microsoft'}
+            </button>
+            <button
+              className={styles.textLink}
+              type="button"
+              onClick={() => void handleDeviceLogin()}
+              disabled={busy !== null || loginInFlight}
+            >
+              改用设备码登录
+            </button>
+          </div>
+        )}
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>本地日历</h2>
+            <p className={styles.sectionMeta}>日程仅保存在这台设备，不同步到任何云端。</p>
+          </div>
+          {localAccount && <StatusPill ok label="已启用" />}
+        </div>
+        {localAccount ? (
+          <div className={styles.sectionBodyStack}>
+            <p className={styles.sectionMeta}>共 {localAccount.event_count} 条本地日程。</p>
+            <div className={styles.actionRow}>
+              {connected && localAccount.event_count > 0 && !confirmDeleteLocal && (
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={() => setShowMigration(true)}
+                  disabled={busy !== null}
+                >
+                  迁入 Outlook
+                </button>
+              )}
+              <button
+                className={workspaceStyles.dangerButton}
+                type="button"
+                onClick={() => void handleDeleteLocal()}
+                disabled={busy !== null}
+              >
+                {busy === 'deleteLocal'
+                  ? '删除中...'
+                  : confirmDeleteLocal
+                    ? `确认删除？将连同 ${localAccount.event_count} 条日程一并删除，不可恢复`
+                    : '删除本地日历'}
+              </button>
+              {confirmDeleteLocal && busy === null && (
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={() => setConfirmDeleteLocal(false)}
+                >
+                  取消
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className={styles.actionRow}>
+            <button
+              className={workspaceStyles.ghostButton}
+              type="button"
+              onClick={() => void handleCreateLocal()}
+              disabled={busy !== null}
+            >
+              {busy === 'createLocal' ? '创建中...' : '创建本地日历'}
+            </button>
+          </div>
+        )}
+      </section>
+
+      <p className={styles.scheduleNote}>
+        默认使用拾迹内置应用，无需注册；自托管或企业环境可在高级选项中改用自己的应用 ID。
+      </p>
+
+      <section className={styles.section}>
+        <button
+          className={styles.advancedHeader}
+          type="button"
+          onClick={() => setAdvancedOpen((value) => !value)}
+          aria-expanded={advancedOpen}
+        >
+          <span className={styles.advancedChevron} data-open={advancedOpen}>
+            <ChevronRightIcon width={16} height={16} />
+          </span>
+          <span className={styles.advancedTitle}>高级选项</span>
+          <span className={styles.advancedState}>{advancedState}</span>
+        </button>
+        {advancedOpen && (
+          <div className={styles.advancedBody}>
+            <div>
+              <h3 className={styles.advancedSubTitle}>Microsoft 应用</h3>
+              <p className={styles.sectionMeta}>
+                默认使用拾迹内置的共享应用。自托管或企业环境可填入自己在 Entra 注册的 Application (client) ID。
+              </p>
+            </div>
+            <div className={styles.formGrid}>
+              <label className={styles.field}>
+                <span>Application (client) ID</span>
+                <input
+                  value={clientIdInput}
+                  placeholder={usingDefault ? '粘贴自定义 client ID' : `当前 ···${clientTail}，可重新输入覆盖`}
+                  onChange={(event) => setClientIdInput(event.target.value)}
+                />
+              </label>
+            </div>
+            <div className={styles.actionRow}>
+              <button
+                className={workspaceStyles.button}
+                type="button"
+                onClick={() => void handleSaveClientId()}
+                disabled={busy !== null || !clientIdInput.trim()}
+              >
+                {busy === 'save' ? '保存中...' : '保存自定义应用'}
+              </button>
+              {!usingDefault && (
+                <button
+                  className={workspaceStyles.ghostButton}
+                  type="button"
+                  onClick={() => setConfirmRestore(true)}
+                  disabled={busy !== null}
+                >
+                  {busy === 'restore' ? '恢复中...' : '恢复内置应用'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <ConfirmDialog
+        isOpen={confirmRestore}
+        title="恢复内置应用"
+        message="恢复内置应用会清除当前自定义应用 ID 和登录状态，之后需要重新登录。确定继续吗？"
+        confirmText="恢复内置应用"
+        danger
+        onConfirm={() => void handleRestoreDefault()}
+        onCancel={() => setConfirmRestore(false)}
+      />
+
+      {showMigration && (
+        <ScheduleMigrationDialog
+          source="settings"
+          localEventCount={localAccount?.event_count ?? 0}
+          onClose={() => setShowMigration(false)}
+          onFinished={() => {
+            setShowMigration(false)
+            invalidateScheduleStatusCache()
+            void reload()
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -620,7 +1277,7 @@ function ModelSettingsPanel({
         <div className={styles.sectionHeader}>
           <div>
             <h2 className={styles.sectionTitle}>主模型</h2>
-            <p className={styles.sectionMeta}>用于公开回应、追问、私聊和整理。</p>
+            <p className={styles.sectionMeta}>用于人格回复、评论追问、私聊和记忆整理——决定 TA 们的回复质量。</p>
           </div>
           <StatusPill ok={settings?.configured ?? false} label={settings?.configured ? '已配置' : '未完成'} />
         </div>
@@ -642,6 +1299,64 @@ function ModelSettingsPanel({
             placeholder={settings?.api_key_masked ?? '输入新的 API Key'}
             onChange={(value) => setField('api_key', value)}
           />
+        </div>
+      </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>副模型（可选）</h2>
+            <p className={styles.sectionMeta}>用于搜索判断、查询改写、待办与目标抽取等轻量任务；留空时由主模型承担。配置一个更快的小模型可以缩短回复等待。</p>
+          </div>
+          <div className={styles.headerControls}>
+            <StatusPill
+              ok={settings?.secondary_configured ?? false}
+              label={settings?.secondary_configured ? '已配置' : '使用主模型'}
+            />
+            <label className={styles.toggleRow}>
+              <input
+                type="checkbox"
+                checked={form.reuse_secondary_config}
+                onChange={(event) => setField('reuse_secondary_config', event.target.checked)}
+              />
+              <span>复用主模型配置</span>
+            </label>
+          </div>
+        </div>
+        <div className={styles.formGrid}>
+          <TextField
+            label="Model"
+            value={form.secondary_model}
+            placeholder="留空则使用主模型"
+            onChange={(value) => setField('secondary_model', value)}
+          />
+          {!form.reuse_secondary_config && (
+            <>
+              <TextField
+                label="Base URL"
+                value={form.secondary_base_url}
+                placeholder={form.base_url || '留空复用主 Base URL'}
+                onChange={(value) => setField('secondary_base_url', value)}
+              />
+              <label className={styles.toggleRow}>
+                <input
+                  type="checkbox"
+                  checked={form.reuse_secondary_api_key}
+                  onChange={(event) => setField('reuse_secondary_api_key', event.target.checked)}
+                />
+                <span>复用主 Key</span>
+              </label>
+              {!form.reuse_secondary_api_key && (
+                <TextField
+                  label="独立 API Key"
+                  type="password"
+                  value={form.secondary_api_key}
+                  placeholder={settings?.secondary_api_key_masked ?? '输入副模型 API Key'}
+                  onChange={(value) => setField('secondary_api_key', value)}
+                />
+              )}
+            </>
+          )}
         </div>
       </section>
 
@@ -779,6 +1494,11 @@ function ModelSettingsPanel({
             </>
           )}
         </div>
+        {settings && (
+          <p className={styles.vectorIndexStatus}>
+            {vectorIndexStatusLabel(settings.vector_index)}
+          </p>
+        )}
       </section>
 
       <div className={styles.saveBar}>
@@ -1116,14 +1836,32 @@ function SoulSettingsPanel({
 
 function DataSettingsPanel({
   status,
+  logStats,
+  logAction,
+  confirmClearLogs,
+  logRevealPath,
   vectorAction,
   vectorError,
   onVectorAction,
+  onCaptureContentChange,
+  onRequestClearLogs,
+  onCancelClearLogs,
+  onClearLogs,
+  onRevealLogs,
 }: {
   status: WorkspaceStatus | null
+  logStats: LogStats | null
+  logAction: 'toggle' | 'clear' | 'reveal' | null
+  confirmClearLogs: boolean
+  logRevealPath: string | null
   vectorAction: 'retry' | 'reconcile' | null
   vectorError: string | null
   onVectorAction: (action: 'retry' | 'reconcile') => void
+  onCaptureContentChange: (captureContent: boolean) => void
+  onRequestClearLogs: () => void
+  onCancelClearLogs: () => void
+  onClearLogs: () => void
+  onRevealLogs: () => void
 }) {
   if (!status) {
     return <div className={workspaceStyles.empty}>无法读取本地数据状态</div>
@@ -1159,7 +1897,6 @@ function DataSettingsPanel({
           <Stat label="回应" value={status.counts.comments} />
           <Stat label="人格" value={status.counts.souls} />
           <Stat label="启用人格" value={status.counts.enabled_souls} />
-          <Stat label="待办" value={status.counts.todos} />
           <Stat label="任务" value={status.counts.jobs} />
           <Stat label="图片摘要" value={status.counts.vision_cache} />
         </div>
@@ -1212,6 +1949,65 @@ function DataSettingsPanel({
           <Stat label="数据库大小" value={formatBytes(status.db_size_bytes)} />
         </div>
       </section>
+
+      <section className={styles.section}>
+        <div className={styles.sectionHeader}>
+          <div>
+            <h2 className={styles.sectionTitle}>调试日志</h2>
+          </div>
+        </div>
+        <div className={styles.sectionBodyStack}>
+          <div className={styles.logToggleRow}>
+            <div>
+              <p className={styles.logPrimary}>记录完整对话内容</p>
+              <p className={styles.sectionMeta}>默认关闭。开启后会在本机保存你与 AI 的完整对话内容；关闭时仍会记录不含内容的调用统计，失败调用会保留截断片段用于排障。</p>
+            </div>
+            <label className={styles.switch}>
+              <input
+                type="checkbox"
+                aria-label="记录完整对话内容"
+                checked={logStats?.capture_content ?? false}
+                disabled={!logStats || logAction !== null}
+                onChange={(event) => onCaptureContentChange(event.target.checked)}
+              />
+            </label>
+          </div>
+          <p className={styles.logStatus}>
+            当前日志：{logStats?.file_count ?? 0} 个文件 · {formatLogSize(logStats?.total_bytes ?? 0)}
+          </p>
+          <div className={styles.actionRow}>
+            <button
+              className={workspaceStyles.dangerButton}
+              type="button"
+              disabled={!logStats || logAction !== null}
+              onClick={onRequestClearLogs}
+            >
+              {logAction === 'clear' ? '清空中...' : '清空日志'}
+            </button>
+            <button
+              className={workspaceStyles.ghostButton}
+              type="button"
+              disabled={!logStats || logAction !== null}
+              onClick={onRevealLogs}
+            >
+              {logAction === 'reveal' ? '打开中...' : '打开日志文件夹'}
+            </button>
+          </div>
+          {logRevealPath && (
+            <p className={styles.logRevealFallback}>无法自动打开，请前往：<code>{logRevealPath}</code></p>
+          )}
+        </div>
+      </section>
+
+      <ConfirmDialog
+        isOpen={confirmClearLogs}
+        title="清空日志"
+        message="清空后所有调试日志将被永久删除，且不可恢复。确定继续吗？"
+        confirmText="清空日志"
+        danger
+        onConfirm={onClearLogs}
+        onCancel={onCancelClearLogs}
+      />
     </div>
   )
 }
@@ -1360,6 +2156,11 @@ function formFromModelSettings(settings: ModelSettings): ModelForm {
     embedding_api_key: '',
     embedding_base_url: settings.embedding_base_url ?? '',
     reuse_embedding_config: settings.reuse_embedding_config,
+    secondary_model: settings.secondary_model ?? '',
+    secondary_api_key: '',
+    secondary_base_url: settings.secondary_base_url ?? '',
+    reuse_secondary_config: settings.reuse_secondary_config ?? true,
+    reuse_secondary_api_key: settings.reuse_secondary_api_key ?? !settings.has_secondary_api_key,
     logging: settings.logging,
     vision: {
       enabled: settings.vision?.enabled ?? false,
@@ -1387,6 +2188,11 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
     embedding_api_key: form.embedding_api_key.trim() || undefined,
     embedding_base_url: form.reuse_embedding_config ? null : form.embedding_base_url.trim() || null,
     reuse_embedding_config: form.reuse_embedding_config,
+    secondary_model: form.secondary_model.trim() || null,
+    secondary_api_key: form.reuse_secondary_config ? undefined : form.secondary_api_key.trim() || undefined,
+    secondary_base_url: form.reuse_secondary_config ? null : form.secondary_base_url.trim() || null,
+    reuse_secondary_config: form.reuse_secondary_config,
+    reuse_secondary_api_key: form.reuse_secondary_config || form.reuse_secondary_api_key,
     logging: form.logging,
     vision: {
       enabled: form.vision.enabled,
@@ -1412,6 +2218,15 @@ function webSearchStatusLabel(settings: ModelSettings | null): string {
   if (webSearch.selected_provider === 'tavily') return '可用：Tavily'
   if (webSearch.selected_provider === 'duckduckgo') return '可用：DuckDuckGo'
   return '可用'
+}
+
+function vectorIndexStatusLabel(status: ModelSettings['vector_index']): string {
+  const main = status.ready
+    ? `向量索引已就绪（${status.indexed} 条）`
+    : `向量索引重建中 ${status.indexed}/${status.total}，期间记忆检索可能不完整`
+  return status.failed > 0
+    ? `${main}；有 ${status.failed} 条失败将自动重试`
+    : main
 }
 
 function newSoulMarkdownTemplate(name: string): string {
@@ -1454,5 +2269,9 @@ function todayDate(): string {
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatLogSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }

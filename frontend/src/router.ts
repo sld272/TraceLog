@@ -1,20 +1,30 @@
 export type Route =
-  | { kind: 'home' }
-  | { kind: 'todos' }
+  | { kind: 'home'; date?: string }
   | { kind: 'goals' }
+  | { kind: 'schedule' }
   | { kind: 'memory' }
-  | { kind: 'settings' }
+  | { kind: 'settings'; tab?: 'schedule' }
+  | { kind: 'chats' }
   | { kind: 'chat'; soulName: string }
   | { kind: 'post'; postId: string; highlight?: string }
+
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, '').replace(/^\//, '')
   const [path = '', query = ''] = raw.split('?')
-  if (!path || path === 'home') return { kind: 'home' }
-  if (path === 'todos') return { kind: 'todos' }
+  if (!path || path === 'home') {
+    const date = parseRouteQuery(query).get('date') ?? undefined
+    return date && DATE_KEY_PATTERN.test(date) ? { kind: 'home', date } : { kind: 'home' }
+  }
   if (path === 'goals') return { kind: 'goals' }
+  if (path === 'schedule') return { kind: 'schedule' }
   if (path === 'memory') return { kind: 'memory' }
-  if (path === 'settings') return { kind: 'settings' }
+  if (path === 'settings') {
+    const tab = parseRouteQuery(query).get('tab')
+    return tab === 'schedule' ? { kind: 'settings', tab } : { kind: 'settings' }
+  }
+  if (path === 'chats') return { kind: 'chats' }
   if (path.startsWith('chat/')) {
     const soulName = decodeRouteSegment(path.slice('chat/'.length))
     return soulName ? { kind: 'chat', soulName } : { kind: 'home' }
@@ -31,15 +41,17 @@ export function parseRoute(hash: string): Route {
 export function formatRoute(route: Route): string {
   switch (route.kind) {
     case 'home':
-      return '#/'
-    case 'todos':
-      return '#/todos'
+      return route.date ? `#/?date=${encodeURIComponent(route.date)}` : '#/'
     case 'goals':
       return '#/goals'
+    case 'schedule':
+      return '#/schedule'
     case 'memory':
       return '#/memory'
     case 'settings':
-      return '#/settings'
+      return route.tab === 'schedule' ? '#/settings?tab=schedule' : '#/settings'
+    case 'chats':
+      return '#/chats'
     case 'chat':
       return `#/chat/${encodeURIComponent(route.soulName)}`
     case 'post': {

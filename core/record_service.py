@@ -8,7 +8,7 @@ from core import db, logging_service, memory_events_service, vector_index_servic
 
 
 def save_post(content: str, *, index_immediately: bool = True, track_embedding: bool = True) -> str:
-    """Save a post to SQLite, then try to index it in ChromaDB."""
+    """Save a post to SQLite, then try to index its embedding."""
     now = datetime.now().astimezone()
     post_id = _next_post_id(now.strftime("%Y%m%d"))
     body = content.strip()
@@ -67,7 +67,7 @@ def _snapshot_post_soul_order(conn, post_id: str, created_at: float) -> None:
 
 
 def index_post_embedding(post_id: str) -> None:
-    """Index one saved post into ChromaDB and clear its pending marker."""
+    """Index one saved post embedding and clear its pending marker."""
     row = db.query_one(
         "SELECT content FROM posts WHERE id = ?",
         (post_id,),

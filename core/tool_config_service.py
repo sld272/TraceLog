@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from core import db
 
-SUPPORTED_TOOLS = {"todo"}
+SUPPORTED_TOOLS: frozenset[str] = frozenset()
 TOOL_META_PREFIX = "tool_enabled:"
 
 

@@ -41,10 +41,14 @@ def fanout(
 
     # Query rewrite is soul-independent, so rewrite the post ONCE and share it
     # across the fanout rather than per soul. First replies have no thread, so
-    # there is no anaphora context to resolve — content only.
-    rewrite = query_rewriter.rewrite_query(
-        client, model, user_input, "public_post", trace_context={"post_id": post_id}
-    )
+    # there is no anaphora context to resolve — content only. build_context already
+    # produced the rewrite (merged with the web-search gate) when it had a client;
+    # reuse it, and only rewrite here when it didn't (e.g. the CLI's clientless build).
+    rewrite = built_context.rewritten
+    if rewrite is None:
+        rewrite = query_rewriter.rewrite_query(
+            client, model, user_input, "public_post", trace_context={"post_id": post_id}
+        )
 
     max_workers = max(1, len(pending_souls))
     results: list[SoulReplyResult] = []

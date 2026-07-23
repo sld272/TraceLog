@@ -64,7 +64,9 @@ confidence 和 importance 只能从五个档位里选，不要输出其他小数
 7. 没有可靠增量时返回空 ops。宁缺毋滥。
 8. unit 内容禁止相对时间词（今晚、明天、最近、下周、这几天等）——记忆会在多天后被读到，
    相对词必然失真。需要时间就按当前时间换算成绝对表述（如「6 月 30 日前交付」「2026 年 7 月初」）。
-   revise 时也要顺手把旧内容里的相对时间词改掉。
+   revise 时也要顺手把旧内容里的相对时间词改掉。证据行若带〔时间标注〕，其中相对时间必须
+   按标注换算，禁止自行推算日期；「≈」表示模糊时间，必须保留到月初/月中/月末的原精度，
+   不得擅自精确到某一天。无标注时才按当前时间换算。
 
 当前时间：{current_datetime}
 """
@@ -104,23 +106,31 @@ MEMORY_RELINK_PROMPT = """\
 
 
 MEMORY_VIEW_SYNTH_PROMPT = """\
-把给定的核心 memory units 综合成一段【简洁、整体性】的用户概述。
+把给定的核心 memory units 按适合用户画像阅读的顺序和段落分组：身份、主要方向、稳定偏好
+与重要处境尽量相邻。你只负责选择和分组 unit id，不生成画像正文。
 
-要求：
-- 目标是"一眼看懂用户是谁"：身份、主要方向/目标、稳定偏好与重要处境，融成一个整体，而不是逐条罗列。
-- 只能使用输入 units 里的事实，不得脑补、不得编造关联、细节或情节。
-- 克制中性，像一段简短的人物简介；不要文学化修辞、不要渲染情绪、不要展开举例。
-- 控制在数句话以内，压在字数预算内；不要把短期状态夸大为长期身份。
+## 硬规则
+1. 只能使用给定的 unit id；不得编造 id。
+2. 每个 id 最多出现一次；可以省略次要 unit。
+3. 每段放 1—3 个语义相近的 id，不要输出任何正文、说明或评价。
 
-只输出 JSON：{"profile_md":"画像"}
+## 输出格式
+只输出 JSON：{"paragraphs":[{"unit_ids":["mu_x","mu_y"]}]}
 当前时间：{current_datetime}
 """
 
 
 SOUL_RELATIONSHIP_VIEW_SYNTH_PROMPT = """\
-把给定的 relationship units 综合成这个 SOUL 与用户的相处叙事。
-只能使用输入 units，不得新增共同经历；重点表达称呼、节奏、回应偏好、边界和默契。
-不要重复普通身份画像；压在字数预算内。只输出 JSON：{"profile_md":"关系叙事"}
+把给定的 relationship units 按适合关系记忆阅读的顺序和段落分组：称呼、节奏、回应偏好、
+边界和默契尽量相邻。你只负责选择和分组 unit id，不生成叙事正文。
+
+## 硬规则
+1. 只能使用给定的 unit id；不得编造 id。
+2. 每个 id 最多出现一次；可以省略次要 unit。
+3. 每段放 1—3 个语义相近的 id，不要输出任何正文、说明或评价。
+
+## 输出格式
+只输出 JSON：{"paragraphs":[{"unit_ids":["mu_x","mu_y"]}]}
 当前时间：{current_datetime}
 """
 
@@ -526,8 +536,14 @@ def call_view_synthesis(
     units_text: str,
     char_budget: int,
     view_type: str,
+    unit_contents: dict[str, str],
     trace_context: dict | None = None,
 ) -> str | None:
+    """Let the model group offered unit ids, then render only source unit text.
+
+    The model never controls user-visible claims: arbitrary ``text`` fields are
+    ignored and every emitted sentence is copied from ``unit_contents``. Returns
+    None on any failure/full strip so the caller uses the deterministic template."""
     user_content = (
         f"## 画像类型\n\n{view_type}\n\n"
         f"## 字数预算\n\n不超过 {char_budget} 字\n\n---\n\n"
@@ -538,6 +554,12 @@ def call_view_synthesis(
         if view_type == "soul_relationship_memory"
         else MEMORY_VIEW_SYNTH_PROMPT
     )
+
+    def parser(content: str | None) -> str | None:
+        return _parse_view_synthesis_content(
+            content, unit_contents=unit_contents, char_budget=char_budget
+        )
+
     return call_json_completion(
         client=client,
         model=model,
@@ -551,12 +573,33 @@ def call_view_synthesis(
             },
             {"role": "user", "content": user_content},
         ],
-        parser=_parse_view_synthesis_content,
+        parser=parser,
         trace_context=trace_context,
     )
 
 
-def _parse_view_synthesis_content(content: str | None) -> str | None:
+def _join_paragraphs_within_budget(paragraphs: list[str], char_budget: int) -> str:
+    """Join paragraphs with blank lines, dropping whole trailing paragraphs once
+    the budget would overflow — never hard-cutting a sentence mid-way."""
+    selected: list[str] = []
+    for para in paragraphs:
+        candidate = "\n\n".join(selected + [para])
+        if len(candidate) > char_budget:
+            break
+        selected.append(para)
+    return "\n\n".join(selected)
+
+
+def _parse_view_synthesis_content(
+    content: str | None,
+    *,
+    unit_contents: dict[str, str],
+    char_budget: int,
+) -> str | None:
+    """Render model-selected id groups from exact source unit text.
+
+    Unknown/repeated ids are ignored. Model prose is deliberately never read, so
+    a legal citation cannot launder an unsupported claim into the portrait."""
     content = clean_json_content(content)
     try:
         data = json.loads(content)
@@ -564,7 +607,37 @@ def _parse_view_synthesis_content(content: str | None) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    profile_md = data.get("profile_md")
-    if not isinstance(profile_md, str) or not profile_md.strip():
+    raw_paragraphs = data.get("paragraphs")
+    if not isinstance(raw_paragraphs, list):
         return None
-    return profile_md.strip()
+
+    kept: list[str] = []
+    seen_ids: set[str] = set()
+    for item in raw_paragraphs:
+        if not isinstance(item, dict):
+            continue
+        raw_ids = item.get("unit_ids")
+        if not isinstance(raw_ids, list):
+            continue
+        ids: list[str] = []
+        for raw_id in raw_ids:
+            unit_id = str(raw_id).strip()
+            if not unit_id or unit_id in seen_ids or unit_id not in unit_contents:
+                continue
+            seen_ids.add(unit_id)
+            ids.append(unit_id)
+        if not ids:
+            continue
+        sentences: list[str] = []
+        for unit_id in ids:
+            source = str(unit_contents[unit_id] or "").strip()
+            if not source:
+                continue
+            sentences.append(source if source[-1] in "。！？!?" else source + "。")
+        if sentences:
+            kept.append("".join(sentences))
+
+    if not kept:
+        return None
+    body = _join_paragraphs_within_budget(kept, char_budget)
+    return body or None

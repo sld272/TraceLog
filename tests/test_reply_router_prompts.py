@@ -37,6 +37,26 @@ class ReplyRouterPromptTest(unittest.TestCase):
         self.assertIn("准备过程", prompt)
         self.assertIn("历史行为", prompt)
 
+    def test_all_reply_prompts_explain_schedule_sections_and_usage_boundaries(self) -> None:
+        prompts = (
+            reply_router.POST_REPLY_TASK_PROMPT,
+            reply_router.CHAT_REPLY_TASK_PROMPT,
+            reply_router.COMMENT_REPLY_TASK_PROMPT,
+        )
+
+        for prompt in prompts:
+            with self.subTest(prompt=prompt[:30]):
+                self.assertIn("上下文结构说明", prompt)
+                self.assertIn("近期日程", prompt)
+                self.assertIn("提及的日程", prompt)
+                self.assertIn("用户真实日历", prompt)
+                self.assertIn("未来的日程是用户的计划", prompt)
+                self.assertIn("不是已经发生的事实", prompt)
+                self.assertIn("已结束的日程不等于用户确实做了", prompt)
+                self.assertIn("不能断言", prompt)
+                self.assertIn("只在与当前话题真正相关时引用一两条", prompt)
+                self.assertIn("不要复述或倾倒整段日程列表", prompt)
+
     def test_comment_reply_prompt_forbids_exposing_private_chat_in_public_comments(self) -> None:
         prompt = reply_router.COMMENT_REPLY_TASK_PROMPT
 

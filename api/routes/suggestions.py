@@ -2,30 +2,59 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from api.deps import run_sync
 from core import suggestion_service
+from core.graph.client import GraphHTTPError
+from core.schedule_service import NoWritableAccountError
 
 router = APIRouter(prefix="/suggestions", tags=["suggestions"])
 
 
+class AcceptSuggestionRequest(BaseModel):
+    fallback_local: bool = False
+    overrides: dict[str, Any] | None = None
+
+
 @router.get("")
 async def list_pending_suggestions(
-    kind: Literal["todo", "goal"] | None = Query(default=None),
+    kind: Literal["goal", "schedule"] | None = Query(default=None),
 ):
     return await run_sync(suggestion_service.list_pending, kind)
 
 
 @router.post("/{suggestion_id}/accept")
-async def accept_suggestion(suggestion_id: str):
+async def accept_suggestion(
+    suggestion_id: str,
+    request: AcceptSuggestionRequest | None = None,
+):
     try:
-        return await run_sync(suggestion_service.accept, suggestion_id)
+        return await run_sync(
+            suggestion_service.accept,
+            suggestion_id,
+            fallback_local=request.fallback_local if request is not None else False,
+            overrides=request.overrides if request is not None else None,
+        )
+    except suggestion_service.SuggestionExpiredError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": "suggestion_expired"}
+        ) from exc
+    except suggestion_service.SuggestionOverrideError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except NoWritableAccountError as exc:
+        raise HTTPException(
+            status_code=409, detail={"code": "no_writable_account"}
+        ) from exc
     except ValueError as exc:
         status = 404 if str(exc) == "suggestion 不存在" else 409
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+    except (GraphHTTPError, httpx.HTTPError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.post("/{suggestion_id}/dismiss")

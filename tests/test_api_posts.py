@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import date, timedelta, timezone
 import importlib.util
 import tempfile
 import unittest
@@ -194,6 +195,31 @@ class ApiPostsTest(unittest.TestCase):
                 response = client.get("/posts/search?q=")
 
         self.assertEqual(422, response.status_code)
+
+    def test_post_activity_range_uses_system_timezone(self) -> None:
+        from api.routes import posts as post_routes
+
+        captured: dict[str, tuple] = {}
+
+        def fake_query_all(sql, params):
+            captured["params"] = params
+            return []
+
+        eastern = timezone(timedelta(hours=-5))
+        with (
+            patch.object(post_routes, "SYSTEM_TIMEZONE", eastern),
+            patch.object(post_routes.db, "query_all", fake_query_all),
+        ):
+            result = post_routes._list_post_activity(
+                date(2026, 1, 2),
+                date(2026, 1, 3),
+            )
+
+        self.assertEqual([], result)
+        self.assertEqual(
+            ("2026-01-02T00:00:00-05:00", "2026-01-04T00:00:00-05:00"),
+            captured["params"],
+        )
 
     def test_search_route_does_not_fall_through_to_post_id(self) -> None:
         from core import retrieval

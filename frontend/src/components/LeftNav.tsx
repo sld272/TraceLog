@@ -1,6 +1,20 @@
 import { type Soul } from '@/api/client'
+import { useMeasuredHeight } from '@/hooks/useMeasuredHeight'
+import { ChevronRightIcon } from '@/components/icons'
 import { SoulAvatar } from './SoulAvatar'
 import styles from './LeftNav.module.css'
+
+/* 私聊区不滚动：按实测可用高度决定显示几个私聊入口。
+ * 高度常量与 LeftNav.module.css 对应：dmItem 38px 头像 + 上下 8px padding，列表 gap 4px。 */
+const DM_ITEM_HEIGHT = 54
+const DM_GAP = 4
+const VIEW_ALL_HEIGHT = 40
+/** 再高的屏幕也最多显示这么多私聊，保持导航清爽。 */
+const MAX_VISIBLE_DMS = 8
+
+function dmFitCount(height: number): number {
+  return Math.max(0, Math.floor((height + DM_GAP) / (DM_ITEM_HEIGHT + DM_GAP)))
+}
 
 interface LeftNavProps {
   souls: Soul[]
@@ -9,8 +23,6 @@ interface LeftNavProps {
   memoryQueueCount?: number
   /** 进行中的目标数，>0 时在「目标」项上显示 badge */
   goalCount?: number
-  /** 未完成的待办数，>0 时在「待办」项上显示 badge */
-  todoCount?: number
   activePage: string
   onNavigate: (page: string) => void
   onAfterNavigate?: () => void
@@ -21,7 +33,6 @@ export function LeftNav({
   soulsLoadState = 'ready',
   memoryQueueCount = 0,
   goalCount = 0,
-  todoCount = 0,
   activePage,
   onNavigate,
   onAfterNavigate,
@@ -29,6 +40,19 @@ export function LeftNav({
   const navigate = (page: string) => {
     onNavigate(page)
     onAfterNavigate?.()
+  }
+
+  const [dmListRef, dmListHeight] = useMeasuredHeight<HTMLDivElement>()
+  const fitAll = Math.min(dmFitCount(dmListHeight), MAX_VISIBLE_DMS)
+  const needsViewAll = souls.length > fitAll
+  let visibleSouls = needsViewAll
+    ? souls.slice(0, Math.min(dmFitCount(dmListHeight - VIEW_ALL_HEIGHT - DM_GAP), MAX_VISIBLE_DMS))
+    : souls
+  /* 正在聊的好友被裁掉时顶进最后一个可见位置，保证左栏始终有高亮 */
+  const activeSoulName = activePage.startsWith('chat:') ? activePage.slice('chat:'.length) : null
+  if (activeSoulName && visibleSouls.length > 0 && !visibleSouls.some((soul) => soul.name === activeSoulName)) {
+    const activeSoul = souls.find((soul) => soul.name === activeSoulName)
+    if (activeSoul) visibleSouls = [...visibleSouls.slice(0, -1), activeSoul]
   }
 
   return (
@@ -52,11 +76,10 @@ export function LeftNav({
           onClick={() => navigate('goals')}
         />
         <NavItem
-          icon={<TodoIcon />}
-          label="待办"
-          badge={todoCount > 0 ? todoCount : undefined}
-          active={activePage === 'todos'}
-          onClick={() => navigate('todos')}
+          icon={<ScheduleIcon />}
+          label="日程"
+          active={activePage === 'schedule'}
+          onClick={() => navigate('schedule')}
         />
         <NavItem
           icon={<MemoryIcon />}
@@ -67,34 +90,46 @@ export function LeftNav({
         />
       </section>
 
-      <section className={styles.section}>
+      <section className={`${styles.section} ${styles.dmSection}`}>
         <h3 className={styles.sectionTitle}>私聊</h3>
-        {souls.map((soul) => {
-          const active = activePage === `chat:${soul.name}`
-          return (
+        <div className={styles.dmList} ref={dmListRef}>
+          {visibleSouls.map((soul) => {
+            const active = activePage === `chat:${soul.name}`
+            return (
+              <button
+                key={soul.name}
+                className={`${styles.dmItem} ${active ? styles.dmItemActive : ''}`}
+                onClick={() => navigate(`chat:${soul.name}`)}
+                aria-current={active ? 'page' : undefined}
+              >
+                <SoulAvatar name={soul.name} className={styles.dmAvatar} />
+                <span className={styles.dmBody}>
+                  <span className={styles.dmName}>{soul.name}</span>
+                  {soul.description && <span className={styles.dmPreview}>{soul.description}</span>}
+                </span>
+              </button>
+            )
+          })}
+          {needsViewAll && (
             <button
-              key={soul.name}
-              className={`${styles.dmItem} ${active ? styles.dmItemActive : ''}`}
-              onClick={() => navigate(`chat:${soul.name}`)}
-              aria-current={active ? 'page' : undefined}
+              className={`${styles.viewAll} ${activePage === 'chats' ? styles.viewAllActive : ''}`}
+              onClick={() => navigate('chats')}
+              aria-current={activePage === 'chats' ? 'page' : undefined}
             >
-              <SoulAvatar name={soul.name} className={styles.dmAvatar} />
-              <span className={styles.dmBody}>
-                <span className={styles.dmName}>{soul.name}</span>
-                {soul.description && <span className={styles.dmPreview}>{soul.description}</span>}
-              </span>
+              查看全部 {souls.length} 位好友
+              <ChevronRightIcon width={13} height={13} />
             </button>
-          )
-        })}
-        {souls.length === 0 && soulsLoadState === 'loading' && (
-          <p className={styles.emptySoul}>加载中...</p>
-        )}
-        {souls.length === 0 && soulsLoadState === 'error' && (
-          <p className={styles.emptySoul} role="alert">加载失败</p>
-        )}
-        {souls.length === 0 && soulsLoadState === 'ready' && (
-          <p className={styles.emptySoul}>还没有人格，去设置里创建</p>
-        )}
+          )}
+          {souls.length === 0 && soulsLoadState === 'loading' && (
+            <p className={styles.emptySoul}>加载中...</p>
+          )}
+          {souls.length === 0 && soulsLoadState === 'error' && (
+            <p className={styles.emptySoul} role="alert">加载失败</p>
+          )}
+          {souls.length === 0 && soulsLoadState === 'ready' && (
+            <p className={styles.emptySoul}>还没有人格，去设置里创建</p>
+          )}
+        </div>
       </section>
 
       <section className={`${styles.section} ${styles.bottomSection}`}>
@@ -145,21 +180,23 @@ function HomeIcon() {
   )
 }
 
-function TodoIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 11l3 3L22 4" />
-      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-    </svg>
-  )
-}
-
 function GoalIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="4" />
       <path d="M12 2v3M22 12h-3M12 22v-3M2 12h3" />
+    </svg>
+  )
+}
+
+function ScheduleIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <line x1="16" y1="2" x2="16" y2="6" />
+      <line x1="8" y1="2" x2="8" y2="6" />
+      <line x1="3" y1="10" x2="21" y2="10" />
     </svg>
   )
 }

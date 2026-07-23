@@ -9,6 +9,9 @@ memory prompts.
 
 from __future__ import annotations
 
+from datetime import datetime
+
+from core import time_normalizer
 from core.llm import memory_router
 from core.llm.types import LLMClient
 
@@ -60,6 +63,23 @@ def describe_scene(boundary: dict) -> str:
     return f"owner={owner}, visibility={vis}。抽取关于【用户】的信念。"
 
 
+def _event_time_note(event: dict) -> str | None:
+    """Resolve the event content's relative-time words against the event's OWN
+    speech time (occurred_at), never the reconcile clock. Backlogged evidence is
+    reconciled hours or days late, so anchoring "明天" on "now" lands it on the
+    wrong day; the event timestamp is the only correct anchor here.
+    """
+    raw = str(event.get("content_snapshot") or "").strip()
+    occurred_at = event.get("occurred_at")
+    if not raw or occurred_at is None:
+        return None
+    try:
+        anchor = datetime.fromtimestamp(float(occurred_at))
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+    return time_normalizer.annotation_note(raw, anchor=anchor)
+
+
 def _format_events(events: list[dict]) -> str:
     if not events:
         return ""
@@ -71,6 +91,9 @@ def _format_events(events: list[dict]) -> str:
             f"- event_id={event.get('id')} | 【{speaker}】{event.get('source_channel')}/{event.get('op')}\n"
             f"  {snapshot}"
         )
+        note = _event_time_note(event)
+        if note:
+            text += f"\n  〔时间标注：{note}〕"
         context = event.get("conversation_context") or []
         if context:
             text += "\n  对话上下文（仅帮助理解互动，不能作为 evidence 引用）："

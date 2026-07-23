@@ -46,13 +46,12 @@ class CliAppTest(unittest.TestCase):
 
         with (
             patch("core.cli.app.load_config", return_value=config),
+            patch("core.cli.app.workspace_service.migrate_workspace_permissions") as migrate_permissions,
             patch("core.cli.app.workspace_service.init_workspace"),
             patch("core.cli.app.vectorstore.init_vectorstore", return_value=vector_result),
             patch("core.cli.app.vectorstore.current_embedding_config_hash", return_value="hash"),
             patch("core.cli.app.record_service.reindex_all_vector_docs", return_value=3) as reindex,
             patch("core.cli.app.record_service.retry_pending_vector_docs", return_value=3) as retry_pending,
-            patch("core.cli.app.todo_service.load_todos", return_value=[]),
-            patch("core.cli.app.tool_config_service.is_tool_enabled", return_value=False),
             patch("core.cli.app.read_cli_input", side_effect=KeyboardInterrupt),
             patch("core.cli.app.sessions.run_memory_reconcile"),
             redirect_stdout(StringIO()),
@@ -61,6 +60,7 @@ class CliAppTest(unittest.TestCase):
 
         reindex.assert_called_once_with()
         retry_pending.assert_called_once_with()
+        migrate_permissions.assert_called_once_with()
 
     def test_cli_startup_reconciles_even_when_collection_has_existing_count(self) -> None:
         config = {
@@ -76,13 +76,12 @@ class CliAppTest(unittest.TestCase):
 
         with (
             patch("core.cli.app.load_config", return_value=config),
+            patch("core.cli.app.workspace_service.migrate_workspace_permissions") as migrate_permissions,
             patch("core.cli.app.workspace_service.init_workspace"),
             patch("core.cli.app.vectorstore.init_vectorstore", return_value=vector_result),
             patch("core.cli.app.vectorstore.current_embedding_config_hash", return_value="hash"),
             patch("core.cli.app.record_service.reindex_all_vector_docs", return_value=0) as reindex,
             patch("core.cli.app.record_service.retry_pending_vector_docs", return_value=1) as retry_pending,
-            patch("core.cli.app.todo_service.load_todos", return_value=[]),
-            patch("core.cli.app.tool_config_service.is_tool_enabled", return_value=False),
             patch("core.cli.app.read_cli_input", side_effect=KeyboardInterrupt),
             patch("core.cli.app.sessions.run_memory_reconcile"),
             redirect_stdout(StringIO()),
@@ -91,6 +90,7 @@ class CliAppTest(unittest.TestCase):
 
         reindex.assert_called_once_with()
         retry_pending.assert_called_once_with()
+        migrate_permissions.assert_called_once_with()
 
 
 if __name__ == "__main__":

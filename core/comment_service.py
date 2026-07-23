@@ -16,10 +16,9 @@ from core import (
     query_rewriter,
     record_service,
     reply_context,
+    schedule_context,
     soul_service,
     suggestion_pipeline,
-    todo_service,
-    tool_config_service,
     vision_service,
 )
 from core.attachment_service import Attachment
@@ -264,6 +263,9 @@ def build_comment_context(
     sections: list[str] = []
 
     sections.extend(goal_service.prompt_sections())
+    recent_schedule = schedule_context.build_recent_schedule_context()
+    if recent_schedule.section:
+        sections.append(recent_schedule.section)
 
     post = _get_post(post_id)
     if post is not None:
@@ -278,53 +280,58 @@ def build_comment_context(
     if include_root_comment and root_comment is not None:
         sections.append(f"# {soul_name} 的首条回复\n\n{root_comment['content']}")
 
-    if tool_config_service.is_tool_enabled("todo"):
-        pending = todo_service.list_active_todos()
-        if pending:
-            lines = [todo_service.format_todo_for_context(todo) for todo in pending]
-            sections.append("# 待办事项\n\n" + "\n".join(lines))
-
-    web_section = reply_context.build_web_search_section(
-        client,
-        model,
-        user_message,
-        channel="comment",
-        context_hint="\n\n---\n\n".join(sections),
-        trace_context={"post_id": post_id, "soul_name": soul_name},
-    )
-    if web_section:
-        sections.append(web_section)
-
+    trace_ctx = {"post_id": post_id, "soul_name": soul_name}
     # Exclude EVERY comment under this post (all SOULs' threads) from the memory
     # section. Public-post comments all share the global/public bucket, so the
     # freshness seam would otherwise surface the user's parallel comments to OTHER
     # SOULs as the current user's "recent evidence" and pull the reply off-topic
     # (cross-talk). The current thread is already the live multi-turn conversation,
     # and other threads are shown as labeled background — neither belongs in memory.
+    # Computed up front (a read-only SELECT) so the recall prefetch and the memory
+    # assembly share one excluded set.
     excluded_comment_sources = {
         ("comment_message", str(row["id"]))
         for row in db.query_all("SELECT id FROM comments WHERE post_id = ?", (post_id,))
     }
-    rewrite = (
-        query_rewriter.rewrite_query(
-            client,
-            model,
-            user_message,
-            "comment",
-            recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
-            trace_context={"post_id": post_id, "soul_name": soul_name},
-        )
-        if client and model
-        else None
+    # Web-search gate and query rewrite are independent yet used to run serially;
+    # merge them into one LLM call, and overlap that call with the query-dependent
+    # vector recall (both need only the raw user message), then execute the
+    # (already-made) search decision. The prefetch is best-effort: on failure it
+    # comes back None and memory assembly falls back to the current serial recall.
+    prep, prefetched = reply_context.prepare_turn_with_prefetch(
+        client,
+        model,
+        user_message=user_message,
+        channel="comment",
+        recent_turns=query_rewriter.recent_turns(llm_messages[:-1]),
+        context_hint="\n\n---\n\n".join(sections),
+        excluded_sources=excluded_comment_sources,
+        trace_context=trace_ctx,
     )
+    mentioned_schedule = schedule_context.build_mentioned_schedule_section(
+        prep.rewritten.keywords,
+        exclude_event_ids=recent_schedule.event_ids,
+    )
+    if mentioned_schedule:
+        sections.append(mentioned_schedule)
+    web_section = reply_context.run_web_search_section(
+        prep.search_decision,
+        channel="comment",
+        trace_context=trace_ctx,
+    )
+    if web_section:
+        sections.append(web_section)
+
+    rewrite = prep.rewritten
     memory = memory_read.memory_section_with_citations(
         "comment",
         soul_name,
         user_message,
         excluded_sources=excluded_comment_sources,
-        semantic_query=rewrite.semantic_query if rewrite else None,
-        keywords=rewrite.keywords if rewrite else None,
-        trace_context={"post_id": post_id, "soul_name": soul_name},
+        semantic_query=rewrite.semantic_query,
+        keywords=rewrite.keywords,
+        prefetched=prefetched,
+        trace_context=trace_ctx,
     )
     if memory.text:
         sections.append(f"# 记忆\n\n{memory.text}")
@@ -626,13 +633,17 @@ def _rerun_root_assistant_message(message: CommentMessage, post, client: LLMClie
         },
     )
     soul = _load_soul_context(message.soul_name)
-    rewrite = query_rewriter.rewrite_query(
-        client,
-        model,
-        llm_content,
-        "public_post",
-        trace_context={"post_id": message.post_id, "soul_name": message.soul_name},
-    )
+    # build_public_post_reply_context already ran turn_prep (gate + rewrite) while
+    # assembling the shared context, so reuse that rewrite instead of a second call.
+    rewrite = public_context.built_context.rewritten
+    if rewrite is None:
+        rewrite = query_rewriter.rewrite_query(
+            client,
+            model,
+            llm_content,
+            "public_post",
+            trace_context={"post_id": message.post_id, "soul_name": message.soul_name},
+        )
     memory = memory_read.memory_section_with_citations(
         "public_post",
         message.soul_name,
@@ -931,5 +942,3 @@ def _post_content_for_llm(post) -> str:
         return f"{content}\n\n{vision_context}" if content.strip() else vision_context
     attachment_count = len(attachment_service.list_post_attachments(str(post["id"])))
     return attachment_service.content_for_llm(content, attachment_count)
-
-

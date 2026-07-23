@@ -4,11 +4,13 @@ const BASE = '/api'
 
 export class ApiError extends Error {
   readonly status: number
+  readonly code: string | null
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code: string | null = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = code
   }
 }
 
@@ -19,9 +21,26 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new ApiError(body.detail || `HTTP ${res.status}`, res.status)
+    const detail = body.detail
+    const code = detail && typeof detail === 'object' && typeof detail.code === 'string'
+      ? detail.code
+      : null
+    const message = typeof detail === 'string' ? detail : code ?? `HTTP ${res.status}`
+    throw new ApiError(message, res.status, code)
   }
   return res.json()
+}
+
+export interface HealthStatus {
+  ok: boolean
+  db: string
+  configured: boolean
+  vectorstore_initialized: boolean
+  version: string
+}
+
+export function fetchHealth(): Promise<HealthStatus> {
+  return request('/health')
 }
 
 /* Types */
@@ -104,19 +123,6 @@ export interface Soul {
   updated_at: number
 }
 
-export interface Todo {
-  id: string
-  task: string
-  date: string | null
-  start_time: string | null
-  end_time: string | null
-  status: string
-  source_post: string | null
-  created_at?: number
-  updated_at?: number
-  completed_at?: number | null
-}
-
 export type GoalHorizon = 'short' | 'long'
 export type GoalStatus = 'active' | 'done' | 'abandoned' | 'paused'
 
@@ -133,10 +139,8 @@ export interface Goal {
   updated_at: number
 }
 
-export interface Suggestion {
+interface SuggestionBase {
   id: string
-  kind: 'todo' | 'goal'
-  payload: Record<string, unknown>
   evidence_ref: string | null
   confidence: number
   status: 'pending' | 'accepted' | 'dismissed'
@@ -144,6 +148,30 @@ export interface Suggestion {
   created_at: number
   decided_at: number | null
 }
+
+export interface GoalSuggestion extends SuggestionBase {
+  kind: 'goal'
+  payload: {
+    title: string
+    detail: string | null
+    horizon: GoalHorizon
+    focus: boolean
+  }
+}
+
+export interface ScheduleSuggestion extends SuggestionBase {
+  kind: 'schedule'
+  payload: {
+    subject: string
+    date: string
+    start_time: string | null
+    end_time: string | null
+    all_day: boolean
+    goal_id: string | null
+  }
+}
+
+export type Suggestion = GoalSuggestion | ScheduleSuggestion
 
 export interface ChatThread {
   id: number
@@ -197,9 +225,6 @@ export type PostEventType =
   | 'reply_started'
   | 'reply_succeeded'
   | 'reply_failed'
-  | 'todo_started'
-  | 'todo_succeeded'
-  | 'todo_failed'
   | 'pipeline_done'
 
 export interface PostEvent {
@@ -310,10 +335,27 @@ export interface ModelSettings {
   embedding_api_key_masked: string | null
   embedding_base_url: string | null
   reuse_embedding_config: boolean
+  vector_index: {
+    ready: boolean
+    indexed: number
+    total: number
+    pending: number
+    failed: number
+  }
+  secondary_model: string | null
+  secondary_configured: boolean
+  has_secondary_api_key: boolean
+  secondary_api_key_masked: string | null
+  secondary_base_url: string | null
+  reuse_secondary_config: boolean
+  reuse_secondary_api_key: boolean
   logging: {
     enabled: boolean
     level: string
-    history_retention: number
+    capture_content: boolean
+    rotate_max_bytes: number
+    history_max_bytes: number
+    history_max_days: number
   }
   vision: {
     enabled: boolean
@@ -354,6 +396,11 @@ export interface ModelSettingsUpdate {
   embedding_api_key?: string
   embedding_base_url?: string | null
   reuse_embedding_config: boolean
+  secondary_model?: string | null
+  secondary_api_key?: string
+  secondary_base_url?: string | null
+  reuse_secondary_config: boolean
+  reuse_secondary_api_key: boolean
   logging: ModelSettings['logging']
   vision: {
     enabled: boolean
@@ -383,7 +430,6 @@ export interface WorkspaceStatus {
     comments: number
     souls: number
     enabled_souls: number
-    todos: number
     jobs: number
     vision_cache: number
     memory_units: number
@@ -413,6 +459,19 @@ export interface WorkspaceStatus {
 export interface VectorIndexActionResult {
   processed: number
   vector_index: WorkspaceStatus['vector_index']
+}
+
+export interface LogStats {
+  enabled: boolean
+  capture_content: boolean
+  file_count: number
+  total_bytes: number
+  path: string
+}
+
+export interface LogRevealResult {
+  ok: boolean
+  path: string
 }
 
 /* Posts */
@@ -548,7 +607,7 @@ function isSuggestion(value: unknown): value is Suggestion {
   if (!value || typeof value !== 'object') return false
   const item = value as Record<string, unknown>
   return typeof item.id === 'string'
-    && (item.kind === 'goal' || item.kind === 'todo')
+    && (item.kind === 'goal' || item.kind === 'schedule')
     && item.status === 'pending'
     && typeof item.payload === 'object'
     && item.payload !== null
@@ -610,9 +669,6 @@ const POST_EVENT_TYPES: PostEventType[] = [
   'reply_started',
   'reply_succeeded',
   'reply_failed',
-  'todo_started',
-  'todo_succeeded',
-  'todo_failed',
   'pipeline_done',
 ]
 
@@ -719,31 +775,6 @@ export function reorderSouls(order: string[]) {
   })
 }
 
-/* Todos */
-export function listTodos() {
-  return request<Todo[]>('/todos')
-}
-
-export function createTodo(changes: Partial<Todo> & { task: string }) {
-  return request<Todo>('/todos', {
-    method: 'POST',
-    body: JSON.stringify(changes),
-  })
-}
-
-export function updateTodo(todoId: string, changes: Partial<Todo>) {
-  return request<Todo>(`/todos/${todoId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(changes),
-  })
-}
-
-export function deleteTodo(todoId: string) {
-  return request<{ ok: boolean }>(`/todos/${todoId}`, {
-    method: 'DELETE',
-  })
-}
-
 /* Goals */
 export function listGoals(filters: { status?: GoalStatus; horizon?: GoalHorizon } = {}) {
   const search = new URLSearchParams()
@@ -783,7 +814,7 @@ export function deleteGoal(goalId: string) {
 }
 
 /* Suggestions */
-export function listPendingSuggestions(kind?: 'goal' | 'todo'): Promise<Suggestion[]> {
+export function listPendingSuggestions(kind?: Suggestion['kind']): Promise<Suggestion[]> {
   const suffix = kind ? `?kind=${kind}` : ''
   return request<Suggestion[]>(`/suggestions${suffix}`)
 }
@@ -795,10 +826,19 @@ export function postIdFromEvidenceRef(ref: string | null | undefined): string | 
   return match?.[1] ?? null
 }
 
-export function acceptSuggestion(suggestionId: string) {
-  return request<{ suggestion: Suggestion; created: Goal | Todo }>(
+export function acceptSuggestion(
+  suggestionId: string,
+  opts?: { fallbackLocal?: boolean; overrides?: Record<string, unknown> },
+) {
+  return request<{ suggestion: Suggestion; created: Goal | ScheduleEvent | null }>(
     `/suggestions/${suggestionId}/accept`,
-    { method: 'POST', body: JSON.stringify({}) },
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        fallback_local: opts?.fallbackLocal ?? false,
+        ...(opts?.overrides ? { overrides: opts.overrides } : {}),
+      }),
+    },
   )
 }
 
@@ -823,11 +863,91 @@ export function getChatThread(threadId: number, limit = DEFAULT_MESSAGE_LIMIT, b
   )
 }
 
-export function sendChatMessage(soulName: string, content: string, attachmentIds: string[] = []) {
+export function sendChatMessage(
+  soulName: string,
+  content: string,
+  attachmentIds: string[] = [],
+  requestId = crypto.randomUUID(),
+) {
   return request<{ thread: ChatThread; result: ChatReplyResult; messages: ChatMessage[] }>(
     `/chat/${soulName}/messages`,
-    { method: 'POST', body: JSON.stringify({ content, attachment_ids: attachmentIds }) },
+    {
+      method: 'POST',
+      body: JSON.stringify({ content, attachment_ids: attachmentIds, request_id: requestId }),
+    },
   )
+}
+
+/**
+ * Stream a private-chat reply. Calls onDelta with each incremental text chunk,
+ * resolving with the final ChatReplyResult (the SSE `done` frame). Rejects on an
+ * `error` frame, a non-OK response, or a missing `done` — the caller can then
+ * fall back to the non-streaming sendChatMessage.
+ */
+export async function sendChatMessageStream(
+  soulName: string,
+  content: string,
+  attachmentIds: string[],
+  requestId: string,
+  onDelta: (text: string) => void,
+): Promise<ChatReplyResult> {
+  const res = await fetch(`${BASE}/chat/${soulName}/messages/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, attachment_ids: attachmentIds, request_id: requestId }),
+  })
+  if (!res.ok || !res.body) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(body.detail || `HTTP ${res.status}`, res.status)
+  }
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: ChatReplyResult | null = null
+  let errorMessage: string | null = null
+
+  const handleFrame = (frame: string) => {
+    const { event, data } = parseSseFrame(frame)
+    if (!data) return
+    if (event === 'delta') {
+      const parsed = parseSseJson<{ text?: string }>(data, 'chat delta')
+      if (parsed?.text) onDelta(parsed.text)
+    } else if (event === 'done') {
+      result = parseSseJson<ChatReplyResult>(data, 'chat done')
+    } else if (event === 'error') {
+      const parsed = parseSseJson<{ message?: string }>(data, 'chat error')
+      errorMessage = parsed?.message || '流式回复失败'
+    }
+  }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary !== -1) {
+      handleFrame(buffer.slice(0, boundary))
+      buffer = buffer.slice(boundary + 2)
+      boundary = buffer.indexOf('\n\n')
+    }
+  }
+  if (buffer.trim()) handleFrame(buffer)
+
+  if (errorMessage !== null) throw new Error(errorMessage)
+  if (!result) throw new Error('流式回复未完成')
+  return result
+}
+
+/** Parse one SSE frame (its `event:` and joined `data:` lines). */
+function parseSseFrame(frame: string): { event: string; data: string } {
+  let event = 'message'
+  const dataLines: string[] = []
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
+  }
+  return { event, data: dataLines.join('\n') }
 }
 
 export function updateChatMessage(messageId: number, content: string, attachmentIds: string[] = []) {
@@ -925,6 +1045,24 @@ export function saveModelSettings(settings: ModelSettingsUpdate) {
 
 export function getWorkspaceStatus() {
   return request<WorkspaceStatus>('/settings/workspace')
+}
+
+export function getLogStats() {
+  return request<LogStats>('/settings/logs')
+}
+
+export function clearLogFiles() {
+  return request<LogStats>('/settings/logs/clear', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function revealLogFolder() {
+  return request<LogRevealResult>('/settings/logs/reveal', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
 }
 
 export function retryVectorIndex() {
@@ -1156,4 +1294,342 @@ export async function listMemoryOperations(limit = 20): Promise<MemoryOperation[
     `/memory/operations?limit=${limit}`,
   )
   return data.operations
+}
+
+/* ===== Schedule (Outlook / Microsoft Graph) ===== */
+
+/** A goal a schedule event is bound to. */
+export interface ScheduleGoalLink {
+  goal_id: string
+  goal_title: string
+}
+
+/** A cached Outlook calendar event (read-only mirror of Graph). */
+export interface ScheduleEvent {
+  id: string
+  subject: string
+  body_preview: string | null
+  start_ts: number
+  end_ts: number
+  /** 'YYYY-MM-DDTHH:MM:SS' wall-clock in the current system timezone. */
+  start_local: string
+  end_local: string
+  all_day: boolean
+  location: string | null
+  web_link: string | null
+  series_master_id: string | null
+  is_cancelled: boolean
+  change_key: string | null
+  synced_at: number
+  /** 所属日历账号 id（'outlook' | 'local'）。 */
+  account_id: string
+  /** 账号 provider（'outlook' | 'local'，未来可能有其他云端家）。 */
+  provider: string
+  goal_link: null
+  goal_links: ScheduleGoalLink[]
+}
+
+/** A calendar account (local or cloud) that stores schedule events. */
+export interface ScheduleAccountInfo {
+  id: string
+  provider: string
+  display_name: string
+  event_count: number
+}
+
+export interface ScheduleAccount {
+  username: string | null
+  name: string | null
+  home_account_id: string | null
+}
+
+export interface ScheduleStatus {
+  configured: boolean
+  connected: boolean
+  account: ScheduleAccount | null
+  last_sync_at: number | null
+  window_start: string
+  window_end: string
+  /** 全部日历账号概要（本地 + 云端）。旧 sessionStorage 快照可能缺失。 */
+  accounts?: ScheduleAccountInfo[]
+  /** 是否应弹出「本地→Outlook 迁移」一次性邀请（已连接 且 有本地日程 且未 dismiss）。 */
+  migration_prompt_pending?: boolean
+}
+
+/** 迁移预检 / 冲突对照里的单个事件摘要（本地或 Outlook 现有）。 */
+export interface MigrationEventRef {
+  id: string
+  subject: string
+  /** 'YYYY-MM-DDTHH:MM:SS' wall-clock in the current system timezone. */
+  start_local: string
+  end_local: string
+  all_day: boolean
+}
+
+/** 一处迁移冲突：本地事件与 Outlook 中疑似已存在的事件对照。 */
+export interface MigrationConflict {
+  local: MigrationEventRef
+  existing: MigrationEventRef
+}
+
+/** 迁移预检结果：总数、无冲突可直接迁入数、逐条冲突。 */
+export interface MigrationPreview {
+  total: number
+  clean: number
+  conflicts: MigrationConflict[]
+}
+
+/** 迁移执行结果。partial 表示中途失败、尚有剩余可重试。 */
+export interface MigrationResult {
+  status: 'ok' | 'partial'
+  migrated: number
+  skipped: number
+  remaining: number
+  account_removed: boolean
+  error?: string
+}
+
+export interface ScheduleClientIdInfo {
+  configured: boolean
+  /** True when the built-in shared app is in use (no custom client_id saved). */
+  using_default: boolean
+  client_id_tail: string | null
+}
+
+export interface ScheduleDeviceStart {
+  user_code: string
+  verification_uri: string
+  expires_in: number | null
+}
+
+/** Shared poll result for both interactive and device-code sign-in flows. */
+export interface ScheduleAuthStatus {
+  status: 'pending' | 'ok' | 'error'
+  account?: ScheduleAccount
+  error?: string
+  /** Present on interactive-login errors: suggests falling back to device code. */
+  fallback?: 'device_code'
+}
+
+export interface ScheduleSyncResult {
+  ok: boolean
+  configured: boolean
+  connected: boolean
+  status: string
+  upserted: number
+  deleted: number
+  last_sync_at: number | null
+}
+
+export interface ScheduleEventsResult {
+  events: ScheduleEvent[]
+  configured: boolean
+  connected: boolean
+}
+
+export interface CreateScheduleEventInput {
+  subject: string
+  /** 'YYYY-MM-DD' */
+  date: string
+  /** 'HH:MM' — ignored when all_day. */
+  start_time?: string
+  end_time?: string
+  all_day?: boolean
+  goal_id?: string
+  /** 保存到的账号（'outlook' | 'local'）；缺省由后端路由（已连接→Outlook，否则本地）。 */
+  account_id?: string
+  /** 同一次创建及其重试复用的幂等请求号，避免 Outlook 重复创建。 */
+  client_request_id?: string
+}
+
+/** A goal's weekly schedule expectation ({ period, target, label }). */
+export interface ScheduleExpectation {
+  period: 'week'
+  target: number
+  label: string
+}
+
+/** Weekly progress against a goal's schedule expectation. */
+export interface ScheduleProgress {
+  goal_id: string
+  week_start: string
+  week_end: string
+  current: number
+  target: number | null
+  text: string | null
+  expectation: ScheduleExpectation | null
+}
+
+export interface GoalSchedule {
+  events: ScheduleEvent[]
+  progress: ScheduleProgress
+}
+
+export interface PostActivity {
+  id: string
+  ts: string
+}
+
+export function getScheduleStatus() {
+  return request<ScheduleStatus>('/schedule/status')
+}
+
+export function getScheduleClientId() {
+  return request<ScheduleClientIdInfo>('/schedule/auth/client-id')
+}
+
+export function saveScheduleClientId(clientId: string) {
+  return request<ScheduleClientIdInfo>('/schedule/auth/client-id', {
+    method: 'POST',
+    body: JSON.stringify({ client_id: clientId }),
+  })
+}
+
+/** Restore the built-in shared app (clears any custom client_id + login state). */
+export function restoreDefaultClientId() {
+  return request<ScheduleClientIdInfo>('/schedule/auth/client-id', {
+    method: 'DELETE',
+  })
+}
+
+/** Start the one-click browser (interactive) sign-in; poll getAuthStatus after. */
+export function startInteractiveAuth() {
+  return request<{ status: string }>('/schedule/auth/interactive-start', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function startScheduleDeviceLogin() {
+  return request<ScheduleDeviceStart>('/schedule/auth/device-start', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+/** Poll the in-progress sign-in flow (interactive or device code). */
+export function getAuthStatus() {
+  return request<ScheduleAuthStatus>('/schedule/auth/status')
+}
+
+export function scheduleLogout() {
+  return request<{ ok: boolean }>('/schedule/auth/logout', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+/** List cached events in [start, end] (inclusive, 'YYYY-MM-DD'). The route
+ *  reports connection state via headers, not the body. */
+export async function listScheduleEvents(start: string, end: string): Promise<ScheduleEventsResult> {
+  const res = await fetch(`${BASE}/schedule/events?start=${start}&end=${end}`, {
+    headers: { 'Content-Type': 'application/json' },
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(body.detail || `HTTP ${res.status}`, res.status)
+  }
+  const events = (await res.json()) as ScheduleEvent[]
+  return {
+    events,
+    configured: res.headers.get('X-Schedule-Configured') === 'true',
+    connected: res.headers.get('X-Schedule-Connected') === 'true',
+  }
+}
+
+export function createScheduleEvent(input: CreateScheduleEventInput) {
+  return request<ScheduleEvent>('/schedule/events', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function updateScheduleEvent(eventId: string, changes: Partial<CreateScheduleEventInput>) {
+  return request<ScheduleEvent>(`/schedule/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(changes),
+  })
+}
+
+export function deleteScheduleEvent(eventId: string) {
+  return request<{ ok: boolean }>(`/schedule/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+  })
+}
+
+export function listScheduleAccounts() {
+  return request<ScheduleAccountInfo[]>('/schedule/accounts')
+}
+
+export function createLocalCalendarAccount() {
+  return request<ScheduleAccountInfo>('/schedule/accounts/local', { method: 'POST' })
+}
+
+export function deleteLocalCalendarAccount(deleteEvents: boolean) {
+  return request<{ ok: boolean; deleted_events: number }>('/schedule/accounts/local', {
+    method: 'DELETE',
+    body: JSON.stringify({ delete_events: deleteEvents }),
+  })
+}
+
+/** 预检本地→Outlook 迁移（有 sync 副作用故用 POST）。未连接 / 无本地账号 / 0 条 → 409。 */
+export function previewLocalMigration() {
+  return request<MigrationPreview>('/schedule/accounts/local/migration/preview', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+/** 执行迁移。decisions 仅对冲突项有意义（'skip' | 'create'），缺省按 'skip'。 */
+export function migrateLocalEvents(decisions: Record<string, 'skip' | 'create'>) {
+  return request<MigrationResult>('/schedule/accounts/local/migration', {
+    method: 'POST',
+    body: JSON.stringify({ decisions }),
+  })
+}
+
+/** 抑制一次性迁移邀请弹窗（「暂不」永不再自动弹）。 */
+export function dismissMigrationPrompt() {
+  return request<{ ok: boolean }>('/schedule/accounts/local/migration/dismiss', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function syncSchedule() {
+  return request<ScheduleSyncResult>('/schedule/sync', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export function listPostActivity(start: string, end: string) {
+  return request<PostActivity[]>(`/posts/activity?start=${start}&end=${end}`)
+}
+
+/* ===== Goal ↔ schedule links ===== */
+
+export function getGoalSchedule(goalId: string) {
+  return request<GoalSchedule>(`/goals/${encodeURIComponent(goalId)}/schedule`)
+}
+
+export function linkGoalSchedule(goalId: string, eventId: string) {
+  return request<{ goal_id: string; event_id: string; created_at: number }>(
+    `/goals/${encodeURIComponent(goalId)}/schedule/links`,
+    { method: 'POST', body: JSON.stringify({ event_id: eventId }) },
+  )
+}
+
+export function unlinkGoalSchedule(goalId: string, eventId: string) {
+  return request<{ ok: boolean }>(
+    `/goals/${encodeURIComponent(goalId)}/schedule/links/${encodeURIComponent(eventId)}`,
+    { method: 'DELETE' },
+  )
+}
+
+export function updateGoalScheduleExpectation(goalId: string, expectation: ScheduleExpectation) {
+  return request<{ expectation: ScheduleExpectation | null; progress: ScheduleProgress }>(
+    `/goals/${encodeURIComponent(goalId)}/schedule/expectation`,
+    { method: 'PUT', body: JSON.stringify(expectation) },
+  )
 }

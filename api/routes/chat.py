@@ -20,6 +20,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 class SendChatMessageRequest(BaseModel):
     content: str = Field(default="", max_length=20_000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=9)
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class UpdateChatMessageRequest(BaseModel):
@@ -87,7 +88,15 @@ async def send_chat_message(soul_name: str, request: SendChatMessageRequest):
     runtime = require_configured_runtime_or_409()
     try:
         thread = await run_sync(chat_service.get_or_create_thread, soul_name)
-        result = await run_sync(chat_service.call_chat_reply, thread.id, body, runtime.client, runtime.model, request.attachment_ids)
+        result = await run_sync(
+            chat_service.call_chat_reply,
+            thread.id,
+            body,
+            runtime.client,
+            runtime.model,
+            request.attachment_ids,
+            request_id=request.request_id,
+        )
         messages = await run_sync(chat_service.list_thread_messages, thread.id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -96,6 +105,62 @@ async def send_chat_message(soul_name: str, request: SendChatMessageRequest):
         "result": asdict(result),
         "messages": [asdict(message) for message in messages],
     }
+
+
+@router.post("/{soul_name}/messages/stream")
+async def send_chat_message_stream(soul_name: str, request: SendChatMessageRequest):
+    body = request.content.strip()
+    if not body and not request.attachment_ids:
+        raise HTTPException(status_code=422, detail="content 不能为空")
+    runtime = require_configured_runtime_or_409()
+    try:
+        thread = await run_sync(chat_service.get_or_create_thread, soul_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return StreamingResponse(
+        _chat_reply_stream(
+            thread.id,
+            body,
+            runtime.client,
+            runtime.model,
+            request.attachment_ids,
+            request.request_id,
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+def _chat_reply_stream(
+    thread_id: int,
+    content: str,
+    client: Any,
+    model: str,
+    attachment_ids: list[str],
+    request_id: str | None,
+):
+    """Bridge chat_service.stream_chat_reply into SSE frames. Starlette iterates
+    this sync generator in a threadpool, so its blocking work never stalls the
+    event loop."""
+    try:
+        for event in chat_service.stream_chat_reply(
+            thread_id,
+            content,
+            client,
+            model,
+            attachment_ids,
+            request_id=request_id,
+        ):
+            if event["type"] == "delta":
+                yield _format_named_sse("delta", {"text": event["text"]})
+            elif event["type"] == "done":
+                yield _format_named_sse("done", event["result"])
+    except Exception as exc:  # surface any unexpected failure as an SSE error frame
+        yield _format_named_sse("error", {"message": str(exc)})
+
+
+def _format_named_sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @router.patch("/messages/{message_id}")

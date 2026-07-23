@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,10 +16,12 @@ from core import (
     memory_read,
     memory_unit_service,
     memory_view_service,
+    query_rewriter,
+    schedule_context,
     soul_relationship_memory,
     soul_service,
     suggestion_pipeline,
-    tool_config_service,
+    turn_prep,
     web_search_gate,
     web_search_service,
 )
@@ -27,7 +30,7 @@ from tests.helpers import require_not_none
 
 class FakeClient:
     def __init__(self, payload: dict | None = None, content: str | None = None) -> None:
-        self.payload = payload or {"reply": "我看到了，继续说。", "todos_to_upsert": [], "todos_to_delete": []}
+        self.payload = payload or {"reply": "我看到了，继续说。"}
         self.content = content
         self.calls: list[dict] = []
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
@@ -46,7 +49,7 @@ class CommentServiceTest(unittest.TestCase):
             os.environ,
             {
                 suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
-                suggestion_pipeline.TODO_SUGGESTIONS_ENABLED_ENV: "0",
+                suggestion_pipeline.SCHEDULE_SUGGESTIONS_ENABLED_ENV: "0",
             },
         )
         suggestions_off.start()
@@ -143,7 +146,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual(["拾迹者", "毒舌好友"], [conversation.soul_name for conversation in conversations])
 
     def test_comment_reply_only_writes_selected_soul_conversation(self) -> None:
-        client = FakeClient({"reply": "好，我只在这里接住这句。", "todos_to_upsert": [], "todos_to_delete": []})
+        client = FakeClient({"reply": "好，我只在这里接住这句。"})
 
         result = comment_service.call_comment_reply("20260525-001", "拾迹者", "只回复拾迹者", client, "fake-model")
         default_messages = comment_service.list_conversation_messages("20260525-001", "拾迹者", include_root=False)
@@ -155,24 +158,99 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual([1, 2], [message.seq for message in default_messages])
         self.assertEqual([], other_messages)
 
+    def test_build_comment_context_overlaps_prep_and_prefetch(self) -> None:
+        # A 2-party barrier releases only if prepare_turn and the recall prefetch are
+        # BOTH in flight at once; a serial submission would leave one side waiting and
+        # trip the timeout (BrokenBarrierError) -> the turn fails the test.
+        barrier = threading.Barrier(2, timeout=5)
+        real_prepare_turn = turn_prep.prepare_turn
+        real_prefetch = memory_read.prefetch_semantic_recall
+        real_section = memory_read.memory_section_with_citations
+        seen = {"prep": False, "prefetch": False, "consumed": None}
+        produced = {}
+
+        def fake_prep(*args, **kwargs):
+            seen["prep"] = True
+            barrier.wait()
+            return real_prepare_turn(*args, **kwargs)
+
+        def fake_prefetch(*args, **kwargs):
+            seen["prefetch"] = True
+            barrier.wait()
+            produced["value"] = real_prefetch(*args, **kwargs)
+            return produced["value"]
+
+        def spy_section(*args, **kwargs):
+            seen["consumed"] = kwargs.get("prefetched")
+            return real_section(*args, **kwargs)
+
+        with patch("core.turn_prep.prepare_turn", side_effect=fake_prep), \
+             patch("core.memory_read.prefetch_semantic_recall", side_effect=fake_prefetch), \
+             patch("core.memory_read.memory_section_with_citations", side_effect=spy_section):
+            comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊练歌")
+
+        self.assertTrue(seen["prep"])                       # gate+rewrite ran
+        self.assertTrue(seen["prefetch"])                   # recall prefetch ran concurrently
+        self.assertIsNotNone(seen["consumed"])              # a prefetch bundle reached assembly
+        self.assertIs(seen["consumed"], produced["value"])  # the exact concurrent result
+
     def test_build_comment_context_separates_evidence_and_messages(self) -> None:
         comment_service.append_comment("20260525-001", "拾迹者", "user", "继续聊练歌")
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "整理歌单", "未完成", 1.0, 1.0),
-        )
-
         context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊练歌")
 
         self.assertIn("测试用户", context.context)
         self.assertIn("今天想认真练歌", context.context)
         self.assertIn("我陪你继续拆", context.context)
-        self.assertIn("整理歌单", context.context)
         self.assertNotIn("继续聊练歌", context.context)
         self.assertEqual(["继续聊练歌"], [message.content for message in context.messages])
+
+    def test_build_comment_context_injects_recent_before_prep_and_mentions_after_rewrite(self) -> None:
+        recent = schedule_context.RecentScheduleContext(
+            section="# 近期日程\n\n本周共 1 项安排",
+            event_ids=frozenset({"recent-event"}),
+        )
+        rewrite = query_rewriter.RewrittenQuery(
+            raw_query="聊聊马拉松",
+            semantic_query="聊聊马拉松",
+            keywords=["马拉松"],
+            used_rewrite=True,
+        )
+        prep = turn_prep.TurnPrep(
+            rewritten=rewrite,
+            search_decision=web_search_gate.default_decision("disabled"),
+        )
+        with (
+            patch(
+                "core.comment_service.schedule_context.build_recent_schedule_context",
+                return_value=recent,
+            ),
+            patch(
+                "core.comment_service.reply_context.prepare_turn_with_prefetch",
+                return_value=(prep, None),
+            ) as prepare,
+            patch(
+                "core.comment_service.schedule_context.build_mentioned_schedule_section",
+                return_value="# 提及的日程\n\n- [3 天后] 马拉松",
+            ) as mentioned,
+            patch(
+                "core.comment_service.memory_read.memory_section_with_citations",
+                return_value=memory_read.MemorySection(""),
+            ),
+        ):
+            context = comment_service.build_comment_context(
+                "20260525-001", "拾迹者", "聊聊马拉松"
+            )
+
+        hint = prepare.call_args.kwargs["context_hint"]
+        self.assertIn("# 近期日程", hint)
+        self.assertNotIn("# 提及的日程", hint)
+        mentioned.assert_called_once_with(
+            ["马拉松"],
+            exclude_event_ids=frozenset({"recent-event"}),
+        )
+        self.assertIn("# 近期日程", context.context)
+        self.assertIn("# 提及的日程", context.context)
+        self.assertLess(context.context.index("# 近期日程"), context.context.index("# 提及的日程"))
 
     def test_other_soul_user_comment_excluded_from_memory_section(self) -> None:
         # All public-post comments share the global/public bucket, so without the
@@ -275,9 +353,19 @@ class CommentServiceTest(unittest.TestCase):
             elapsed_ms=1,
         )
 
+        # Gate + rewrite now share one merged turn-prep call; the merged JSON carries
+        # both halves, and the comment path must fire it exactly once.
+        merged = {
+            "should_search": True,
+            "queries": ["Python 3.13 stable release"],
+            "reason": "当前版本事实",
+            "freshness_required": True,
+            "semantic_query": "用户询问 Python 3.13 稳定版发布信息",
+            "keywords": ["Python", "3.13", "稳定版"],
+        }
         with (
             patch("core.reply_context.web_search_service.effective_config", return_value=settings),
-            patch("core.reply_context.web_search_gate.decide", return_value=decision) as decide,
+            patch("core.llm.turn_prep_router.call_turn_prep", return_value=merged) as call_turn_prep,
             patch("core.reply_context.web_search_service.search", return_value=run) as search,
         ):
             context = comment_service.build_comment_context(
@@ -291,7 +379,7 @@ class CommentServiceTest(unittest.TestCase):
         self.assertIn("# 网页搜索结果", context.context)
         self.assertIn("Python release", context.context)
         self.assertIn("Python 版本信息", context.context)
-        decide.assert_called_once()
+        call_turn_prep.assert_called_once()
         search.assert_called_once()
 
     def test_comment_reply_sends_multi_turn_messages(self) -> None:
@@ -381,8 +469,8 @@ class CommentServiceTest(unittest.TestCase):
             "confidence": 0.88,
         }
         with patch.dict(os.environ, {suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "1"}), patch(
-            "core.suggestion_pipeline.goal_router.call_goal_router",
-            return_value=[candidate],
+            "core.suggestion_pipeline.suggestion_router.call_suggestion_router",
+            return_value={"goals": [candidate], "events": []},
         ):
             result = comment_service.call_comment_reply(
                 "20260525-001",
@@ -546,46 +634,6 @@ class CommentServiceTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             comment_service.rerun_latest_assistant_message(first.assistant_message_id, FakeClient(), "fake-model")
-
-    def test_comment_reply_ignores_todo_fields(self) -> None:
-        client = FakeClient(
-            {
-                "reply": "我记下来了。",
-                "todos_to_upsert": [
-                    {
-                        "id": None,
-                        "task": "今晚整理歌单",
-                        "date": "2026-05-25",
-                        "start_time": None,
-                        "end_time": None,
-                        "status": "未完成",
-                    }
-                ],
-                "todos_to_delete": [],
-            }
-        )
-
-        result = comment_service.call_comment_reply("20260525-001", "拾迹者", "提醒我今晚整理歌单", client, "fake-model")
-        row = require_not_none(db.query_one("SELECT COUNT(*) AS count FROM todos"))
-
-        self.assertTrue(result.ok)
-        self.assertIsNotNone(result.assistant_message_id)
-        self.assertEqual(0, row["count"])
-
-    def test_comment_context_omits_todos_when_tool_disabled(self) -> None:
-        tool_config_service.set_tool_enabled("todo", False)
-        db.execute(
-            """
-            INSERT INTO todos(id, task, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("todo-1", "整理歌单", "未完成", 1.0, 1.0),
-        )
-
-        context = comment_service.build_comment_context("20260525-001", "拾迹者", "继续聊")
-
-        self.assertNotIn("整理歌单", context.context)
-        self.assertNotIn("# 待办事项", context.context)
 
     def test_comment_reply_only_records_evidence_until_reconcile_runs(self) -> None:
         comment_service.call_comment_reply("20260525-001", "拾迹者", "这是一条评论回复", FakeClient(), "fake-model")

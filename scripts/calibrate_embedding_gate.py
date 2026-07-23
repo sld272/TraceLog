@@ -85,20 +85,12 @@ def main() -> None:
     if len(probes) < 8:
         raise SystemExit("探针集太小（至少 8 对），校准不可信")
 
-    from chromadb.utils.embedding_functions.openai_embedding_function import (
-        OpenAIEmbeddingFunction,
-    )
-
-    embed = OpenAIEmbeddingFunction(
-        api_key=config.get("embedding_api_key") or config["api_key"],
-        api_base=config.get("embedding_base_url") or config.get("base_url", "https://api.openai.com/v1"),
-        model_name=config.get("embedding_model", "text-embedding-3-small"),
-    )
     texts = [p["query"] for p in probes] + [p["content"] for p in probes]
-    vectors = embed(texts)
+    # embed_texts 返回 np.float32 数组；不转回 float 会让 json.dumps 持久化失败。
+    vectors = [[float(value) for value in vector] for vector in vectorstore.embed_texts(texts)]
     n = len(probes)
     scored = [
-        (_cosine(list(vectors[i]), list(vectors[n + i])), bool(probes[i]["relevant"]))
+        (_cosine(vectors[i], vectors[n + i]), bool(probes[i]["relevant"]))
         for i in range(n)
     ]
 

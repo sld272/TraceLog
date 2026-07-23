@@ -9,9 +9,11 @@ import {
   parseMessageSuggestions,
   rerunChatMessage,
   sendChatMessage,
+  sendChatMessageStream,
   streamChatMessages,
   updateChatMessage,
 } from '@/api/client'
+import type { ChatReplyResult } from '@/api/client'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EvidencePanel } from '@/components/EvidencePanel'
 import { ImageGrid } from '@/components/ImageGrid'
@@ -220,25 +222,55 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     setDraft('')
     setAttachments([])
     setSending(true)
-    try {
-      const response = await sendChatMessage(soulName, body, attachments.map((attachment) => attachment.id))
+    const attachmentIds = submittedAttachments.map((attachment) => attachment.id)
+    const requestId = crypto.randomUUID()
+    const applyNonStreamResponse = (response: {
+      thread: ChatThread
+      result: ChatReplyResult
+      messages: ChatMessage[]
+    }) => {
       setThread(response.thread)
-      if (response.result.ok) {
-        setMessages((prev) => mergeMessageWindow(prev, response.messages))
+      const windowMessages = response.result.ok || response.messages.length > 0
+        ? response.messages
+        : [
+            failedAssistantMessage(
+              optimisticAssistantId,
+              response.thread.id,
+              createdAt,
+              response.result.error ?? '回复生成失败',
+            ),
+          ]
+      setMessages((prev) => mergeMessageWindow(prev, windowMessages))
+      setRetryErrors({})
+    }
+    try {
+      try {
+        const result = await sendChatMessageStream(soulName, body, attachmentIds, requestId, (delta) => {
+          setMessages((prev) =>
+            prev.map((message) =>
+              message.id === optimisticAssistantId
+                ? { ...message, content: message.content + delta }
+                : message,
+            ),
+          )
+        })
+        // done: swap the optimistic bubbles for the server result (real ids,
+        // final reply, suggestions); the thread poller enriches metadata shortly.
+        setMessages((prev) =>
+          applyStreamResult(prev, result, optimisticUserId, optimisticAssistantId, createdAt),
+        )
         setRetryErrors({})
-      } else {
-        const failedMessages = response.messages.length > 0
-          ? response.messages
-          : [
-              failedAssistantMessage(
-                optimisticAssistantId,
-                response.thread.id,
-                createdAt,
-                response.result.error ?? '回复生成失败',
-              ),
-            ]
-        setMessages((prev) => mergeMessageWindow(prev, failedMessages))
-        setRetryErrors({})
+      } catch {
+        // streaming unavailable -> reset the bubble to "thinking" and retry
+        // without streaming (seamless for the user)
+        setMessages((prev) =>
+          prev.map((message) =>
+            message.id === optimisticAssistantId
+              ? { ...message, content: '', metadata: null }
+              : message,
+          ),
+        )
+        applyNonStreamResponse(await sendChatMessage(soulName, body, attachmentIds, requestId))
       }
       setError(null)
     } catch (err) {
@@ -613,6 +645,38 @@ function withPendingReplyAfterUserEdit(
   ]
 }
 
+function applyStreamResult(
+  messages: ChatMessage[],
+  result: ChatReplyResult,
+  optimisticUserId: number,
+  optimisticAssistantId: number,
+  createdAt: number,
+): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.id === optimisticUserId) {
+      return { ...message, id: result.user_message_id }
+    }
+    if (message.id === optimisticAssistantId) {
+      if (result.ok) {
+        return {
+          ...message,
+          id: result.assistant_message_id ?? message.id,
+          content: result.reply,
+          created_at: createdAt,
+          metadata: JSON.stringify({ status: 'ok', suggestions: result.suggestions }),
+        }
+      }
+      return failedAssistantMessage(
+        result.assistant_message_id ?? optimisticAssistantId,
+        result.thread_id,
+        createdAt,
+        result.error ?? '回复生成失败',
+      )
+    }
+    return message
+  })
+}
+
 function failedAssistantMessage(id: number, threadId: number, createdAt: number, error?: string): ChatMessage {
   return {
     id,
@@ -826,7 +890,7 @@ function MessageBubble({
       <ImageGrid attachments={message.attachments ?? []} borderless={isUser} />
       {!isUser && !isFailedAssistant && !isPendingAssistant && editDraft === null && (
         <>
-          <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} />
+          <InlineSuggestions suggestions={parseMessageSuggestions(message.metadata)} fromPrivateChat />
           <EvidencePanel metadata={message.metadata} channel="chat" messageId={message.id} />
         </>
       )}

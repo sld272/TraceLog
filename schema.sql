@@ -32,6 +32,34 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS idx_posts_ts ON posts(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_importance ON posts(importance DESC);
 
+CREATE TABLE IF NOT EXISTS calendar_accounts (
+    id           TEXT PRIMARY KEY,
+    provider     TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    created_at   REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS schedule_events (
+    id               TEXT PRIMARY KEY,
+    account_id       TEXT,
+    subject          TEXT NOT NULL DEFAULT '',
+    body_preview     TEXT,
+    start_ts         REAL NOT NULL,
+    end_ts           REAL NOT NULL,
+    start_local      TEXT NOT NULL,
+    end_local        TEXT NOT NULL,
+    all_day          INTEGER NOT NULL DEFAULT 0,
+    location         TEXT,
+    web_link         TEXT,
+    series_master_id TEXT,
+    is_cancelled     INTEGER NOT NULL DEFAULT 0,
+    change_key       TEXT,
+    synced_at        REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_schedule_events_start ON schedule_events(start_ts);
+CREATE INDEX IF NOT EXISTS idx_schedule_events_account ON schedule_events(account_id);
+
 CREATE TABLE IF NOT EXISTS post_soul_orders (
     post_id    TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
     soul_name  TEXT NOT NULL REFERENCES souls(name) ON DELETE CASCADE,
@@ -183,26 +211,14 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created_at  REAL NOT NULL,
     edited_at   REAL,
     rerun_at    REAL,
-    metadata    TEXT
+    metadata    TEXT,
+    client_request_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);
-
-CREATE TABLE IF NOT EXISTS todos (
-    id           TEXT PRIMARY KEY,
-    task         TEXT NOT NULL,
-    date         TEXT,
-    start_time   TEXT,
-    end_time     TEXT,
-    status       TEXT NOT NULL DEFAULT '未完成',
-    source_post  TEXT REFERENCES posts(id) ON DELETE SET NULL,
-    created_at   REAL NOT NULL,
-    updated_at   REAL NOT NULL,
-    completed_at REAL
-);
-
-CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status, date);
-CREATE INDEX IF NOT EXISTS idx_todos_date ON todos(date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_request_role
+    ON chat_messages(thread_id, client_request_id, role)
+    WHERE client_request_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS goals (
     id               TEXT PRIMARY KEY,
@@ -215,6 +231,7 @@ CREATE TABLE IF NOT EXISTS goals (
                          CHECK(source IN ('user', 'suggested_accepted')),
     focus            INTEGER NOT NULL DEFAULT 0 CHECK(focus IN (0, 1)),
     last_progress_at REAL,
+    schedule_expectation TEXT,
     created_at       REAL NOT NULL,
     updated_at       REAL NOT NULL
 );
@@ -222,9 +239,16 @@ CREATE TABLE IF NOT EXISTS goals (
 CREATE INDEX IF NOT EXISTS idx_goals_status_horizon
     ON goals(status, horizon, id);
 
+CREATE TABLE IF NOT EXISTS goal_schedule_links (
+    goal_id     TEXT NOT NULL,
+    event_id    TEXT NOT NULL,
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (goal_id, event_id)
+);
+
 CREATE TABLE IF NOT EXISTS suggestions (
     id             TEXT PRIMARY KEY,
-    kind           TEXT NOT NULL CHECK(kind IN ('todo', 'goal')),
+    kind           TEXT NOT NULL CHECK(kind IN ('goal', 'schedule')),
     payload_json   TEXT NOT NULL,
     evidence_ref   TEXT,
     confidence     REAL NOT NULL DEFAULT 0.6 CHECK(confidence >= 0.0 AND confidence <= 1.0),
@@ -325,6 +349,8 @@ CREATE TABLE IF NOT EXISTS vector_index_items (
     content_hash    TEXT NOT NULL,
     source_revision INTEGER NOT NULL,
     indexed_at      REAL NOT NULL,
+    dim             INTEGER,
+    embedding       BLOB,
     PRIMARY KEY (collection_name, doc_id)
 );
 

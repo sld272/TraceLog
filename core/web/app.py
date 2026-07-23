@@ -1,4 +1,4 @@
-"""Start the TraceLog API and Vite frontend together."""
+"""Start TraceLog in production or development web mode."""
 
 from __future__ import annotations
 
@@ -9,16 +9,112 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
-from pathlib import Path
+import urllib.request
+import webbrowser
+
+import uvicorn
+
+from core import paths
+from core.web.server import create_production_app
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = paths.RESOURCE_DIR
 FRONTEND_DIR = ROOT / "frontend"
+DIST_DIR = paths.FRONTEND_DIST_DIR
+DIST_INDEX = DIST_DIR / "index.html"
+FRONTEND_SRC_DIR = FRONTEND_DIR / "src"
 VITE_ENTRYPOINT = FRONTEND_DIR / "node_modules" / "vite" / "bin" / "vite.js"
 
 
 def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    mode = "serve"
+    if args and args[0] in {"serve", "dev"}:
+        mode = args.pop(0)
+    if mode == "dev":
+        return _dev(args)
+    return _serve(args)
+
+
+def _serve(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Start TraceLog.")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--no-open", action="store_true")
+    args = parser.parse_args(argv)
+
+    if not DIST_INDEX.is_file():
+        print(
+            "TraceLog's built frontend is missing.\n"
+            "Build it with: cd frontend && npm run build\n"
+            "Or start development mode with: python main.py dev",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
+    _warn_if_frontend_build_is_stale()
+    requested_port = args.port
+    args.port = _find_available_port(args.host, requested_port)
+    if args.port != requested_port:
+        if requested_port == 0:
+            print(f"TRACELOG_PORT={args.port}", flush=True)
+        else:
+            print(
+                f"TraceLog port {requested_port} is in use; using {args.port}.",
+                flush=True,
+            )
+
+    display_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
+    web_url = f"http://{display_host}:{args.port}"
+    print("", flush=True)
+    print(f"TraceLog: {web_url}/", flush=True)
+    print(f"TraceLog API: {web_url}/api/health", flush=True)
+    print("Press Ctrl+C to stop TraceLog.", flush=True)
+
+    stop_browser_probe = threading.Event()
+    if not args.no_open:
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(web_url, stop_browser_probe),
+            daemon=True,
+        ).start()
+
+    production_app = create_production_app(DIST_DIR)
+    try:
+        uvicorn.run(production_app, host=args.host, port=args.port)
+    finally:
+        stop_browser_probe.set()
+    return 0
+
+
+def _warn_if_frontend_build_is_stale() -> None:
+    built_at = DIST_INDEX.stat().st_mtime
+    if any(path.is_file() and path.stat().st_mtime > built_at for path in FRONTEND_SRC_DIR.rglob("*")):
+        print(
+            "Warning: frontend source files are newer than frontend/dist/index.html; "
+            "run `cd frontend && npm run build` to refresh it.",
+            flush=True,
+        )
+
+
+def _open_browser_when_ready(web_url: str, stop_event: threading.Event) -> None:
+    health_url = f"{web_url}/api/health"
+    while not stop_event.is_set():
+        try:
+            with urllib.request.urlopen(health_url, timeout=1) as response:
+                if response.status == 200:
+                    webbrowser.open(f"{web_url}/")
+                    return
+        # The probe can reach the selected port before uvicorn begins accepting requests.
+        except OSError:
+            pass
+        stop_event.wait(0.2)
+
+
+def _dev(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Start TraceLog Web development servers.")
     parser.add_argument("--backend-port", type=int, default=8000)
     parser.add_argument("--frontend-port", type=int, default=5173)
@@ -97,6 +193,11 @@ def _assign_ports(args: argparse.Namespace) -> None:
 
 def _find_available_port(host: str, preferred_port: int, used_ports: set[int] | None = None) -> int:
     used_ports = used_ports or set()
+    if preferred_port == 0:
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.bind((host, 0))
+            return int(sock.getsockname()[1])
     port = preferred_port
     while port < 65536:
         if port not in used_ports and _can_bind(host, port):
