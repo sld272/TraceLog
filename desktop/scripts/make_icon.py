@@ -16,7 +16,10 @@ from PIL import Image, ImageDraw
 CANVAS = 1024
 TILE = 824
 CORNER_RADIUS = 185
-GLYPH_RATIO = 0.62
+# Glyph size relative to the tile, applied after cropping the source to
+# its alpha bounding box — matches the proportions of docs/images/logo.png
+# (glyph fills ~3/4 of the frame).
+GLYPH_RATIO = 0.75
 
 
 def main(source: Path, destination: Path) -> None:
@@ -34,6 +37,9 @@ def main(source: Path, destination: Path) -> None:
 
     with Image.open(source) as image:
         glyph = image.convert("RGBA")
+    bbox = glyph.getbbox()
+    if bbox:
+        glyph = glyph.crop(bbox)
     glyph_size = int(TILE * GLYPH_RATIO)
     glyph.thumbnail((glyph_size, glyph_size), Image.LANCZOS)
     glyph_origin = (
