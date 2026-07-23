@@ -13,16 +13,16 @@ import threading
 import time
 import urllib.request
 import webbrowser
-from pathlib import Path
 
 import uvicorn
 
+from core import paths
 from core.web.server import create_production_app
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = paths.RESOURCE_DIR
 FRONTEND_DIR = ROOT / "frontend"
-DIST_DIR = FRONTEND_DIR / "dist"
+DIST_DIR = paths.FRONTEND_DIST_DIR
 DIST_INDEX = DIST_DIR / "index.html"
 FRONTEND_SRC_DIR = FRONTEND_DIR / "src"
 VITE_ENTRYPOINT = FRONTEND_DIR / "node_modules" / "vite" / "bin" / "vite.js"
@@ -59,10 +59,13 @@ def _serve(argv: list[str]) -> int:
     requested_port = args.port
     args.port = _find_available_port(args.host, requested_port)
     if args.port != requested_port:
-        print(
-            f"TraceLog port {requested_port} is in use; using {args.port}.",
-            flush=True,
-        )
+        if requested_port == 0:
+            print(f"TRACELOG_PORT={args.port}", flush=True)
+        else:
+            print(
+                f"TraceLog port {requested_port} is in use; using {args.port}.",
+                flush=True,
+            )
 
     display_host = "127.0.0.1" if args.host in {"0.0.0.0", "::"} else args.host
     web_url = f"http://{display_host}:{args.port}"
@@ -190,6 +193,11 @@ def _assign_ports(args: argparse.Namespace) -> None:
 
 def _find_available_port(host: str, preferred_port: int, used_ports: set[int] | None = None) -> int:
     used_ports = used_ports or set()
+    if preferred_port == 0:
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
+            sock.bind((host, 0))
+            return int(sock.getsockname()[1])
     port = preferred_port
     while port < 65536:
         if port not in used_ports and _can_bind(host, port):

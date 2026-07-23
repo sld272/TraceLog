@@ -68,6 +68,27 @@ class StartWebTest(unittest.TestCase):
         thread.assert_not_called()
         run.assert_called_once_with(production_app, host="127.0.0.1", port=8123)
 
+    def test_zero_port_prints_shell_protocol_before_starting_server(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            dist_dir = Path(tmp) / "dist"
+            dist_dir.mkdir()
+            index = dist_dir / "index.html"
+            index.write_text("<main>TraceLog</main>", encoding="utf-8")
+
+            with (
+                patch.object(web_app, "DIST_DIR", dist_dir),
+                patch.object(web_app, "DIST_INDEX", index),
+                patch.object(web_app, "FRONTEND_SRC_DIR", Path(tmp) / "src"),
+                patch("core.web.app._find_available_port", return_value=43123),
+                patch("core.web.app.create_production_app", return_value=object()),
+                patch("core.web.app.uvicorn.run"),
+                redirect_stdout(StringIO()) as stdout,
+            ):
+                result = web_app.main(["serve", "--port", "0", "--no-open"])
+
+        self.assertEqual(0, result)
+        self.assertIn("TRACELOG_PORT=43123\n", stdout.getvalue())
+
     def test_browser_opens_after_health_check_succeeds(self) -> None:
         stop_event = web_app.threading.Event()
         with (
@@ -117,6 +138,17 @@ class StartWebTest(unittest.TestCase):
             port = web_app._find_available_port("127.0.0.1", occupied_port)
 
         self.assertNotEqual(occupied_port, port)
+
+    def test_find_available_port_zero_returns_ephemeral_port(self) -> None:
+        socket_context = Mock()
+        socket_context.__enter__ = Mock(return_value=socket_context)
+        socket_context.__exit__ = Mock(return_value=False)
+        socket_context.getsockname.return_value = ("127.0.0.1", 43123)
+        with patch("core.web.app.socket.socket", return_value=socket_context):
+            port = web_app._find_available_port("127.0.0.1", 0)
+
+        self.assertEqual(43123, port)
+        socket_context.bind.assert_called_once_with(("127.0.0.1", 0))
 
     def test_assign_ports_keeps_backend_and_frontend_distinct(self) -> None:
         backend_port = _free_port()
