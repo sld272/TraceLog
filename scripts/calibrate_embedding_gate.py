@@ -86,10 +86,11 @@ def main() -> None:
         raise SystemExit("探针集太小（至少 8 对），校准不可信")
 
     texts = [p["query"] for p in probes] + [p["content"] for p in probes]
-    vectors = vectorstore.embed_texts(texts)
+    # embed_texts 返回 np.float32 数组；不转回 float 会让 json.dumps 持久化失败。
+    vectors = [[float(value) for value in vector] for vector in vectorstore.embed_texts(texts)]
     n = len(probes)
     scored = [
-        (_cosine(list(vectors[i]), list(vectors[n + i])), bool(probes[i]["relevant"]))
+        (_cosine(vectors[i], vectors[n + i]), bool(probes[i]["relevant"]))
         for i in range(n)
     ]
 
