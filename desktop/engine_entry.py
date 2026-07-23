@@ -12,7 +12,10 @@ from core.web.app import main
 
 def _stop_when_parent_pipe_closes() -> None:
     sys.stdin.buffer.read()
-    os.kill(os.getpid(), signal.SIGTERM)
+    if os.name == "nt":
+        signal.raise_signal(signal.SIGINT)
+    else:
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 if __name__ == "__main__":

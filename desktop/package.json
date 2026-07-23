@@ -2,14 +2,16 @@
   "name": "tracelog-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "TraceLog 拾迹 macOS desktop shell",
+  "description": "TraceLog 拾迹 desktop shell",
   "main": "shell/main.cjs",
   "author": "TraceLog",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "pack:mac": "electron-builder --config electron-builder.config.cjs --mac --dir",
-    "dist:mac": "electron-builder --config electron-builder.config.cjs --mac --publish never"
+    "dist:mac": "electron-builder --config electron-builder.config.cjs --mac --publish never",
+    "pack:win": "electron-builder --config electron-builder.config.cjs --win --dir",
+    "dist:win": "electron-builder --config electron-builder.config.cjs --win --publish never"
   },
   "dependencies": {
     "semver": "^7.7.2"

@@ -37,6 +37,7 @@ module.exports = {
     target: ['dmg', 'zip'],
     category: 'public.app-category.productivity',
     icon: 'build/icon.icns',
+    artifactName: 'TraceLog-${version}-macOS-Arm64.${ext}',
     identity: hasSigningIdentity ? undefined : null,
     hardenedRuntime: true,
     gatekeeperAssess: false,
@@ -44,12 +45,33 @@ module.exports = {
     entitlementsInherit: 'entitlements.mac.plist',
     notarize: hasSigningIdentity && (hasAppleIdNotary || hasApiKeyNotary),
   },
+  win: {
+    target: [
+      {
+        target: 'nsis',
+        arch: ['x64'],
+      },
+      {
+        target: 'zip',
+        arch: ['x64'],
+      },
+    ],
+    icon: 'build/icon.ico',
+    artifactName: 'TraceLog-${version}-Windows-x64.${ext}',
+  },
+  nsis: {
+    artifactName: 'TraceLog-${version}-Windows-x64-Installer.${ext}',
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: 'TraceLog 拾迹',
+    uninstallDisplayName: 'TraceLog 拾迹',
+  },
   dmg: {
     sign: false,
     title: 'TraceLog 拾迹 ${version}',
   },
-  // arm64-only build: name it for humans — these DMGs run only on Apple Silicon (M-series) Macs.
-  artifactName: 'TraceLog-${version}-macOS-AppleSilicon.${ext}',
   publish: {
     provider: 'github',
     owner: 'sld272',

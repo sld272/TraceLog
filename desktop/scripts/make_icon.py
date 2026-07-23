@@ -1,9 +1,10 @@
-"""Generate the macOS application icon from TraceLog's source PNG.
+"""Generate a desktop application icon from TraceLog's source PNG.
 
 macOS app icons are a rounded-rect tile on a transparent 1024 canvas
 (Apple's grid: an 824x824 tile centered, corner radius ~185). The brand
 glyph is transparent-background artwork, so we composite it onto a white
-rounded-rect tile here instead of shipping a transparent icon.
+rounded-rect tile here instead of shipping a transparent icon. The same
+composition is exported as a multi-resolution ICO for Windows.
 """
 
 from __future__ import annotations
@@ -48,7 +49,26 @@ def main(source: Path, destination: Path) -> None:
     )
     canvas.alpha_composite(glyph, glyph_origin)
 
-    canvas.save(destination, format="ICNS")
+    suffix = destination.suffix.lower()
+    if suffix == ".icns":
+        canvas.save(destination, format="ICNS")
+        return
+    if suffix == ".ico":
+        canvas.save(
+            destination,
+            format="ICO",
+            sizes=[
+                (16, 16),
+                (24, 24),
+                (32, 32),
+                (48, 48),
+                (64, 64),
+                (128, 128),
+                (256, 256),
+            ],
+        )
+        return
+    raise ValueError(f"Unsupported desktop icon format: {destination.suffix}")
 
 
 if __name__ == "__main__":

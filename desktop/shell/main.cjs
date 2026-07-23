@@ -20,6 +20,8 @@ const ENGINE_START_TIMEOUT_MS = 30_000
 const ENGINE_STOP_TIMEOUT_MS = 8_000
 const GITHUB_API_LATEST = 'https://api.github.com/repos/sld272/TraceLog/releases/latest'
 const GITHUB_RELEASES = 'https://github.com/sld272/TraceLog/releases'
+const desktopSmoke = process.env.TRACELOG_DESKTOP_SMOKE === '1'
+const desktopSmokeMarker = process.env.TRACELOG_DESKTOP_SMOKE_MARKER
 
 let engineProcess = null
 let engineUrl = null
@@ -34,7 +36,7 @@ const engineDataDir = process.env.TRACELOG_DATA_DIR
   : dataDir
 app.setPath('userData', dataDir)
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const hasSingleInstanceLock = desktopSmoke || app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
@@ -69,11 +71,13 @@ function registerApplicationEvents() {
 }
 
 async function startDesktop() {
-  if (process.platform !== 'darwin') {
+  if (!['darwin', 'win32'].includes(process.platform)) {
     throw new Error(`Unsupported desktop platform: ${process.platform}`)
   }
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 })
-  fs.chmodSync(dataDir, 0o700)
+  if (process.platform !== 'win32') {
+    fs.chmodSync(dataDir, 0o700)
+  }
   fs.mkdirSync(engineDataDir, { recursive: true, mode: 0o700 })
   installApplicationMenu()
   createTray()
@@ -89,7 +93,10 @@ function engineExecutablePath() {
   if (process.env.TRACELOG_ENGINE_PATH) {
     return path.resolve(process.env.TRACELOG_ENGINE_PATH)
   }
-  return path.join(process.resourcesPath, 'engine', 'tracelog-engine')
+  const executableName = process.platform === 'win32'
+    ? 'tracelog-engine.exe'
+    : 'tracelog-engine'
+  return path.join(process.resourcesPath, 'engine', executableName)
 }
 
 function startEngine() {
@@ -115,6 +122,7 @@ function startEngine() {
         TRACELOG_PARENT_PIPE: '1',
       },
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     })
 
     engineProcess.stdout.setEncoding('utf8')
@@ -216,6 +224,14 @@ function createMainWindow(baseUrl) {
       }
     }
   })
+  if (desktopSmoke) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      if (desktopSmokeMarker) {
+        fs.writeFileSync(desktopSmokeMarker, 'TRACELOG_DESKTOP_SMOKE_OK\n')
+      }
+      app.quit()
+    })
+  }
   mainWindow.loadURL(`${baseUrl}/`)
 }
 
@@ -388,7 +404,7 @@ function shutdownEngine() {
       clearTimeout(timeout)
       resolve()
     })
-    killEngineProcessGroup('SIGTERM')
+    child.stdin.end()
   })
   return shutdownPromise
 }
@@ -398,7 +414,11 @@ function killEngineProcessGroup(signal = 'SIGTERM') {
     return
   }
   try {
-    process.kill(-engineProcess.pid, signal)
+    if (process.platform === 'win32') {
+      engineProcess.kill(signal)
+    } else {
+      process.kill(-engineProcess.pid, signal)
+    }
   } catch (error) {
     if (error.code !== 'ESRCH') {
       process.stderr.write(`Failed to stop TraceLog engine: ${String(error)}\n`)

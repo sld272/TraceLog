@@ -232,6 +232,8 @@ frontend/tsconfig.node.tsbuildinfo
 
 # Desktop packaging outputs and dependencies
 !desktop/engine.spec
+desktop/build/
+desktop/dist/
 desktop/node_modules/
 
 

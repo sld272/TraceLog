@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -5,6 +6,19 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 project_root = Path(SPECPATH).parent
 jieba_datas, jieba_binaries, jieba_hiddenimports = collect_all("jieba")
+windows_runtime_binaries = []
+if sys.platform == "win32":
+    conda_library_bin = Path(sys.prefix) / "Library" / "bin"
+    for pattern in (
+        "ffi-*.dll",
+        "libcrypto-*.dll",
+        "libexpat.dll",
+        "liblzma.dll",
+        "libssl-*.dll",
+    ):
+        windows_runtime_binaries.extend(
+            (str(dll), ".") for dll in conda_library_bin.glob(pattern)
+        )
 
 datas = [
     (str(project_root / "schema.sql"), "."),
@@ -21,7 +35,7 @@ hiddenimports = [
 a = Analysis(
     [str(project_root / "desktop" / "engine_entry.py")],
     pathex=[str(project_root)],
-    binaries=jieba_binaries,
+    binaries=[*jieba_binaries, *windows_runtime_binaries],
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
