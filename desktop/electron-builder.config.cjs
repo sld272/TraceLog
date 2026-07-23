@@ -34,7 +34,7 @@ module.exports = {
     },
   ],
   mac: {
-    target: ['dmg', 'zip'],
+    target: ['dmg'],
     category: 'public.app-category.productivity',
     icon: 'build/icon.icns',
     artifactName: 'TraceLog-${version}-macOS-Arm64.${ext}',
@@ -51,13 +51,8 @@ module.exports = {
         target: 'nsis',
         arch: ['x64'],
       },
-      {
-        target: 'zip',
-        arch: ['x64'],
-      },
     ],
     icon: 'build/icon.ico',
-    artifactName: 'TraceLog-${version}-Windows-x64.${ext}',
   },
   nsis: {
     artifactName: 'TraceLog-${version}-Windows-x64-Installer.${ext}',
