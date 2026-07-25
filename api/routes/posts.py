@@ -186,7 +186,12 @@ def _list_posts(
         """,
         tuple(params),
     )
-    return [_post_summary(row) for row in rows]
+    post_ids = [str(row["id"]) for row in rows]
+    activities_by_post = _goal_activities_by_post_ids(post_ids)
+    return [
+        _post_summary(row, activities_by_post[str(row["id"])])
+        for row in rows
+    ]
 
 
 def _search_posts(query: str, limit: int, mode: Literal["keyword", "hybrid"]) -> dict[str, Any]:
@@ -207,7 +212,11 @@ def _search_posts(query: str, limit: int, mode: Literal["keyword", "hybrid"]) ->
         """,
         tuple(post_ids),
     )
-    by_id = {row["id"]: _post_summary(row) for row in rows}
+    activities_by_post = _goal_activities_by_post_ids(post_ids)
+    by_id = {
+        row["id"]: _post_summary(row, activities_by_post[str(row["id"])])
+        for row in rows
+    }
     items = []
     for post_id in post_ids:
         item = by_id.get(post_id)
@@ -217,7 +226,7 @@ def _search_posts(query: str, limit: int, mode: Literal["keyword", "hybrid"]) ->
     return {"items": items, "semantic_available": search_result.semantic_available, "mode": mode}
 
 
-def _post_summary(row) -> dict[str, Any]:
+def _post_summary(row, goal_activities: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "post_id": row["id"],
         "ts": row["ts"],
@@ -227,6 +236,7 @@ def _post_summary(row) -> dict[str, Any]:
         "latest_event_type": event_service.latest_event_type(row["id"]),
         "pipeline_status": public_post_pipeline.summarize_pipeline_status(row["id"]),
         "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(row["id"])],
+        "goal_activities": goal_activities,
     }
 
 
@@ -270,11 +280,74 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
             "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(post_id)],
             "latest_event_type": event_service.latest_event_type(post_id),
             "pipeline_status": public_post_pipeline.summarize_pipeline_status(post_id),
+            "goal_activities": _goal_activities_by_post_ids([post_id])[post_id],
         },
         "comments": comments,
         "jobs": job_service.list_jobs_for_post(post_id),
         "events": event_service.list_post_events(post_id),
     }
+
+
+def _goal_activities_by_post_ids(
+    post_ids: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped = {post_id: [] for post_id in post_ids}
+    if not post_ids:
+        return grouped
+    placeholders = ",".join("?" for _ in post_ids)
+    rows = db.query_all(
+        f"""
+        SELECT
+            activity.id, activity.goal_id, activity.kind, activity.source,
+            activity.evidence_ref, activity.evidence_span, activity.confidence,
+            activity.status, activity.created_at, activity.decided_at,
+            goal.title AS goal_title,
+            CASE
+                WHEN activity.evidence_ref LIKE 'post:%'
+                    THEN substr(activity.evidence_ref, 6)
+                WHEN activity.evidence_ref LIKE 'comment:%'
+                    THEN comment.post_id
+                ELSE NULL
+            END AS post_id
+        FROM goal_activities AS activity
+        JOIN goals AS goal ON goal.id = activity.goal_id
+        LEFT JOIN comments AS comment
+          ON activity.evidence_ref LIKE 'comment:%'
+         AND comment.id = CAST(substr(activity.evidence_ref, 9) AS INTEGER)
+        WHERE activity.status = 'active'
+          AND (
+              (
+                  activity.evidence_ref LIKE 'post:%'
+                  AND substr(activity.evidence_ref, 6) IN ({placeholders})
+              )
+              OR (
+                  activity.evidence_ref LIKE 'comment:%'
+                  AND comment.post_id IN ({placeholders})
+              )
+          )
+        ORDER BY activity.created_at DESC, activity.id DESC
+        """,
+        (*post_ids, *post_ids),
+    )
+    for row in rows:
+        post_id = str(row["post_id"])
+        grouped[post_id].append(
+            {
+                "id": int(row["id"]),
+                "goal_id": row["goal_id"],
+                "goal_title": row["goal_title"],
+                "kind": row["kind"],
+                "source": row["source"],
+                "evidence_ref": row["evidence_ref"],
+                "evidence_span": row["evidence_span"],
+                "confidence": row["confidence"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "decided_at": row["decided_at"],
+                "post_id": post_id,
+            }
+        )
+    return grouped
 
 
 def _comment_row_to_dict(row) -> dict[str, Any]:

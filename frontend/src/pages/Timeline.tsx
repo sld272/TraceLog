@@ -244,6 +244,7 @@ export function Timeline({
         failed_jobs: [],
       },
       attachments,
+      goal_activities: [],
     }
     setPosts((prev) => [newPost, ...prev])
 
@@ -271,6 +272,7 @@ export function Timeline({
               latest_event_type: detail.post.latest_event_type ?? eventType ?? p.latest_event_type,
               pipeline_status: detail.post.pipeline_status,
               attachments: detail.post.attachments,
+              goal_activities: detail.post.goal_activities,
             }
           : p,
       ),

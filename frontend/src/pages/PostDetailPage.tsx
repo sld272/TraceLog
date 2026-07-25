@@ -82,6 +82,7 @@ export function PostDetailPage({
       latest_event_type: detail.post.latest_event_type ?? null,
       pipeline_status: detail.post.pipeline_status,
       attachments: detail.post.attachments,
+      goal_activities: detail.post.goal_activities,
     }
   }, [detail.comments.length, detail.post])
 

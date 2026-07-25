@@ -53,6 +53,7 @@ export interface Post {
   latest_event_type: string | null
   pipeline_status?: PipelineStatus
   attachments: Attachment[]
+  goal_activities: PostGoalActivity[]
 }
 
 export type SearchMatchKind = 'keyword' | 'semantic' | 'both'
@@ -93,6 +94,7 @@ export interface PostDetail {
     attachments: Attachment[]
     latest_event_type?: string | null
     pipeline_status?: PipelineStatus
+    goal_activities: PostGoalActivity[]
   }
   comments: Comment[]
   jobs: Job[]
@@ -152,6 +154,10 @@ export interface GoalActivity {
   created_at: number
   decided_at: number | null
   post_id: string | null
+}
+
+export interface PostGoalActivity extends GoalActivity {
+  goal_title: string
 }
 
 export interface GoalActivityStats {

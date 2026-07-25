@@ -29,6 +29,7 @@ import { ScheduleEventDrawer } from '@/components/ScheduleEventDrawer'
 import { PlusIcon } from '@/components/icons'
 import { formatRoute } from '@/router'
 import { formatAbsoluteTime } from '@/utils/date'
+import { ACTIVITY_KIND_LABELS } from '@/utils/goalActivity'
 import { eventDateKey, formatEventTime, localDateKey, monthDayLabel, todayKey } from '@/utils/schedule'
 import styles from './WorkspacePages.module.css'
 
@@ -397,14 +398,6 @@ const ACTIVITY_KINDS: GoalActivityKind[] = [
   'milestone',
   'scheduled',
 ]
-
-const ACTIVITY_KIND_LABELS: Record<GoalActivityKind, string> = {
-  commitment: '承诺',
-  progress: '进展',
-  blocked: '卡住',
-  milestone: '里程碑',
-  scheduled: '已排期',
-}
 
 function GoalActivitySection({ goalId }: { goalId: string }) {
   const [data, setData] = useState<GoalActivities | null>(null)

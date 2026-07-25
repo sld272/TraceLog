@@ -276,6 +276,94 @@ class ApiPostsTest(unittest.TestCase):
         self.assertEqual(200, second_page.status_code)
         self.assertEqual(["p-a", "p-old"], [item["post_id"] for item in second_page.json()])
 
+    def test_list_and_detail_inline_active_goal_activities(self) -> None:
+        from core import db, goal_activity_service, goal_service
+
+        with self._temp_db():
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, importance, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "p-activity",
+                    "2026-07-17T10:00:00+08:00",
+                    "最近每天刷科目一的题",
+                    0.8,
+                    1.0,
+                    1.0,
+                ),
+            )
+            db.execute(
+                """
+                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("拾迹者", "souls/default.md", 1, 0, 1.0, 1.0),
+            )
+            db.execute(
+                """
+                INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("p-activity", "拾迹者", "user", "科一过了", 1, 2.0),
+            )
+            comment = db.query_one(
+                "SELECT id FROM comments WHERE post_id = ?",
+                ("p-activity",),
+            )
+            self.assertIsNotNone(comment)
+            assert comment is not None
+            driving = goal_service.create_goal("考驾照", None, "short")
+            hidden = goal_service.create_goal("隐藏目标", None, "short")
+            goal_activity_service.record(
+                driving["id"],
+                "progress",
+                "auto",
+                "post:p-activity",
+                evidence_span="最近每天刷科目一的题",
+                confidence=0.8,
+                created_at=3.0,
+            )
+            goal_activity_service.record(
+                driving["id"],
+                "milestone",
+                "auto",
+                f"comment:{comment['id']}",
+                evidence_span="科一过了",
+                confidence=0.9,
+                created_at=4.0,
+            )
+            rejected = goal_activity_service.record(
+                hidden["id"],
+                "progress",
+                "auto",
+                "post:p-activity",
+                evidence_span="最近每天刷科目一的题",
+                confidence=0.8,
+                created_at=5.0,
+            )
+            self.assertIsNotNone(rejected)
+            assert rejected is not None
+            goal_activity_service.reject(rejected["id"])
+
+            with self._client() as client:
+                list_response = client.get("/posts")
+                detail_response = client.get("/posts/p-activity")
+
+        self.assertEqual(200, list_response.status_code)
+        list_activities = list_response.json()[0]["goal_activities"]
+        self.assertEqual(
+            {("考驾照", "progress"), ("考驾照", "milestone")},
+            {(item["goal_title"], item["kind"]) for item in list_activities},
+        )
+        self.assertEqual(200, detail_response.status_code)
+        detail_activities = detail_response.json()["post"]["goal_activities"]
+        self.assertEqual(
+            [item["id"] for item in list_activities],
+            [item["id"] for item in detail_activities],
+        )
+
     def test_list_posts_cursor_requires_complete_pair(self) -> None:
         with self._temp_db():
             with self._client() as client:

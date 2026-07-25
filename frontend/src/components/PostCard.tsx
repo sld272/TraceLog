@@ -8,6 +8,7 @@ import {
   type Post,
   type Suggestion,
   parseMessageSuggestions,
+  rejectGoalActivity,
 } from '@/api/client'
 import { EvidencePanel } from './EvidencePanel'
 import { ImageGrid } from './ImageGrid'
@@ -17,6 +18,7 @@ import { SoulAvatar } from './SoulAvatar'
 import { ChatIcon, ChevronRightIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
+import { ACTIVITY_KIND_LABELS } from '@/utils/goalActivity'
 import { useSoulColors } from './SoulColorContext'
 import styles from './PostCard.module.css'
 
@@ -74,8 +76,29 @@ export const PostCard = memo(function PostCard({
   onRetryFailedJobs,
 }: PostCardProps) {
   const timeAgo = formatSmartTime(post.ts)
+  const [goalActivities, setGoalActivities] = useState(post.goal_activities)
+  const [rejectingActivityId, setRejectingActivityId] = useState<number | null>(null)
+  const [activityError, setActivityError] = useState<string | null>(null)
   // detail page opens with comments expanded; the feed stays collapsed
   const [showComments, setShowComments] = useState(variant === 'detail')
+  useEffect(() => {
+    setGoalActivities(post.goal_activities)
+    setActivityError(null)
+  }, [post.goal_activities])
+
+  const rejectActivity = async (activityId: number) => {
+    setRejectingActivityId(activityId)
+    setActivityError(null)
+    try {
+      await rejectGoalActivity(activityId)
+      setGoalActivities((current) => current.filter((activity) => activity.id !== activityId))
+    } catch {
+      setActivityError('撤销失败，请重试。')
+    } finally {
+      setRejectingActivityId(null)
+    }
+  }
+
   const toggleComments = () => {
     const next = !showComments
     setShowComments(next)
@@ -111,6 +134,33 @@ export const PostCard = memo(function PostCard({
 
       {post.content && <div id={`post-content-${post.post_id}`} className={styles.content}>{post.content}</div>}
       <ImageGrid attachments={post.attachments ?? []} />
+
+      {goalActivities.length > 0 && (
+        <div className={styles.goalActivityChips}>
+          {goalActivities.map((activity) => {
+            const label = `${ACTIVITY_KIND_LABELS[activity.kind]} · ${activity.goal_title}`
+            return (
+              <span
+                key={activity.id}
+                className={styles.goalActivityChip}
+                title={activity.evidence_span ?? undefined}
+              >
+                <span>{label}</span>
+                <button
+                  type="button"
+                  className={styles.goalActivityUndo}
+                  aria-label={`撤销${label}`}
+                  disabled={rejectingActivityId !== null}
+                  onClick={() => void rejectActivity(activity.id)}
+                >
+                  ×
+                </button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+      {activityError && <p className={styles.goalActivityError}>{activityError}</p>}
 
       <InlineSuggestions suggestions={suggestions} />
 
