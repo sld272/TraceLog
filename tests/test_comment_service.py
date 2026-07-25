@@ -50,6 +50,7 @@ class CommentServiceTest(unittest.TestCase):
             {
                 suggestion_pipeline.GOAL_SUGGESTIONS_ENABLED_ENV: "0",
                 suggestion_pipeline.SCHEDULE_SUGGESTIONS_ENABLED_ENV: "0",
+                suggestion_pipeline.GOAL_ACTIVITY_DETECTION_ENABLED_ENV: "0",
             },
         )
         suggestions_off.start()

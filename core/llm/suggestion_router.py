@@ -1,7 +1,7 @@
-"""LLM extraction of goal and one-off schedule suggestion candidates.
+"""LLM extraction of goal, schedule and goal-activity candidates.
 
-This router never creates goals or events. It only returns candidates that the
-suggestion service may persist for explicit user confirmation.
+This router never writes application state. It returns goal and event candidates
+for explicit confirmation, plus reversible activity candidates for existing goals.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from core.llm.types import LLMClient
 
 
 SUGGESTION_ROUTER_PROMPT = """\
-你是 TraceLog 拾迹的 Suggestion Router。请从用户本轮输入中识别两类候选：值得正式追踪的目标，以及单次日程事件。
+你是 TraceLog 拾迹的 Suggestion Router。请从用户本轮输入中同时识别三类候选：值得正式追踪的目标、单次日程事件，以及已有目标的具体动态。
 
 你只能输出一个标准 JSON 对象，不要输出 Markdown 或解释：
 
@@ -37,6 +37,14 @@ SUGGESTION_ROUTER_PROMPT = """\
       "start_time": "HH:MM|null",
       "end_time": "HH:MM|null",
       "all_day": false,
+      "confidence": 0.0
+    }
+  ],
+  "activities": [
+    {
+      "goal_id": "g_xxx",
+      "kind": "commitment|progress|blocked|milestone",
+      "evidence_span": "帖子里的原句片段",
       "confidence": 0.0
     }
   ]
@@ -59,9 +67,22 @@ SUGGESTION_ROUTER_PROMPT = """\
 5. 随口一提、尚未决定、属于他人的事情不得输出。
 6. subject 使用中性、简洁表述，不复述隐私细节——日程对所有 AI 伙伴可见。
 
+目标动态规则：
+1. activities 只能指向「场景上下文」中「当前目标」列表里真实出现的 goal_id，必须原样填写方括号里的完整 id；不得臆造 id，也不得把没有对应目标的内容硬凑到某个目标。
+2. 只判断与该目标直接相关的具体行动、承诺、受阻或结果。纯情绪、自我评价、与该目标无关领域的事情不输出。例如“放假好爽”“感觉我真是超级低精力人群”都不是目标动态；法语专业课的考试也不是“跨专业考研（计算机方向）”的动态。
+3. evidence_span 必填，且必须是「用户本轮输入」中真实出现的连续原文片段，不能转述、概括或拼接，控制在 40 字以内。没有可直接引用的原句，就不要输出这条候选。
+4. kind 严格按是否已经发生区分：
+   - commitment：说要做、尚未发生，例如“明天一定要早点起，十点开始背法语”。
+   - progress：实际已经做了，例如“最近每天刷科目一的题”。
+   - blocked：没做到或遇到阻碍，例如“今天十一点才起床”“卡在第三题”。
+   - milestone：阶段性达成，例如“科一过了”“考完了”。
+5. scheduled 不属于模型可输出的 kind；它只由日程来源产生。
+6. activities 最多输出 3 条；同一个目标在本轮最多输出一条最能代表具体事实的动态。
+
 共同规则：
-1. goals 与 events 各自最多输出 3 个，宁缺毋滥；没有可靠候选时输出空数组。
-2. confidence ∈ [0,1]，低于 0.65 的候选不要输出。
+1. goals、events 与 activities 都必须返回数组；没有可靠候选时返回空数组。
+2. goals 与 events 各自最多输出 3 个，confidence 低于 0.65 的候选不要输出。
+3. activities 最多输出 3 个，confidence 低于 0.5 的候选不要输出。这里刻意比 goals/events 宽松，不要把两类阈值统一。
 
 当前时间：
 {current_datetime}
@@ -104,14 +125,17 @@ def call_suggestion_router(
             },
             {"role": "user", "content": content},
         ],
-        parser=lambda value: _parse_suggestion_router_content(value, now=anchor),
+        parser=lambda value: _parse_suggestion_router_content(
+            value, now=anchor, user_input=user_input
+        ),
         trace_context=trace_context,
     )
     if not isinstance(data, dict):
-        return {"goals": [], "events": []}
+        return {"goals": [], "events": [], "activities": []}
     return {
         "goals": data.get("goals", []),
         "events": data.get("events", []),
+        "activities": data.get("activities", []),
     }
 
 
@@ -119,7 +143,10 @@ def _parse_suggestion_router_content(
     content: str | None,
     *,
     now: datetime | None = None,
+    user_input: str = "",
 ) -> dict | None:
+    """Parse one router response. ``user_input`` is the text the quotes must come
+    from; an empty one drops every activity, since no quote can be verified."""
     content = clean_json_content(content)
     try:
         data = json.loads(content)
@@ -130,6 +157,7 @@ def _parse_suggestion_router_content(
     return {
         "goals": _parse_goals(data.get("goals")),
         "events": _parse_events(data.get("events"), now=now),
+        "activities": _parse_activities(data.get("activities"), user_input=user_input),
     }
 
 
@@ -227,6 +255,64 @@ def _parse_events(raw_events: object, *, now: datetime | None = None) -> list[di
         if len(events) >= 3:
             break
     return events
+
+
+def _span_is_verbatim(span: str, user_input: str) -> bool:
+    """Whether the quote really is the user's own contiguous wording.
+
+    The prompt asks for a verbatim excerpt, but nothing forces the model to
+    comply, and a fabricated quote is the one failure that destroys trust in the
+    ledger outright — the UI would show the user a sentence they never wrote, and
+    the backfill would put dozens of them on screen at once. Whitespace is
+    ignored so harmless reformatting survives; anything else is dropped, taking a
+    miss over a fake citation. (Deliberately stricter than the 0.5 confidence
+    floor: a false positive is one dismissable row, a false quote is not.)
+    """
+    if span in user_input:
+        return True
+    compact = "".join(span.split())
+    return bool(compact) and compact in "".join(user_input.split())
+
+
+def _parse_activities(raw_activities: object, *, user_input: str) -> list[dict]:
+    if not isinstance(raw_activities, list):
+        return []
+    activities: list[dict] = []
+    seen_goal_ids: set[str] = set()
+    for item in raw_activities:
+        if not isinstance(item, dict):
+            continue
+        goal_id = item.get("goal_id")
+        kind = item.get("kind")
+        evidence_span = item.get("evidence_span")
+        if (
+            not isinstance(goal_id, str)
+            or not goal_id.strip()
+            or kind not in {"commitment", "progress", "blocked", "milestone"}
+            or not isinstance(evidence_span, str)
+            or not evidence_span.strip()
+            or len(evidence_span.strip()) > 40
+            or not _span_is_verbatim(evidence_span.strip(), user_input)
+        ):
+            continue
+        confidence = _coerce_confidence(item.get("confidence"))
+        if confidence < 0.5:
+            continue
+        normalized_goal_id = goal_id.strip()
+        if normalized_goal_id in seen_goal_ids:
+            continue
+        seen_goal_ids.add(normalized_goal_id)
+        activities.append(
+            {
+                "goal_id": normalized_goal_id,
+                "kind": kind,
+                "evidence_span": evidence_span.strip(),
+                "confidence": confidence,
+            }
+        )
+        if len(activities) >= 3:
+            break
+    return activities
 
 
 def _parse_date(value: object) -> date | None:
