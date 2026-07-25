@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 
 from core import time_normalizer
@@ -99,6 +100,7 @@ def call_suggestion_router(
     user_input: str,
     context: str = "",
     trace_context: dict | None = None,
+    status_callback: Callable[[dict], None] | None = None,
 ) -> dict[str, list[dict]]:
     client, model = secondary_model.resolve(client, model)
     anchor = datetime.now().astimezone()
@@ -129,6 +131,7 @@ def call_suggestion_router(
             value, now=anchor, user_input=user_input
         ),
         trace_context=trace_context,
+        status_callback=status_callback,
     )
     if not isinstance(data, dict):
         return {"goals": [], "events": [], "activities": []}
