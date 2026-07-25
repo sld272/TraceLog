@@ -1,9 +1,11 @@
-import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import {
   type Attachment,
   type Comment,
   type CommentConversation,
   type CommentMessage,
+  type GoalActivity,
+  type GoalActivityKind,
   type PipelineJobSummary,
   type Post,
   type Suggestion,
@@ -11,11 +13,20 @@ import {
   rejectGoalActivity,
 } from '@/api/client'
 import { EvidencePanel } from './EvidencePanel'
+import { GoalActivityTagger } from './GoalActivityTagger'
 import { ImageGrid } from './ImageGrid'
 import { ImageUploader } from './ImageUploader'
 import { InlineSuggestions } from './InlineSuggestions'
 import { SoulAvatar } from './SoulAvatar'
-import { ChatIcon, ChevronRightIcon, LoadingDots, RefreshCwIcon, SendIcon, TrashIcon } from '@/components/icons'
+import {
+  ChatIcon,
+  ChevronRightIcon,
+  LoadingDots,
+  MoreHorizontalIcon,
+  RefreshCwIcon,
+  SendIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import { formatAbsoluteTime, formatDateTimeAttribute, formatSmartTime } from '@/utils/date'
 import { ACTIVITY_KIND_LABELS } from '@/utils/goalActivity'
@@ -79,12 +90,34 @@ export const PostCard = memo(function PostCard({
   const [goalActivities, setGoalActivities] = useState(post.goal_activities)
   const [rejectingActivityId, setRejectingActivityId] = useState<number | null>(null)
   const [activityError, setActivityError] = useState<string | null>(null)
+  const [taggerOpen, setTaggerOpen] = useState(false)
   // detail page opens with comments expanded; the feed stays collapsed
   const [showComments, setShowComments] = useState(variant === 'detail')
+  const evidenceRef = `post:${post.post_id}`
   useEffect(() => {
     setGoalActivities(post.goal_activities)
     setActivityError(null)
   }, [post.goal_activities])
+
+  /* 幂等键是 (goal_id, evidence_ref)，所以只有帖子自己那条 ref 会挡住补标；
+     挂在本帖评论上的动态用的是 comment: 前缀，不构成冲突。 */
+  const taggedKindByGoal = useMemo(() => {
+    const map = new Map<string, GoalActivityKind>()
+    for (const activity of goalActivities) {
+      if (activity.evidence_ref === evidenceRef) map.set(activity.goal_id, activity.kind)
+    }
+    return map
+  }, [goalActivities, evidenceRef])
+
+  const closeTagger = useCallback(() => setTaggerOpen(false), [])
+
+  const addActivity = useCallback((activity: GoalActivity, goalTitle: string) => {
+    setActivityError(null)
+    setGoalActivities((current) => [
+      ...current.filter((item) => item.id !== activity.id),
+      { ...activity, goal_title: goalTitle },
+    ])
+  }, [])
 
   const rejectActivity = async (activityId: number) => {
     setRejectingActivityId(activityId)
@@ -106,7 +139,7 @@ export const PostCard = memo(function PostCard({
   }
 
   return (
-    <article id={`post-${post.post_id}`} className={styles.card}>
+    <article id={`post-${post.post_id}`} className={`${styles.card} ${taggerOpen ? styles.cardRaised : ''}`}>
       <div className={styles.header}>
         <div className={styles.author}>
           <span className={styles.userAvatar}>我</span>
@@ -125,11 +158,43 @@ export const PostCard = memo(function PostCard({
             )}
           </div>
         </div>
-        {onDeletePost && (
-          <button className={styles.postAction} onClick={onDeletePost} disabled={deletingPost} title="删除记录" aria-label="删除记录">
-            <TrashIcon />
-          </button>
-        )}
+        <div className={styles.headerActions}>
+          {/* 补标是自动识别漏了才用的低频兜底，收进「更多」里，不占显眼位置。
+              stopPropagation：搜索结果里整张卡是 role="link"，点击和 Enter/空格
+              都会跳详情页，不掐断就一打开弹层立刻被导航走；Escape 走 document
+              监听，所以这里只拦这三种。 */}
+          <div
+            className={styles.postMoreWrap}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
+            }}
+          >
+            <button
+              className={`${styles.postAction} ${styles.postActionQuiet} ${taggerOpen ? styles.postActionOn : ''}`}
+              onClick={() => setTaggerOpen((open) => !open)}
+              title="更多操作"
+              aria-label="更多操作"
+              aria-haspopup="dialog"
+              aria-expanded={taggerOpen}
+            >
+              <MoreHorizontalIcon />
+            </button>
+            {taggerOpen && (
+              <GoalActivityTagger
+                evidenceRef={evidenceRef}
+                taggedKindByGoal={taggedKindByGoal}
+                onClose={closeTagger}
+                onRecorded={addActivity}
+              />
+            )}
+          </div>
+          {onDeletePost && (
+            <button className={styles.postAction} onClick={onDeletePost} disabled={deletingPost} title="删除记录" aria-label="删除记录">
+              <TrashIcon />
+            </button>
+          )}
+        </div>
       </div>
 
       {post.content && <div id={`post-content-${post.post_id}`} className={styles.content}>{post.content}</div>}
@@ -146,12 +211,17 @@ export const PostCard = memo(function PostCard({
                 title={activity.evidence_span ?? undefined}
               >
                 <span>{label}</span>
+                {/* stopPropagation：搜索结果里整张卡是 role="link"，
+                    不掐断冒泡会边撤销边跳走 */}
                 <button
                   type="button"
                   className={styles.goalActivityUndo}
                   aria-label={`撤销${label}`}
                   disabled={rejectingActivityId !== null}
-                  onClick={() => void rejectActivity(activity.id)}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void rejectActivity(activity.id)
+                  }}
                 >
                   ×
                 </button>

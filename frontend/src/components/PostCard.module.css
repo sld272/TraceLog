@@ -14,6 +14,13 @@
   box-shadow: var(--shadow-md);
 }
 
+/* fadeInUp 的 fill-mode: both 会让 transform: translateY(0) 一直挂着，
+   .card 因此是个层叠上下文——卡内弹层的 z-index 只在卡内有效，不抬卡片的话
+   会被后面的卡片盖住。15 是为了仍然低于日期透镜那条 sticky 状态条（20）。 */
+.cardRaised {
+  z-index: 15;
+}
+
 @keyframes fadeInUp {
   from {
     opacity: 0;
@@ -79,6 +86,19 @@
   text-decoration: underline;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* 「更多」弹层的定位锚点 */
+.postMoreWrap {
+  position: relative;
+  display: inline-flex;
+}
+
 .postAction {
   display: inline-flex;
   align-items: center;
@@ -111,6 +131,22 @@
 .postAction:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+/* 「更多」不是破坏性操作，别套用删除的红色 hover */
+.postAction.postActionQuiet:hover:not(:disabled) {
+  border-color: var(--color-accent-border);
+  background: var(--color-accent-subtle);
+  color: var(--color-accent);
+}
+
+/* 弹层开着时按钮保持可见：鼠标移出卡片后 .card:hover 会断，
+   而点击打开只触发 :focus 不触发 :focus-visible，两条现有规则都兜不住 */
+.postAction.postActionOn {
+  opacity: 1;
+  color: var(--color-accent);
+  background: var(--color-accent-subtle);
+  border-color: var(--color-accent-border);
 }
 
 .content {
