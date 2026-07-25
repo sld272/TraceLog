@@ -246,6 +246,11 @@ CREATE TABLE IF NOT EXISTS goal_schedule_links (
     PRIMARY KEY (goal_id, event_id)
 );
 
+CREATE TABLE IF NOT EXISTS goal_schedule_assessments (
+    event_id     TEXT PRIMARY KEY,
+    assessed_at  REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS goal_activities (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     goal_id       TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
