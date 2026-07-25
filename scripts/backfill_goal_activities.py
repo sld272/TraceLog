@@ -1,10 +1,15 @@
 """Preview or apply goal-activity extraction over public history.
 
-Run ``--apply`` once per workspace. Writes are idempotent (``UNIQUE`` +
-``INSERT OR IGNORE``), but the judgement is not: candidates sitting on the
-confidence threshold move between runs, so repeated applies keep sweeping in
-whichever borderline rows happened to clear 0.8 that time. The effective
-threshold degrades into "cleared 0.8 at least once".
+The ledger is derived data: every row comes from a post or comment plus a goal,
+so this script is also the way to rebuild ``goal_activities`` from the source of
+truth if that table is ever lost or corrupted.
+
+In normal operation, though, run ``--apply`` once per workspace. Writes are
+idempotent (``UNIQUE`` + ``INSERT OR IGNORE``), but the judgement is not:
+candidates sitting on the confidence threshold move between runs, so repeated
+applies over an intact table keep sweeping in whichever borderline rows happened
+to clear 0.8 that time. The effective threshold degrades into "cleared 0.8 at
+least once".
 """
 
 from __future__ import annotations
