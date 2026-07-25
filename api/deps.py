@@ -11,7 +11,7 @@ from openai import OpenAI
 from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
-from core import db, logging_service, memory_events_service, memory_unit_service, record_service, schedule_service, vector_index_service, vectorstore, workspace_service
+from core import db, goal_schedule_service, logging_service, memory_events_service, memory_unit_service, record_service, schedule_service, vector_index_service, vectorstore, workspace_service
 from core.app_services import job_service
 from core.app_services.api_runtime import ApiRuntime, JobWorker
 from core.cli.config import CONFIG_FILE, normalize_vision_config, normalize_web_search_config
@@ -193,17 +193,27 @@ def _start_schedule_sync_task() -> None:
 
 async def _schedule_sync_loop() -> None:
     while True:
-        try:
-            await run_sync(schedule_service.ScheduleService().sync)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logging_service.log_event(
-                "schedule_sync_failed",
-                level="WARNING",
-                error_type=type(exc).__name__,
-            )
+        await _run_schedule_maintenance_once()
         await asyncio.sleep(SCHEDULE_SYNC_INTERVAL_SECONDS)
+
+
+async def _run_schedule_maintenance_once() -> None:
+    try:
+        await run_sync(schedule_service.ScheduleService().sync)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logging_service.log_event(
+            "schedule_sync_failed",
+            level="WARNING",
+            error_type=type(exc).__name__,
+        )
+    runtime = _runtime
+    await run_sync(
+        goal_schedule_service.run_automation_best_effort,
+        runtime.client if runtime is not None else None,
+        runtime.model if runtime is not None else None,
+    )
 
 
 def _load_api_config(*, strict: bool = True) -> dict:
