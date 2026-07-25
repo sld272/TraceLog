@@ -246,6 +246,26 @@ CREATE TABLE IF NOT EXISTS goal_schedule_links (
     PRIMARY KEY (goal_id, event_id)
 );
 
+CREATE TABLE IF NOT EXISTS goal_activities (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id       TEXT NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL
+                      CHECK(kind IN ('commitment','progress','blocked','milestone','scheduled')),
+    source        TEXT NOT NULL CHECK(source IN ('auto','manual','schedule')),
+    evidence_ref  TEXT NOT NULL,   -- post:{id} | comment:{id} | schedule:{event_id}
+    evidence_span TEXT,            -- 引用的原文片段；source=schedule 时为 NULL
+    confidence    REAL,            -- source=manual/schedule 时为 NULL
+    status        TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','rejected')),
+    created_at    REAL NOT NULL,
+    decided_at    REAL,            -- 置 rejected 的时刻
+    UNIQUE(goal_id, evidence_ref)
+);
+
+CREATE INDEX IF NOT EXISTS idx_goal_activities_goal
+    ON goal_activities(goal_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_goal_activities_ref
+    ON goal_activities(evidence_ref);
+
 CREATE TABLE IF NOT EXISTS suggestions (
     id             TEXT PRIMARY KEY,
     kind           TEXT NOT NULL CHECK(kind IN ('goal', 'schedule')),
