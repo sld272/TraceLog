@@ -524,7 +524,7 @@ class ApiManagementTest(unittest.TestCase):
         self.assertFalse(payload["restart_required"])
         self.assertEqual("reload boom", payload["reload_error"])
 
-    def test_goal_routes_cover_crud_status_focus_and_progress(self) -> None:
+    def test_goal_routes_cover_crud_status_focus_and_activities(self) -> None:
         with self._client() as client:
             create_response = client.post(
                 "/goals",
@@ -541,7 +541,18 @@ class ApiManagementTest(unittest.TestCase):
                 f"/goals/{goal_id}",
                 json={"status": "paused", "focus": False},
             )
-            progress_response = client.post(f"/goals/{goal_id}/progress")
+            activity_response = client.post(
+                f"/goals/{goal_id}/activities",
+                json={
+                    "kind": "progress",
+                    "evidence_ref": "post:goal-api",
+                    "evidence_span": "完成了可演示版本",
+                },
+            )
+            activities_response = client.get(f"/goals/{goal_id}/activities")
+            activity_id = activity_response.json()["id"]
+            reject_response = client.post(f"/goals/activities/{activity_id}/reject")
+            activities_after_reject = client.get(f"/goals/{goal_id}/activities")
             delete_response = client.delete(f"/goals/{goal_id}")
             missing_response = client.patch("/goals/missing", json={"status": "done"})
 
@@ -550,7 +561,16 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual([goal_id], [goal["id"] for goal in list_response.json()])
         self.assertEqual("paused", patch_response.json()["status"])
         self.assertFalse(patch_response.json()["focus"])
-        self.assertIsNotNone(progress_response.json()["last_progress_at"])
+        self.assertEqual("manual", activity_response.json()["source"])
+        self.assertEqual("goal-api", activity_response.json()["post_id"])
+        self.assertEqual(
+            [activity_id],
+            [item["id"] for item in activities_response.json()["activities"]],
+        )
+        self.assertEqual(1, activities_response.json()["stats"]["counts"]["progress"])
+        self.assertEqual("rejected", reject_response.json()["status"])
+        self.assertEqual([], activities_after_reject.json()["activities"])
+        self.assertEqual(0, activities_after_reject.json()["stats"]["counts"]["progress"])
         self.assertEqual(200, delete_response.status_code)
         self.assertEqual(404, missing_response.status_code)
 

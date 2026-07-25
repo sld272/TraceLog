@@ -176,27 +176,12 @@ def set_focus(goal_id: str, focus: bool) -> dict[str, Any] | None:
     return update_goal(goal_id, focus=focus)
 
 
-def mark_progress(goal_id: str, *, at: float | None = None) -> dict[str, Any] | None:
-    if get_goal(goal_id) is None:
-        return None
-    now = db.now_ts() if at is None else float(at)
-    db.execute(
-        """
-        UPDATE goals
-        SET last_progress_at = ?, focus = CASE WHEN horizon = 'short' THEN 1 ELSE focus END,
-            updated_at = ?
-        WHERE id = ?
-        """,
-        (now, now, goal_id),
-    )
-    return get_goal(goal_id)
-
-
 def delete_goal(goal_id: str) -> bool | None:
     if get_goal(goal_id) is None:
         return None
     with db.transaction() as conn:
         conn.execute("DELETE FROM goal_schedule_links WHERE goal_id = ?", (goal_id,))
+        conn.execute("DELETE FROM goal_activities WHERE goal_id = ?", (goal_id,))
         conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
     return True
 

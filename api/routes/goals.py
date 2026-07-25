@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from api.deps import run_sync
-from core import goal_schedule_service, goal_service
+from core import goal_activity_service, goal_schedule_service, goal_service
 
 router = APIRouter(prefix="/goals", tags=["goals"])
 
@@ -26,6 +26,15 @@ class UpdateGoalRequest(BaseModel):
     horizon: Literal["short", "long"] | None = None
     status: Literal["active", "done", "abandoned", "paused"] | None = None
     focus: bool | None = None
+
+
+class CreateGoalActivityRequest(BaseModel):
+    kind: Literal["commitment", "progress", "blocked", "milestone", "scheduled"]
+    evidence_ref: str = Field(min_length=1, max_length=1000)
+    # 手动补标不强制引文：用户亲手指定了这条证据，引文没有解释价值，而自动截取
+    # 的片段是假引文（并非判定依据）。只有 source=auto 才强制，见
+    # goal_activity_service._normalize_record。
+    evidence_span: str | None = Field(default=None, max_length=4000)
 
 
 class LinkScheduleRequest(BaseModel):
@@ -75,12 +84,39 @@ async def update_goal(goal_id: str, request: UpdateGoalRequest):
     return goal
 
 
-@router.post("/{goal_id}/progress")
-async def mark_goal_progress(goal_id: str):
-    goal = await run_sync(goal_service.mark_progress, goal_id)
-    if goal is None:
+@router.get("/{goal_id}/activities")
+async def list_goal_activities(goal_id: str):
+    if await run_sync(goal_service.get_goal, goal_id) is None:
         raise HTTPException(status_code=404, detail="goal not found")
-    return goal
+    activities = await run_sync(goal_activity_service.list_for_goal, goal_id)
+    stats = await run_sync(goal_activity_service.stats_for_goal, goal_id)
+    return {"activities": activities, "stats": stats}
+
+
+@router.post("/{goal_id}/activities")
+async def create_goal_activity(goal_id: str, request: CreateGoalActivityRequest):
+    try:
+        activity = await run_sync(
+            goal_activity_service.record,
+            goal_id,
+            request.kind,
+            "manual",
+            request.evidence_ref,
+            evidence_span=request.evidence_span,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if activity is None:
+        raise HTTPException(status_code=404, detail="goal not found")
+    return activity
+
+
+@router.post("/activities/{activity_id}/reject")
+async def reject_goal_activity(activity_id: int):
+    activity = await run_sync(goal_activity_service.reject, activity_id)
+    if activity is None:
+        raise HTTPException(status_code=404, detail="goal activity not found")
+    return activity
 
 
 @router.get("/{goal_id}/schedule")

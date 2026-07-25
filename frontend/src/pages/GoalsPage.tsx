@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   type CreateScheduleEventInput,
   type Goal,
+  type GoalActivities,
+  type GoalActivity,
+  type GoalActivityKind,
   type GoalHorizon,
   type GoalSchedule,
   type GoalStatus,
@@ -11,9 +14,10 @@ import {
   deleteGoal,
   getGoalSchedule,
   linkGoalSchedule,
+  listGoalActivities,
   listGoals,
   listScheduleEvents,
-  markGoalProgress,
+  postIdFromEvidenceRef,
   unlinkGoalSchedule,
   updateGoal,
   updateGoalScheduleExpectation,
@@ -23,6 +27,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Notice } from '@/components/Notice'
 import { ScheduleEventDrawer } from '@/components/ScheduleEventDrawer'
 import { PlusIcon } from '@/components/icons'
+import { formatRoute } from '@/router'
 import { formatAbsoluteTime } from '@/utils/date'
 import { eventDateKey, formatEventTime, localDateKey, monthDayLabel, todayKey } from '@/utils/schedule'
 import styles from './WorkspacePages.module.css'
@@ -139,19 +144,6 @@ export function GoalsPage() {
     }
   }
 
-  const progressGoal = async (goal: Goal) => {
-    setBusyId(goal.id)
-    setError(null)
-    try {
-      const updated = await markGoalProgress(goal.id)
-      setGoals((current) => replaceGoal(current, updated))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '记录推进失败')
-    } finally {
-      setBusyId(null)
-    }
-  }
-
   const removeSelected = async () => {
     if (!selectedGoal) return
     setSaving(true)
@@ -208,7 +200,6 @@ export function GoalsPage() {
                         busy={busyId === goal.id}
                         onEdit={() => openEdit(goal)}
                         onPatch={(changes) => void patchGoal(goal, changes)}
-                        onProgress={() => void progressGoal(goal)}
                       />
                     ))}
                   </div>
@@ -257,13 +248,11 @@ function GoalRow({
   busy,
   onEdit,
   onPatch,
-  onProgress,
 }: {
   goal: Goal
   busy: boolean
   onEdit: () => void
   onPatch: (changes: Partial<Goal>) => void
-  onProgress: () => void
 }) {
   return (
     <article className={styles.itemCard}>
@@ -291,9 +280,6 @@ function GoalRow({
                   {goal.focus ? '取消关注' : '设为关注'}
                 </button>
               )}
-              <button disabled={busy} onClick={onProgress}>
-                记录推进
-              </button>
               <button disabled={busy} onClick={() => onPatch({ status: 'done' })}>
                 完成
               </button>
@@ -386,7 +372,12 @@ function GoalDrawer({
         />
         <span>作为当前关注（仅短期目标）</span>
       </label>
-      {mode === 'edit' && goalId && <GoalScheduleSection goalId={goalId} goals={goals} />}
+      {mode === 'edit' && goalId && (
+        <>
+          <GoalActivitySection key={goalId} goalId={goalId} />
+          <GoalScheduleSection goalId={goalId} goals={goals} />
+        </>
+      )}
       <div className={styles.drawerActions}>
         {mode === 'edit' ? (
           <button className={styles.dangerButton} onClick={onDelete} disabled={saving}>删除</button>
@@ -397,6 +388,124 @@ function GoalDrawer({
       </div>
     </aside>
   )
+}
+
+const ACTIVITY_KINDS: GoalActivityKind[] = [
+  'commitment',
+  'progress',
+  'blocked',
+  'milestone',
+  'scheduled',
+]
+
+const ACTIVITY_KIND_LABELS: Record<GoalActivityKind, string> = {
+  commitment: '承诺',
+  progress: '进展',
+  blocked: '卡住',
+  milestone: '里程碑',
+  scheduled: '已排期',
+}
+
+function GoalActivitySection({ goalId }: { goalId: string }) {
+  const [data, setData] = useState<GoalActivities | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setData(await listGoalActivities(goalId))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '目标动态加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [goalId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  return (
+    <section className={styles.goalActivityBlock}>
+      <div className={styles.goalActivityTitle}>目标动态</div>
+      {error && <p className={styles.goalActivityError}>{error}</p>}
+      {loading ? (
+        <p className={styles.groupEmpty}>加载中...</p>
+      ) : data ? (
+        <>
+          <div className={styles.goalActivityStats}>
+            {ACTIVITY_KINDS.map((kind) => (
+              <div key={kind} className={styles.goalActivityStat}>
+                <strong>{data.stats.counts[kind]}</strong>
+                <span>{ACTIVITY_KIND_LABELS[kind]}</span>
+              </div>
+            ))}
+          </div>
+          <div className={styles.goalActivityLatest}>
+            <span>
+              最近进展
+              <strong>
+                {data.stats.last_progress_at
+                  ? formatAbsoluteTime(data.stats.last_progress_at)
+                  : '暂无'}
+              </strong>
+            </span>
+            <span>
+              最近里程碑
+              <strong>
+                {data.stats.last_milestone_at
+                  ? formatAbsoluteTime(data.stats.last_milestone_at)
+                  : '暂无'}
+              </strong>
+            </span>
+          </div>
+          <div className={styles.goalActivitySubTitle}>推进时间线</div>
+          {data.activities.length > 0 ? (
+            <div className={styles.goalActivityTimeline}>
+              {data.activities.map((activity) => (
+                <GoalActivityItem key={activity.id} activity={activity} />
+              ))}
+            </div>
+          ) : (
+            <p className={styles.groupEmpty}>还没有目标动态。</p>
+          )}
+        </>
+      ) : null}
+    </section>
+  )
+}
+
+function GoalActivityItem({ activity }: { activity: GoalActivity }) {
+  const route = activityPostRoute(activity)
+  return (
+    <article className={styles.goalActivityItem}>
+      <div className={styles.goalActivityItemHeader}>
+        <span className={styles.goalActivityKind}>{ACTIVITY_KIND_LABELS[activity.kind]}</span>
+        <time>{formatAbsoluteTime(activity.created_at)}</time>
+      </div>
+      <p className={styles.goalActivityEvidence}>
+        {activity.evidence_span ? `“${activity.evidence_span}”` : '来自已排期的日程'}
+      </p>
+      {route && (
+        <a className={styles.goalActivityLink} href={route}>
+          查看原帖
+        </a>
+      )}
+    </article>
+  )
+}
+
+function activityPostRoute(activity: GoalActivity): string | null {
+  const postId = activity.post_id ?? postIdFromEvidenceRef(activity.evidence_ref)
+  if (!postId) return null
+  const comment = /^comment:(\d+)$/.exec(activity.evidence_ref)
+  return formatRoute({
+    kind: 'post',
+    postId,
+    highlight: comment?.[1] ? `comment-${comment[1]}` : undefined,
+  })
 }
 
 function shiftDays(key: string, delta: number): string {

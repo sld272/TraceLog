@@ -29,9 +29,10 @@ class GoalServiceTest(unittest.TestCase):
         self.assertTrue(created["id"].startswith("g_"))
         self.assertEqual([created["id"]], [goal["id"] for goal in goal_service.list_active_short_term()])
 
-        progressed = goal_service.mark_progress(created["id"], at=100.0)
-        self.assertEqual(100.0, progressed["last_progress_at"])
-        self.assertTrue(progressed["focus"])
+        db.execute(
+            "UPDATE goals SET created_at = 100.0, updated_at = 100.0 WHERE id = ?",
+            (created["id"],),
+        )
 
         current = goal_service.list_current_focus(now=100.0 + 29 * goal_service.DAY_SECONDS)
         self.assertEqual([created["id"]], [goal["id"] for goal in current])

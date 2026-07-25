@@ -125,6 +125,7 @@ export interface Soul {
 
 export type GoalHorizon = 'short' | 'long'
 export type GoalStatus = 'active' | 'done' | 'abandoned' | 'paused'
+export type GoalActivityKind = 'commitment' | 'progress' | 'blocked' | 'milestone' | 'scheduled'
 
 export interface Goal {
   id: string
@@ -137,6 +138,31 @@ export interface Goal {
   last_progress_at: number | null
   created_at: number
   updated_at: number
+}
+
+export interface GoalActivity {
+  id: number
+  goal_id: string
+  kind: GoalActivityKind
+  source: 'auto' | 'manual' | 'schedule'
+  evidence_ref: string
+  evidence_span: string | null
+  confidence: number | null
+  status: 'active' | 'rejected'
+  created_at: number
+  decided_at: number | null
+  post_id: string | null
+}
+
+export interface GoalActivityStats {
+  counts: Record<GoalActivityKind, number>
+  last_progress_at: number | null
+  last_milestone_at: number | null
+}
+
+export interface GoalActivities {
+  activities: GoalActivity[]
+  stats: GoalActivityStats
 }
 
 interface SuggestionBase {
@@ -800,8 +826,27 @@ export function updateGoal(goalId: string, changes: Partial<Goal>) {
   })
 }
 
-export function markGoalProgress(goalId: string) {
-  return request<Goal>(`/goals/${goalId}/progress`, {
+export function listGoalActivities(goalId: string) {
+  return request<GoalActivities>(`/goals/${goalId}/activities`)
+}
+
+export function recordGoalActivity(
+  goalId: string,
+  input: {
+    kind: GoalActivityKind
+    evidence_ref: string
+    /** 手动补标可省略：用户亲手指定了证据，引文无解释价值。仅 auto 强制。 */
+    evidence_span?: string | null
+  },
+) {
+  return request<GoalActivity>(`/goals/${goalId}/activities`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export function rejectGoalActivity(activityId: number) {
+  return request<GoalActivity>(`/goals/activities/${activityId}/reject`, {
     method: 'POST',
     body: JSON.stringify({}),
   })
