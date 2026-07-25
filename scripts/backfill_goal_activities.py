@@ -1,4 +1,11 @@
-"""Preview or apply goal-activity extraction over public history."""
+"""Preview or apply goal-activity extraction over public history.
+
+Run ``--apply`` once per workspace. Writes are idempotent (``UNIQUE`` +
+``INSERT OR IGNORE``), but the judgement is not: candidates sitting on the
+confidence threshold move between runs, so repeated applies keep sweeping in
+whichever borderline rows happened to clear 0.8 that time. The effective
+threshold degrades into "cleared 0.8 at least once".
+"""
 
 from __future__ import annotations
 
@@ -58,7 +65,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="写入目标动态台账；默认仅预览",
+        help="写入目标动态台账（每个工作区只跑一次）；默认仅预览",
     )
     return parser.parse_args(argv)
 
