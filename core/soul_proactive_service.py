@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
-from core import db
+from core import chat_service, db, logging_service, soul_service
 from core.cli.config import normalize_proactive_message_config
+from core.llm.types import LLMClient
 
 DAY_SECONDS = 86_400.0
 SCAN_COOLDOWN_SECONDS = DAY_SECONDS
@@ -157,6 +159,112 @@ def scan_for_candidates(
             last_user_activity_at=last_user_activity_at,
             silent_for_days=silent_for_days,
         )
+
+
+def run_proactive_message(
+    config: dict[str, Any],
+    client: LLMClient,
+    model: str,
+    *,
+    now: float | None = None,
+) -> chat_service.ChatMessage | None:
+    """Send the first letter produced by the ordered eligible SOULs."""
+    from core.llm import soul_letter_router
+
+    current = db.now_ts() if now is None else float(now)
+    decision = scan_for_candidates(config, now=current)
+    if not decision.should_call_llm:
+        return None
+
+    for soul_name in decision.candidate_souls:
+        thread = chat_service.get_or_create_thread(soul_name)
+        draft = soul_letter_router.call_soul_letter(
+            client,
+            model,
+            soul_name=soul_name,
+            persona=soul_service.read_soul_content(soul_name),
+            silent_for_days=int(decision.silent_for_days),
+            trace_context={
+                "channel": "proactive_message",
+                "thread_id": thread.id,
+            },
+        )
+        if draft is None:
+            continue
+
+        def persist_letter(
+            conn: sqlite3.Connection,
+            message_id: int,
+            sent_at: float,
+        ) -> None:
+            _insert_soul_letter_rows(
+                conn,
+                message_id,
+                sent_at,
+                material_post_ids=draft.material_post_ids,
+            )
+
+        message = chat_service.append_unprompted_assistant_message(
+            thread.id,
+            draft.message,
+            metadata={
+                "status": "ok",
+                "proactive_message": True,
+            },
+            transaction_hook=persist_letter,
+        )
+        logging_service.log_event(
+            "soul_proactive_message_sent",
+            soul_name=soul_name,
+            thread_id=thread.id,
+            message_id=message.id,
+            material_post_count=len(draft.material_post_ids),
+        )
+        return message
+    return None
+
+
+def run_proactive_message_best_effort(
+    config: dict[str, Any],
+    client: LLMClient | None,
+    model: str | None,
+) -> chat_service.ChatMessage | None:
+    """Run proactive delivery without allowing it to fail other maintenance."""
+    if not proactive_message_enabled(config) or client is None or not model:
+        return None
+    try:
+        return run_proactive_message(config, client, model)
+    except Exception as exc:
+        logging_service.log_event(
+            "soul_proactive_message_failed",
+            level="WARNING",
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        return None
+
+
+def _insert_soul_letter_rows(
+    conn: sqlite3.Connection,
+    message_id: int,
+    sent_at: float,
+    *,
+    material_post_ids: tuple[str, ...],
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO soul_letters(message_id, sent_at)
+        VALUES (?, ?)
+        """,
+        (message_id, sent_at),
+    )
+    conn.executemany(
+        """
+        INSERT INTO soul_message_sources(message_id, post_id)
+        VALUES (?, ?)
+        """,
+        [(message_id, post_id) for post_id in material_post_ids],
+    )
 
 
 def list_unused_public_material_rows(

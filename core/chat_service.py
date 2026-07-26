@@ -6,7 +6,7 @@ import json
 import queue
 import sqlite3
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
 from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, schedule_context, soul_service, suggestion_pipeline, vision_service
@@ -657,6 +657,34 @@ def _finalize_chat_reply(
     )
 
 
+def append_unprompted_assistant_message(
+    thread_id: int,
+    content: str,
+    *,
+    metadata: dict | None = None,
+    transaction_hook: (
+        Callable[[sqlite3.Connection, int, float], None] | None
+    ) = None,
+) -> ChatMessage:
+    """Persist a SOUL speaking first — no user message precedes it.
+
+    Every other assistant row in here answers something the user just said, so
+    this is the one entry point that must NOT run the reply pipeline: no
+    ``collect_reply_suggestions`` (a proactive message is not the user's
+    evidence and must not reach the goal ledger) and no reply generation.
+    ``transaction_hook`` runs inside the same transaction as the insert, so a
+    caller's bookkeeping — which posts this letter consumed, for instance —
+    cannot survive a message that failed to persist, or vice versa.
+    """
+    return _append_message(
+        thread_id,
+        "assistant",
+        content,
+        metadata=metadata,
+        transaction_hook=transaction_hook,
+    )
+
+
 def _append_message(
     thread_id: int,
     role: str,
@@ -665,6 +693,9 @@ def _append_message(
     attachment_ids: list[str] | None = None,
     metadata: dict | None = None,
     client_request_id: str | None = None,
+    transaction_hook: (
+        Callable[[sqlite3.Connection, int, float], None] | None
+    ) = None,
 ) -> ChatMessage:
     thread = get_thread(thread_id)
     body = content.strip()
@@ -708,6 +739,8 @@ def _append_message(
             """,
             (now, now, thread_id),
         )
+        if transaction_hook is not None:
+            transaction_hook(conn, message_id, now)
     message = get_message(message_id)
     attachment_service.attach_to_chat_message(message.id, attachment_ids)
     message = get_message(message_id)
