@@ -78,8 +78,14 @@ SOUL_LETTER_PROMPT = """\
 F5_BLACKLIST = (
     "突然想到",
     "忽然想到",
+    # 副词打头的一律是自指，不必再看宾语：「突然想起来你之前说…」实测逃过了
+    # 只锚宾语的那几条（"想起来你" 中间多一个"来"字，"想起你" 就匹配不上）。
+    "突然想起",
+    "忽然想起",
+    "猛然想起",
     "我想起",
     "想起你",
+    "想起来你",
     "想起了你",
     "我记起",
     "记起你",
@@ -105,10 +111,21 @@ class SoulLetterDraft:
     material_post_ids: tuple[str, ...]
 
 
-def build_letter_material(*, now: float) -> LetterMaterial:
+def build_letter_material(*, now: float, soul_name: str) -> LetterMaterial:
+    """Assemble the letter's background, including what this SOUL already said.
+
+    Its own past comments are in here on purpose. The silence gate keeps a
+    *fresh* post out of reach, but the newest post is still material, and
+    without seeing its own reply to it the model happily writes a second
+    reaction — which reads exactly like the comment it already left. Showing
+    the reply makes the repetition self-evident, so it moves on to what it has
+    not said. Same move as fixing the fabricated-opening: change what it can
+    see, not what it is told.
+    """
     rows = soul_proactive_service.list_unused_public_material_rows(
         since=now - MATERIAL_WINDOW_DAYS * soul_proactive_service.DAY_SECONDS
     )
+    own_replies = soul_proactive_service.own_comments_by_post(soul_name)
     sections: list[str] = []
     post_ids: list[str] = []
     for row in rows:
@@ -116,10 +133,13 @@ def build_letter_material(*, now: float) -> LetterMaterial:
         absolute_time = _absolute_time(created_at)
         relative_time = memory_read.relative_time_tag(created_at, now)
         if row["item_kind"] == "post":
-            post_ids.append(str(row["post_id"]))
+            post_id = str(row["post_id"])
+            post_ids.append(post_id)
             sections.append(
                 f"### {absolute_time}（{relative_time}）\n{row['content']}"
             )
+            for reply in own_replies.get(post_id, ()):
+                sections.append(f"  - 【你当时已经回过这条】{reply}")
         else:
             sections.append(
                 f"  - {absolute_time}（{relative_time}）"
@@ -138,7 +158,7 @@ def call_soul_letter(
     trace_context: dict[str, Any] | None = None,
 ) -> SoulLetterDraft | None:
     now = db.now_ts()
-    material = build_letter_material(now=now)
+    material = build_letter_material(now=now, soul_name=soul_name)
     # 用户可能只留下过私聊动作，或所有公开帖都已被前一封信占用；
     # 这两种输入都会让公开材料为空，不能再付一次必然违背规则 7 的调用。
     if not material.text:

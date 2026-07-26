@@ -267,6 +267,27 @@ def _insert_soul_letter_rows(
     )
 
 
+def own_comments_by_post(soul_name: str) -> dict[str, tuple[str, ...]]:
+    """This SOUL's own public replies, keyed by post.
+
+    Handed to the letter prompt so a second reaction to a post it already
+    answered is visibly redundant — the silence gate stops a *fresh* post from
+    existing, but it cannot stop the model from re-reacting to an old one."""
+    rows = db.query_all(
+        """
+        SELECT post_id, content
+        FROM comments
+        WHERE role = 'assistant' AND soul_name = ? AND content <> ''
+        ORDER BY id ASC
+        """,
+        (soul_name,),
+    )
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["post_id"]), []).append(str(row["content"]))
+    return {post_id: tuple(items) for post_id, items in grouped.items()}
+
+
 def list_unused_public_material_rows(
     *,
     since: float,

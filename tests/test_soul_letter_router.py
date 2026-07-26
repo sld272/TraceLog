@@ -70,9 +70,19 @@ class SoulLetterRouterTest(unittest.TestCase):
             INSERT INTO comments(
                 post_id, soul_name, role, content, seq, created_at
             )
-            VALUES ('p-1', 'A', 'assistant', 'AI 的公开回复', 2, ?)
+            VALUES ('p-1', 'A', 'assistant', '我自己当时的回复', 2, ?)
             """,
             (NOW - 0.5 * DAY,),
+        )
+        self._insert_soul("B")
+        db.execute(
+            """
+            INSERT INTO comments(
+                post_id, soul_name, role, content, seq, created_at
+            )
+            VALUES ('p-1', 'B', 'assistant', '别的人格的回复', 3, ?)
+            """,
+            (NOW - 0.4 * DAY,),
         )
         thread_id = self._insert_thread("A")
         db.execute(
@@ -83,7 +93,7 @@ class SoulLetterRouterTest(unittest.TestCase):
             (thread_id, NOW - DAY),
         )
 
-        material = soul_letter_router.build_letter_material(now=NOW)
+        material = soul_letter_router.build_letter_material(now=NOW, soul_name="A")
 
         self.assertEqual(("p-1",), material.post_ids)
         self.assertIn("科一过了", material.text)
@@ -98,7 +108,12 @@ class SoulLetterRouterTest(unittest.TestCase):
             soul_letter_router._absolute_time(NOW - DAY),
             material.text,
         )
-        self.assertNotIn("AI 的公开回复", material.text)
+        # 自己回过的那条要在材料里、并标明已经回过——否则模型会对同一条帖子
+        # 再写一遍反应，读起来就是它自己那条评论的翻版（实测 8 封里约 3 封）。
+        self.assertIn("我自己当时的回复", material.text)
+        self.assertIn("【你当时已经回过这条】", material.text)
+        # 别的人格说了什么与它无关，进来只会诱导它接话。
+        self.assertNotIn("别的人格的回复", material.text)
         self.assertNotIn("私聊里的秘密", material.text)
 
     def test_material_source_query_excludes_posts_used_by_prior_letters(
@@ -124,7 +139,7 @@ class SoulLetterRouterTest(unittest.TestCase):
             (message_id,),
         )
 
-        material = soul_letter_router.build_letter_material(now=NOW)
+        material = soul_letter_router.build_letter_material(now=NOW, soul_name="拾迹者")
 
         self.assertEqual(("fresh",), material.post_ids)
         self.assertIn("还没说过的帖子", material.text)
@@ -139,6 +154,9 @@ class SoulLetterRouterTest(unittest.TestCase):
             "我在等你",
             "一直关注你的进展",
             "这事让人想起你之前念叨的驾校",
+            # 生产管线实测逃逸过：副词打头、宾语中间夹一个"来"字，
+            # 只锚宾语的那几条全都匹配不上。
+            "突然想起来你之前说想学深度学习",
         )
 
         for message in phrases:
