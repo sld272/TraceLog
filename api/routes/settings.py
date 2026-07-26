@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from api import deps
 from api.deps import run_sync
 from core import db, file_security, logging_service, record_service, vector_index_service, vectorstore, vision_service, web_search_service
-from core.cli.config import CONFIG_FILE, default_vision_config, default_web_search_config, normalize_vision_config, normalize_web_search_config
+from core.cli.config import CONFIG_FILE, normalize_proactive_message_config, normalize_vision_config, normalize_web_search_config
 from core.logging_service import DEFAULT_HISTORY_MAX_BYTES, DEFAULT_HISTORY_MAX_DAYS, DEFAULT_ROTATE_MAX_BYTES
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
@@ -48,6 +48,12 @@ class WebSearchSettings(BaseModel):
     cache_ttl_s: int = Field(default=1800, ge=0, le=86400)
 
 
+class ProactiveMessageSettings(BaseModel):
+    enabled: bool = False
+    silence_days: int = Field(default=7, ge=1, le=60)
+    notify_desktop: bool = True
+
+
 class ModelSettingsRequest(BaseModel):
     api_key: str | None = None
     base_url: str = Field(min_length=1)
@@ -64,6 +70,7 @@ class ModelSettingsRequest(BaseModel):
     logging: LoggingSettings | None = None
     vision: VisionSettings | None = None
     web_search: WebSearchSettings | None = None
+    proactive_message: ProactiveMessageSettings | None = None
 
 
 @router.get("/model")
@@ -127,6 +134,9 @@ def _read_model_settings() -> dict[str, Any]:
     logging_config = normalize_logging_config(config.get("logging"))
     vision = normalize_vision_config(config.get("vision"))
     web_search = normalize_web_search_config(config.get("web_search"))
+    proactive_message = normalize_proactive_message_config(
+        config.get("proactive_message")
+    )
     effective_vision = vision_service.configured_status(config)
     effective_web_search = web_search_service.configured_status(config)
     return {
@@ -173,6 +183,7 @@ def _read_model_settings() -> dict[str, Any]:
             "timeout_s": int(web_search.get("timeout_s", 8)),
             "cache_ttl_s": int(web_search.get("cache_ttl_s", 1800)),
         },
+        "proactive_message": proactive_message,
         "config_path": str(Path(CONFIG_FILE).resolve()),
     }
 
@@ -219,6 +230,17 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
     if incoming_web_search.get("tavily_api_key") is None:
         incoming_web_search["tavily_api_key"] = existing_web_search.get("tavily_api_key")
 
+    if payload.get("proactive_message") is None:
+        # 阶段 1/2 的现有前端尚未发送这个字段；此时保存模型设置不能覆盖
+        # 用户先通过后端接口写入的主动私聊配置。
+        incoming_proactive_message = normalize_proactive_message_config(
+            existing.get("proactive_message")
+        )
+    else:
+        incoming_proactive_message = normalize_proactive_message_config(
+            payload.get("proactive_message")
+        )
+
     config = {
         **{key: value for key, value in existing.items() if key != "job_worker_concurrency"},
         "api_key": api_key,
@@ -233,6 +255,7 @@ def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "logging": normalize_logging_config(payload.get("logging")),
         "vision": incoming_vision,
         "web_search": incoming_web_search,
+        "proactive_message": incoming_proactive_message,
     }
 
     missing = [key for key in ("api_key", "base_url", "model", "embedding_model") if not config.get(key)]

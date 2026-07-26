@@ -220,6 +220,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_messages_request_role
     ON chat_messages(thread_id, client_request_id, role)
     WHERE client_request_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS soul_letters (
+    message_id INTEGER PRIMARY KEY REFERENCES chat_messages(id) ON DELETE CASCADE,
+    sent_at    REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_soul_letters_sent
+    ON soul_letters(sent_at DESC);
+
+CREATE TABLE IF NOT EXISTS soul_message_sources (
+    message_id INTEGER NOT NULL REFERENCES soul_letters(message_id) ON DELETE CASCADE,
+    post_id    TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    PRIMARY KEY (message_id, post_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_soul_message_sources_post
+    ON soul_message_sources(post_id);
+
 CREATE TABLE IF NOT EXISTS goals (
     id               TEXT PRIMARY KEY,
     title            TEXT NOT NULL,

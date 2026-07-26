@@ -309,6 +309,11 @@ class ApiManagementTest(unittest.TestCase):
                         "timeout_s": 9,
                         "cache_ttl_s": 600,
                     },
+                    "proactive_message": {
+                        "enabled": True,
+                        "silence_days": 9,
+                        "notify_desktop": False,
+                    },
                 },
             )
             workspace_response = client.get("/settings/workspace")
@@ -316,6 +321,14 @@ class ApiManagementTest(unittest.TestCase):
         self.assertEqual(200, get_response.status_code)
         self.assertTrue(get_response.json()["has_api_key"])
         self.assertNotIn("sk-test-secret", json.dumps(get_response.json()))
+        self.assertEqual(
+            {
+                "enabled": False,
+                "silence_days": 7,
+                "notify_desktop": True,
+            },
+            get_response.json()["proactive_message"],
+        )
         self.assertEqual(
             {
                 "ready": False,
@@ -360,6 +373,15 @@ class ApiManagementTest(unittest.TestCase):
             },
             saved["web_search"],
         )
+        self.assertEqual(
+            {
+                "enabled": True,
+                "silence_days": 9,
+                "notify_desktop": False,
+            },
+            saved["proactive_message"],
+        )
+        self.assertEqual(saved["proactive_message"], updated["proactive_message"])
         self.assertNotIn("tavily-secret", json.dumps(updated))
 
         self.assertEqual(200, workspace_response.status_code)
@@ -370,6 +392,41 @@ class ApiManagementTest(unittest.TestCase):
         self.assertIn("web_search", status)
         self.assertIn("vector_index", status)
         self.assertIn("source_revision", status["vector_index"])
+
+    def test_settings_update_without_proactive_message_preserves_existing_value(
+        self,
+    ) -> None:
+        current = json.loads(self.config_path.read_text(encoding="utf-8"))
+        current["proactive_message"] = {
+            "enabled": True,
+            "silence_days": 11,
+            "notify_desktop": False,
+        }
+        self.config_path.write_text(json.dumps(current), encoding="utf-8")
+
+        with self._client() as client:
+            response = client.put(
+                "/settings/model",
+                json={
+                    "api_key": "",
+                    "base_url": "https://updated.invalid/v1",
+                    "model": "updated-model",
+                    "embedding_model": "updated-embedding",
+                    "reuse_embedding_config": True,
+                    "reuse_secondary_config": True,
+                },
+            )
+
+        self.assertEqual(200, response.status_code)
+        saved = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                "enabled": True,
+                "silence_days": 11,
+                "notify_desktop": False,
+            },
+            saved["proactive_message"],
+        )
 
     @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
     def test_settings_atomic_write_replaces_existing_config_with_owner_only_permissions(self) -> None:

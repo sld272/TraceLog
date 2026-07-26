@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -297,6 +298,39 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(new_worker.started)
         self.assertEqual(["old.stop", "new.start"], events)
         migrate_permissions.assert_called_once_with()
+
+    async def test_api_config_normalizes_proactive_message_for_hot_reload(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "api_key": "sk",
+                        "base_url": "https://example.invalid/v1",
+                        "model": "model",
+                        "embedding_model": "embedding",
+                        "proactive_message": {
+                            "enabled": True,
+                            "silence_days": 999,
+                            "notify_desktop": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("api.deps.CONFIG_FILE", str(config_path)):
+                config = deps._load_api_config()
+
+        self.assertEqual(
+            {
+                "enabled": True,
+                "silence_days": 60,
+                "notify_desktop": False,
+            },
+            config["proactive_message"],
+        )
 
 
 if __name__ == "__main__":

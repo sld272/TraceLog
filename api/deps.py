@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from core import db, goal_schedule_service, logging_service, memory_events_service, memory_unit_service, record_service, schedule_service, vector_index_service, vectorstore, workspace_service
 from core.app_services import job_service
 from core.app_services.api_runtime import ApiRuntime, JobWorker
-from core.cli.config import CONFIG_FILE, normalize_vision_config, normalize_web_search_config
+from core.cli.config import CONFIG_FILE, normalize_proactive_message_config, normalize_vision_config, normalize_web_search_config
 from core.llm import secondary_model
 from core.logging_service import normalize_config as normalize_logging_settings
 
@@ -237,6 +237,9 @@ def _load_api_config(*, strict: bool = True) -> dict:
     config["logging"] = normalize_logging_settings(config.get("logging"))
     config["vision"] = normalize_vision_config(config.get("vision"))
     config["web_search"] = normalize_web_search_config(config.get("web_search"))
+    config["proactive_message"] = normalize_proactive_message_config(
+        config.get("proactive_message")
+    )
     return config
 
 
@@ -245,6 +248,7 @@ def _default_api_config() -> dict:
         "logging": normalize_logging_settings(None),
         "vision": normalize_vision_config(None),
         "web_search": normalize_web_search_config(None),
+        "proactive_message": normalize_proactive_message_config(None),
     }
 
 

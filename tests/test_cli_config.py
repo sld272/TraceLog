@@ -77,6 +77,14 @@ class CliConfigTest(unittest.TestCase):
             },
             loaded["web_search"],
         )
+        self.assertEqual(
+            {
+                "enabled": False,
+                "silence_days": 7,
+                "notify_desktop": True,
+            },
+            loaded["proactive_message"],
+        )
 
     @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
     def test_first_run_writes_config_with_owner_only_permissions(self) -> None:
@@ -99,6 +107,14 @@ class CliConfigTest(unittest.TestCase):
         self.assertEqual(0o600, mode)
         saved = json.loads(Path(cli_config.CONFIG_FILE).read_text(encoding="utf-8"))
         self.assertFalse(saved["logging"]["capture_content"])
+        self.assertEqual(
+            {
+                "enabled": False,
+                "silence_days": 7,
+                "notify_desktop": True,
+            },
+            saved["proactive_message"],
+        )
 
     def test_normalize_web_search_config_clamps_values_and_cleans_provider(self) -> None:
         normalized = cli_config.normalize_web_search_config(
@@ -119,6 +135,28 @@ class CliConfigTest(unittest.TestCase):
         self.assertEqual(3, normalized["timeout_s"])
         self.assertEqual(0, normalized["cache_ttl_s"])
         self.assertNotIn("include_sources", normalized)
+
+    def test_normalize_proactive_message_config_clamps_silence_days(self) -> None:
+        too_large = cli_config.normalize_proactive_message_config(
+            {
+                "enabled": True,
+                "silence_days": 99,
+                "notify_desktop": False,
+            }
+        )
+        invalid = cli_config.normalize_proactive_message_config(
+            {"silence_days": "not-a-number"}
+        )
+
+        self.assertEqual(
+            {
+                "enabled": True,
+                "silence_days": 60,
+                "notify_desktop": False,
+            },
+            too_large,
+        )
+        self.assertEqual(7, invalid["silence_days"])
 
 
 if __name__ == "__main__":

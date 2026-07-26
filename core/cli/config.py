@@ -27,6 +27,11 @@ DEFAULT_WEB_SEARCH_CONFIG = {
     "timeout_s": 8,
     "cache_ttl_s": 1800,
 }
+DEFAULT_PROACTIVE_MESSAGE_CONFIG = {
+    "enabled": False,
+    "silence_days": 7,
+    "notify_desktop": True,
+}
 WEB_SEARCH_PROVIDERS = {"tavily", "duckduckgo"}
 
 
@@ -47,6 +52,9 @@ def load_config() -> dict:
             config["logging"] = _normalize_logging_config(config.get("logging"))
             config["vision"] = normalize_vision_config(config.get("vision"))
             config["web_search"] = normalize_web_search_config(config.get("web_search"))
+            config["proactive_message"] = normalize_proactive_message_config(
+                config.get("proactive_message")
+            )
             return config
 
         print(f"[配置] 检测到配置不完整（缺少：{', '.join(missing)}），将重新配置。")
@@ -94,6 +102,7 @@ def load_config() -> dict:
         "logging": default_logging_config(),
         "vision": default_vision_config(),
         "web_search": default_web_search_config(),
+        "proactive_message": default_proactive_message_config(),
     }
     tmp = CONFIG_FILE + ".tmp"
     descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -116,6 +125,10 @@ def default_vision_config() -> dict:
 
 def default_web_search_config() -> dict:
     return dict(DEFAULT_WEB_SEARCH_CONFIG)
+
+
+def default_proactive_message_config() -> dict:
+    return dict(DEFAULT_PROACTIVE_MESSAGE_CONFIG)
 
 
 def normalize_vision_config(value) -> dict:
@@ -159,6 +172,24 @@ def normalize_web_search_config(value) -> dict:
     merged["max_results"] = _clamp_int(merged.get("max_results"), 5, 1, 8)
     merged["timeout_s"] = _clamp_int(merged.get("timeout_s"), 8, 3, 20)
     merged["cache_ttl_s"] = _clamp_int(merged.get("cache_ttl_s"), 1800, 0, 86400)
+    return merged
+
+
+def normalize_proactive_message_config(value) -> dict:
+    raw = value if isinstance(value, dict) else {}
+    merged = default_proactive_message_config()
+    merged.update(
+        {
+            key: raw.get(key)
+            for key in DEFAULT_PROACTIVE_MESSAGE_CONFIG
+            if key in raw
+        }
+    )
+    merged["enabled"] = bool(merged.get("enabled"))
+    merged["silence_days"] = _clamp_int(
+        merged.get("silence_days"), 7, 1, 60
+    )
+    merged["notify_desktop"] = bool(merged.get("notify_desktop"))
     return merged
 
 
