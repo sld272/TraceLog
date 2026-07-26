@@ -6,6 +6,7 @@ import {
   getChatThread,
   getMemorySourceImpact,
   listChatThreads,
+  markChatThreadRead,
   parseMessageSuggestions,
   rerunChatMessage,
   sendChatMessage,
@@ -32,9 +33,11 @@ interface ChatPageProps {
   soulName: string
   modelConfigured?: boolean | null
   onOpenSettings?: () => void
+  /** 标记已读之后通知外层刷新未读点。 */
+  onThreadRead?: () => void
 }
 
-export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPageProps) {
+export function ChatPage({ soulName, modelConfigured, onOpenSettings, onThreadRead }: ChatPageProps) {
   const [thread, setThread] = useState<ChatThread | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
@@ -55,6 +58,10 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
     message: string
     onConfirm: () => void
   } | null>(null)
+  const [pageVisible, setPageVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState === 'visible',
+  )
+  const markedReadRef = useRef<string | null>(null)
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
   const messagesRef = useRef<HTMLDivElement>(null)
   const historySentinelRef = useRef<HTMLDivElement>(null)
@@ -147,6 +154,31 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings }: ChatPage
       }
     }
   }, [thread?.id])
+
+  useEffect(() => {
+    const onVisibilityChange = () => setPageVisible(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [])
+
+  /* 已读时机 = 这个会话正显示在眼前、且它最新的那条消息已经在屏幕上。
+   * 不在"打开会话"那一刻一次性标完：主动私聊可能在页面开着时才到（SSE 推进来），
+   * 只认打开时刻会让它永远留一个点；反过来，窗口在后台时到达的信不算已读，
+   * 否则桌面通知点开之前点就没了。 */
+  useEffect(() => {
+    const threadId = thread?.id
+    if (!threadId || !pageVisible) return
+    const latestMessageId = maxRealMessageId(messages)
+    const key = `${threadId}:${latestMessageId}`
+    if (markedReadRef.current === key) return
+    markedReadRef.current = key
+    void markChatThreadRead(threadId)
+      .then(() => onThreadRead?.())
+      .catch(() => {
+        /* 标记失败就让下一次渲染重试，未读点多留一会儿不影响会话本身 */
+        if (markedReadRef.current === key) markedReadRef.current = null
+      })
+  }, [messages, onThreadRead, pageVisible, thread?.id])
 
   useEffect(() => {
     if (loading || !hasMoreHistory) return

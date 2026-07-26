@@ -198,7 +198,11 @@ CREATE TABLE IF NOT EXISTS chat_threads (
     title           TEXT,
     created_at      REAL NOT NULL,
     updated_at      REAL NOT NULL,
-    last_message_at REAL
+    last_message_at REAL,
+    -- Unread is derived, never stored: assistant messages created after this
+    -- watermark are unread. A counter column would drift the moment a message
+    -- is edited, rerun or truncated, all of which this schema allows.
+    last_read_at    REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_chat_threads_soul ON chat_threads(soul_name, last_message_at DESC);

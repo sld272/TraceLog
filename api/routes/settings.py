@@ -15,7 +15,15 @@ from pydantic import BaseModel, Field
 from api import deps
 from api.deps import run_sync
 from core import db, file_security, logging_service, record_service, vector_index_service, vectorstore, vision_service, web_search_service
-from core.cli.config import CONFIG_FILE, normalize_proactive_message_config, normalize_vision_config, normalize_web_search_config
+from core.cli.config import (
+    CONFIG_FILE,
+    default_proactive_message_config,
+    default_vision_config,
+    default_web_search_config,
+    normalize_proactive_message_config,
+    normalize_vision_config,
+    normalize_web_search_config,
+)
 from core.logging_service import DEFAULT_HISTORY_MAX_BYTES, DEFAULT_HISTORY_MAX_DAYS, DEFAULT_ROTATE_MAX_BYTES
 from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
@@ -359,10 +367,13 @@ def _load_config_file() -> dict[str, Any]:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
+        # No config.json yet — the first-run settings page must still load, so
+        # this branch has to answer with defaults rather than blow up.
         return {
             "logging": default_logging_config(),
             "vision": default_vision_config(),
             "web_search": default_web_search_config(),
+            "proactive_message": default_proactive_message_config(),
         }
     except json.JSONDecodeError as exc:
         raise ValueError(f"{CONFIG_FILE} 不是有效 JSON") from exc

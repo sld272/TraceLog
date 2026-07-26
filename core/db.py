@@ -45,6 +45,7 @@ def init_db() -> None:
         _migrate_suggestions_kind_constraint(conn)
         conn.executescript(sql)
         _backfill_schedule_event_accounts(conn)
+        _backfill_chat_thread_read_watermark(conn)
         conn.execute("PRAGMA foreign_keys = ON")
         mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()[0]
         if str(mode).lower() != "wal":
@@ -76,6 +77,7 @@ _COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("schedule_events", "account_id", "TEXT"),
     ("vector_index_items", "dim", "INTEGER"),
     ("vector_index_items", "embedding", "BLOB"),
+    ("chat_threads", "last_read_at", "REAL"),
 )
 
 
@@ -151,6 +153,36 @@ def _backfill_schedule_event_accounts(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "UPDATE schedule_events SET account_id = 'outlook' WHERE account_id IS NULL"
+    )
+
+
+_READ_WATERMARK_BACKFILL_KEY = "chat_threads_read_watermark_backfilled"
+
+
+def _backfill_chat_thread_read_watermark(conn: sqlite3.Connection) -> None:
+    """Treat every pre-existing thread as read, once.
+
+    Unread is derived from ``last_read_at``, so threads that predate the column
+    would otherwise report their whole history as unread on the first upgrade.
+    The meta flag is what makes this safe to call on every start: after the
+    one-time pass, a NULL watermark means the thread really has never been
+    opened, and rewriting it would silently swallow an unread letter.
+    """
+    done = conn.execute(
+        "SELECT 1 FROM meta WHERE key = ?", (_READ_WATERMARK_BACKFILL_KEY,)
+    ).fetchone()
+    if done is not None:
+        return
+    conn.execute(
+        """
+        UPDATE chat_threads
+        SET last_read_at = COALESCE(last_message_at, updated_at)
+        WHERE last_read_at IS NULL
+        """
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
+        (_READ_WATERMARK_BACKFILL_KEY, "1"),
     )
 
 

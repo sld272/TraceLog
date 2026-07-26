@@ -182,6 +182,63 @@ class ChatServiceTest(unittest.TestCase):
 
         self.assertEqual(["测试好友", "拾迹者"], [thread.soul_name for thread in threads])
 
+    def test_unread_counts_assistant_messages_after_the_read_watermark(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        chat_service.append_user_message(thread.id, "在吗")
+        chat_service.append_unprompted_assistant_message(thread.id, "路上当心些")
+
+        before = chat_service.get_thread(thread.id)
+        chat_service.mark_thread_read(thread.id)
+        after = chat_service.get_thread(thread.id)
+
+        # the user's own message never counts as unread
+        self.assertEqual(1, before.unread_count)
+        self.assertIsNone(before.last_read_at)
+        self.assertEqual(0, after.unread_count)
+        self.assertIsNotNone(after.last_read_at)
+
+    def test_unread_ignores_failed_replies(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        chat_service.append_user_message(thread.id, "在吗")
+        chat_service._append_message(
+            thread.id,
+            "assistant",
+            "",
+            metadata={"status": "failed", "error": "boom"},
+        )
+
+        self.assertEqual(0, chat_service.get_thread(thread.id).unread_count)
+        self.assertEqual([], chat_service.list_unread_threads())
+
+    def test_list_unread_threads_carries_the_newest_proactive_letter(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        chat_service.append_unprompted_assistant_message(
+            thread.id, "第一封信", metadata={"status": "ok", "proactive_message": True}
+        )
+        chat_service.append_unprompted_assistant_message(
+            thread.id, "第二封信", metadata={"status": "ok", "proactive_message": True}
+        )
+        # a plain reply after the letter must not overwrite the notification body
+        chat_service.append_unprompted_assistant_message(
+            thread.id, "普通回复", metadata={"status": "ok"}
+        )
+
+        unread = chat_service.list_unread_threads()
+
+        self.assertEqual(1, len(unread))
+        self.assertEqual("拾迹者", unread[0].soul_name)
+        self.assertEqual(3, unread[0].unread_count)
+        self.assertEqual("第二封信", unread[0].proactive_preview)
+
+    def test_list_unread_threads_skips_read_threads(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        chat_service.append_unprompted_assistant_message(
+            thread.id, "一封信", metadata={"status": "ok", "proactive_message": True}
+        )
+        chat_service.mark_thread_read(thread.id)
+
+        self.assertEqual([], chat_service.list_unread_threads())
+
     def test_build_chat_context_separates_memory_and_messages(self) -> None:
         # background (portrait + v2 memory) lands in context.context;
         # the live conversation stays in context.messages, never duplicated into

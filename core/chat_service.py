@@ -28,6 +28,24 @@ class ChatThread:
     created_at: float
     updated_at: float
     last_message_at: float | None
+    last_read_at: float | None = None
+    unread_count: int = 0
+
+
+@dataclass(frozen=True)
+class UnreadThread:
+    """One thread's unread state, plus the newest unread proactive letter.
+
+    The letter is carried here because the desktop notification needs a sender
+    and a preview, and polling one summary endpoint is the whole delivery
+    mechanism for a message the user never asked for."""
+
+    thread_id: int
+    soul_name: str
+    unread_count: int
+    last_message_at: float | None
+    proactive_message_id: int | None
+    proactive_preview: str | None
 
 
 @dataclass(frozen=True)
@@ -72,35 +90,129 @@ class ChatReplyResult:
 FAILED_REPLY_CONTENT = ""
 
 
+"""Unread is counted, not stored: assistant messages newer than the thread's
+read watermark. Failed replies (empty content) are excluded — a bubble that
+only says "回复生成失败" is not something to call the user back for."""
+_UNREAD_COUNT_SQL = """
+    (
+        SELECT COUNT(*)
+        FROM chat_messages m
+        WHERE m.thread_id = t.id
+          AND m.role = 'assistant'
+          AND m.content <> ''
+          AND m.created_at > COALESCE(t.last_read_at, 0)
+    ) AS unread_count
+"""
+_THREAD_COLUMNS = f"""
+    t.id, t.soul_name, t.title, t.created_at, t.updated_at, t.last_message_at,
+    t.last_read_at, {_UNREAD_COUNT_SQL}
+"""
+
+
 def list_chat_threads(soul_name: str | None = None) -> list[ChatThread]:
     """List chat threads, newest activity first."""
     params: tuple = ()
     where = ""
     if soul_name is not None:
         soul_service.validate_soul_name(soul_name)
-        where = "WHERE soul_name = ?"
+        where = "WHERE t.soul_name = ?"
         params = (soul_name,)
     rows = db.query_all(
         f"""
-        SELECT id, soul_name, title, created_at, updated_at, last_message_at
-        FROM chat_threads
+        SELECT {_THREAD_COLUMNS}
+        FROM chat_threads t
         {where}
-        ORDER BY COALESCE(last_message_at, updated_at, created_at) DESC, id DESC
+        ORDER BY COALESCE(t.last_message_at, t.updated_at, t.created_at) DESC, t.id DESC
         """,
         params,
     )
     return [_thread_from_row(row) for row in rows]
 
 
+def list_unread_threads() -> list[UnreadThread]:
+    """Summarize unread state across every thread, newest activity first.
+
+    Only threads with something unread come back: this is polled, and the
+    common case is an empty list."""
+    rows = db.query_all(
+        """
+        SELECT m.thread_id, m.id, m.content, m.metadata,
+               t.soul_name, t.last_message_at
+        FROM chat_messages m
+        JOIN chat_threads t ON t.id = m.thread_id
+        WHERE m.role = 'assistant'
+          AND m.content <> ''
+          AND m.created_at > COALESCE(t.last_read_at, 0)
+        ORDER BY m.thread_id ASC, m.id ASC
+        """
+    )
+    summaries: dict[int, dict] = {}
+    for row in rows:
+        thread_id = int(row["thread_id"])
+        summary = summaries.setdefault(
+            thread_id,
+            {
+                "soul_name": row["soul_name"],
+                "last_message_at": row["last_message_at"],
+                "unread_count": 0,
+                "proactive_message_id": None,
+                "proactive_preview": None,
+            },
+        )
+        summary["unread_count"] += 1
+        if _is_proactive_metadata(row["metadata"]):
+            summary["proactive_message_id"] = int(row["id"])
+            summary["proactive_preview"] = _preview(row["content"])
+    unread = [
+        UnreadThread(
+            thread_id=thread_id,
+            soul_name=str(summary["soul_name"]),
+            unread_count=int(summary["unread_count"]),
+            last_message_at=summary["last_message_at"],
+            proactive_message_id=summary["proactive_message_id"],
+            proactive_preview=summary["proactive_preview"],
+        )
+        for thread_id, summary in summaries.items()
+    ]
+    unread.sort(key=lambda item: (item.last_message_at or 0.0, item.thread_id), reverse=True)
+    return unread
+
+
+def mark_thread_read(thread_id: int, *, now: float | None = None) -> ChatThread:
+    """Move the thread's read watermark to now."""
+    get_thread(thread_id)
+    read_at = db.now_ts() if now is None else float(now)
+    db.execute(
+        "UPDATE chat_threads SET last_read_at = ? WHERE id = ?",
+        (read_at, thread_id),
+    )
+    return get_thread(thread_id)
+
+
+def _is_proactive_metadata(metadata: str | None) -> bool:
+    if not metadata:
+        return False
+    try:
+        parsed = json.loads(metadata)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict) and bool(parsed.get("proactive_message"))
+
+
+def _preview(content: str, limit: int = 80) -> str:
+    text = " ".join(str(content).split())
+    return text if len(text) <= limit else f"{text[: limit - 1]}…"
+
+
 def get_or_create_thread(soul_name: str) -> ChatThread:
     """Return the newest writable thread for a SOUL, creating one if needed."""
     _assert_soul_writable(soul_name)
     row = db.query_one(
-        """
-        SELECT id, soul_name, title, created_at, updated_at, last_message_at
-        FROM chat_threads
-        WHERE soul_name = ?
-        ORDER BY COALESCE(last_message_at, updated_at, created_at) DESC, id DESC
+        f"""
+        SELECT {_THREAD_COLUMNS}
+        FROM chat_threads t
+        WHERE t.soul_name = ?
+        ORDER BY COALESCE(t.last_message_at, t.updated_at, t.created_at) DESC, t.id DESC
         LIMIT 1
         """,
         (soul_name,),
@@ -124,10 +236,10 @@ def get_or_create_thread(soul_name: str) -> ChatThread:
 def get_thread(thread_id: int) -> ChatThread:
     """Return one chat thread."""
     row = db.query_one(
-        """
-        SELECT id, soul_name, title, created_at, updated_at, last_message_at
-        FROM chat_threads
-        WHERE id = ?
+        f"""
+        SELECT {_THREAD_COLUMNS}
+        FROM chat_threads t
+        WHERE t.id = ?
         """,
         (thread_id,),
     )
@@ -1040,6 +1152,8 @@ def _thread_from_row(row) -> ChatThread:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         last_message_at=row["last_message_at"],
+        last_read_at=row["last_read_at"],
+        unread_count=int(row["unread_count"]),
     )
 
 

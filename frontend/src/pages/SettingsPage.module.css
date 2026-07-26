@@ -195,6 +195,12 @@
   color: var(--color-text-tertiary);
 }
 
+.fieldHint {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
 .toggleRow,
 .switch {
   display: inline-flex;

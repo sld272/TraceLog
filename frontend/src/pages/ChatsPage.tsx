@@ -6,11 +6,13 @@ import styles from './ChatsPage.module.css'
 interface ChatsPageProps {
   souls: Soul[]
   loadState: 'loading' | 'ready' | 'error'
+  /** 每位好友的未读消息数，>0 时在卡片上打点。 */
+  unreadBySoul?: Record<string, number>
   onOpenChat: (soulName: string) => void
 }
 
 /** 全部私聊：左栏放不下时的完整好友列表入口。 */
-export function ChatsPage({ souls, loadState, onOpenChat }: ChatsPageProps) {
+export function ChatsPage({ souls, loadState, unreadBySoul, onOpenChat }: ChatsPageProps) {
   return (
     <div className={pageStyles.page}>
       <header className={pageStyles.header}>
@@ -29,15 +31,19 @@ export function ChatsPage({ souls, loadState, onOpenChat }: ChatsPageProps) {
         </p>
       ) : (
         <div className={styles.grid}>
-          {souls.map((soul) => (
-            <button key={soul.name} type="button" className={styles.card} onClick={() => onOpenChat(soul.name)}>
-              <SoulAvatar name={soul.name} className={styles.avatar} />
-              <span className={styles.body}>
-                <span className={styles.name}>{soul.name}</span>
-                {soul.description && <span className={styles.desc}>{soul.description}</span>}
-              </span>
-            </button>
-          ))}
+          {souls.map((soul) => {
+            const unread = unreadBySoul?.[soul.name] ?? 0
+            return (
+              <button key={soul.name} type="button" className={styles.card} onClick={() => onOpenChat(soul.name)}>
+                <SoulAvatar name={soul.name} className={styles.avatar} />
+                <span className={styles.body}>
+                  <span className={styles.name}>{soul.name}</span>
+                  {soul.description && <span className={styles.desc}>{soul.description}</span>}
+                </span>
+                {unread > 0 && <span className={styles.unread} role="img" aria-label={`${unread} 条未读`} />}
+              </button>
+            )
+          })}
         </div>
       )}
     </div>

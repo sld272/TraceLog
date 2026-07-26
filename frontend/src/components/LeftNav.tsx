@@ -23,6 +23,8 @@ interface LeftNavProps {
   memoryQueueCount?: number
   /** 进行中的目标数，>0 时在「目标」项上显示 badge */
   goalCount?: number
+  /** 每位好友的未读消息数，>0 时在私聊入口上打点。不做全局入口红点。 */
+  unreadBySoul?: Record<string, number>
   activePage: string
   onNavigate: (page: string) => void
   onAfterNavigate?: () => void
@@ -33,6 +35,7 @@ export function LeftNav({
   soulsLoadState = 'ready',
   memoryQueueCount = 0,
   goalCount = 0,
+  unreadBySoul,
   activePage,
   onNavigate,
   onAfterNavigate,
@@ -95,6 +98,7 @@ export function LeftNav({
         <div className={styles.dmList} ref={dmListRef}>
           {visibleSouls.map((soul) => {
             const active = activePage === `chat:${soul.name}`
+            const unread = unreadBySoul?.[soul.name] ?? 0
             return (
               <button
                 key={soul.name}
@@ -107,6 +111,9 @@ export function LeftNav({
                   <span className={styles.dmName}>{soul.name}</span>
                   {soul.description && <span className={styles.dmPreview}>{soul.description}</span>}
                 </span>
+                {unread > 0 && (
+                  <span className={styles.dmUnread} role="img" aria-label={`${unread} 条未读`} />
+                )}
               </button>
             )
           })}

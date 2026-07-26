@@ -35,6 +35,11 @@ import {
   updateSoul,
 } from '@/api/client'
 import { formatSmartTime } from '@/utils/date'
+import {
+  type NotificationPermissionState,
+  notificationPermission,
+  requestNotificationPermission,
+} from '@/utils/notifications'
 import { invalidateScheduleStatusCache, setCachedScheduleStatus } from '@/utils/scheduleStatusCache'
 import { Notice } from '@/components/Notice'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
@@ -107,7 +112,15 @@ interface ModelForm {
     timeout_s: number
     cache_ttl_s: number
   }
+  proactive_message: {
+    enabled: boolean
+    silence_days: number
+    notify_desktop: boolean
+  }
 }
+
+const SILENCE_DAYS_MIN = 1
+const SILENCE_DAYS_MAX = 60
 
 const DEFAULT_MODEL_FORM: ModelForm = {
   api_key: '',
@@ -144,12 +157,17 @@ const DEFAULT_MODEL_FORM: ModelForm = {
     timeout_s: 8,
     cache_ttl_s: 1800,
   },
+  proactive_message: {
+    enabled: false,
+    silence_days: 7,
+    notify_desktop: true,
+  },
 }
 
 const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语气、相处方式、边界、适合的场景，或任何灵感。系统会把它整理成完整的人格 Markdown 文件。'
 
 const TAB_SUBTITLES: Record<SettingsTab, string> = {
-  model: '模型、图片识别、网页搜索与 Embedding 配置',
+  model: '模型、图片识别、网页搜索、主动私聊与 Embedding 配置',
   souls: '排序决定首页并发回应顺序，禁用后不进入回应队列',
   schedule: '管理日历账号：Outlook 云端与本地日历',
   data: '本地 workspace 状态、数据概览与记忆检索索引',
@@ -1456,6 +1474,8 @@ function ModelSettingsPanel({
         </div>
       </section>
 
+      <ProactiveMessageSection form={form} onChange={onChange} />
+
       <section className={styles.section}>
         <div className={styles.sectionHeader}>
           <div>
@@ -2074,6 +2094,121 @@ function vectorIndexActionConfig(
   return null
 }
 
+/** 主动私聊：沉默够久时，某个人格会自己开口写一封信。默认关。 */
+function ProactiveMessageSection({
+  form,
+  onChange,
+}: {
+  form: ModelForm
+  onChange: (form: ModelForm) => void
+}) {
+  const [permission, setPermission] = useState<NotificationPermissionState>(() =>
+    notificationPermission(),
+  )
+  const proactive = form.proactive_message
+
+  const update = (patch: Partial<ModelForm['proactive_message']>) => {
+    onChange({ ...form, proactive_message: { ...proactive, ...patch } })
+  }
+
+  /* 权限只在用户亲手打开桌面通知时申请：浏览器把无手势的申请当骚扰，
+   * 而一旦被拒绝就再也弹不出来了。 */
+  const toggleNotifyDesktop = async (checked: boolean) => {
+    update({ notify_desktop: checked })
+    if (checked) setPermission(await requestNotificationPermission())
+  }
+
+  return (
+    <section className={styles.section}>
+      <div className={styles.sectionHeader}>
+        <div>
+          <h2 className={styles.sectionTitle}>主动私聊</h2>
+          <p className={styles.sectionMeta}>
+            你连着几天没动静时，某位好友会主动在私聊里写一封信。不催办、不索取回应，一个月最多两三封。
+          </p>
+        </div>
+        <div className={styles.headerControls}>
+          <StatusPill ok={proactive.enabled} label={proactive.enabled ? '已开启' : '已关闭'} />
+          <label className={styles.toggleRow}>
+            <input
+              type="checkbox"
+              checked={proactive.enabled}
+              onChange={(event) => update({ enabled: event.target.checked })}
+            />
+            <span>启用</span>
+          </label>
+        </div>
+      </div>
+      {proactive.enabled && (
+        <>
+          <div className={styles.formGrid}>
+            <NumberField
+              label="沉默多少天后开口"
+              value={proactive.silence_days}
+              min={SILENCE_DAYS_MIN}
+              max={SILENCE_DAYS_MAX}
+              hint={`${SILENCE_DAYS_MIN}–${SILENCE_DAYS_MAX} 天。从你最后一次发帖、评论或私聊算起。`}
+              onChange={(value) => update({ silence_days: value })}
+            />
+          </div>
+          <label className={styles.toggleRow}>
+            <input
+              type="checkbox"
+              checked={proactive.notify_desktop}
+              onChange={(event) => void toggleNotifyDesktop(event.target.checked)}
+            />
+            <span>信到了发桌面通知</span>
+          </label>
+          {proactive.notify_desktop && (
+            <p className={styles.sectionMeta}>{notifyPermissionHint(permission)}</p>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+function notifyPermissionHint(permission: NotificationPermissionState): string {
+  if (permission === 'granted') return '已获得系统通知权限。窗口完全关闭、只剩托盘时收不到，下次打开会在私聊列表上看到未读点。'
+  if (permission === 'denied') return '系统通知权限被拒绝了，需要去浏览器或系统设置里重新允许，否则只会有未读点。'
+  if (permission === 'unsupported') return '当前环境不支持桌面通知，只会有未读点。'
+  return '还没授权系统通知：把上面的开关关掉再打开，可以再申请一次。'
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  hint,
+}: {
+  label: string
+  value: number
+  onChange: (value: number) => void
+  min: number
+  max: number
+  hint?: string
+}) {
+  return (
+    <label className={styles.field}>
+      <span>{label}</span>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={1}
+        onChange={(event) => {
+          const next = Number.parseInt(event.target.value, 10)
+          onChange(Number.isNaN(next) ? min : next)
+        }}
+      />
+      {hint && <small className={styles.fieldHint}>{hint}</small>}
+    </label>
+  )
+}
+
 function TextField({
   label,
   value,
@@ -2176,6 +2311,11 @@ function formFromModelSettings(settings: ModelSettings): ModelForm {
       timeout_s: settings.web_search?.timeout_s ?? 8,
       cache_ttl_s: settings.web_search?.cache_ttl_s ?? 1800,
     },
+    proactive_message: {
+      enabled: settings.proactive_message?.enabled ?? false,
+      silence_days: settings.proactive_message?.silence_days ?? 7,
+      notify_desktop: settings.proactive_message?.notify_desktop ?? true,
+    },
   }
 }
 
@@ -2208,7 +2348,19 @@ function toModelUpdate(form: ModelForm): ModelSettingsUpdate {
       timeout_s: form.web_search.timeout_s,
       cache_ttl_s: form.web_search.cache_ttl_s,
     },
+    /* 后端在这个字段缺省时保留原值，所以前端必须每次都带上它，
+     * 否则"关闭主动私聊"这个动作会被当成没提过。 */
+    proactive_message: {
+      enabled: form.proactive_message.enabled,
+      silence_days: clampSilenceDays(form.proactive_message.silence_days),
+      notify_desktop: form.proactive_message.notify_desktop,
+    },
   }
+}
+
+function clampSilenceDays(value: number): number {
+  if (!Number.isFinite(value)) return 7
+  return Math.min(SILENCE_DAYS_MAX, Math.max(SILENCE_DAYS_MIN, Math.round(value)))
 }
 
 function webSearchStatusLabel(settings: ModelSettings | null): string {

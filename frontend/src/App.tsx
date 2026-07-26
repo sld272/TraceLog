@@ -2,11 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   type MemoryStatus,
   type Soul,
+  type UnreadThread,
+  getChatUnread,
   getMemoryStatus,
   getModelSettings,
   listGoals,
   listSouls,
 } from '@/api/client'
+import {
+  loadNotifiedMessageIds,
+  saveNotifiedMessageIds,
+  showDesktopNotification,
+} from '@/utils/notifications'
 import { AppShell } from '@/components/AppShell'
 import { LeftNav } from '@/components/LeftNav'
 import { SoulColorProvider } from '@/components/SoulColorContext'
@@ -25,6 +32,9 @@ import styles from '@/components/AppShell.module.css'
 
 const MODEL_CONFIG_RETRY_DELAYS = [2_000, 5_000, 10_000, 30_000]
 const SOULS_RETRY_DELAYS = [2_000, 5_000, 10_000, 30_000]
+/* 未读轮询间隔。主动私聊全局冷却 3 天，半分钟的投递延迟无关紧要，
+ * 而这一跳只是一条 SQL，静默期恒定为空列表。 */
+const UNREAD_POLL_INTERVAL_MS = 30_000
 type SoulsLoadState = 'loading' | 'ready' | 'error'
 
 export function App() {
@@ -34,6 +44,9 @@ export function App() {
   const [soulsLoadState, setSoulsLoadState] = useState<SoulsLoadState>('loading')
   const [activeGoalCount, setActiveGoalCount] = useState(0)
   const [memoryStatus, setMemoryStatus] = useState<MemoryStatus | null>(null)
+  const [unreadThreads, setUnreadThreads] = useState<UnreadThread[]>([])
+  const notifyDesktopRef = useRef(false)
+  const notifiedMessageIdsRef = useRef<Set<number>>(loadNotifiedMessageIds())
   const [postMutationSignal, setPostMutationSignal] = useState<PostMutationSignal | null>(null)
   const [homeSearch, setHomeSearch] = useState('')
   const homeScrollTopRef = useRef(0)
@@ -42,6 +55,7 @@ export function App() {
   const navKey = navKeyFromRoute(route)
   const memoryQueueCount = memoryStatus?.pending_event_count ?? 0
   const selectedDate = route.kind === 'home' ? route.date ?? null : null
+  const unreadBySoul = unreadCountsBySoul(unreadThreads)
 
   const loadSouls = useCallback(async () => {
     const data = await listSouls(true)
@@ -82,6 +96,36 @@ export function App() {
     navigate(routeFromNavKey(page))
   }, [navigate])
 
+  /* 未读轮询同时承担两件事：给私聊列表打点，以及把新到的主动私聊弹成桌面通知。
+   * 用户几乎不主动进私聊，没有这条投递路径，信写得再好等于没发。 */
+  const refreshUnread = useCallback(async () => {
+    try {
+      const data = await getChatUnread()
+      setUnreadThreads(data.threads)
+      if (!notifyDesktopRef.current) return
+      const notified = notifiedMessageIdsRef.current
+      let changed = false
+      for (const thread of data.threads) {
+        const messageId = thread.proactive_message_id
+        if (messageId === null || notified.has(messageId)) continue
+        const shown = showDesktopNotification(
+          thread.soul_name,
+          thread.proactive_preview ?? '给你发了条消息',
+          {
+            tag: `tracelog-letter-${messageId}`,
+            onClick: () => navigate({ kind: 'chat', soulName: thread.soul_name }),
+          },
+        )
+        if (!shown) continue
+        notified.add(messageId)
+        changed = true
+      }
+      if (changed) saveNotifiedMessageIds(notified)
+    } catch {
+      /* 未读只是装饰，拿不到就保持上一次的结果 */
+    }
+  }, [navigate])
+
   const notifyPostMutated = useCallback((postId: string, kind: PostMutationKind) => {
     setPostMutationSignal({ postId, kind, nonce: Date.now() })
   }, [])
@@ -116,6 +160,8 @@ export function App() {
   const loadModelConfiguration = useCallback(async () => {
     const settings = await getModelSettings()
     setModelConfigured(settings.configured)
+    const proactive = settings.proactive_message
+    notifyDesktopRef.current = Boolean(proactive?.enabled && proactive.notify_desktop)
     return settings.configured
   }, [])
 
@@ -212,6 +258,14 @@ export function App() {
     void refreshHomeContext()
   }, [refreshHomeContext])
 
+  useEffect(() => {
+    void refreshUnread()
+    const timer = window.setInterval(() => {
+      void refreshUnread()
+    }, UNREAD_POLL_INTERVAL_MS)
+    return () => window.clearInterval(timer)
+  }, [refreshUnread])
+
   const renderMain = () => {
     const isHome = route.kind === 'home'
     return (
@@ -246,6 +300,7 @@ export function App() {
           <ChatsPage
             souls={souls}
             loadState={soulsLoadState}
+            unreadBySoul={unreadBySoul}
             onOpenChat={(soulName) => navigate({ kind: 'chat', soulName })}
           />
         )}
@@ -265,6 +320,7 @@ export function App() {
             soulName={route.soulName}
             modelConfigured={modelConfigured}
             onOpenSettings={openSettings}
+            onThreadRead={refreshUnread}
           />
         )}
       </>
@@ -280,6 +336,7 @@ export function App() {
           soulsLoadState={soulsLoadState}
           memoryQueueCount={memoryQueueCount}
           goalCount={activeGoalCount}
+          unreadBySoul={unreadBySoul}
           activePage={navKey}
           onNavigate={navigateToPage}
           onAfterNavigate={closeMobileNav}
@@ -300,6 +357,14 @@ export function App() {
     />
     </SoulColorProvider>
   )
+}
+
+function unreadCountsBySoul(threads: UnreadThread[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const thread of threads) {
+    counts[thread.soul_name] = (counts[thread.soul_name] ?? 0) + thread.unread_count
+  }
+  return counts
 }
 
 function navKeyFromRoute(route: Route): string {

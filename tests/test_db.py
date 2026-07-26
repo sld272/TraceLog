@@ -277,6 +277,61 @@ class DbTest(unittest.TestCase):
         self.assertIn("metadata", chat_columns)
         self.assertIn("client_request_id", chat_columns)
 
+    def test_legacy_chat_threads_gain_read_watermark_backfilled_once(self) -> None:
+        legacy = Path(self.tmp.name) / "legacy-chat-workspace"
+        old_ws, old_path = db.WORKSPACE_DIR, db.DB_PATH
+        db.WORKSPACE_DIR = legacy
+        db.DB_PATH = legacy / "state.db"
+        try:
+            legacy.mkdir(parents=True, exist_ok=True)
+            conn = db.connect()
+            conn.execute(
+                """
+                CREATE TABLE chat_threads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    soul_name TEXT NOT NULL,
+                    title TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    last_message_at REAL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO chat_threads(id, soul_name, title, created_at, updated_at, last_message_at)
+                VALUES (1, '拾迹者', NULL, 1.0, 2.0, 5.0)
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            db.init_db()
+            columns = {row["name"] for row in db.query_all("PRAGMA table_info(chat_threads)")}
+            backfilled = require_not_none(
+                db.query_one("SELECT last_read_at FROM chat_threads WHERE id = 1")
+            )
+
+            # a thread opened after the migration starts unread again, and a
+            # second init must not silently mark it read
+            db.execute(
+                """
+                INSERT INTO chat_threads(id, soul_name, title, created_at, updated_at, last_message_at)
+                VALUES (2, '拾迹者', NULL, 6.0, 6.0, 7.0)
+                """
+            )
+            db.init_db()
+            fresh = require_not_none(
+                db.query_one("SELECT last_read_at FROM chat_threads WHERE id = 2")
+            )
+
+            self.assertIn("last_read_at", columns)
+            self.assertEqual(5.0, backfilled["last_read_at"])
+            self.assertIsNone(fresh["last_read_at"])
+        finally:
+            db.WORKSPACE_DIR = old_ws
+            db.DB_PATH = old_path
+
     def _insert_post(self, post_id: str) -> None:
         db.execute(
             """

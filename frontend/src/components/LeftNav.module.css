@@ -207,6 +207,16 @@
   text-overflow: ellipsis;
 }
 
+/* 未读点：只说明"有新的"，不报数。全局入口不做红点，只落在私聊入口上。 */
+.dmUnread {
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+}
+
 .bottomSection {
   margin-top: auto;
   padding-top: var(--space-4);

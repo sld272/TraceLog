@@ -212,6 +212,23 @@ export interface ChatThread {
   created_at: number
   updated_at: number
   last_message_at: number | null
+  last_read_at: number | null
+  unread_count: number
+}
+
+export interface UnreadThread {
+  thread_id: number
+  soul_name: string
+  unread_count: number
+  last_message_at: number | null
+  /** 最新一条未读的主动私聊；桌面通知只认它 */
+  proactive_message_id: number | null
+  proactive_preview: string | null
+}
+
+export interface ChatUnread {
+  threads: UnreadThread[]
+  total_unread: number
 }
 
 export interface ChatMessage {
@@ -413,6 +430,11 @@ export interface ModelSettings {
     timeout_s: number
     cache_ttl_s: number
   }
+  proactive_message: {
+    enabled: boolean
+    silence_days: number
+    notify_desktop: boolean
+  }
   config_path: string
   config_reloaded?: boolean
   restart_required?: boolean
@@ -448,6 +470,7 @@ export interface ModelSettingsUpdate {
     timeout_s: number
     cache_ttl_s: number
   }
+  proactive_message: ModelSettings['proactive_message']
 }
 
 export interface WorkspaceStatus {
@@ -905,6 +928,17 @@ const DEFAULT_MESSAGE_LIMIT = 30
 
 export function listChatThreads(soulName: string) {
   return request<ChatThread[]>(`/chat/${soulName}/threads`)
+}
+
+export function getChatUnread() {
+  return request<ChatUnread>('/chat/unread')
+}
+
+export function markChatThreadRead(threadId: number) {
+  return request<{ thread: ChatThread }>(`/chat/threads/${threadId}/read`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
 }
 
 export function getChatThread(threadId: number, limit = DEFAULT_MESSAGE_LIMIT, beforeMessageId?: number) {

@@ -134,6 +134,35 @@ class ApiChatStreamTest(unittest.TestCase):
 
         self.assertEqual(409, response.status_code)
 
+    def test_unread_endpoint_reports_letters_and_read_clears_them(self) -> None:
+        from core import chat_service
+
+        with self._temp_db():
+            with self._client(FakeStreamingClient()) as client:
+                thread = chat_service.get_or_create_thread("拾迹者")
+                chat_service.append_unprompted_assistant_message(
+                    thread.id,
+                    "路上当心些",
+                    metadata={"status": "ok", "proactive_message": True},
+                )
+                unread = client.get("/chat/unread").json()
+                read = client.post(f"/chat/threads/{thread.id}/read")
+                cleared = client.get("/chat/unread").json()
+
+        self.assertEqual(1, unread["total_unread"])
+        self.assertEqual("拾迹者", unread["threads"][0]["soul_name"])
+        self.assertEqual("路上当心些", unread["threads"][0]["proactive_preview"])
+        self.assertEqual(200, read.status_code)
+        self.assertEqual(0, read.json()["thread"]["unread_count"])
+        self.assertEqual({"threads": [], "total_unread": 0}, cleared)
+
+    def test_read_endpoint_404s_for_a_missing_thread(self) -> None:
+        with self._temp_db():
+            with self._client(FakeStreamingClient()) as client:
+                response = client.post("/chat/threads/9999/read")
+
+        self.assertEqual(404, response.status_code)
+
 
 if __name__ == "__main__":
     unittest.main()

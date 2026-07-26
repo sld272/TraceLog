@@ -428,6 +428,22 @@ class ApiManagementTest(unittest.TestCase):
             saved["proactive_message"],
         )
 
+    def test_settings_read_falls_back_to_defaults_without_a_config_file(self) -> None:
+        # first run: the settings page is where the user goes to create the
+        # config, so reading it must not require the config to already exist
+        self.config_path.unlink()
+
+        with self._client() as client:
+            response = client.get("/settings/model")
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertFalse(body["configured"])
+        self.assertEqual(
+            {"enabled": False, "silence_days": 7, "notify_desktop": True},
+            body["proactive_message"],
+        )
+
     @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
     def test_settings_atomic_write_replaces_existing_config_with_owner_only_permissions(self) -> None:
         from api.routes.settings import _atomic_write_json

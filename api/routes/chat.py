@@ -28,6 +28,17 @@ class UpdateChatMessageRequest(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=9)
 
 
+@router.get("/unread")
+async def get_chat_unread():
+    """Unread summary for the whole workspace — one poll drives the DM dots and
+    the desktop notification for a proactive letter."""
+    threads = await run_sync(chat_service.list_unread_threads)
+    return {
+        "threads": [asdict(thread) for thread in threads],
+        "total_unread": sum(thread.unread_count for thread in threads),
+    }
+
+
 @router.get("/threads/{thread_id}")
 async def get_chat_thread(
     thread_id: int,
@@ -69,6 +80,15 @@ async def stream_chat_thread_events(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@router.post("/threads/{thread_id}/read")
+async def mark_chat_thread_read(thread_id: int):
+    try:
+        thread = await run_sync(chat_service.mark_thread_read, thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"thread": asdict(thread)}
 
 
 @router.get("/{soul_name}/threads")

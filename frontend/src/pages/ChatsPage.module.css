@@ -57,6 +57,15 @@
   overflow: hidden;
 }
 
+.unread {
+  width: 9px;
+  height: 9px;
+  margin-left: auto;
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+}
+
 .empty {
   color: var(--color-text-tertiary);
   font-size: var(--text-sm);
