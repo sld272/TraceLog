@@ -29,7 +29,7 @@ interface ScheduleEventDrawerProps {
   /** 可写日历账号（顺序即默认优先级，Outlook 在前）。缺省视为仅 Outlook。 */
   accounts?: { id: string; label: string }[]
   /** 空白时段新建时的预填（日期 + 起止时间）。 */
-  prefill?: { date: string; start_time?: string; end_time?: string }
+  prefill?: { date: string; start_time?: string; end_time?: string; all_day?: boolean }
   /** 传入则进入编辑态（预填现有事件字段）。 */
   event?: ScheduleEvent
   onClose: () => void
@@ -51,7 +51,7 @@ export function ScheduleEventDrawer({
 
   const [subject, setSubject] = useState(() => event?.subject ?? '')
   const [date, setDate] = useState(() => (event ? eventDateKey(event) : prefill?.date ?? todayKey()))
-  const [allDay, setAllDay] = useState(() => event?.all_day ?? false)
+  const [allDay, setAllDay] = useState(() => event?.all_day ?? prefill?.all_day ?? false)
   const [startTime, setStartTime] = useState(() =>
     event ? eventClock(event.start_local) : prefill?.start_time ?? '09:00',
   )

@@ -1,9 +1,9 @@
+/* 日期透镜。它是找记录的入口，不是日历管理器，所以只表达两件事：
+ * 哪天写得多（墨色深浅），哪天有安排（暖色小点）。teal 留给"今天"和"选中"。 */
 .calCard {
-  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-bg-card);
-  box-shadow: var(--shadow-sm);
-  padding: var(--space-3) var(--space-3) var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-3);
 }
 
 .calHead {
@@ -16,7 +16,8 @@
 .calMonth {
   color: var(--color-text-primary);
   font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
 }
 
 .calNav {
@@ -27,10 +28,10 @@
 .calNavBtn {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: var(--radius-sm);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-quaternary);
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
@@ -42,13 +43,13 @@
 .calGrid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
+  gap: 1px;
 }
 
 .calDow {
-  padding: 2px 0 4px;
+  padding: 2px 0 5px;
   text-align: center;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-quaternary);
   font-size: 0.6875rem;
 }
 
@@ -56,89 +57,63 @@
   position: relative;
   display: grid;
   place-items: center;
-  aspect-ratio: 1 / 0.92;
+  aspect-ratio: 1 / 0.9;
   border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
+  color: var(--color-text-tertiary);
   font-size: var(--text-xs);
-  transition: box-shadow var(--transition-fast);
+  font-variant-numeric: tabular-nums;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .calCell.outside {
-  color: var(--color-text-tertiary);
-  opacity: 0.4;
+  color: var(--color-text-quaternary);
+  opacity: 0.35;
   pointer-events: none;
 }
 
+/* 写得越多，纸上的墨越重 */
 .calCell[data-heat="1"] {
-  background: rgba(47, 139, 125, 0.1);
-  color: var(--color-text-primary);
+  background: rgba(22, 33, 30, 0.05);
+  color: var(--color-text-secondary);
 }
 
 .calCell[data-heat="2"] {
-  background: rgba(47, 139, 125, 0.22);
+  background: rgba(22, 33, 30, 0.1);
   color: var(--color-text-primary);
 }
 
 .calCell[data-heat="3"] {
-  background: rgba(47, 139, 125, 0.38);
-  color: #fff;
+  background: rgba(22, 33, 30, 0.17);
+  color: var(--color-text-primary);
+  font-weight: var(--weight-medium);
 }
 
 .calCell:not(.outside):hover {
-  box-shadow: inset 0 0 0 1.5px var(--color-accent-border);
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 .calCell.today {
-  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+  color: var(--color-accent);
   font-weight: var(--weight-semibold);
 }
 
-.calCell.selected {
+.calCell.selected,
+.calCell.selected:hover {
   background: var(--color-accent);
-  color: #fff;
-  box-shadow: inset 0 0 0 2px var(--color-accent);
-  font-weight: var(--weight-semibold);
+  color: var(--color-text-inverse);
+  font-weight: var(--weight-medium);
 }
 
 .schedDot {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 4px;
-  height: 4px;
+  bottom: 3px;
+  width: 3px;
+  height: 3px;
   border-radius: 50%;
   background: var(--color-warm);
 }
 
 .calCell.selected .schedDot {
-  background: #fff;
-}
-
-.calFoot {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-1) 2px;
-  color: var(--color-text-tertiary);
-  font-size: 0.6875rem;
-}
-
-.k {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.kSwatch {
-  width: 8px;
-  height: 8px;
-  border-radius: 3px;
-  background: rgba(47, 139, 125, 0.28);
-}
-
-.kDot {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--color-warm);
+  background: rgba(255, 254, 251, 0.9);
 }

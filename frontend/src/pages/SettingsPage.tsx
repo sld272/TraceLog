@@ -167,7 +167,8 @@ const DEFAULT_MODEL_FORM: ModelForm = {
 const AI_SOUL_PLACEHOLDER = '写下你想要的人格。可以描述性格、语气、相处方式、边界、适合的场景，或任何灵感。系统会把它整理成完整的人格 Markdown 文件。'
 
 const TAB_SUBTITLES: Record<SettingsTab, string> = {
-  model: '模型、图片识别、网页搜索、主动私聊与 Embedding 配置',
+  /* 下面每个分区都有自己的标题，这里不必再把它们列一遍 */
+  model: 'TA 们用哪个模型思考、回应和整理记忆',
   souls: '排序决定首页并发回应顺序，禁用后不进入回应队列',
   schedule: '管理日历账号：Outlook 云端与本地日历',
   data: '本地 workspace 状态、数据概览与记忆检索索引',
@@ -1617,7 +1618,7 @@ function SoulSettingsPanel({
                   type="button"
                   onClick={() => onStartEditSoul(soul)}
                   disabled={savingSoul !== null || editing !== null}
-                  title="编辑人格文件"
+                  data-tip="编辑人格文件"
                   aria-label="编辑人格文件"
                 >
                   <PencilIcon width={13} height={13} />
@@ -1627,7 +1628,7 @@ function SoulSettingsPanel({
                   type="button"
                   onClick={() => onMoveSoul(index, -1)}
                   disabled={index === 0 || savingSoul !== null}
-                  title="上移"
+                  data-tip="上移"
                   aria-label="上移"
                 >
                   <ArrowUpIcon />
@@ -1637,7 +1638,7 @@ function SoulSettingsPanel({
                   type="button"
                   onClick={() => onMoveSoul(index, 1)}
                   disabled={index === souls.length - 1 || savingSoul !== null}
-                  title="下移"
+                  data-tip="下移"
                   aria-label="下移"
                 >
                   <ArrowDownIcon />

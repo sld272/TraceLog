@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from api.deps import get_runtime, require_configured_runtime_or_409, run_sync
-from core import attachment_service, db, retrieval, vectorstore
+from core import attachment_service, comment_service, db, retrieval, suggestion_service, vectorstore
 from core.app_services import event_service, job_service, post_mutation, public_post_pipeline
 from core.version import APP_VERSION
 from core.system_timezone import SYSTEM_TIMEZONE
@@ -283,6 +283,14 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
             "goal_activities": _goal_activities_by_post_ids([post_id])[post_id],
         },
         "comments": comments,
+        # 首页默认展开评论，追问不能等到用户点"展开"才去取
+        "conversations": [
+            {
+                "conversation": asdict(conversation),
+                "messages": [asdict(message) for message in messages],
+            }
+            for conversation, messages in comment_service.list_post_conversation_threads(post_id)
+        ],
         "jobs": job_service.list_jobs_for_post(post_id),
         "events": event_service.list_post_events(post_id),
     }
@@ -352,6 +360,7 @@ def _goal_activities_by_post_ids(
 
 def _comment_row_to_dict(row) -> dict[str, Any]:
     item = dict(row)
+    item["metadata"] = suggestion_service.metadata_with_live_suggestions(item.get("metadata"))
     item["attachments"] = [asdict(attachment) for attachment in attachment_service.list_comment_attachments(int(row["id"]))]
     return item
 

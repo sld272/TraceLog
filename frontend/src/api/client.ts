@@ -97,8 +97,15 @@ export interface PostDetail {
     goal_activities: PostGoalActivity[]
   }
   comments: Comment[]
+  /** 每位 SOUL 的整段对话（含用户追问），首条回复也在里面。 */
+  conversations: PostConversationThread[]
   jobs: Job[]
   events: PostEvent[]
+}
+
+export interface PostConversationThread {
+  conversation: CommentConversation
+  messages: CommentMessage[]
 }
 
 export interface Attachment {

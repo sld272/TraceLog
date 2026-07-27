@@ -1,4 +1,5 @@
 import { type Soul } from '@/api/client'
+import { ChevronRightIcon } from '@/components/icons'
 import { SoulAvatar } from '@/components/SoulAvatar'
 import pageStyles from './WorkspacePages.module.css'
 import styles from './ChatsPage.module.css'
@@ -18,7 +19,7 @@ export function ChatsPage({ souls, loadState, unreadBySoul, onOpenChat }: ChatsP
       <header className={pageStyles.header}>
         <div className={pageStyles.titleGroup}>
           <h1 className={pageStyles.title}>私聊</h1>
-          <p className={pageStyles.subtitle}>全部 AI 好友都在这里，挑一位继续聊。</p>
+          <p className={pageStyles.subtitle}>{souls.length} 位好友</p>
         </div>
       </header>
       {souls.length === 0 ? (
@@ -30,17 +31,24 @@ export function ChatsPage({ souls, loadState, unreadBySoul, onOpenChat }: ChatsP
               : '还没有人格，去设置里创建一个吧。'}
         </p>
       ) : (
-        <div className={styles.grid}>
+        <div className={styles.list}>
           {souls.map((soul) => {
             const unread = unreadBySoul?.[soul.name] ?? 0
             return (
-              <button key={soul.name} type="button" className={styles.card} onClick={() => onOpenChat(soul.name)}>
+              <button key={soul.name} type="button" className={styles.row} onClick={() => onOpenChat(soul.name)}>
                 <SoulAvatar name={soul.name} className={styles.avatar} />
                 <span className={styles.body}>
-                  <span className={styles.name}>{soul.name}</span>
+                  <span className={styles.nameLine}>
+                    <span className={styles.name}>{soul.name}</span>
+                    {unread > 0 && <span className={styles.unread} role="img" aria-label={`${unread} 条未读`} />}
+                  </span>
+                  {/* 人格说明在左栏永远会被截断，这一页是它唯一能说全的地方 */}
                   {soul.description && <span className={styles.desc}>{soul.description}</span>}
                 </span>
-                {unread > 0 && <span className={styles.unread} role="img" aria-label={`${unread} 条未读`} />}
+                {/* 行尾的箭头顶住右边缘：整行是可点的，右半边不能只是一片空白 */}
+                <span className={styles.rowEnd} aria-hidden="true">
+                  <ChevronRightIcon width={16} height={16} />
+                </span>
               </button>
             )
           })}

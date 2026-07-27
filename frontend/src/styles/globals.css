@@ -1,55 +1,88 @@
-/* ===== Design Tokens ===== */
+/* ===== Design Tokens =====
+ *
+ * 视觉主张：冷灰台面上放着暖白纸页。
+ *
+ * 台面（--color-bg-primary）是带绿调的浅灰，纸（--color-bg-card）是偏暖的白。
+ * 两者之间有足够明度差，卡片因此不需要边框和阴影就能立住 —— 这是整套视觉
+ * 与「白底 + 浅边 + 微阴影」的通用后台风格拉开距离的地方。
+ *
+ * 颜色只承担三件事：墨色阶做层级，teal 做唯一的行动色，clay 做唯一的暖提示色。
+ * 层级优先用字重、字号和留白表达，不要靠加颜色。
+ */
 :root {
-  /* Colors — soft social workspace palette */
-  --color-bg-primary: #f4f7f3;
-  --color-bg-secondary: #edf3ef;
-  --color-bg-tertiary: #dde8e2;
+  /* Surfaces — 台面与纸。
+   * 台面要够亮才不压抑，纸要够白才透气；两者之间留 8–9% 的明度差，
+   * 卡片就能不靠边框和阴影立住。 */
+  --color-bg-primary: #e8ece8;
+  --color-bg-secondary: #dee3de;
+  --color-bg-tertiary: #cfd6d0;
   --color-bg-card: #ffffff;
-  --color-bg-soft: #f7faf7;
-  --color-bg-hover: rgba(33, 53, 48, 0.04);
+  --color-bg-soft: #f2f5f1;
+  --color-bg-hover: rgba(22, 33, 30, 0.045);
+  --color-bg-sunken: rgba(22, 33, 30, 0.032);
 
-  /* Text */
-  --color-text-primary: #18221f;
-  --color-text-secondary: #5d6b65;
-  --color-text-tertiary: #8a958f;
-  --color-text-inverse: #ffffff;
+  /* Ink — 文本与线条共用一套墨色阶。
+   * secondary / tertiary 在纸底上都过 WCAG AA（4.5:1）；quaternary 达不到，
+   * 只能用在纯装饰性文字上，任何需要读的信息至少用 tertiary。 */
+  --color-text-primary: #182421;
+  --color-text-secondary: #4d5854;
+  --color-text-tertiary: #6b7570;
+  --color-text-quaternary: #869089;
+  --color-text-inverse: #fffefb;
 
-  /* Accent — quiet teal with warm secondary notes */
+  /* Teal — 唯一的行动色。用在可点击、当前状态、品牌处，别用来装饰 */
   --color-accent: #2f8b7d;
-  --color-accent-hover: #237365;
-  --color-accent-subtle: rgba(47, 139, 125, 0.09);
-  --color-accent-border: rgba(47, 139, 125, 0.28);
-  --color-warm: #c98655;
-  --color-warm-subtle: rgba(201, 134, 85, 0.1);
+  --color-accent-hover: #24705f;
+  --color-accent-subtle: rgba(47, 139, 125, 0.1);
+  --color-accent-border: rgba(47, 139, 125, 0.3);
+  --color-accent-ink: #1f5f54;
 
-  /* Borders */
-  --color-border: rgba(39, 55, 50, 0.08);
-  --color-border-strong: rgba(39, 55, 50, 0.15);
+  /* Clay — 唯一的暖色。留给"需要你看一眼"，不做第二品牌色 */
+  --color-warm: #b4643c;
+  --color-warm-subtle: rgba(180, 100, 60, 0.1);
+  --color-warm-border: rgba(180, 100, 60, 0.26);
+
+  /* Rules — 分隔线比边框更常用 */
+  --color-border: rgba(22, 33, 30, 0.09);
+  --color-border-strong: rgba(22, 33, 30, 0.17);
+  --color-rule: rgba(22, 33, 30, 0.07);
 
   /* Status */
-  --color-success: #3d8c5c;
-  --color-error: #c44040;
-  --color-warning: #b8860b;
+  --color-success: #2f7a55;
+  --color-error: #b04033;
+  --color-error-subtle: rgba(176, 64, 51, 0.08);
+  --color-error-border: rgba(176, 64, 51, 0.26);
+  --color-warning: #9a6b12;
 
-  /* Typography */
-  --font-sans: 'Avenir Next', 'Inter', -apple-system, BlinkMacSystemFont,
-    'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  /* Typography
+   * 衬线只给页面主标题和少数需要"手写记录"气质的地方，正文一律无衬线。
+   * 拉丁字母走系统 UI 字体，中文自然落到 PingFang / 微软雅黑。 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'HarmonyOS Sans SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-serif: 'Songti SC', 'Source Han Serif SC', 'Noto Serif SC', 'STSong',
+    'SimSun', Georgia, serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
   --text-base: 0.9375rem;
-  --text-lg: 1.125rem;
-  --text-xl: 1.5rem;
-  --text-2xl: 2rem;
+  --text-lg: 1.0625rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: 2.25rem;
 
-  --leading-tight: 1.3;
+  --leading-tight: 1.25;
+  --leading-snug: 1.45;
   --leading-normal: 1.6;
-  --leading-relaxed: 1.8;
+  --leading-relaxed: 1.78;
 
   --weight-normal: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --tracking-tight: -0.01em;
+  --tracking-wide: 0.06em;
 
   /* Spacing — 4px base */
   --space-1: 0.25rem;
@@ -58,33 +91,39 @@
   --space-4: 1rem;
   --space-5: 1.25rem;
   --space-6: 1.5rem;
+  --space-7: 1.75rem;
   --space-8: 2rem;
   --space-10: 2.5rem;
   --space-12: 3rem;
   --space-16: 4rem;
 
-  /* Radii — match the prototype's softer rounding */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 18px;
-  --radius-xl: 24px;
+  /* Radii — 收紧到"纸张裁切"的程度，不做糖果圆角 */
+  --radius-sm: 5px;
+  --radius-md: 9px;
+  --radius-lg: 13px;
+  --radius-xl: 17px;
   --radius-full: 9999px;
 
-  /* Shadows — light social surface depth */
-  --shadow-sm: 0 1px 2px rgba(39, 55, 50, 0.04);
-  --shadow-md: 0 10px 30px rgba(39, 55, 50, 0.07);
-  --shadow-lg: 0 18px 54px rgba(39, 55, 50, 0.12);
+  /* Shadows — 只给真正浮起来的东西（弹层、抽屉），卡片靠明度差立住 */
+  --shadow-sm: 0 1px 2px rgba(22, 33, 30, 0.05);
+  --shadow-md: 0 6px 20px rgba(22, 33, 30, 0.08);
+  --shadow-lg: 0 20px 48px rgba(22, 33, 30, 0.14);
 
-  /* Layout — sidebars scale with viewport width, capped on very wide screens */
-  --nav-width: clamp(236px, 16vw, 340px);
-  --panel-width: clamp(296px, 20vw, 430px);
-  --content-max-width: clamp(760px, 46vw, 980px);
+  /* Layout */
+  --nav-width: clamp(228px, 15vw, 292px);
+  --panel-width: clamp(288px, 19vw, 380px);
+  /* 首页 timeline 和帖子详情是阅读栏，按行宽定；工作台页面另用 --workspace-max-width。
+   * 工作台比阅读栏宽出一大截（放得下周视图七列、设置的三列表单、目标行尾的指标），
+   * 但也不铺满：1460px 那一档会把清单和卡片拉得又扁又空，行长也没人读得下去。
+   * 居中留白左右对称，才不会读成"少了一块右栏"。 */
+  --content-max-width: clamp(680px, 52vw, 880px);
+  --workspace-max-width: clamp(860px, 66vw, 1000px);
   --topbar-height: 58px;
 
   /* Transitions */
-  --transition-fast: 150ms ease-out;
-  --transition-normal: 200ms ease-out;
-  --transition-slow: 300ms ease-out;
+  --transition-fast: 130ms cubic-bezier(0.2, 0, 0.2, 1);
+  --transition-normal: 200ms cubic-bezier(0.2, 0, 0.2, 1);
+  --transition-slow: 320ms cubic-bezier(0.2, 0, 0.2, 1);
 }
 
 /* ===== Reset & Base ===== */
@@ -100,6 +139,7 @@ html {
   font-size: 16px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -107,14 +147,23 @@ body {
   font-size: var(--text-base);
   line-height: var(--leading-normal);
   color: var(--color-text-primary);
+  /* 光从左上来。一抹极淡的品牌绿让整屏不至于只有一个灰度——
+     强度必须压到几乎察觉不到，再重就变成"AI 生成的氛围渐变"了。 */
   background:
-    radial-gradient(circle at 22% -10%, rgba(47, 139, 125, 0.08), transparent 28rem),
-    linear-gradient(180deg, #fbfdfb 0%, var(--color-bg-primary) 26rem);
+    radial-gradient(1100px 620px at 12% -12%, rgba(47, 139, 125, 0.07), transparent 70%),
+    linear-gradient(180deg, #f0f3ef 0, var(--color-bg-primary) 26rem);
+  background-attachment: fixed;
   min-height: 100vh;
 }
 
 #root {
   min-height: 100vh;
+}
+
+/* 数字与时间统一等宽对齐，时间戳成列时不跳动 */
+time,
+[data-numeric] {
+  font-variant-numeric: tabular-nums;
 }
 
 a {
@@ -132,15 +181,18 @@ button {
   cursor: pointer;
   border: none;
   background: none;
+  color: inherit;
 }
 
 input,
-textarea {
+textarea,
+select {
   font-family: inherit;
   font-size: inherit;
   border: none;
   outline: none;
   background: none;
+  color: inherit;
 }
 
 /* Focus visible */
@@ -163,7 +215,8 @@ textarea {
 
 /* ===== Scrollbar ===== */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -171,12 +224,88 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border-strong);
+  background: rgba(22, 33, 30, 0.14);
+  border: 2px solid transparent;
+  background-clip: padding-box;
   border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-tertiary);
+  background: rgba(22, 33, 30, 0.26);
+  background-clip: padding-box;
+}
+
+/* ===== Shared primitives ===== */
+
+/* 页面主标题：宋体是这套视觉唯一的"记录本"信号，只用在这里和少数纪年数字上 */
+.pageTitle {
+  font-family: var(--font-serif);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-normal);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text-primary);
+}
+
+/* 分区小标签：大写字距，用来标记区块而不占用标题层级 */
+.eyebrow {
+  font-size: 0.6875rem;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-text-quaternary);
+  text-transform: uppercase;
+}
+
+/* ===== 悬浮说明 =====
+ * 只放图标的按钮一律带 data-tip，鼠标停住时说明它做什么。
+ * 用伪元素而不是原生 title：原生 title 有一秒多的延迟、样式不可控，
+ * 而且和这里的气泡会同时冒出来。带了 data-tip 就把 title 去掉，只留 aria-label。
+ * 靠右边缘的按钮加 data-tip-align="end"，避免气泡被容器裁掉。 */
+[data-tip] {
+  position: relative;
+}
+
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  z-index: 60;
+  padding: 4px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-text-primary);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.6875rem;
+  font-weight: var(--weight-normal);
+  line-height: 1.5;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 3px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast), visibility var(--transition-fast);
+  pointer-events: none;
+}
+
+[data-tip][data-tip-align='end']::after {
+  left: auto;
+  right: 0;
+  transform: translate(0, 3px);
+}
+
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+[data-tip][data-tip-align='end']:hover::after,
+[data-tip][data-tip-align='end']:focus-visible::after {
+  transform: translate(0, 0);
+}
+
+[data-tip]:disabled::after {
+  display: none;
 }
 
 /* ===== Keyboard shortcut tooltip (shared) ===== */
@@ -198,9 +327,8 @@ textarea {
   white-space: nowrap;
   padding: 5px var(--space-2);
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-card);
-  color: var(--color-text-secondary);
+  background: var(--color-text-primary);
+  color: rgba(255, 254, 251, 0.86);
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
   box-shadow: var(--shadow-md);
@@ -220,11 +348,10 @@ textarea {
 .kbdTipKey {
   display: inline-flex;
   align-items: center;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border-strong);
-  background: var(--color-bg-soft);
-  color: var(--color-text-tertiary);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 254, 251, 0.16);
+  color: rgba(255, 254, 251, 0.98);
   font-size: 0.6875rem;
   line-height: 1.4;
 }

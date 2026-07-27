@@ -418,6 +418,51 @@ class ApiPostsTest(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual(["拾迹者", "毒舌好友"], [item["soul_name"] for item in response.json()["comments"]])
 
+    def test_get_post_detail_inlines_follow_up_messages(self) -> None:
+        """详情要自带追问：首页默认展开评论，不会再走一次会话接口。"""
+        from core import db
+
+        with self._temp_db():
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("p-thread", "2026-06-01T10:00:00+08:00", "追问测试", 1.0, 1.0),
+            )
+            db.execute(
+                """
+                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, 1, 0, ?, ?)
+                """,
+                ("拾迹者", "souls/拾迹者.md", 1.0, 1.0),
+            )
+            for role, content, seq, created_at in [
+                ("assistant", "我陪你继续拆。", 0, 2.0),
+                ("user", "那我先试一周", 1, 3.0),
+                ("assistant", "一周后我来问你", 2, 4.0),
+            ]:
+                db.execute(
+                    """
+                    INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    ("p-thread", "拾迹者", role, content, seq, created_at),
+                )
+
+            with self._client() as client:
+                response = client.get("/posts/p-thread")
+
+        self.assertEqual(200, response.status_code)
+        body = response.json()
+        self.assertEqual(1, len(body["comments"]))
+        threads = body["conversations"]
+        self.assertEqual(["拾迹者"], [thread["conversation"]["soul_name"] for thread in threads])
+        self.assertEqual(
+            ["我陪你继续拆。", "那我先试一周", "一周后我来问你"],
+            [message["content"] for message in threads[0]["messages"]],
+        )
+
     def test_sse_event_format_includes_id_event_and_payload(self) -> None:
         from api.routes.posts import _format_sse
 

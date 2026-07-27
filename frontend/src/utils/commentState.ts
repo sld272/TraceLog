@@ -3,9 +3,30 @@ import {
   type Comment,
   type CommentConversation,
   type CommentMessage,
+  type PostConversationThread,
   type PostEvent,
 } from '@/api/client'
 import { type CommentConversationState } from '@/components/PostCard'
+
+/** 帖子详情自带的整段对话 → 按 SOUL 归档的状态。
+ *
+ * `previous` 里正在发送的那条会原样留着：服务端快照是发送前拍的，直接盖上去会
+ * 让刚打出去的追问先消失、等回复到了再闪回来。 */
+export function conversationsFromThreads(
+  threads: PostConversationThread[] | undefined,
+  previous?: Record<string, CommentConversationState>,
+): Record<string, CommentConversationState> {
+  const next: Record<string, CommentConversationState> = Object.fromEntries(
+    (threads ?? []).map((thread) => [
+      thread.conversation.soul_name,
+      toConversationState(thread.conversation, thread.messages),
+    ]),
+  )
+  for (const [soulName, state] of Object.entries(previous ?? {})) {
+    if (state.sending) next[soulName] = state
+  }
+  return next
+}
 
 export function toConversationState(
   conversation: CommentConversation,

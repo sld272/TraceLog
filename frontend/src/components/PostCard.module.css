@@ -1,17 +1,11 @@
+/* 帖子卡是"纸"。台面比它暗，所以不需要边框和阴影就能立住。
+ * 卡内的层级顺序：正文 > 好友的回应 > 时刻与操作。 */
 .card {
   position: relative;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  background: rgba(255, 255, 255, 0.8);
-  padding: var(--space-5);
-  box-shadow: var(--shadow-sm);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  padding: var(--space-8) var(--space-8) var(--space-7);
   animation: fadeInUp 200ms ease-out both;
-}
-
-.card:hover {
-  border-color: var(--color-border-strong);
-  box-shadow: var(--shadow-md);
 }
 
 /* fadeInUp 的 fill-mode: both 会让 transform: translateY(0) 一直挂着，
@@ -24,7 +18,7 @@
 @keyframes fadeInUp {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
@@ -32,48 +26,21 @@
   }
 }
 
+/* 时刻 + 操作。日期由时间线的分组锚交代，这里只报时刻。 */
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  margin-bottom: var(--space-3);
-}
-
-.author {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.userAvatar {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  flex-shrink: 0;
-  place-items: center;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--color-accent), #7fbdb2);
-  color: var(--color-text-inverse);
-  font-size: var(--text-sm);
-  font-weight: 700;
-}
-
-.userName {
-  display: block;
-  margin-top: 2px;
-  color: var(--color-text-primary);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-tight);
+  min-height: 22px;
+  margin-bottom: var(--space-2);
 }
 
 .time {
-  display: block;
-  margin-top: 2px;
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
 .timeLink {
@@ -83,7 +50,6 @@
 
 .timeLink:hover .time {
   color: var(--color-accent);
-  text-decoration: underline;
 }
 
 .headerActions {
@@ -103,12 +69,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
-  color: var(--color-text-tertiary);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-quaternary);
   opacity: 0;
   transition: background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
 }
@@ -119,34 +84,27 @@
 }
 
 .postAction:hover:not(:disabled) {
+  background: var(--color-error-subtle);
   color: var(--color-error);
-  background: rgba(196, 64, 64, 0.08);
-}
-
-.postAction:hover:not(:disabled) {
-  border-color: var(--color-error);
-  background: rgba(190, 80, 70, 0.08);
 }
 
 .postAction:disabled {
   cursor: not-allowed;
-  opacity: 0.48;
+  opacity: 0.4;
 }
 
 /* 「更多」不是破坏性操作，别套用删除的红色 hover */
 .postAction.postActionQuiet:hover:not(:disabled) {
-  border-color: var(--color-accent-border);
-  background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 /* 弹层开着时按钮保持可见：鼠标移出卡片后 .card:hover 会断，
    而点击打开只触发 :focus 不触发 :focus-visible，两条现有规则都兜不住 */
 .postAction.postActionOn {
   opacity: 1;
-  color: var(--color-accent);
-  background: var(--color-accent-subtle);
-  border-color: var(--color-accent-border);
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 .content {
@@ -157,6 +115,7 @@
   word-break: break-word;
 }
 
+/* 目标推进标记：一条低调的说明，不是按钮也不是标签堆 */
 .goalActivityChips {
   display: flex;
   flex-wrap: wrap;
@@ -168,41 +127,38 @@
   display: inline-flex;
   align-items: center;
   overflow: hidden;
-  border: 1px solid rgba(62, 132, 119, 0.24);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
   font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-  line-height: 24px;
+  line-height: 22px;
 }
 
 .goalActivityChip > span {
-  padding-left: var(--space-3);
+  padding-left: var(--space-2);
 }
 
 .goalActivityUndo {
   display: grid;
-  width: 24px;
-  height: 24px;
-  margin-left: var(--space-1);
+  width: 22px;
+  height: 22px;
   place-items: center;
   color: inherit;
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1;
-  opacity: 0.62;
+  opacity: 0.5;
   transition: background var(--transition-fast), opacity var(--transition-fast);
 }
 
 .goalActivityUndo:hover:not(:disabled),
 .goalActivityUndo:focus-visible {
-  background: rgba(62, 132, 119, 0.12);
+  background: rgba(47, 139, 125, 0.14);
   opacity: 1;
 }
 
 .goalActivityUndo:disabled {
   cursor: not-allowed;
-  opacity: 0.35;
+  opacity: 0.3;
 }
 
 .goalActivityError {
@@ -215,23 +171,21 @@
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  margin-top: var(--space-4);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-3);
 }
 
 .commentToggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  color: var(--color-text-tertiary);
-  font-size: var(--text-sm);
+  gap: 5px;
+  color: var(--color-text-quaternary);
+  font-size: var(--text-xs);
   transition: color var(--transition-fast);
 }
 
 .commentToggle:hover:not(:disabled),
 .commentToggleOn {
-  color: var(--color-accent);
+  color: var(--color-text-secondary);
 }
 
 .commentToggleChevron {
@@ -247,11 +201,16 @@
   transform: rotate(270deg);
 }
 
+/* ===== 好友的回应 =====
+ * 整段对话都不套气泡：它是这条记录的内容延伸，用排印区分（印章 + 名字 + 缩进），
+ * 不用聊天软件的灰色圆角块。行宽交给卡片，卡内不再二次收窄。 */
 .comments {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-5);
   margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-rule);
 }
 
 .comment {
@@ -263,13 +222,14 @@
 .commentThread {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  min-width: 0;
 }
 
 @keyframes fadeInLeft {
   from {
     opacity: 0;
-    transform: translateX(-4px);
+    transform: translateX(-3px);
   }
   to {
     opacity: 1;
@@ -277,17 +237,17 @@
   }
 }
 
+/* 头像是印章：方一点、小一点、实心色，一屏里几个并排也不吵 */
 .soulBadge {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   font-size: 12px;
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
 }
 
 .commentBody {
@@ -297,51 +257,42 @@
 
 .commentHeader {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: var(--space-2);
-  margin-bottom: var(--space-1);
+  margin-bottom: 3px;
 }
 
 .soulName {
   display: block;
   min-width: 0;
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
-  line-height: 20px;
 }
 
 .commentTime {
   flex-shrink: 0;
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
-  line-height: 20px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-/* bubble + actions share one fit-content column so the footer's right
-   edge (and the 回复 button) lines up with the bubble's right edge */
+/* 行宽由卡片自己的宽度决定（阅读栏已经是 880px 上限），不在卡内再收一次——
+   那会让每一行右边固定切掉一块空白。 */
 .commentMain {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  width: fit-content;
-  max-width: min(620px, 100%);
-  /* keep the bubble wide enough to fit 引用记忆 / 重跑 / 回复 on one row */
-  min-width: min(248px, 100%);
+  width: 100%;
 }
 
 .commentText {
   display: block;
   width: 100%;
-  max-width: 100%;
-  margin-top: 2px;
-  padding: 10px 14px;
-  border-radius: 4px 16px 16px 16px;
-  background: var(--color-bg-soft);
-  color: var(--color-text-primary);
+  color: var(--color-text-secondary);
   font-size: var(--text-sm);
-  line-height: var(--leading-normal);
+  line-height: var(--leading-relaxed);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -357,19 +308,21 @@
 .threadMarker {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-full);
-  background: var(--color-bg-soft);
-  color: var(--color-text-tertiary);
+  min-height: 20px;
+  color: var(--color-text-quaternary);
   font-size: var(--text-xs);
 }
 
-.threadMessages {
+/* 追问挂在首条回复下面：竖线从头像正下方垂下来（13px = 头像半宽），
+   文字回到首条回复的文字列（26 + 12 = 38px）。 */
+.threadBranch {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  margin-top: var(--space-3);
+  margin-left: 13px;
+  padding-left: calc(38px - 13px - 1px);
+  /* 这条线要看得见才算线程，用比分隔线重一档的边框色 */
+  border-left: 1px solid var(--color-border);
 }
 
 /* A collapsed-gap marker (centered divider) — it sits where the middle of the
@@ -379,7 +332,7 @@
   align-items: center;
   gap: 8px;
   align-self: stretch;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-quaternary);
   font-size: var(--text-xs);
   text-decoration: none;
 }
@@ -389,89 +342,42 @@
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--color-border);
+  background: var(--color-rule);
 }
 
 .threadMoreLink:hover {
   color: var(--color-accent);
 }
 
-/* follow-up message = chat bubble row with avatar (我 on the right) */
+/* 追问和首条回复长得一样：左边一个署名，右边一段话。没有气泡，也不左右分边——
+   一屏里同时出现方块头像、彩色气泡和右对齐，噪声比信息多。 */
+/* 线程里不再逐条挂头像：竖线已经说明这几条属于同一段对话，谁在说交给署名。 */
 .threadRow {
   display: flex;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.threadRowUser {
-  flex-direction: row-reverse;
-}
-
-.threadAvatar {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  flex-shrink: 0;
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  border-radius: var(--radius-full);
-  font-size: 12px;
-  font-weight: var(--weight-semibold);
-}
-
-.threadAvatarMe {
-  background: var(--color-accent-subtle);
-  color: var(--color-accent);
-}
-
-.threadCol {
-  display: flex;
   flex-direction: column;
+  align-items: flex-start;
   min-width: 0;
-  /* cap bubble width (matches the root comment) so long replies don't
-     stretch edge-to-edge on wide screens */
-  max-width: min(620px, 100%);
-}
-
-.threadRowUser .threadCol {
-  align-items: flex-end;
 }
 
 .threadHeader {
   display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-bottom: 2px;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: 3px;
 }
 
-.threadRowUser .threadHeader {
-  flex-direction: row-reverse;
-}
-
-.threadBubble {
-  width: fit-content;
-  max-width: 100%;
-  padding: 10px 14px;
+.threadText {
+  display: block;
+  width: 100%;
   font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-}
-
-.threadBubble p {
-  color: inherit;
+  line-height: var(--leading-relaxed);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.threadBubbleSoul {
-  border-radius: 4px 16px 16px 16px;
-  background: var(--color-bg-soft);
-  color: var(--color-text-primary);
-}
-
-.threadBubbleUser {
-  border-radius: 16px 4px 16px 16px;
-  background: var(--color-accent);
-  color: var(--color-text-inverse);
+.threadTextSoul,
+.threadTextUser {
+  color: var(--color-text-secondary);
 }
 
 .threadPending {
@@ -479,24 +385,21 @@
   align-items: center;
   min-width: 36px;
   min-height: 20px;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-quaternary);
 }
 
 .threadRole {
   display: block;
-  color: inherit;
-  font-size: 0.68rem;
-  font-weight: 700;
-  line-height: 20px;
-  opacity: 0.68;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
 
 .threadTime {
   flex-shrink: 0;
-  color: inherit;
+  color: var(--color-text-quaternary);
   font-size: var(--text-xs);
-  line-height: 20px;
-  opacity: 0.68;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -527,16 +430,15 @@
   align-items: center;
   gap: 5px;
   background: none;
-  color: var(--color-text-tertiary);
-  font-size: 12.5px;
-  font-weight: var(--weight-medium);
+  color: var(--color-text-quaternary);
+  font-size: var(--text-xs);
   line-height: 20px;
   transition: color var(--transition-fast), opacity var(--transition-fast);
 }
 
 .quietAction svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
 }
 
 .quietAction:hover:not(:disabled),
@@ -545,7 +447,7 @@
 }
 
 .quietPrimary {
-  color: var(--color-accent);
+  color: var(--color-text-tertiary);
 }
 
 .quietDanger:hover:not(:disabled) {
@@ -576,11 +478,7 @@
 }
 
 /* reply trigger + box live at the bottom of the whole thread */
-.replyArea {
-  margin-top: var(--space-2);
-}
-
-/* push 回复 to the far right of the footer, level with the bubble's edge */
+/* push 回复 to the far right of the footer, level with the card's text edge */
 .replyTrigger {
   margin-left: auto;
 }
@@ -589,10 +487,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  /* left edge aligns with the soul bubble, right edge with the 我 bubble
-     (both sit 42px = avatar + gap inside the row) */
-  width: calc(100% - 84px);
-  margin: var(--space-1) 42px 0;
+  width: 100%;
   box-sizing: border-box;
 }
 
@@ -600,11 +495,14 @@
   display: flex;
   align-items: flex-end;
   gap: var(--space-1);
-  padding: 4px 5px 4px 14px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: rgba(255, 255, 255, 0.72);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  padding: 4px 5px 4px 13px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sunken);
+  transition: background var(--transition-fast);
+}
+
+.replyRow:focus-within {
+  background: var(--color-bg-soft);
 }
 
 .replyInput {
@@ -627,7 +525,7 @@
 }
 
 .replyInput::placeholder {
-  color: var(--color-text-tertiary);
+  color: var(--color-text-quaternary);
 }
 
 .replyButtonWrap {
@@ -641,10 +539,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--color-accent);
   color: var(--color-text-inverse);
   transition: background var(--transition-fast), opacity var(--transition-fast);
@@ -656,16 +554,14 @@
 
 .replyButton:disabled {
   cursor: not-allowed;
-  background: var(--color-border-strong);
-  color: var(--color-bg-soft);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-quaternary);
 }
 
 .threadError {
-  margin-left: 42px;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid rgba(190, 80, 70, 0.18);
   border-radius: var(--radius-md);
-  background: rgba(190, 80, 70, 0.05);
+  background: var(--color-error-subtle);
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
 }
@@ -678,7 +574,7 @@
 }
 
 .threadErrorMain strong {
-  line-height: 30px;
+  line-height: 28px;
   font-weight: var(--weight-semibold);
 }
 
@@ -697,7 +593,6 @@
   color: var(--color-text-secondary);
 }
 
-
 .expandError {
   margin-top: var(--space-2);
   color: var(--color-error);
@@ -705,25 +600,22 @@
   line-height: var(--leading-normal);
 }
 
+/* 处理中：一行安静的说明，不是需要盯着的进度指示器 */
 .processing {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 30px;
+  min-height: 26px;
   margin-top: var(--space-3);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-full);
-  background: var(--color-bg-soft);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-quaternary);
   font-size: var(--text-xs);
 }
 
 .pipelineFailure {
   margin-top: var(--space-3);
   padding: var(--space-3);
-  border: 1px solid rgba(190, 80, 70, 0.24);
   border-radius: var(--radius-md);
-  background: rgba(190, 80, 70, 0.06);
+  background: var(--color-error-subtle);
 }
 
 .pipelineFailureMain {
@@ -737,7 +629,7 @@
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
   font-weight: var(--weight-semibold);
-  line-height: 30px;
+  line-height: 28px;
 }
 
 .pipelineDiagnostics {
@@ -748,7 +640,7 @@
   margin-top: var(--space-2);
   padding: var(--space-2);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.56);
+  background: var(--color-bg-card);
   color: var(--color-error);
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -772,9 +664,9 @@
 }
 
 .pipelineDetails summary {
-  min-height: 30px;
+  min-height: 28px;
   cursor: pointer;
-  line-height: 30px;
+  line-height: 28px;
   white-space: nowrap;
 }
 
@@ -787,20 +679,18 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-1);
-  min-height: 30px;
+  min-height: 28px;
   padding: 0 var(--space-3);
-  border: 1px solid rgba(190, 80, 70, 0.32);
-  border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.74);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
   color: var(--color-error);
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
-  transition: background var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
+  transition: background var(--transition-fast), opacity var(--transition-fast);
 }
 
 .pipelineRetryButton:hover:not(:disabled) {
-  border-color: var(--color-error);
-  background: rgba(190, 80, 70, 0.08);
+  background: rgba(176, 64, 51, 0.12);
 }
 
 .pipelineRetryButton:disabled {
@@ -809,6 +699,11 @@
 }
 
 @media (max-width: 640px) {
+  /* 窄屏上留白要让位给字：四边都按桌面端来会把行宽压得太短 */
+  .card {
+    padding: var(--space-6) var(--space-5) var(--space-5);
+  }
+
   .pipelineFailureMain {
     align-items: flex-start;
     flex-direction: column;

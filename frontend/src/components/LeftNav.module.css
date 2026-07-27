@@ -2,28 +2,24 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  gap: var(--space-5);
+  gap: var(--space-6);
 }
 
 .navLogo {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 4px var(--space-2) var(--space-2);
+  padding: 0 var(--space-2) var(--space-1);
 }
 
 .navLogo .logoMark {
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
+  width: 26px;
+  height: 26px;
   object-fit: contain;
-  background: #fff;
-  padding: 3px;
-  box-shadow: var(--shadow-sm);
 }
 
 .navLogo .logoWordmark {
-  height: 22px;
+  height: 19px;
   width: auto;
   object-fit: contain;
   display: block;
@@ -32,30 +28,29 @@
 .section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 1px;
 }
 
 .sectionTitle {
-  font-size: var(--text-xs);
+  padding: 0 var(--space-2) var(--space-2);
+  font-size: 0.6875rem;
   font-weight: var(--weight-semibold);
-  color: var(--color-text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0;
-  padding: var(--space-2) var(--space-3);
-  margin-bottom: var(--space-1);
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-text-quaternary);
 }
 
+/* 导航项：台面上不放色块，active 只把纸铺到它下面，不加阴影也不加边框 */
 .item {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-full);
-  color: var(--color-text-secondary);
-  transition: background var(--transition-fast), color var(--transition-fast);
-  min-height: 46px;
+  padding: 0 var(--space-3);
+  min-height: 38px;
   width: 100%;
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
   text-align: left;
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .item:hover {
@@ -64,19 +59,28 @@
 }
 
 .item.active {
-  background: #ffffff;
-  color: var(--color-accent);
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
   font-weight: var(--weight-medium);
-  box-shadow: var(--shadow-sm);
 }
 
 .icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  transition: color var(--transition-fast);
+}
+
+.item:hover .icon {
+  color: var(--color-text-secondary);
+}
+
+.item.active .icon {
+  color: var(--color-accent);
 }
 
 .label {
@@ -87,24 +91,21 @@
   text-overflow: ellipsis;
 }
 
+/* 计数是次要信息：不给底色，只用小一号的墨字 */
 .badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 var(--space-2);
   flex-shrink: 0;
-  border-radius: var(--radius-full);
-  background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  color: var(--color-text-quaternary);
   font-size: var(--text-xs);
-  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.item.active .badge {
+  color: var(--color-accent);
 }
 
 .emptySoul {
   padding: var(--space-2) var(--space-3);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-quaternary);
   font-size: var(--text-xs);
 }
 
@@ -117,7 +118,7 @@
 .dmList {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 2px;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -128,11 +129,11 @@
   align-items: center;
   gap: 2px;
   width: 100%;
-  min-height: 40px;
+  min-height: 32px;
   padding: 0 var(--space-3);
-  border-radius: var(--radius-full);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  border-radius: var(--radius-md);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
   text-align: left;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
@@ -143,22 +144,20 @@
 }
 
 .viewAllActive {
-  background: #ffffff;
-  color: var(--color-accent);
-  font-weight: var(--weight-medium);
-  box-shadow: var(--shadow-sm);
+  background: var(--color-bg-card);
+  color: var(--color-text-primary);
 }
 
-/* 私聊 entries — avatar + name + one-line persona preview */
+/* 私聊入口：头像 + 名字。人格说明在这里永远会被截断，留给私聊列表页说全 */
 .dmItem {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   width: 100%;
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
+  min-height: 42px;
+  padding: 0 var(--space-3);
   border-radius: var(--radius-md);
-  color: var(--color-text-secondary);
+  text-align: left;
   transition: background var(--transition-fast);
 }
 
@@ -167,51 +166,40 @@
 }
 
 .dmItemActive {
-  background: var(--color-accent-subtle);
+  background: var(--color-bg-card);
 }
 
 .dmAvatar {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
-  border-radius: var(--radius-full);
-  font-size: 15px;
-  font-weight: var(--weight-semibold);
-}
-
-.dmBody {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: var(--weight-medium);
 }
 
 .dmName {
-  font-size: 13.5px;
-  font-weight: var(--weight-semibold);
-  color: var(--color-text-primary);
-}
-
-.dmItemActive .dmName {
-  color: var(--color-accent);
-}
-
-.dmPreview {
-  font-size: var(--text-xs);
-  color: var(--color-text-tertiary);
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.dmItemActive .dmName {
+  color: var(--color-text-primary);
+  font-weight: var(--weight-medium);
+}
+
 /* 未读点：只说明"有新的"，不报数。全局入口不做红点，只落在私聊入口上。 */
 .dmUnread {
-  width: 8px;
-  height: 8px;
-  margin-left: auto;
+  width: 6px;
+  height: 6px;
   flex-shrink: 0;
   border-radius: var(--radius-full);
   background: var(--color-accent);
@@ -220,12 +208,12 @@
 .bottomSection {
   margin-top: auto;
   padding-top: var(--space-4);
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-rule);
 }
 
 /* 移动端抽屉可整体滚动（AppShell），保证「查看全部」入口在矮窗口下也有一行可见 */
 @media (max-width: 767px) {
   .dmList {
-    min-height: 44px;
+    min-height: 42px;
   }
 }

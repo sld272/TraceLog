@@ -146,6 +146,39 @@ class CommentServiceTest(unittest.TestCase):
 
         self.assertEqual(["拾迹者", "毒舌好友"], [conversation.soul_name for conversation in conversations])
 
+    def test_list_post_conversation_threads_returns_full_threads(self) -> None:
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+            VALUES (?, ?, 'user', ?, 1, ?)
+            """,
+            ("20260525-001", "拾迹者", "那我先试一周", 4.0),
+        )
+        db.execute(
+            """
+            INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+            VALUES (?, ?, 'assistant', ?, 2, ?)
+            """,
+            ("20260525-001", "拾迹者", "一周后我来问你", 5.0),
+        )
+
+        threads = dict(
+            (conversation.soul_name, messages)
+            for conversation, messages in comment_service.list_post_conversation_threads("20260525-001")
+        )
+
+        self.assertEqual([0, 1, 2], [message.seq for message in threads["拾迹者"]])
+        self.assertEqual("那我先试一周", threads["拾迹者"][1].content)
+        self.assertEqual([0], [message.seq for message in threads["毒舌好友"]])
+
+    def test_list_post_conversation_threads_includes_disabled_soul(self) -> None:
+        """SOUL 被禁用后旧对话仍要能显示 —— 帖子详情不能因此整个报错。"""
+        db.execute("UPDATE souls SET enabled = 0 WHERE name = ?", ("毒舌好友",))
+
+        threads = comment_service.list_post_conversation_threads("20260525-001")
+
+        self.assertIn("毒舌好友", [conversation.soul_name for conversation, _ in threads])
+
     def test_comment_reply_only_writes_selected_soul_conversation(self) -> None:
         client = FakeClient({"reply": "好，我只在这里接住这句。"})
 

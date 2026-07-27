@@ -26,29 +26,29 @@
   display: none;
 }
 
+/* 与发布 / 发送按钮同尺寸：并排的图标按钮大小不一会立刻显出来 */
 .pickButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
   padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 50%;
-  background: var(--color-bg-soft);
-  color: var(--color-text-secondary);
-  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-tertiary);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .compact .pickButton {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
 }
 
 .pickButton svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 .compact .pickButton svg {

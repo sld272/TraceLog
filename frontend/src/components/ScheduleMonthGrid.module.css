@@ -58,7 +58,7 @@
   min-width: 24px;
   height: 24px;
   padding: 0 4px;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   font-size: 12px;
   font-weight: var(--weight-medium);
   color: var(--color-text-secondary);
@@ -75,7 +75,7 @@
   padding: 1px 6px;
   border-radius: 5px;
   border-left: 2px solid var(--color-accent);
-  background: rgba(47, 139, 125, 0.12);
+  background: var(--color-accent-subtle);
   color: var(--color-text-primary);
   font-size: 11px;
   white-space: nowrap;
@@ -85,7 +85,7 @@
 }
 
 .chipGoal {
-  background: rgba(201, 134, 85, 0.16);
+  background: var(--color-warm-subtle);
   border-left-color: var(--color-warm);
 }
 

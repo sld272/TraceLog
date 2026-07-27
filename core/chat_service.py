@@ -9,7 +9,7 @@ import threading
 from collections.abc import Callable, Iterator
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
-from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, schedule_context, soul_service, suggestion_pipeline, vision_service
+from core import attachment_service, db, goal_service, logging_service, memory_events_service, memory_read, memory_unit_service, query_rewriter, record_service, reply_context, schedule_context, soul_service, suggestion_pipeline, suggestion_service, vision_service
 from core.app_services import job_service
 from core.attachment_service import Attachment
 from core.llm import reply_router
@@ -1167,7 +1167,7 @@ def _message_from_row(row) -> ChatMessage:
         created_at=row["created_at"],
         edited_at=float(row["edited_at"]) if row["edited_at"] is not None else None,
         rerun_at=float(row["rerun_at"]) if row["rerun_at"] is not None else None,
-        metadata=row["metadata"],
+        metadata=suggestion_service.metadata_with_live_suggestions(row["metadata"]),
         client_request_id=row["client_request_id"],
         attachments=attachment_service.list_chat_message_attachments(message_id),
     )

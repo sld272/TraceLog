@@ -10,9 +10,7 @@ import {
   createPost,
   deleteCommentMessage,
   deletePost,
-  getCommentConversation,
   getPost,
-  listCommentConversations,
   listPendingSuggestions,
   listPosts,
   postIdFromEvidenceRef,
@@ -31,6 +29,7 @@ import { formatRoute } from '@/router'
 import { type PostMutationSignal } from '@/types/postMutation'
 import {
   buildSendingCommentState,
+  conversationsFromThreads,
   failedCommentState,
   latestEventId,
   shouldRefreshPostDetail,
@@ -38,8 +37,12 @@ import {
   withPendingCommentRerun,
 } from '@/utils/commentState'
 import { API_LIMITS } from '@/utils/constants'
-import { localDateKey, monthDayLabel, SYSTEM_TIME_ZONE, weekdayLabel } from '@/utils/schedule'
+import { localDateKey, monthDayLabel, weekdayLabel } from '@/utils/schedule'
+import { dayAnchorLabel, dayKeyOf } from '@/utils/date'
 import styles from './Timeline.module.css'
+
+/** 进入首页时预取评论的条数。够铺满前两三屏，再往下靠展开时按需取。 */
+const COMMENT_PREFETCH_COUNT = 12
 
 interface TimelineProps {
   onActivitySettled?: () => void
@@ -129,6 +132,30 @@ export function Timeline({
     }
   }, [])
 
+  /* 帖子列表接口只带评论数，不带评论本身。首页默认展开好友的回应，所以进页面后
+     顺手把靠前那几条的评论取回来 —— 都是本地请求，够快，也不会打乱滚动位置。
+     追问也一起取：默认展开后没人再点"展开"，只取首条回复会让追问整段看不见。 */
+  const prefetchComments = useCallback(async (list: Post[]) => {
+    const targets = list.slice(0, COMMENT_PREFETCH_COUNT).filter((post) => post.comment_count > 0)
+    await Promise.all(
+      targets.map(async (post) => {
+        try {
+          const detail = await getPost(post.post_id)
+          setPostComments((prev) =>
+            prev[post.post_id] ? prev : { ...prev, [post.post_id]: detail.comments },
+          )
+          setPostCommentConversations((prev) =>
+            prev[post.post_id]
+              ? prev
+              : { ...prev, [post.post_id]: conversationsFromThreads(detail.conversations) },
+          )
+        } catch {
+          /* 预取失败就退回原来的按需展开，不打扰用户 */
+        }
+      }),
+    )
+  }, [])
+
   const fetchPosts = useCallback(async () => {
     try {
       const data = await listPosts(API_LIMITS.POSTS_DEFAULT, 0)
@@ -136,6 +163,7 @@ export function Timeline({
       setHasMorePosts(data.length >= API_LIMITS.POSTS_DEFAULT)
       setError(null)
       void refreshSuggestions()
+      void prefetchComments(data)
       data.forEach((post) => {
         if (isActivePipeline(post)) void restorePostStream(post.post_id)
       })
@@ -144,7 +172,7 @@ export function Timeline({
     } finally {
       setLoading(false)
     }
-  }, [refreshSuggestions])
+  }, [refreshSuggestions, prefetchComments])
 
   useEffect(() => {
     fetchPosts()
@@ -343,6 +371,7 @@ export function Timeline({
       setPosts((prev) => appendUniquePosts(prev, data))
       setHasMorePosts(data.length >= API_LIMITS.POSTS_DEFAULT)
       setError(null)
+      void prefetchComments(data)
       data.forEach((post) => {
         if (isActivePipeline(post)) void restorePostStream(post.post_id)
       })
@@ -351,7 +380,7 @@ export function Timeline({
     } finally {
       setLoadingMore(false)
     }
-  }, [hasMorePosts, loadingMore, posts, searching])
+  }, [hasMorePosts, loadingMore, posts, searching, prefetchComments])
 
   useEffect(() => {
     if (searching || !hasMorePosts || loadingMore) return
@@ -371,7 +400,10 @@ export function Timeline({
         ...prev,
         [postId]: detail.comments,
       }))
-      await refreshCommentConversations(postId)
+      setPostCommentConversations((prev) => ({
+        ...prev,
+        [postId]: conversationsFromThreads(detail.conversations, prev[postId]),
+      }))
       applyPostDetailToSummary(detail, eventType)
       return detail
     } catch {
@@ -424,7 +456,10 @@ export function Timeline({
     try {
       const detail = await getPost(postId)
       setPostComments((prev) => ({ ...prev, [postId]: detail.comments }))
-      await refreshCommentConversations(postId)
+      setPostCommentConversations((prev) => ({
+        ...prev,
+        [postId]: conversationsFromThreads(detail.conversations, prev[postId]),
+      }))
     } catch (err) {
       setExpandErrors((prev) => ({
         ...prev,
@@ -432,29 +467,6 @@ export function Timeline({
       }))
     } finally {
       setExpandingPostIds((prev) => ({ ...prev, [postId]: false }))
-    }
-  }
-
-  const refreshCommentConversations = async (postId: string) => {
-    try {
-      const conversations = await listCommentConversations(postId)
-      const details = await Promise.all(
-        conversations.map(async (conversation) => {
-          const detail = await getCommentConversation(postId, conversation.soul_name)
-          return [conversation.soul_name, toConversationState(detail.conversation, detail.messages)] as const
-        }),
-      )
-      setPostCommentConversations((prev) => {
-        const next: Record<string, CommentConversationState> = Object.fromEntries(details)
-        /* Keep in-flight optimistic threads: a server snapshot taken mid-send
-           would wipe the pending bubble and let it flash back later. */
-        for (const [soulName, state] of Object.entries(prev[postId] ?? {})) {
-          if (state.sending) next[soulName] = state
-        }
-        return { ...prev, [postId]: next }
-      })
-    } catch {
-      /* Keep root comments visible even if thread history is unavailable. */
     }
   }
 
@@ -659,6 +671,14 @@ export function Timeline({
     />
   )
 
+  const renderDayGroups = (list: Post[]) =>
+    groupPostsByDay(list).map((group) => (
+      <section key={group.key} className={styles.dayGroup}>
+        <DayAnchor dayKey={group.key} />
+        <div className={styles.dayPosts}>{group.posts.map(renderPostCard)}</div>
+      </section>
+    ))
+
   return (
     <div className={styles.timeline}>
       <TimelineHeader />
@@ -732,7 +752,7 @@ export function Timeline({
                 右边可以看看这天的日程，或者回到最新动态。
               </div>
             ) : (
-              <div className={styles.feed}>{filteredPosts.map(renderPostCard)}</div>
+              <div className={styles.feed}>{renderDayGroups(filteredPosts)}</div>
             )
           ) : posts.length === 0 ? (
             <div className={styles.empty}>
@@ -746,7 +766,7 @@ export function Timeline({
             </div>
           ) : (
             <div className={styles.feed}>
-              {posts.map(renderPostCard)}
+              {renderDayGroups(posts)}
               <div className={styles.loadMoreRow} ref={loadMoreSentinelRef}>
                 {loadingMore ? (
                   <span>加载更早的记录...</span>
@@ -938,6 +958,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
         deletingPost={deletingPost}
         retryingJobId={retryingJobId}
         detailHref={detailHref}
+        timeStyle="clock"
         modelConfigured={modelConfigured}
         expandLoading={expandLoading}
         expandError={expandError}
@@ -965,37 +986,43 @@ function searchSummaryText(
   return `找到 ${count} 条记录`
 }
 
+/* 首页开头只说一句话。日期由下面每一组的锚点交代，不在这里重复；
+   产品是干什么的也不必在自己的首页上介绍一遍。 */
 function TimelineHeader() {
-  const now = new Date()
-  const hour = now.getHours()
+  const hour = new Date().getHours()
   const greeting =
     hour < 5 ? '夜深了' : hour < 11 ? '早上好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
-  const today = now.toLocaleDateString('zh-CN', {
-    month: 'long',
-    day: 'numeric',
-    weekday: 'long',
-    timeZone: SYSTEM_TIME_ZONE,
-  })
   return (
     <header className={styles.header}>
-      <div>
-        <h1>{greeting}</h1>
-        <p>记录日常、想法与情绪，和拾迹一起回看自己。</p>
-      </div>
-      <div className={styles.headerDate}>
-        <CalendarIcon />
-        {today}
-      </div>
+      <h1>{greeting}</h1>
     </header>
   )
 }
 
-function CalendarIcon() {
+/** 时间线的日期锚：日号挂在左边，帖子挂在它下面。 */
+function DayAnchor({ dayKey }: { dayKey: string }) {
+  const label = dayAnchorLabel(dayKey)
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
-    </svg>
+    <div className={styles.dayAnchor}>
+      <span className={styles.dayNumber} data-numeric>{label.day}</span>
+      <span className={styles.dayDetail}>
+        {label.relative && <strong>{label.relative}</strong>}
+        {label.detail}
+      </span>
+    </div>
   )
+}
+
+/** 把时间线按自然日切段，日期只在段首出现一次。 */
+function groupPostsByDay(posts: Post[]): { key: string; posts: Post[] }[] {
+  const groups: { key: string; posts: Post[] }[] = []
+  for (const post of posts) {
+    const key = dayKeyOf(post.ts)
+    const last = groups[groups.length - 1]
+    if (last && last.key === key) last.posts.push(post)
+    else groups.push({ key, posts: [post] })
+  }
+  return groups
 }
 
 function FilterCalendarIcon() {

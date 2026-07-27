@@ -85,6 +85,8 @@ const PORTRAIT_OPTIONS: { value: MemoryPortraitPolicy; label: string }[] = [
 ]
 
 const SOUL_PREFIX = 'soul:'
+/** 低于这个把握才值得在卡片上说一句"不太确定"。 */
+const LOW_CONFIDENCE = 0.6
 
 function typeLabel(type: string): string {
   return TYPE_LABELS[type] ?? type
@@ -318,7 +320,9 @@ export function MemoryWorkbench() {
     <div className={styles.workbench}>
       <header className={styles.pageHeader}>
         <h1>记忆</h1>
-        <p>拾迹记住的关于你的一切都在这里。每条记忆都能看到它从哪来，也可以随时修改，或者让 TA 忘记。</p>
+        {/* 原来是一段三句话的功能说明。留一句产品主张就够，怎么改、怎么忘，
+            点开卡片自然会看到。 */}
+        <p>每条都能翻回原话</p>
       </header>
 
       {error && <Notice kind="error" onClose={() => setError(null)}>{error}</Notice>}
@@ -347,14 +351,16 @@ export function MemoryWorkbench() {
                     )}
                     <span className={styles.viewCardName}>{entry.kind === 'user' ? '我' : `与 ${entry.soulName}`}</span>
                   </div>
-                  <div className={styles.viewCardMeta}>
-                    <span className={`${styles.statusDot} ${needsIntegration ? styles.statusStale : styles.statusFresh}`} />
-                    {needsIntegration
-                      ? `有新记忆 · 待整理${entry.pending > 0 ? ` (${entry.pending})` : ''}`
-                      : entry.view
-                        ? '最新'
-                        : '暂无相处记忆'}
-                  </div>
+                  {/* 「暂无相处记忆」是默认状态，一列里重复三四遍没有信息量；
+                      只有待整理和已整理才值得标一行 */}
+                  {(needsIntegration || entry.view) && (
+                    <div className={styles.viewCardMeta}>
+                      <span className={`${styles.statusDot} ${needsIntegration ? styles.statusStale : styles.statusFresh}`} />
+                      {needsIntegration
+                        ? `有新记忆 · 待整理${entry.pending > 0 ? ` (${entry.pending})` : ''}`
+                        : '最新'}
+                    </div>
+                  )}
                 </button>
               )
             })
@@ -428,8 +434,8 @@ export function MemoryWorkbench() {
                 </button>
               ))}
             </div>
-            <div>
-              <span className={styles.muted}>{filteredUnits.length} 个记忆条目</span>
+            <div className={styles.unitsBarRight}>
+              <span className={styles.muted}>{filteredUnits.length} 条</span>
               <button className={styles.ghostButton} onClick={() => setCreating((value) => !value)}>
                 {creating ? '取消新增' : '新增记忆'}
               </button>
@@ -518,15 +524,17 @@ function UnitCard({
   const inPortrait = unit.in_portrait === 1
   const forgotten = isForgottenStatus(unit.status)
   const dormant = unit.status === 'dormant'
+  /* "还没进入核心画像"是绝大多数条目的默认状态，每张卡都声明一遍等于没说。
+     只有进入了画像，或者被你手动设过什么，才值得占一行。 */
   const statusText = inPortrait
     ? unit.portrait_policy === 'force_include'
-      ? '正在塑造你的核心画像 · 已强制纳入'
+      ? '正在塑造你的核心画像 · 你指定了一定要用'
       : '正在塑造你的核心画像'
     : muted
-      ? '未纳入核心画像 · 已设为不要提起'
+      ? '已设为不要提起'
       : unit.portrait_policy === 'force_exclude'
-        ? '未纳入核心画像 · 已强制排除'
-        : '未纳入核心画像 · 未达到自动纳入标准'
+        ? '你指定了不要进画像'
+        : null
 
   const openEdit = () => {
     setDraftContent(unit.content)
@@ -663,19 +671,24 @@ function UnitCard({
           <span className={styles.chipPending} title="你最近改了相关内容，TA 正在重新核对这条">整理中</span>
         )}
         {dormant && <span className={styles.chipGhost} title="很久没提，TA 慢慢淡忘了；再提到会自然想起">淡出的</span>}
+        {/* 置信度和重要度原来是两条进度条。重要度只影响系统内部排序，用户改不了也
+            用不上；置信度只有偏低时才值得说一句，高的时候画一条满格的条毫无信息。 */}
+        {unit.confidence < LOW_CONFIDENCE && (
+          <span className={styles.chipGhost} title={`TA 对这条的把握是 ${Math.round(unit.confidence * 100)}%`}>
+            不太确定
+          </span>
+        )}
       </div>
-      <div className={styles.bars}>
-        <Bar label="置信度" value={unit.confidence} />
-        <Bar label="重要度" value={unit.importance} warm />
-      </div>
-      <div className={`${styles.statusLine} ${inPortrait ? styles.statusIn : styles.statusOut}`}>
-        {inPortrait ? <CheckIcon width={14} height={14} /> : <span className={styles.statusOutDot} />}
-        <span>
-          {isPendingStatus(unit.status)
-            ? '你最近改了相关内容，TA 正在重新核对这条，核对期间暂不使用'
-            : statusText}
-        </span>
-      </div>
+      {(isPendingStatus(unit.status) || statusText) && (
+        <div className={`${styles.statusLine} ${inPortrait ? styles.statusIn : styles.statusOut}`}>
+          {inPortrait ? <CheckIcon width={14} height={14} /> : <span className={styles.statusOutDot} />}
+          <span>
+            {isPendingStatus(unit.status)
+              ? '你最近改了相关内容，TA 正在重新核对这条，核对期间暂不使用'
+              : statusText}
+          </span>
+        </div>
+      )}
       <div className={styles.unitActions} onClick={(e) => e.stopPropagation()}>
         <button className={styles.unitAction} onClick={openEdit} disabled={busy}>
           <PencilIcon /> 编辑
@@ -739,21 +752,6 @@ function ForgetDialog({
       </div>
       <p className={styles.forgetHint}>如果只是不想让 TA 主动提起，用「不要提起」就够了。</p>
     </ConfirmDialog>
-  )
-}
-
-function Bar({ label, value, warm = false }: { label: string; value: number; warm?: boolean }) {
-  const pct = Math.round(Math.max(0, Math.min(1, value)) * 100)
-  return (
-    <div className={styles.bar}>
-      <div className={styles.barLabel}>
-        <span>{label}</span>
-        <span>{pct}%</span>
-      </div>
-      <div className={styles.barTrack}>
-        <div className={`${styles.barFill} ${warm ? styles.barFillWarm : ''}`} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
   )
 }
 
@@ -825,7 +823,7 @@ function EvidenceDrawer({
             <h3>证据追溯</h3>
             <p className={styles.drawerSub}>这条记忆背后的原始记录</p>
           </div>
-          <button className={styles.drawerClose} onClick={onClose} title="关闭" aria-label="关闭">×</button>
+          <button className={styles.drawerClose} onClick={onClose} data-tip="关闭" data-tip-align="end" aria-label="关闭">×</button>
         </div>
         {loading ? (
           <p className={styles.drawerHint}>加载中...</p>

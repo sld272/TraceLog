@@ -50,7 +50,7 @@ import styles from './SchedulePage.module.css'
 type CalendarView = 'week' | 'month'
 type PopoverState = { event: ScheduleEvent; anchor: { x: number; y: number } }
 type DrawerState =
-  | { mode: 'create'; prefill?: { date: string; start_time?: string; end_time?: string } }
+  | { mode: 'create'; prefill?: { date: string; start_time?: string; end_time?: string; all_day?: boolean } }
   | { mode: 'edit'; event: ScheduleEvent }
 
 /** 一笔后台在途的写操作及其乐观覆盖项。 */
@@ -293,6 +293,8 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
   }
   const openCreateSlot = (date: string, startTime: string, endTime: string) =>
     setDrawer({ mode: 'create', prefill: { date, start_time: startTime, end_time: endTime } })
+  const openCreateAllDay = (date: string) =>
+    setDrawer({ mode: 'create', prefill: { date, all_day: true } })
   const openDayWeek = (dateKey: string) => {
     setAnchor(dateKey)
     setView('week')
@@ -606,6 +608,7 @@ export function SchedulePage({ onOpenSettings }: SchedulePageProps) {
               events={displayEvents}
               onEventClick={openEvent}
               onCreateSlot={openCreateSlot}
+              onCreateAllDay={openCreateAllDay}
               pendingIds={pendingIds}
             />
           ) : (

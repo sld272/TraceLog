@@ -8,6 +8,7 @@ import {
   type GoalSchedule,
   type GoalStatus,
   type ScheduleEvent,
+  type ScheduleProgress,
   createGoal,
   createScheduleEvent,
   deleteGoal,
@@ -27,7 +28,7 @@ import { Notice } from '@/components/Notice'
 import { ScheduleEventDrawer } from '@/components/ScheduleEventDrawer'
 import { PlusIcon } from '@/components/icons'
 import { formatRoute } from '@/router'
-import { formatAbsoluteTime } from '@/utils/date'
+import { formatAbsoluteTime, formatSmartTime } from '@/utils/date'
 import { ACTIVITY_KINDS, ACTIVITY_KIND_LABELS } from '@/utils/goalActivity'
 import { eventDateKey, formatEventTime, localDateKey, monthDayLabel, todayKey } from '@/utils/schedule'
 import styles from './WorkspacePages.module.css'
@@ -58,14 +59,19 @@ export function GoalsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [form, setForm] = useState<GoalForm>(EMPTY_FORM)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  /* 每周节奏是这一页最该先看到的东西（"跑步 3 次/周，这周跑了几次"），
+     但它只在 /goals/{id}/schedule 里。目标数量是个位数，进页面顺手一起取。 */
+  const [weeklyProgress, setWeeklyProgress] = useState<Record<string, ScheduleProgress>>({})
   const selectedGoal = selectedId ? goals.find((goal) => goal.id === selectedId) ?? null : null
   const groups = useMemo(() => groupGoals(goals), [goals])
 
   const refresh = useCallback(async () => {
     try {
       setLoading(true)
-      setGoals(await listGoals())
+      const data = await listGoals()
+      setGoals(data)
       setError(null)
+      void loadWeeklyProgress(data, setWeeklyProgress)
     } catch (err) {
       setError(err instanceof Error ? err.message : '目标加载失败')
     } finally {
@@ -187,7 +193,12 @@ export function GoalsPage() {
                 key={group.key}
                 title={group.title}
                 count={group.goals.length}
-                defaultCollapsed={group.key === 'paused' || group.key === 'done' || group.key === 'abandoned'}
+                defaultCollapsed={
+                  group.goals.length === 0 ||
+                  group.key === 'paused' ||
+                  group.key === 'done' ||
+                  group.key === 'abandoned'
+                }
               >
                 {group.goals.length === 0 ? (
                   <p className={styles.groupEmpty}>暂无</p>
@@ -198,6 +209,7 @@ export function GoalsPage() {
                         key={goal.id}
                         goal={goal}
                         busy={busyId === goal.id}
+                        progress={weeklyProgress[goal.id]}
                         onEdit={() => openEdit(goal)}
                         onPatch={(changes) => void patchGoal(goal, changes)}
                       />
@@ -243,14 +255,61 @@ export function GoalsPage() {
   )
 }
 
+/** 并发取回每个目标的本周节奏。失败的目标就不显示节奏，不打断整页。 */
+async function loadWeeklyProgress(
+  goals: Goal[],
+  apply: (next: Record<string, ScheduleProgress>) => void,
+) {
+  const entries = await Promise.all(
+    goals.map(async (goal) => {
+      try {
+        const schedule = await getGoalSchedule(goal.id)
+        return [goal.id, schedule.progress] as const
+      } catch {
+        return null
+      }
+    }),
+  )
+  const next: Record<string, ScheduleProgress> = {}
+  for (const entry of entries) {
+    if (entry && entry[1]?.target) next[entry[0]] = entry[1]
+  }
+  apply(next)
+}
+
+/** 本周节奏：一次一个点，做到的填实。比进度条更贴近"每周几次"这件事本身。 */
+function WeeklyRhythm({ progress }: { progress: ScheduleProgress }) {
+  const target = progress.target ?? 0
+  if (target <= 0) return null
+  const dots = Math.min(Math.max(target, progress.current), 12)
+  const label = progress.expectation?.label ?? ''
+  return (
+    <span className={styles.rhythm}>
+      <span className={styles.rhythmDots} aria-hidden="true">
+        {Array.from({ length: dots }, (_, index) => (
+          <span
+            key={index}
+            className={index < progress.current ? styles.rhythmDotOn : styles.rhythmDotOff}
+          />
+        ))}
+      </span>
+      <span data-numeric>
+        本周{label} {progress.current}/{target}
+      </span>
+    </span>
+  )
+}
+
 function GoalRow({
   goal,
   busy,
+  progress,
   onEdit,
   onPatch,
 }: {
   goal: Goal
   busy: boolean
+  progress?: ScheduleProgress
   onEdit: () => void
   onPatch: (changes: Partial<Goal>) => void
 }) {
@@ -263,14 +322,15 @@ function GoalRow({
             {goal.focus && <span className={styles.focusBadge}>当前关注</span>}
           </div>
           {goal.detail && <p className={styles.itemDetail}>{goal.detail}</p>}
-          <div className={styles.goalMeta}>
-            <span className={styles.chip}>{goal.horizon === 'long' ? '长期' : '短期'}</span>
-            <span className={styles.chip}>{statusLabel(goal.status)}</span>
-            {goal.last_progress_at && (
-              <span className={styles.chip}>最近推进 {formatAbsoluteTime(goal.last_progress_at)}</span>
-            )}
-            <span className={styles.chip}>{goal.source === 'user' ? '手动新增' : '采纳建议'}</span>
-          </div>
+        </div>
+        {/* 长短期和状态已经写在分组标题上，来源对日常使用没有影响，都不再重复。
+            这里只留两件真正会看的事：这周做了几次，上次推进是什么时候。它们贴在
+            行尾，一列对齐着往下扫，比塞在标题底下好读。 */}
+        <div className={styles.goalMeta}>
+          {progress && <WeeklyRhythm progress={progress} />}
+          {goal.last_progress_at && (
+            <span className={styles.chip}>最近推进 {formatSmartTime(goal.last_progress_at)}</span>
+          )}
         </div>
         <div className={styles.rowActs}>
           {goal.status === 'active' && (
@@ -432,7 +492,7 @@ function GoalActivitySection({ goalId }: { goalId: string }) {
               最近进展
               <strong>
                 {data.stats.last_progress_at
-                  ? formatAbsoluteTime(data.stats.last_progress_at)
+                  ? formatSmartTime(data.stats.last_progress_at)
                   : '暂无'}
               </strong>
             </span>
@@ -440,7 +500,7 @@ function GoalActivitySection({ goalId }: { goalId: string }) {
               最近里程碑
               <strong>
                 {data.stats.last_milestone_at
-                  ? formatAbsoluteTime(data.stats.last_milestone_at)
+                  ? formatSmartTime(data.stats.last_milestone_at)
                   : '暂无'}
               </strong>
             </span>
@@ -467,7 +527,7 @@ function GoalActivityItem({ activity }: { activity: GoalActivity }) {
     <article className={styles.goalActivityItem}>
       <div className={styles.goalActivityItemHeader}>
         <span className={styles.goalActivityKind}>{ACTIVITY_KIND_LABELS[activity.kind]}</span>
-        <time>{formatAbsoluteTime(activity.created_at)}</time>
+        <time title={formatAbsoluteTime(activity.created_at)}>{formatSmartTime(activity.created_at)}</time>
       </div>
       <p className={styles.goalActivityEvidence}>
         {activity.evidence_span ? `“${activity.evidence_span}”` : '来自已排期的日程'}
@@ -726,9 +786,3 @@ function replaceGoal(goals: Goal[], updated: Goal): Goal[] {
   return goals.map((goal) => goal.id === updated.id ? updated : goal)
 }
 
-function statusLabel(status: GoalStatus): string {
-  if (status === 'active') return '进行中'
-  if (status === 'paused') return '暂停'
-  if (status === 'done') return '已完成'
-  return '已放弃'
-}

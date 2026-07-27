@@ -96,10 +96,10 @@ export function MiniCalendar({ selectedDate, connected, onSelectDate }: MiniCale
       <div className={styles.calHead}>
         <span className={styles.calMonth}>{viewYear}年{viewMonth}月</span>
         <span className={styles.calNav}>
-          <button className={styles.calNavBtn} type="button" onClick={goToPrevMonth} title="上个月" aria-label="上个月">
+          <button className={styles.calNavBtn} type="button" onClick={goToPrevMonth} data-tip="上个月" aria-label="上个月">
             <ChevronIcon direction="left" />
           </button>
-          <button className={styles.calNavBtn} type="button" onClick={goToNextMonth} title="下个月" aria-label="下个月">
+          <button className={styles.calNavBtn} type="button" onClick={goToNextMonth} data-tip="下个月" aria-label="下个月">
             <ChevronIcon direction="right" />
           </button>
         </span>
@@ -130,7 +130,6 @@ export function MiniCalendar({ selectedDate, connected, onSelectDate }: MiniCale
               type="button"
               className={className}
               data-heat={heat}
-              title={`${viewMonth}月${cell.day}日`}
               aria-pressed={cell.key === selectedDate}
               onClick={() => onSelectDate(cell.key)}
             >
@@ -139,10 +138,6 @@ export function MiniCalendar({ selectedDate, connected, onSelectDate }: MiniCale
             </button>
           )
         })}
-      </div>
-      <div className={styles.calFoot}>
-        <span className={styles.k}><span className={styles.kSwatch} />帖子密度</span>
-        <span className={styles.k}><span className={styles.kDot} />有日程</span>
       </div>
     </div>
   )

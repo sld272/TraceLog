@@ -32,7 +32,8 @@ export function ScheduleList({ events, progressByGoal = {}, emptyText, showLocat
                     href={event.web_link}
                     target="_blank"
                     rel="noreferrer"
-                    title="在 Outlook 中打开"
+                    data-tip="在 Outlook 中打开"
+                    data-tip-align="end"
                     aria-label="在 Outlook 中打开"
                   >
                     <ExternalLinkIcon />

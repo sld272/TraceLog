@@ -116,6 +116,45 @@ def get_suggestion(suggestion_id: str, *, conn: sqlite3.Connection | None = None
     )
 
 
+def metadata_with_live_suggestions(metadata: str | None) -> str | None:
+    """回复的 metadata 里存着生成当时的建议快照，状态是写入那一刻冻结的。
+
+    用户采纳或忽略后只改了 suggestions 表，快照不会跟着变，于是刷新页面时被忽略的
+    建议又原样冒出来。读取时按真实状态过一遍：只留还 pending 的，已决定的和已被删掉
+    的都去掉。
+    """
+    if not metadata or '"suggestions"' not in metadata:
+        return metadata
+    try:
+        parsed = json.loads(metadata)
+    except (TypeError, ValueError):
+        return metadata
+    if not isinstance(parsed, dict):
+        return metadata
+    snapshot = parsed.get("suggestions")
+    if not isinstance(snapshot, list) or not snapshot:
+        return metadata
+
+    ids = [item["id"] for item in snapshot if isinstance(item, dict) and isinstance(item.get("id"), str)]
+    if not ids:
+        return metadata
+    placeholders = ",".join("?" for _ in ids)
+    rows = db.query_all(
+        f"SELECT id FROM suggestions WHERE id IN ({placeholders}) AND status = 'pending'",
+        tuple(ids),
+    )
+    live_ids = {row["id"] for row in rows}
+    kept = [
+        item
+        for item in snapshot
+        if isinstance(item, dict) and item.get("id") in live_ids
+    ]
+    if len(kept) == len(snapshot):
+        return metadata
+    parsed["suggestions"] = kept
+    return json.dumps(parsed, ensure_ascii=False)
+
+
 def list_pending(kind: str | None = None) -> list[dict[str, Any]]:
     if kind is not None:
         _validate_kind(kind)

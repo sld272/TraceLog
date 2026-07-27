@@ -1,9 +1,10 @@
+/* 左右和底部留白：网格线原来一直画到卡片边缘，看起来像被裁掉了一截。
+   顶部不留——列头是 sticky 的，上面留白会让内容从空隙里滑过去。 */
 .card {
   position: relative;
-  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   background: var(--color-bg-card);
-  box-shadow: var(--shadow-sm);
+  padding: 0 var(--space-5) var(--space-5);
 }
 
 /* 列头吸顶：贴页面顶部（无固定顶栏），保留卡片上圆角。 */
@@ -13,9 +14,8 @@
   position: sticky;
   top: 0;
   z-index: 6;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(6px);
-  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  border-bottom: 1px solid var(--color-rule);
   border-top-left-radius: var(--radius-lg);
   border-top-right-radius: var(--radius-lg);
 }
@@ -39,14 +39,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 28px;
+  min-width: 26px;
+  height: 26px;
   margin-top: 2px;
   padding: 0 6px;
-  border-radius: var(--radius-full);
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-serif);
+  font-size: var(--text-lg);
   color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
 }
 
 .headToday .dayName {
@@ -56,14 +57,14 @@
 
 .headToday .dayNum {
   background: var(--color-accent);
-  color: #fff;
+  color: var(--color-text-inverse);
 }
 
 .allDayRow {
   display: grid;
   grid-template-columns: 56px repeat(7, 1fr);
-  border-bottom: 1px solid var(--color-border);
-  min-height: 32px;
+  border-bottom: 1px solid var(--color-rule);
+  min-height: 30px;
 }
 
 .allDayLabel {
@@ -74,20 +75,59 @@
 }
 
 .allDayCell {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
   padding: 4px;
-  border-left: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-rule);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.allDayCell:hover {
+  background: var(--color-bg-hover);
+}
+
+/* 今天那一列在时间网格里有底色，全天行也跟着，否则这一列像断了 */
+.allDayCellToday {
+  background: var(--color-accent-subtle);
+}
+
+.allDayCellToday:hover {
+  background: rgba(47, 139, 125, 0.16);
+}
+
+/* 空格子里的"＋"只在鼠标停住时浮出来，平时这一行保持安静 */
+.allDayGhost {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-quaternary);
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+}
+
+.allDayCell:hover .allDayGhost,
+.allDayCell:focus-visible .allDayGhost {
+  opacity: 1;
+}
+
+/* 已经有全天事件时不再叠"＋"，避免盖在事件上 */
+.allDayChip ~ .allDayGhost {
+  display: none;
 }
 
 .allDayChip {
   display: block;
   width: 100%;
   padding: 2px 8px;
-  border-radius: 6px;
-  border-left: 3px solid var(--color-accent);
-  background: rgba(47, 139, 125, 0.14);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--color-accent);
+  background: var(--color-accent-subtle);
   color: var(--color-text-primary);
   font-size: 11px;
   font-weight: var(--weight-medium);
@@ -99,7 +139,7 @@
 }
 
 .allDayGoal {
-  background: rgba(201, 134, 85, 0.16);
+  background: var(--color-warm-subtle);
   border-left-color: var(--color-warm);
 }
 
@@ -125,52 +165,54 @@
   color: var(--color-text-tertiary);
 }
 
+/* 小时线跟着 --hour-px 画，由 ScheduleWeekGrid 的 HOUR_PX 注入。
+   写死过一次 52px，行高改成 56 之后线和事件、时刻线就整片错开了。 */
 .dayCol {
   position: relative;
   border-left: 1px solid var(--color-border);
   background-image: repeating-linear-gradient(
     to bottom,
     transparent 0,
-    transparent 51px,
-    var(--color-border) 51px,
-    var(--color-border) 52px
+    transparent calc(var(--hour-px) - 1px),
+    var(--color-rule) calc(var(--hour-px) - 1px),
+    var(--color-rule) var(--hour-px)
   );
-  cursor: copy;
+  /* 和全天格子同一个手势：都是"点一下新建"，光标不该一个 copy 一个 pointer */
+  cursor: pointer;
 }
 
 .dayColToday {
-  background-color: rgba(47, 139, 125, 0.035);
+  background-color: rgba(47, 139, 125, 0.04);
 }
 
 .evt {
   position: absolute;
   z-index: 2;
   padding: 3px 8px;
-  border-radius: 8px;
-  border-left: 3px solid var(--color-accent);
-  background: rgba(47, 139, 125, 0.12);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--color-accent);
+  background: var(--color-accent-subtle);
   font-size: 12px;
   line-height: 1.35;
   overflow: hidden;
   cursor: pointer;
-  transition: box-shadow var(--transition-fast), filter var(--transition-fast);
+  transition: box-shadow var(--transition-fast);
 }
 
 .evt:hover {
-  filter: brightness(0.98);
   box-shadow: var(--shadow-md);
   z-index: 3;
 }
 
 .evtGoal {
-  background: rgba(201, 134, 85, 0.16);
+  background: var(--color-warm-subtle);
   border-left-color: var(--color-warm);
 }
 
 .etitle {
   display: block;
   color: var(--color-text-primary);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -178,7 +220,8 @@
 
 .etime {
   font-size: 11px;
-  color: var(--color-text-secondary);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .egoal {
@@ -186,7 +229,7 @@
   align-items: center;
   gap: 3px;
   margin-left: 8px;
-  color: var(--color-warm);
+  color: #8f4e2e;
   font-size: 10px;
   font-weight: var(--weight-medium);
   white-space: nowrap;
@@ -231,20 +274,21 @@
   background: var(--color-error);
 }
 
+/* 和全天行的新建口子长一样：一块淡底 + 居中的 ＋。
+   虚线框加时间文字是另一套语言，同一张网格上不该出现两种"点这里新建"。
+   高度是半小时——吸附就是按半小时走的，它标的是"你停在哪一格"，
+   铺满一小时会在半点上悬空半格，看着就是没对齐。 */
 .ghostSlot {
   position: absolute;
-  left: 4px;
-  right: 6px;
-  height: 25px;
+  left: 0;
+  right: 0;
+  height: calc(var(--hour-px) / 2);
   z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1.5px dashed var(--color-accent-border);
-  border-radius: 8px;
-  background: rgba(47, 139, 125, 0.05);
-  font-size: 11px;
-  color: var(--color-accent);
+  display: grid;
+  place-items: center;
+  background: var(--color-bg-hover);
+  font-size: 13px;
+  color: var(--color-text-quaternary);
   pointer-events: none;
 }
 
@@ -256,11 +300,5 @@
   cursor: progress;
 }
 
-/* 本地日历事件：虚线左边条（色彩语义不变，仅标注「家在本机」） */
-.evtLocal {
-  border-left-style: dashed;
-}
-
-.chipLocal {
-  border-left-style: dashed;
-}
+/* 本地日历事件曾用虚线左边条区分。2px 宽的虚线只画得出三四个断点，读起来像
+   渲染缺陷而不是编码，已改回实线——「本地日历（仅这台设备）」在事件详情里写着。 */

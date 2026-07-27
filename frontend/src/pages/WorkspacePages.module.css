@@ -15,10 +15,12 @@
 }
 
 .title {
-  font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
+  font-family: var(--font-serif);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-normal);
   color: var(--color-text-primary);
   line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
 }
 
 .subtitle {
@@ -41,11 +43,11 @@
   gap: var(--space-4);
 }
 
+/* 工作台上的每个块也是"纸"：靠明度差从台面上立起来，不加边框和阴影 */
 .card {
   background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: var(--space-5);
+  padding: var(--space-6);
 }
 
 .cardHeader {
@@ -72,9 +74,9 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 40px;
+  min-height: 34px;
   padding: 0 var(--space-4);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   background: var(--color-accent);
   color: var(--color-text-inverse);
   font-size: var(--text-sm);
@@ -103,19 +105,18 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 36px;
+  min-height: 30px;
   padding: 0 var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sunken);
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
-  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .ghostButton:hover:not(:disabled) {
-  color: var(--color-accent);
-  border-color: var(--color-accent-border);
-  background: var(--color-accent-subtle);
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
 }
 
 .ghostButton:disabled {
@@ -148,7 +149,7 @@
   margin-top: var(--space-2);
   padding: var(--space-2);
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.56);
+  background: var(--color-bg-card);
   color: var(--color-error);
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -158,8 +159,7 @@
 }
 
 .todoDrawer {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--color-bg-card);
 }
 
@@ -197,7 +197,7 @@
 .groupCount {
   min-height: 18px;
   padding: 1px var(--space-2);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--color-bg-tertiary);
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
@@ -209,10 +209,15 @@
   color: var(--color-accent);
 }
 
+/* 目标是一张清单：一组行排在同一张纸上，靠发丝线分隔。
+   之前排成多列网格，目标数一旦填不满整行，右边就空出一格——那正是"右侧大片空白"
+   的来源。改成行之后，行尾固定挂着节奏和最近推进，宽度就用上了。 */
 .col {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  overflow: hidden;
 }
 
 .groupEmpty {
@@ -221,25 +226,20 @@
   font-size: var(--text-sm);
 }
 
-/* ---- item card (goals) ---- */
+/* ---- 目标行 ---- */
 .itemCard {
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 16px 18px;
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow var(--transition-normal), border-color var(--transition-normal);
+  position: relative;
+  padding: var(--space-5) var(--space-6);
 }
 
-.itemCard:hover {
-  box-shadow: var(--shadow-md);
-  border-color: var(--color-border-strong);
+.itemCard + .itemCard {
+  box-shadow: inset 0 1px 0 var(--color-rule);
 }
 
 .itemRow {
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
+  align-items: center;
+  gap: var(--space-6);
 }
 
 .itemDetail {
@@ -249,22 +249,18 @@
   line-height: 1.6;
 }
 
+/* 标签只在真正带信息时出现，所以做得很轻：无底色，靠墨色区分 */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  background: var(--color-bg-secondary);
-  color: var(--color-text-secondary);
+  color: var(--color-text-tertiary);
   font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
 }
 
 .chipOverdue {
-  background: rgba(196, 64, 64, 0.1);
   color: var(--color-error);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--weight-medium);
 }
 
 .rowActs {
@@ -274,21 +270,42 @@
   flex-shrink: 0;
 }
 
+/* 操作浮在行尾、竖直居中，用一段渐变盖住底下的节奏和时间：
+   常驻会在每行右边留一块空位，进出流又会让整行跳动 */
+.itemCard .rowActs {
+  position: absolute;
+  top: 50%;
+  right: var(--space-6);
+  transform: translateY(-50%);
+  margin-left: 0;
+  padding-left: var(--space-8);
+  background: linear-gradient(90deg, transparent, var(--color-bg-card) var(--space-8));
+}
+
+/* 目标卡上的操作平时不出声，鼠标进卡才现身 —— 它们是偶尔用一次的动作，
+   不该和目标本身抢注意力 */
 .rowActs button {
-  padding: 5px 11px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
-  color: var(--color-text-secondary);
-  font-size: 12.5px;
-  font-weight: var(--weight-medium);
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
   white-space: nowrap;
-  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .rowActs button:hover:not(:disabled) {
   background: var(--color-bg-hover);
-  color: var(--color-accent);
-  border-color: var(--color-accent-border);
+  color: var(--color-text-primary);
+}
+
+.itemCard .rowActs {
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.itemCard:hover .rowActs,
+.itemCard:focus-within .rowActs {
+  opacity: 1;
 }
 
 .rowActs button:disabled {
@@ -342,14 +359,20 @@
 .field select,
 .field textarea {
   width: 100%;
-  min-height: 38px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: #ffffff;
+  min-height: 34px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sunken);
   color: var(--color-text-primary);
   font: inherit;
   font-size: var(--text-sm);
   padding: var(--space-2) var(--space-3);
+  transition: box-shadow var(--transition-fast);
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  box-shadow: inset 0 0 0 1.5px var(--color-accent-border);
 }
 
 .field textarea {
@@ -377,10 +400,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
+  min-height: 34px;
   padding: 0 var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   color: var(--color-error);
   cursor: pointer;
   font-size: var(--text-sm);
@@ -430,7 +452,8 @@
 
 .goalTitleLine h3 {
   color: var(--color-text-primary);
-  font-size: var(--text-md);
+  /* 原来写的是不存在的 --text-md，字号一直靠继承兜着 */
+  font-size: var(--text-lg);
   font-weight: var(--weight-medium);
 }
 
@@ -443,22 +466,57 @@
 
 .goalMeta {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
+  align-items: center;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  gap: var(--space-5);
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
 }
 
+.goalMeta:empty {
+  display: none;
+}
+
 .focusBadge {
   display: inline-flex;
-  min-height: 22px;
+  min-height: 20px;
   align-items: center;
   padding: 0 var(--space-2);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
   font-size: var(--text-xs);
+}
+
+/* 本周节奏：做到一次点亮一个点。目标页真正缺的就是这行。 */
+.rhythm {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.rhythmDots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.rhythmDotOn,
+.rhythmDotOff {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.rhythmDotOn {
+  background: var(--color-accent);
+}
+
+.rhythmDotOff {
+  background: var(--color-bg-tertiary);
 }
 
 .checkboxField {
@@ -581,7 +639,7 @@
   min-height: 20px;
   align-items: center;
   padding: 0 var(--space-2);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-sm);
   background: var(--color-accent-subtle);
   color: var(--color-accent);
   font-size: var(--text-xs);
@@ -731,6 +789,28 @@
     max-height: calc(100vh - var(--space-8));
     overflow: auto;
     box-shadow: var(--shadow-lg);
+  }
+}
+
+/* 窄屏放不下"标题在左、指标在右"，退回上下堆叠 */
+@media (max-width: 860px) {
+  .itemRow {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  .goalMeta {
+    justify-content: flex-start;
+    gap: var(--space-4);
+  }
+
+  .itemCard .rowActs {
+    position: static;
+    transform: none;
+    padding-left: 0;
+    background: none;
+    opacity: 1;
   }
 }
 
@@ -970,9 +1050,13 @@
   word-break: break-word;
 }
 
+/* 外层铺满工作区，里面的消息流另外限宽居中：页面不空，行宽也不会失控 */
 .chatShell {
   display: flex;
   flex-direction: column;
+  width: 100%;
+  max-width: 940px;
+  margin: 0 auto;
   /* topbar + .main vertical padding (24px top + 48px bottom) */
   height: calc(100vh - var(--topbar-height) - 72px);
   height: calc(100dvh - var(--topbar-height) - 72px);
@@ -982,20 +1066,20 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding-bottom: var(--space-4);
-  margin-bottom: var(--space-4);
-  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-5);
+  margin-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-rule);
 }
 
 .chatHeadAvatar {
   display: grid;
   place-items: center;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   flex-shrink: 0;
-  border-radius: var(--radius-full);
-  font-size: 16px;
-  font-weight: 700;
+  border-radius: var(--radius-md);
+  font-size: 15px;
+  font-weight: var(--weight-medium);
 }
 
 .chatHeadInfo {
@@ -1004,14 +1088,14 @@
 
 .chatHeadName {
   color: var(--color-text-primary);
-  font-size: 16px;
-  font-weight: var(--weight-semibold);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
   line-height: 1.3;
 }
 
 .chatHeadStatus {
-  margin-top: 2px;
-  color: var(--color-accent);
+  margin-top: 1px;
+  color: var(--color-text-tertiary);
   font-size: var(--text-xs);
 }
 
@@ -1019,10 +1103,16 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--space-2);
-  margin-bottom: var(--space-4);
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
   min-height: 0;
   overflow-y: auto;
+}
+
+/* 消息少的时候贴着输入框排，空白留在上面 —— 顶头排会让半屏悬空。
+   用 margin-top:auto 而不是 justify-content:flex-end，后者在内容溢出时会裁掉顶部。 */
+.messages > :first-child {
+  margin-top: auto;
 }
 
 .historySentinel {
@@ -1055,10 +1145,10 @@
 
 .message {
   width: fit-content;
-  max-width: min(88%, 520px);
-  padding: 10px var(--space-3);
+  max-width: min(74%, 560px);
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-lg);
-  line-height: var(--leading-normal);
+  line-height: var(--leading-relaxed);
   word-break: break-word;
   white-space: pre-wrap;
 }
@@ -1149,9 +1239,9 @@
   min-height: auto;
   max-height: 200px;
   padding: var(--space-2) var(--space-3);
-  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 0 0 1px var(--color-border);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--color-bg-card);
   color: inherit;
   font: inherit;
   font-size: var(--text-sm);
@@ -1164,8 +1254,8 @@
 
 .messageEditInput:focus {
   outline: none;
-  border-color: rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.3);
+  box-shadow: inset 0 0 0 1.5px var(--color-accent-border);
+  background: var(--color-bg-card);
 }
 
 .messageEditInput:disabled {
@@ -1175,31 +1265,32 @@
 
 .messageAssistant .messageEditInput {
   border-color: var(--color-border);
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--color-bg-sunken);
   color: var(--color-text-primary);
 }
 
 .messageAssistant .messageEditInput:focus {
   border-color: var(--color-accent-border);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--color-bg-sunken);
 }
 
 .messageUser .messageEditInput {
-  border-color: rgba(255, 255, 255, 0.42);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
+/* 我的话是"写在纸上"的墨底块，TA 的回应是一张纸。整屏因此只有一种强调色，
+   而不是一半屏幕铺满饱和绿。 */
 .messageUser {
   align-self: flex-end;
-  border-radius: 18px 18px 4px 18px;
-  background: var(--color-accent);
-  color: var(--color-text-inverse);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-primary);
 }
 
 .messageAssistant {
   align-self: flex-start;
-  border-radius: 4px 18px 18px 18px;
+  border-radius: var(--radius-sm) var(--radius-lg) var(--radius-lg) var(--radius-lg);
   background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
   color: var(--color-text-primary);
 }
 
@@ -1208,23 +1299,23 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  margin-bottom: 2px;
+  margin-bottom: 5px;
 }
 
 .messageRole {
   display: block;
   font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
   line-height: 20px;
-  color: inherit;
-  opacity: 0.7;
+  color: var(--color-text-secondary);
 }
 
 .messageTime {
   flex-shrink: 0;
-  color: inherit;
+  color: var(--color-text-tertiary);
   font-size: var(--text-xs);
   line-height: 20px;
-  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -1244,20 +1335,14 @@
 .messageMarker {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-full);
-  background: rgba(255, 255, 255, 0.24);
-  color: inherit;
+  min-height: 20px;
+  color: var(--color-text-tertiary);
   font-size: var(--text-xs);
-  opacity: 0.76;
   white-space: nowrap;
 }
 
 .messageAssistant .messageMarker {
-  background: var(--color-bg-soft);
   color: var(--color-text-tertiary);
-  opacity: 1;
 }
 
 .messageActions {
@@ -1277,27 +1362,33 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  border-radius: var(--radius-full);
-  color: inherit;
-  transition: background var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-quaternary);
+  opacity: 0;
+  transition: background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.message:hover .messageAction,
+.message:focus-within .messageAction,
+.messageAction:focus-visible {
+  opacity: 1;
 }
 
 .messageAssistant .messageAction {
-  border-color: var(--color-border);
-  color: var(--color-accent);
+  color: var(--color-text-quaternary);
 }
 
 .messageAction:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.16);
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 .messageAssistant .messageAction:hover:not(:disabled) {
-  border-color: var(--color-accent-border);
-  background: var(--color-accent-subtle);
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 .messageAction:disabled {
@@ -1309,30 +1400,24 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 28px;
+  min-height: 26px;
   padding: 0 var(--space-3);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: var(--radius-full);
-  color: inherit;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-hover);
+  color: var(--color-text-secondary);
   font-size: var(--text-xs);
   white-space: nowrap;
-  transition: background var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .messageAssistant .messageTextAction {
-  border-color: var(--color-border);
   color: var(--color-text-secondary);
 }
 
-.messageTextAction:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.2);
-  border-color: rgba(255, 255, 255, 0.6);
-}
-
+.messageTextAction:hover:not(:disabled),
 .messageAssistant .messageTextAction:hover:not(:disabled) {
-  border-color: var(--color-accent-border);
-  background: var(--color-accent-subtle);
-  color: var(--color-accent);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-primary);
 }
 
 .messageTextAction:disabled {
@@ -1346,17 +1431,15 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-xl);
-  background: rgba(255, 255, 255, 0.84);
-  box-shadow: var(--shadow-md);
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--transition-fast);
 }
 
 .chatForm:focus-within {
-  border-color: var(--color-accent-border);
-  box-shadow: 0 8px 22px rgba(47, 139, 125, 0.08);
+  box-shadow: var(--shadow-md);
 }
 
 .chatInputGroup {
@@ -1378,11 +1461,8 @@
 .chatHint {
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-full);
-  background: var(--color-bg-soft);
-  color: var(--color-text-tertiary);
+  min-height: 26px;
+  color: var(--color-text-quaternary);
   font-size: var(--text-xs);
 }
 
@@ -1414,19 +1494,17 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   background: var(--color-accent);
   color: var(--color-text-inverse);
-  box-shadow: 0 4px 12px rgba(47, 139, 125, 0.15);
-  transition: background var(--transition-fast), opacity var(--transition-fast), transform var(--transition-fast);
+  transition: background var(--transition-fast), opacity var(--transition-fast);
 }
 
 .chatSubmitButton:hover:not(:disabled) {
   background: var(--color-accent-hover);
-  transform: translateY(-1px);
 }
 
 .chatSubmitButton:active:not(:disabled) {

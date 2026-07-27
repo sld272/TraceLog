@@ -5,10 +5,10 @@ import { SoulAvatar } from './SoulAvatar'
 import styles from './LeftNav.module.css'
 
 /* 私聊区不滚动：按实测可用高度决定显示几个私聊入口。
- * 高度常量与 LeftNav.module.css 对应：dmItem 38px 头像 + 上下 8px padding，列表 gap 4px。 */
-const DM_ITEM_HEIGHT = 54
-const DM_GAP = 4
-const VIEW_ALL_HEIGHT = 40
+ * 高度常量与 LeftNav.module.css 对应：dmItem 30px 头像 + 上下 6px padding，列表 gap 2px。 */
+const DM_ITEM_HEIGHT = 42
+const DM_GAP = 2
+const VIEW_ALL_HEIGHT = 34
 /** 再高的屏幕也最多显示这么多私聊，保持导航清爽。 */
 const MAX_VISIBLE_DMS = 8
 
@@ -107,10 +107,7 @@ export function LeftNav({
                 aria-current={active ? 'page' : undefined}
               >
                 <SoulAvatar name={soul.name} className={styles.dmAvatar} />
-                <span className={styles.dmBody}>
-                  <span className={styles.dmName}>{soul.name}</span>
-                  {soul.description && <span className={styles.dmPreview}>{soul.description}</span>}
-                </span>
+                <span className={styles.dmName}>{soul.name}</span>
                 {unread > 0 && (
                   <span className={styles.dmUnread} role="img" aria-label={`${unread} 条未读`} />
                 )}

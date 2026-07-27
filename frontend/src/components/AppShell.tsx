@@ -5,9 +5,12 @@ interface AppShellProps {
   nav: ReactNode | ((closeMobileNav: () => void) => ReactNode)
   main: ReactNode
   panel?: ReactNode
+  /** 'reading' 是 timeline / 详情 / 私聊的窄阅读栏；'workspace' 给目标、日程、
+   *  记忆、设置这些需要横向铺开的页面，否则内容会缩在一条窄柱里、左侧留出大片空白。 */
+  width?: 'reading' | 'workspace'
 }
 
-export function AppShell({ nav, main, panel }: AppShellProps) {
+export function AppShell({ nav, main, panel, width = 'reading' }: AppShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   /* Close on escape and when window grows past mobile breakpoint */
@@ -69,7 +72,7 @@ export function AppShell({ nav, main, panel }: AppShellProps) {
             aria-hidden="true"
           />
         )}
-        <main className={styles.main}>
+        <main className={`${styles.main} ${width === 'workspace' ? styles.mainWide : ''}`}>
           {main}
         </main>
         {panel && (

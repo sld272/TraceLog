@@ -38,7 +38,7 @@
 .actions button {
   min-height: 38px;
   padding: 0 var(--space-4);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   background: var(--color-accent);
   color: var(--color-text-inverse);
   font-weight: var(--weight-medium);

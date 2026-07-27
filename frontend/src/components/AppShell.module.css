@@ -15,8 +15,7 @@
   width: 38px;
   height: 38px;
   flex-shrink: 0;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   background: var(--color-bg-card);
   box-shadow: var(--shadow-sm);
   color: var(--color-text-secondary);
@@ -28,24 +27,22 @@
   color: var(--color-text-primary);
 }
 
-
 .body {
   display: flex;
   flex: 1;
   width: 100%;
 }
 
+/* 左右栏留在台面上（无底色），只有内容是纸。分栏靠一条极细的墨线，不用边框色块。 */
 .nav {
   position: sticky;
   top: 0;
   height: 100vh;
   width: var(--nav-width);
   flex-shrink: 0;
-  padding: var(--space-5) var(--space-4);
+  padding: var(--space-6) var(--space-4) var(--space-5);
   /* 侧栏不滚动：私聊列表按可用高度裁剪条数（LeftNav 内自适应） */
   overflow: hidden;
-  background: var(--color-bg-primary);
-  border-right: 1px solid var(--color-border);
 }
 
 .navBackdrop {
@@ -57,7 +54,14 @@
   min-width: 0;
   max-width: var(--content-max-width);
   margin: 0 auto;
-  padding: var(--space-6) var(--space-4) var(--space-12);
+  padding: var(--space-8) var(--space-6) var(--space-16);
+}
+
+/* 工作台比阅读栏宽，左右也多留一点：行一长就没人愿意从头扫到尾 */
+.mainWide {
+  max-width: var(--workspace-max-width);
+  padding-left: var(--space-8);
+  padding-right: var(--space-8);
 }
 
 .hiddenPage {
@@ -70,11 +74,9 @@
   height: 100vh;
   width: var(--panel-width);
   flex-shrink: 0;
-  padding: var(--space-5) var(--space-4) var(--space-6);
+  padding: var(--space-6) var(--space-5) var(--space-6) var(--space-4);
   /* 侧栏不滚动：卡片条数按可用高度自适应（RightPanel 内控制） */
   overflow: hidden;
-  background: var(--color-bg-primary);
-  border-left: 1px solid var(--color-border);
 }
 
 /* Tablet: hide panel */
@@ -84,7 +86,7 @@
   }
 }
 
-/* Mobile: nav becomes a slide-in drawer triggered by topbar menu button */
+/* Mobile: nav becomes a slide-in drawer triggered by the floating menu button */
 @media (max-width: 767px) {
   .menuButton {
     display: inline-flex;
@@ -101,7 +103,6 @@
     /* 移动端抽屉是覆盖层而非常驻侧栏，保留滚动兜底（横屏矮窗口时固定导航项也可能放不下） */
     overflow-y: auto;
     background: var(--color-bg-card);
-    border-right: 1px solid var(--color-border);
     box-shadow: var(--shadow-lg);
     transform: translateX(-100%);
     transition: transform var(--transition-normal);
@@ -113,11 +114,10 @@
 
   .navBackdrop {
     position: fixed;
-    inset: var(--topbar-height) 0 0 0;
+    inset: 0;
     z-index: 80;
     display: block;
-    background: rgba(31, 41, 35, 0.32);
-    backdrop-filter: blur(2px);
+    background: rgba(22, 33, 30, 0.34);
     animation: navFadeIn var(--transition-normal);
   }
 
@@ -127,6 +127,6 @@
   }
 
   .main {
-    padding: var(--space-4) var(--space-4);
+    padding: calc(var(--space-12) + var(--space-2)) var(--space-4) var(--space-12);
   }
 }

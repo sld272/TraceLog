@@ -19,6 +19,7 @@ from core import (
     schedule_context,
     soul_service,
     suggestion_pipeline,
+    suggestion_service,
     vision_service,
 )
 from core.attachment_service import Attachment
@@ -106,6 +107,31 @@ def list_post_conversations(post_id: str) -> list[CommentConversation]:
         (post_id,),
     )
     return [_conversation_from_root(post_id, row["soul_name"], row) for row in rows]
+
+
+def list_post_conversation_threads(
+    post_id: str,
+    limit: int = COMMENT_HISTORY_LIMIT,
+) -> list[tuple[CommentConversation, list[CommentMessage]]]:
+    """帖子下每位 SOUL 的整段对话（首条回复 + 后续追问）。
+
+    不走 get_conversation：那条路会对已禁用的 SOUL 抛错，而旧对话即使 SOUL 被
+    禁用也该照常显示。前端拿帖子详情时一次取全，省掉一串 N+1 请求。
+    """
+    threads: list[tuple[CommentConversation, list[CommentMessage]]] = []
+    for conversation in list_post_conversations(post_id):
+        rows = db.query_all(
+            """
+            SELECT id, post_id, soul_name, role, content, seq, metadata, created_at, edited_at, rerun_at
+            FROM comments
+            WHERE post_id = ? AND soul_name = ?
+            ORDER BY seq DESC
+            LIMIT ?
+            """,
+            (post_id, conversation.soul_name, limit),
+        )
+        threads.append((conversation, [_message_from_row(row) for row in reversed(rows)]))
+    return threads
 
 
 def list_conversation_messages(
@@ -904,7 +930,7 @@ def _message_from_row(row) -> CommentMessage:
         created_at=float(row["created_at"]),
         edited_at=float(row["edited_at"]) if row["edited_at"] is not None else None,
         rerun_at=float(row["rerun_at"]) if row["rerun_at"] is not None else None,
-        metadata=row["metadata"],
+        metadata=suggestion_service.metadata_with_live_suggestions(row["metadata"]),
         attachments=attachment_service.list_comment_attachments(message_id),
     )
 

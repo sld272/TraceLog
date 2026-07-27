@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { type Attachment } from '@/api/client'
 import { ImageUploader } from './ImageUploader'
-import { LoadingDots } from '@/components/icons'
+import { LoadingDots, SendIcon } from '@/components/icons'
 import { LAYOUT } from '@/utils/constants'
 import styles from './Composer.module.css'
 
@@ -59,7 +59,7 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
         value={content}
         onChange={(e) => setContent(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="此刻发生了什么？"
+        placeholder="记点什么…"
         rows={2}
         disabled={submitting || disabled}
         aria-label="发帖内容"
@@ -81,8 +81,10 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
         showControls={false}
       />
       <div className={styles.footer}>
+        {/* 空着的时候不必报「0 字」——没写的东西不需要计数 */}
         <span className={styles.hint}>
-          {content.length} 字{attachments.length > 0 ? ` · ${attachments.length} 图` : ''}
+          {content.length > 0 ? `${content.length} 字` : ''}
+          {attachments.length > 0 ? `${content.length > 0 ? ' · ' : ''}${attachments.length} 图` : ''}
         </span>
         <div className={styles.actions}>
           <ImageUploader
@@ -91,6 +93,7 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
             onChange={setAttachments}
             showPreview={false}
           />
+          {/* 只放图标：这个按钮旁边本来就有悬浮说明，写上"发布"是同一句话说两遍 */}
           <span className={`${styles.submitWrap} kbdTip`}>
             <button
               className={styles.submitBtn}
@@ -98,10 +101,10 @@ export function Composer({ onSubmit, disabled = false, disabledReason }: Compose
               disabled={(!content.trim() && attachments.length === 0) || submitting || disabled}
               aria-label="发布"
             >
-              {submitting ? <LoadingDots /> : '发布'}
+              {submitting ? <LoadingDots /> : <SendIcon />}
             </button>
             <span className="kbdTipBubble" role="tooltip">
-              发送 <span className="kbdTipKey">Enter</span>
+              发布 <span className="kbdTipKey">Enter</span>
             </span>
           </span>
         </div>

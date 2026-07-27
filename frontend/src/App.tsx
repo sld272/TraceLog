@@ -35,6 +35,9 @@ const SOULS_RETRY_DELAYS = [2_000, 5_000, 10_000, 30_000]
 /* 未读轮询间隔。主动私聊全局冷却 3 天，半分钟的投递延迟无关紧要，
  * 而这一跳只是一条 SQL，静默期恒定为空列表。 */
 const UNREAD_POLL_INTERVAL_MS = 30_000
+/** 需要横向工作区的页面；其余路由走窄阅读栏。
+ *  帖子详情看的还是一张卡，跟首页里那张一样宽才连贯——铺满只会让卡右半边空着。 */
+const WORKSPACE_ROUTES = new Set<Route['kind']>(['goals', 'schedule', 'memory', 'settings', 'chats', 'chat'])
 type SoulsLoadState = 'loading' | 'ready' | 'error'
 
 export function App() {
@@ -52,6 +55,8 @@ export function App() {
   const homeScrollTopRef = useRef(0)
   const previousRouteKindRef = useRef(route.kind)
   const showRightPanel = route.kind === 'home'
+  /* 工作台页面横向铺开，阅读类页面（timeline / 详情 / 私聊）保持窄栏 */
+  const shellWidth = WORKSPACE_ROUTES.has(route.kind) ? 'workspace' : 'reading'
   const navKey = navKeyFromRoute(route)
   const memoryQueueCount = memoryStatus?.pending_event_count ?? 0
   const selectedDate = route.kind === 'home' ? route.date ?? null : null
@@ -343,6 +348,7 @@ export function App() {
         />
       )}
       main={renderMain()}
+      width={shellWidth}
       panel={showRightPanel ? (
         <RightPanel
           searchQuery={homeSearch}

@@ -83,7 +83,7 @@ export function RightPanel({
           aria-label="搜索动态"
         />
         {searchQuery && (
-          <button className={styles.panelSearchClear} onClick={() => onSearchQueryChange('')} aria-label="清空搜索" title="清空搜索">
+          <button className={styles.panelSearchClear} onClick={() => onSearchQueryChange('')} aria-label="清空搜索" data-tip="清空搜索" data-tip-align="end">
             ×
           </button>
         )}

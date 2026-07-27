@@ -22,6 +22,44 @@ export function formatSmartTime(value: string | number, now = new Date()): strin
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${formatClock(date)}`
 }
 
+/** 只取时刻（HH:mm）。用在日期已经由分组锚点交代过的地方，帖子自己不必重复日期。 */
+export function formatTimeOfDay(value: string | number): string {
+  const date = parseDateValue(value)
+  return date ? formatClock(date) : '-'
+}
+
+/** 时间线分组用的日期键（本地时区的 YYYY-MM-DD）。 */
+export function dayKeyOf(value: string | number): string {
+  const date = parseDateValue(value)
+  if (!date) return ''
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
+export interface DayAnchorLabel {
+  /** 日号，锚点上的大字 */
+  day: string
+  /** 月份 + 星期，锚点上的小字 */
+  detail: string
+  /** 今天 / 昨天这类相对说法，有则替代 detail 的前半段 */
+  relative: string | null
+}
+
+/** 拆出时间线日期锚需要的三段文字。 */
+export function dayAnchorLabel(dayKey: string, now = new Date()): DayAnchorLabel {
+  const date = new Date(`${dayKey}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return { day: dayKey, detail: '', relative: null }
+  const diff = getCalendarDayDiff(date, now)
+  const relative = diff === 0 ? '今天' : diff === 1 ? '昨天' : null
+  const year = date.getFullYear() === now.getFullYear() ? '' : `${date.getFullYear()}年`
+  const weekday = WEEKDAYS[date.getDay()] ?? ''
+  return {
+    day: String(date.getDate()),
+    /* 说了"今天/昨天"就不必再报月份，那是同一件事说两遍 */
+    detail: relative ? weekday : `${year}${date.getMonth() + 1}月 ${weekday}`,
+    relative,
+  }
+}
+
 /** 格式化绝对时间，用于悬停提示 */
 export function formatAbsoluteTime(value: string | number): string {
   const date = parseDateValue(value)

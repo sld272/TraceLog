@@ -5,9 +5,7 @@ import {
   type PostDetail,
   ApiError,
   deleteCommentMessage,
-  getCommentConversation,
   getPost,
-  listCommentConversations,
   rerunCommentMessage,
   retryJob,
   sendCommentMessage,
@@ -16,6 +14,7 @@ import {
 import { type CommentConversationState } from '@/components/PostCard'
 import {
   buildSendingCommentState,
+  conversationsFromThreads,
   failedCommentState,
   latestEventId,
   shouldRefreshPostDetail,
@@ -58,25 +57,6 @@ export function usePostDetail(postId: string): UsePostDetailResult {
     unsubscribeRef.current = null
   }, [])
 
-  const refreshConversations = useCallback(async () => {
-    const roots = await listCommentConversations(postId)
-    const details = await Promise.all(
-      roots.map(async (conversation) => {
-        const detail = await getCommentConversation(postId, conversation.soul_name)
-        return [conversation.soul_name, toConversationState(detail.conversation, detail.messages)] as const
-      }),
-    )
-    setConversations((prev) => {
-      const next: Record<string, CommentConversationState> = Object.fromEntries(details)
-      /* Keep in-flight optimistic threads: a server snapshot taken mid-send
-         would wipe the pending bubble and let it flash back later. */
-      for (const [soulName, state] of Object.entries(prev)) {
-        if (state.sending) next[soulName] = state
-      }
-      return next
-    })
-  }, [postId])
-
   const refresh = useCallback(async () => {
     try {
       const detail = await getPost(postId)
@@ -84,7 +64,7 @@ export function usePostDetail(postId: string): UsePostDetailResult {
       setComments(detail.comments)
       setNotFound(false)
       setError(null)
-      await refreshConversations()
+      setConversations((prev) => conversationsFromThreads(detail.conversations, prev))
       return detail
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
@@ -97,7 +77,7 @@ export function usePostDetail(postId: string): UsePostDetailResult {
       }
       return null
     }
-  }, [postId, refreshConversations])
+  }, [postId])
 
   const subscribeIfRunning = useCallback((detail: PostDetail) => {
     const state = detail.post.pipeline_status?.state

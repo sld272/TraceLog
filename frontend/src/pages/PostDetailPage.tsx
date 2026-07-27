@@ -274,10 +274,8 @@ function DetailHeader({ onBack }: { onBack: () => void }) {
   return (
     <header className={styles.header}>
       <button className={styles.backButton} onClick={onBack}>← 返回</button>
-      <div>
-        <h1>记录详情</h1>
-        <p>完整对话、引用和处理状态</p>
-      </div>
+      {/* 页面上就摆着这条记录，不必再用一行小字解释这页有什么 */}
+      <h1>记录详情</h1>
     </header>
   )
 }

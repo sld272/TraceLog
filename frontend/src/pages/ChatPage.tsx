@@ -516,7 +516,8 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings, onThreadRe
           <SoulAvatar name={soulName} className={styles.chatHeadAvatar} />
           <div className={styles.chatHeadInfo}>
             <div className={styles.chatHeadName}>{soulName}</div>
-            <div className={styles.chatHeadStatus}>{thread?.title || '会记得你们的对话'}</div>
+            {/* 后端生成的会话标题就是「与 XX 的私聊」，名字已经在上面写着了，
+                这行再说一遍等于占位。有真正的近况可讲时再来填这里。 */}
           </div>
         </header>
 
@@ -884,11 +885,11 @@ function MessageBubble({
         {isPersisted && editDraft === null && !isFailedAssistant && (
           <div className={styles.messageActions}>
             {isUser ? (
-              <button className={styles.messageAction} onClick={() => onStartEdit(message)} disabled={busy} title="编辑" aria-label="编辑私聊消息">
+              <button className={styles.messageAction} onClick={() => onStartEdit(message)} disabled={busy} data-tip="编辑" aria-label="编辑私聊消息">
                 <PencilIcon />
               </button>
             ) : (
-              <button className={styles.messageAction} onClick={() => onRerun(message)} disabled={busy} title="重跑" aria-label={`重跑 ${soulName} 的回复`}>
+              <button className={styles.messageAction} onClick={() => onRerun(message)} disabled={busy} data-tip="重跑" aria-label={`重跑 ${soulName} 的回复`}>
                 <RefreshCwIcon />
               </button>
             )}
