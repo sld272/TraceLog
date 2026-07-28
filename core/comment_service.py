@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, field, replace
 
 from core import (
@@ -30,6 +31,7 @@ from core.app_services import job_service, public_post_pipeline
 
 COMMENT_HISTORY_LIMIT = 30
 OTHER_SOUL_THREAD_CONTEXT_LIMIT = 6
+_COMMENT_TURN_LOCKS = tuple(threading.RLock() for _ in range(64))
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,16 @@ class CommentReplyResult:
     assistant_message_id: int | None
     error: str | None
     suggestions: list[dict] = field(default_factory=list)
+
+
+def _comment_turn_lock(post_id: str, soul_name: str):
+    """Serialize every mutation in one (post, SOUL) conversation.
+
+    Fixed stripes do not retain a lock for each historical conversation. All
+    mutation entry points take this single lock, and nested append operations
+    reuse it through RLock instead of establishing a second lock order.
+    """
+    return _COMMENT_TURN_LOCKS[hash((post_id, soul_name)) % len(_COMMENT_TURN_LOCKS)]
 
 
 def get_conversation(post_id: str, soul_name: str) -> CommentConversation:
@@ -185,6 +197,25 @@ def list_conversation_messages_after(
 
 
 def append_comment(
+    post_id: str,
+    soul_name: str,
+    role: str,
+    content: str,
+    attachment_ids: list[str] | None = None,
+    metadata: dict | None = None,
+) -> CommentMessage:
+    with _comment_turn_lock(post_id, soul_name):
+        return _append_comment(
+            post_id,
+            soul_name,
+            role,
+            content,
+            attachment_ids=attachment_ids,
+            metadata=metadata,
+        )
+
+
+def _append_comment(
     post_id: str,
     soul_name: str,
     role: str,
@@ -391,6 +422,25 @@ def call_comment_reply(
     attachment_ids: list[str] | None = None,
 ) -> CommentReplyResult:
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
+    with _comment_turn_lock(post_id, soul_name):
+        return _call_comment_reply(
+            post_id,
+            soul_name,
+            user_message,
+            client,
+            model,
+            attachment_ids,
+        )
+
+
+def _call_comment_reply(
+    post_id: str,
+    soul_name: str,
+    user_message: str,
+    client: LLMClient,
+    model: str,
+    attachment_ids: list[str],
+) -> CommentReplyResult:
     user_message_row = append_comment(post_id, soul_name, "user", user_message, attachment_ids=attachment_ids)
     llm_user_message = vision_service.content_for_llm(user_message, user_message_row.attachments)
     comment_context = build_comment_context(post_id, soul_name, llm_user_message, client, model)
@@ -500,6 +550,12 @@ def _record_comment_deletes(conn, post_id: str, soul_name: str, deleted_rows: li
 
 def delete_message(message_id: int) -> dict:
     message = get_message(message_id)
+    with _comment_turn_lock(message.post_id, message.soul_name):
+        return _delete_message(message_id)
+
+
+def _delete_message(message_id: int) -> dict:
+    message = get_message(message_id)
     if message.role != "user":
         raise ValueError("只能删除用户评论；要删除 SOUL 回复，请删除它前面的用户评论或原 post")
     if message.seq == 0:
@@ -554,6 +610,12 @@ def delete_message(message_id: int) -> dict:
 
 
 def rerun_latest_assistant_message(message_id: int, client: LLMClient, model: str) -> dict:
+    message = get_message(message_id)
+    with _comment_turn_lock(message.post_id, message.soul_name):
+        return _rerun_latest_assistant_message(message_id, client, model)
+
+
+def _rerun_latest_assistant_message(message_id: int, client: LLMClient, model: str) -> dict:
     message = get_message(message_id)
     latest = _latest_conversation_message(message.post_id, message.soul_name)
     if latest is None or latest.id != message.id or latest.role != "assistant":

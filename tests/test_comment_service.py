@@ -450,6 +450,201 @@ class CommentServiceTest(unittest.TestCase):
         self.assertEqual('{"reply": "你好呀"}', thread_messages[1]["content"])
         self.assertTrue(thread_messages[2]["content"].rstrip().endswith("再说说"))
 
+    def test_same_conversation_reply_turns_do_not_interleave(self) -> None:
+        post_id = "20260525-001"
+        soul_name = "拾迹者"
+        first_reply_entered = threading.Event()
+        release_first_reply = threading.Event()
+        second_lock_requested = threading.Event()
+        second_reply_entered = threading.Event()
+        contexts: dict[str, list[comment_service.CommentMessage]] = {}
+        results: dict[str, comment_service.CommentReplyResult] = {}
+        failures: list[BaseException] = []
+        original_comment_turn_lock = comment_service._comment_turn_lock
+
+        def fake_reply(client, model, context, soul, *, trace_context=None):
+            del client, model, soul, trace_context
+            current_message = context.messages[-1].content
+            if current_message == "用户 A":
+                first_reply_entered.set()
+                if not release_first_reply.wait(timeout=5):
+                    raise RuntimeError("first comment reply was not released")
+                return {"reply": "助手 A"}
+            contexts["B"] = context.messages
+            second_reply_entered.set()
+            return {"reply": "助手 B"}
+
+        def tracked_comment_turn_lock(current_post_id: str, current_soul_name: str):
+            if threading.current_thread().name == "second-comment-turn":
+                second_lock_requested.set()
+            return original_comment_turn_lock(current_post_id, current_soul_name)
+
+        def run_first() -> None:
+            try:
+                results["A"] = comment_service.call_comment_reply(
+                    post_id,
+                    soul_name,
+                    "用户 A",
+                    FakeClient(),
+                    "fake-model",
+                )
+            except BaseException as exc:
+                failures.append(exc)
+
+        def run_second() -> None:
+            try:
+                results["B"] = comment_service.call_comment_reply(
+                    post_id,
+                    soul_name,
+                    "用户 B",
+                    FakeClient(),
+                    "fake-model",
+                )
+            except BaseException as exc:
+                failures.append(exc)
+
+        first = threading.Thread(target=run_first, name="first-comment-turn", daemon=True)
+        second = threading.Thread(target=run_second, name="second-comment-turn", daemon=True)
+        second_started = False
+        with (
+            patch("core.comment_service.reply_router.call_soul_comment_reply", side_effect=fake_reply),
+            patch("core.comment_service._comment_turn_lock", side_effect=tracked_comment_turn_lock),
+        ):
+            first.start()
+            try:
+                self.assertTrue(first_reply_entered.wait(timeout=5))
+                second.start()
+                second_started = True
+                self.assertTrue(second_lock_requested.wait(timeout=5))
+                self.assertFalse(second_reply_entered.wait(timeout=0.2))
+                self.assertEqual(
+                    [("assistant", "我陪你继续拆。"), ("user", "用户 A")],
+                    [
+                        (message.role, message.content)
+                        for message in comment_service.list_conversation_messages(post_id, soul_name)
+                    ],
+                )
+            finally:
+                release_first_reply.set()
+                first.join(timeout=5)
+                if second_started:
+                    second.join(timeout=5)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual([], failures)
+        self.assertEqual({"A", "B"}, set(results))
+        self.assertEqual(
+            [("user", "用户 A"), ("assistant", "助手 A"), ("user", "用户 B")],
+            [(message.role, message.content) for message in contexts["B"]],
+        )
+        self.assertEqual(
+            [
+                ("assistant", "我陪你继续拆。"),
+                ("user", "用户 A"),
+                ("assistant", "助手 A"),
+                ("user", "用户 B"),
+                ("assistant", "助手 B"),
+            ],
+            [
+                (message.role, message.content)
+                for message in comment_service.list_conversation_messages(post_id, soul_name)
+            ],
+        )
+
+    def test_delete_waits_for_an_inflight_comment_turn(self) -> None:
+        post_id = "20260525-001"
+        soul_name = "拾迹者"
+        first_reply_entered = threading.Event()
+        release_first_reply = threading.Event()
+        delete_lock_requested = threading.Event()
+        delete_finished = threading.Event()
+        failures: list[BaseException] = []
+        deleted: dict[str, dict] = {}
+        pending_user_id: int | None = None
+        original_comment_turn_lock = comment_service._comment_turn_lock
+
+        def fake_reply(client, model, context, soul, *, trace_context=None):
+            del client, model, context, soul, trace_context
+            first_reply_entered.set()
+            if not release_first_reply.wait(timeout=5):
+                raise RuntimeError("in-flight comment reply was not released")
+            return {"reply": "助手 A"}
+
+        def tracked_comment_turn_lock(current_post_id: str, current_soul_name: str):
+            if threading.current_thread().name == "delete-comment-turn":
+                delete_lock_requested.set()
+            return original_comment_turn_lock(current_post_id, current_soul_name)
+
+        def run_reply() -> None:
+            try:
+                comment_service.call_comment_reply(
+                    post_id,
+                    soul_name,
+                    "用户 A",
+                    FakeClient(),
+                    "fake-model",
+                )
+            except BaseException as exc:
+                failures.append(exc)
+
+        def run_delete(message_id: int) -> None:
+            try:
+                deleted["result"] = comment_service.delete_message(message_id)
+                delete_finished.set()
+            except BaseException as exc:
+                failures.append(exc)
+
+        reply_thread = threading.Thread(target=run_reply, name="first-comment-turn", daemon=True)
+        delete_thread: threading.Thread | None = None
+        with (
+            patch("core.comment_service.reply_router.call_soul_comment_reply", side_effect=fake_reply),
+            patch("core.comment_service._comment_turn_lock", side_effect=tracked_comment_turn_lock),
+        ):
+            reply_thread.start()
+            try:
+                self.assertTrue(first_reply_entered.wait(timeout=5))
+                pending_user = comment_service.list_conversation_messages(post_id, soul_name, include_root=False)[0]
+                pending_user_id = pending_user.id
+                delete_thread = threading.Thread(
+                    target=run_delete,
+                    args=(pending_user.id,),
+                    name="delete-comment-turn",
+                    daemon=True,
+                )
+                delete_thread.start()
+                self.assertTrue(delete_lock_requested.wait(timeout=5))
+                self.assertFalse(delete_finished.wait(timeout=0.2))
+                self.assertEqual(
+                    [("assistant", "我陪你继续拆。"), ("user", "用户 A")],
+                    [
+                        (message.role, message.content)
+                        for message in comment_service.list_conversation_messages(post_id, soul_name)
+                    ],
+                )
+            finally:
+                release_first_reply.set()
+                reply_thread.join(timeout=5)
+                if delete_thread is not None:
+                    delete_thread.join(timeout=5)
+
+        self.assertFalse(reply_thread.is_alive())
+        self.assertIsNotNone(delete_thread)
+        self.assertFalse(delete_thread.is_alive())
+        self.assertEqual([], failures)
+        self.assertTrue(delete_finished.is_set())
+        self.assertEqual(
+            [require_not_none(pending_user_id), require_not_none(pending_user_id) + 1],
+            deleted["result"]["deleted_message_ids"],
+        )
+        self.assertEqual(
+            [("assistant", "我陪你继续拆。")],
+            [
+                (message.role, message.content)
+                for message in comment_service.list_conversation_messages(post_id, soul_name)
+            ],
+        )
+
     def test_comment_reply_failure_preserves_user_message_and_failed_assistant(self) -> None:
         with patch("core.comment_service.reply_router.call_soul_comment_reply", return_value=None):
             result = comment_service.call_comment_reply("20260525-001", "拾迹者", "这句先记下", FakeClient(), "fake-model")
