@@ -72,11 +72,14 @@ export function AppShell({ nav, main, panel, width = 'reading' }: AppShellProps)
             aria-hidden="true"
           />
         )}
-        <main className={`${styles.main} ${width === 'workspace' ? styles.mainWide : ''}`}>
+        <main
+          className={`${styles.main} ${width === 'workspace' ? styles.mainWide : ''}`}
+          inert={mobileNavOpen}
+        >
           {main}
         </main>
         {panel && (
-          <aside className={styles.panel} aria-label="信息面板">
+          <aside className={styles.panel} aria-label="信息面板" inert={mobileNavOpen}>
             {panel}
           </aside>
         )}
