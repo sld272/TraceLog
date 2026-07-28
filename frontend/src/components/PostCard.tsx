@@ -319,14 +319,7 @@ function PipelineNotice({
             )}
           </div>
         </div>
-        <details className={styles.pipelineDetails}>
-          <summary>诊断信息</summary>
-          <div className={styles.pipelineDiagnostics}>
-            {failedJobs.map((job) => (
-              <p key={job.id}>{formatPipelineError(job.error)}</p>
-            ))}
-          </div>
-        </details>
+        <p className={styles.pipelineDiagnostics}>请稍后重试。</p>
       </div>
     )
   }
@@ -354,14 +347,10 @@ function PipelineNotice({
 
 function pipelineFailureTitle(failedJobs: PipelineJobSummary[]): string {
   return failedJobs.some((job) => job.type === 'generate_post_replies')
-    ? 'AI 回复失败'
-    : '处理失败'
+    ? '回应暂时没有生成'
+    : '这条记录暂时没有处理完'
 }
 
-function formatPipelineError(error: PipelineJobSummary['error']): string {
-  const text = (error ?? '').trim()
-  return text || '未知错误'
-}
 function CommentPreview({
   comment,
   conversation,
@@ -572,7 +561,6 @@ function CommentPreview({
       )}
       {conversation?.error && (
         <ReplyFailureInline
-          error={conversation.error}
           onRetry={latestMessage.role === 'assistant' && onRerun ? () => onRerun(latestMessage.id) : undefined}
           busy={replyBusy}
         />
@@ -594,11 +582,9 @@ function visibleMessagesForVariant(
 }
 
 function ReplyFailureInline({
-  error,
   onRetry,
   busy,
 }: {
-  error: string
   onRetry?: () => void
   busy: boolean
 }) {
@@ -615,12 +601,7 @@ function ReplyFailureInline({
           )}
         </div>
       </div>
-      <details className={styles.pipelineDetails}>
-        <summary>诊断信息</summary>
-        <div className={styles.pipelineDiagnostics}>
-          <p>{error}</p>
-        </div>
-      </details>
+      <p className={styles.pipelineDiagnostics}>请稍后重试。</p>
     </div>
   )
 }
@@ -649,9 +630,8 @@ function ThreadMessage({
   const isUser = message.role === 'user'
   const colors = useSoulColors(soulName)
   const isPersisted = message.id > 0
-  const failure = failedCommentReplyError(message)
-  const isFailedAssistant = message.role === 'assistant' && Boolean(failure)
-  const isPendingAssistant = message.role === 'assistant' && !failure && !message.content && (message.id < 0 || busy)
+  const isFailedAssistant = message.role === 'assistant' && hasFailedCommentReply(message)
+  const isPendingAssistant = message.role === 'assistant' && !isFailedAssistant && !message.content && (message.id < 0 || busy)
   return (
     <div id={`comment-${message.id}`} className={styles.threadRow}>
       <div className={styles.threadHeader}>
@@ -685,7 +665,6 @@ function ThreadMessage({
         </div>
       ) : isFailedAssistant ? (
         <ReplyFailureBubble
-          error={failure}
           onRetry={isPersisted && onRerun ? () => onRerun(message.id) : undefined}
           busy={busy}
         />
@@ -728,11 +707,9 @@ function RerunMarker({ at, className }: { at?: number | null; className?: string
 }
 
 function ReplyFailureBubble({
-  error,
   onRetry,
   busy,
 }: {
-  error: string | null
   onRetry?: () => void
   busy: boolean
 }) {
@@ -749,26 +726,18 @@ function ReplyFailureBubble({
           )}
         </div>
       </div>
-      <details className={styles.pipelineDetails}>
-        <summary>诊断信息</summary>
-        <div className={styles.pipelineDiagnostics}>
-          <p>{error || '未知错误'}</p>
-        </div>
-      </details>
+      <p className={styles.pipelineDiagnostics}>请稍后重试。</p>
     </div>
   )
 }
 
-function failedCommentReplyError(message: CommentMessage): string | null {
-  if (message.role !== 'assistant' || !message.metadata) return null
+function hasFailedCommentReply(message: CommentMessage): boolean {
+  if (message.role !== 'assistant' || !message.metadata) return false
   try {
-    const parsed = JSON.parse(message.metadata) as { status?: unknown; error?: unknown }
-    if (parsed.status !== 'failed') return null
-    return typeof parsed.error === 'string' && parsed.error.trim()
-      ? parsed.error.trim()
-      : '回复生成失败'
+    const parsed = JSON.parse(message.metadata) as { status?: unknown }
+    return parsed.status === 'failed'
   } catch {
-    return null
+    return false
   }
 }
 
