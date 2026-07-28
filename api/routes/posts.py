@@ -178,7 +178,8 @@ def _list_posts(
         SELECT posts.id, posts.ts, posts.content, posts.importance,
                COUNT(comments.id) AS comment_count
         FROM posts
-        LEFT JOIN comments ON comments.post_id = posts.id AND comments.seq = 0
+        -- 评论数把追问和回复一起算上：一段聊了三个来回的对话，说"评论 1"是不对的
+        LEFT JOIN comments ON comments.post_id = posts.id
         {where}
         GROUP BY posts.id
         ORDER BY julianday(posts.ts) DESC, posts.id DESC
@@ -211,7 +212,8 @@ def _search_posts(query: str, limit: int, mode: Literal["keyword", "hybrid"]) ->
         SELECT posts.id, posts.ts, posts.content, posts.importance,
                COUNT(comments.id) AS comment_count
         FROM posts
-        LEFT JOIN comments ON comments.post_id = posts.id AND comments.seq = 0
+        -- 评论数把追问和回复一起算上：一段聊了三个来回的对话，说"评论 1"是不对的
+        LEFT JOIN comments ON comments.post_id = posts.id
         WHERE posts.id IN ({placeholders})
         GROUP BY posts.id
         """,

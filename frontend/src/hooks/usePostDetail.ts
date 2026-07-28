@@ -15,6 +15,7 @@ import {
 import { type CommentConversationState } from '@/components/PostCard'
 import {
   buildSendingCommentState,
+  commentCountOf,
   conversationsFromThreads,
   failedCommentState,
   latestEventId,
@@ -29,6 +30,8 @@ export interface UsePostDetailResult {
   post: PostDetail['post'] | null
   comments: Comment[]
   conversations: Record<string, CommentConversationState>
+  /** 首条回应加上所有追问和回复。 */
+  commentCount: number
   loading: boolean
   notFound: boolean
   error: string | null
@@ -46,6 +49,7 @@ export function usePostDetail(postId: string): UsePostDetailResult {
   const [post, setPost] = useState<PostDetail['post'] | null>(null)
   const [comments, setComments] = useState<Comment[]>([])
   const [conversations, setConversations] = useState<Record<string, CommentConversationState>>({})
+  const [commentCount, setCommentCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,6 +71,7 @@ export function usePostDetail(postId: string): UsePostDetailResult {
       setNotFound(false)
       setError(null)
       setConversations((prev) => conversationsFromThreads(detail.conversations, prev))
+      setCommentCount(commentCountOf(detail.comments, detail.conversations))
       return detail
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
@@ -256,6 +261,7 @@ export function usePostDetail(postId: string): UsePostDetailResult {
     post,
     comments,
     conversations,
+    commentCount,
     loading,
     notFound,
     error,

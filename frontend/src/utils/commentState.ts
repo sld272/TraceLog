@@ -28,6 +28,14 @@ export function conversationsFromThreads(
   return next
 }
 
+/** 一条帖子下的评论总数：首条回应加上所有追问和回复。 */
+export function commentCountOf(
+  comments: Comment[],
+  threads: PostConversationThread[] | undefined,
+): number {
+  return comments.length + (threads ?? []).reduce((sum, thread) => sum + thread.thread_total, 0)
+}
+
 export function toConversationState(
   conversation: CommentConversation,
   messages: CommentMessage[],

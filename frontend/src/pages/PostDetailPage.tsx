@@ -78,7 +78,7 @@ export function PostDetailPage({
       ts: detail.post.ts,
       content: detail.post.content,
       importance: detail.post.importance,
-      comment_count: detail.comments.length,
+      comment_count: detail.commentCount,
       latest_event_type: detail.post.latest_event_type ?? null,
       pipeline_status: detail.post.pipeline_status,
       attachments: detail.post.attachments,
@@ -87,7 +87,7 @@ export function PostDetailPage({
       comments: [],
       conversations: [],
     }
-  }, [detail.comments.length, detail.post])
+  }, [detail.commentCount, detail.post])
 
   /* The feed may be scrolled deep when the user jumps in; without this the
      browser only clamps the old scroll offset to the new page height. */

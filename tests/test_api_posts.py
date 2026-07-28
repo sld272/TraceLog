@@ -512,6 +512,43 @@ class ApiPostsTest(unittest.TestCase):
         )
         self.assertEqual(4, thread["thread_total"])
 
+    def test_comment_count_includes_follow_ups(self) -> None:
+        """"评论 N"数的是评论：一段聊了两个来回的对话不是 1 条。"""
+        from core import db
+
+        with self._temp_db():
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("p-count", "2026-06-01T10:00:00+08:00", "计数测试", 1.0, 1.0),
+            )
+            db.execute(
+                """
+                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, 1, 0, ?, ?)
+                """,
+                ("拾迹者", "souls/拾迹者.md", 1.0, 1.0),
+            )
+            for role, content, seq, created_at in [
+                ("assistant", "首条回复", 0, 2.0),
+                ("user", "追问", 1, 3.0),
+                ("assistant", "回答", 2, 4.0),
+            ]:
+                db.execute(
+                    """
+                    INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    ("p-count", "拾迹者", role, content, seq, created_at),
+                )
+
+            with self._client() as client:
+                response = client.get("/posts")
+
+        self.assertEqual(3, response.json()[0]["comment_count"])
+
     def test_list_posts_keeps_soul_without_follow_ups(self) -> None:
         """只回了一句、没人追问的 SOUL 也要出现在列表里。"""
         from core import db

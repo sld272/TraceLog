@@ -30,6 +30,7 @@ import { formatRoute } from '@/router'
 import { type PostMutationSignal } from '@/types/postMutation'
 import {
   buildSendingCommentState,
+  commentCountOf,
   conversationsFromThreads,
   failedCommentState,
   latestEventId,
@@ -292,7 +293,7 @@ export function Timeline({
           ? {
               ...p,
               importance: detail.post.importance,
-              comment_count: detail.comments.length,
+              comment_count: commentCountOf(detail.comments, detail.conversations),
               latest_event_type: detail.post.latest_event_type ?? eventType ?? p.latest_event_type,
               pipeline_status: detail.post.pipeline_status,
               attachments: detail.post.attachments,
