@@ -58,7 +58,6 @@ def load_config() -> dict:
             return config
 
         print(f"[配置] 检测到配置不完整（缺少：{', '.join(missing)}），将重新配置。")
-        os.remove(CONFIG_FILE)
 
     print("=" * 50)
     print("欢迎使用 TraceLog 拾迹！首次运行需要配置。")

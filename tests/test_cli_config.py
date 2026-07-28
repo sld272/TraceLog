@@ -86,6 +86,23 @@ class CliConfigTest(unittest.TestCase):
             loaded["proactive_message"],
         )
 
+    def test_incomplete_config_survives_interrupted_reconfiguration(self) -> None:
+        original = {
+            "api_key": "existing-key",
+            "base_url": "https://example.invalid/v1",
+            "model": "existing-model",
+        }
+        config_path = Path(cli_config.CONFIG_FILE)
+        config_path.write_text(json.dumps(original), encoding="utf-8")
+
+        with (
+            patch.object(cli_config.getpass, "getpass", side_effect=EOFError),
+            self.assertRaises(EOFError),
+        ):
+            cli_config.load_config()
+
+        self.assertEqual(original, json.loads(config_path.read_text(encoding="utf-8")))
+
     @unittest.skipUnless(os.name == "posix", "POSIX file modes are required")
     def test_first_run_writes_config_with_owner_only_permissions(self) -> None:
         with (
