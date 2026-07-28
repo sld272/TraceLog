@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import {
   type MemoryEvidenceRef,
   type MemoryPortraitPolicy,
@@ -543,6 +543,14 @@ function UnitCard({
     setEditing(true)
   }
 
+  const handleSelectKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // 焦点在“编辑”等内部按钮时，Enter/Space 会冒泡到卡片；按钮自身已处理操作，不能同时打开证据抽屉。
+    if (event.target !== event.currentTarget) return
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onSelect()
+  }
+
   const saveEdit = async () => {
     const content = draftContent.trim()
     if (!content) return
@@ -662,7 +670,13 @@ function UnitCard({
   }
 
   return (
-    <div className={`${styles.unit} ${selected ? styles.unitSelected : ''}`} onClick={onSelect} role="button" tabIndex={0}>
+    <div
+      className={`${styles.unit} ${selected ? styles.unitSelected : ''}`}
+      onClick={onSelect}
+      onKeyDown={handleSelectKeyDown}
+      role="button"
+      tabIndex={0}
+    >
       <p className={styles.unitContent}>{unit.content}</p>
       <div className={styles.unitMeta}>
         <span className={styles.chip}>{typeLabel(unit.type)}</span>
