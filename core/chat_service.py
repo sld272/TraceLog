@@ -18,6 +18,7 @@ from core.soul_service import SoulContext
 
 CHAT_HISTORY_LIMIT = 20
 _REQUEST_LOCKS = tuple(threading.Lock() for _ in range(64))
+_THREAD_TURN_LOCKS = tuple(threading.RLock() for _ in range(64))
 
 
 @dataclass(frozen=True)
@@ -310,6 +311,16 @@ def _request_lock(request_id: str | None):
     return _REQUEST_LOCKS[hash(request_id) % len(_REQUEST_LOCKS)]
 
 
+def _thread_turn_lock(thread_id: int):
+    """Serialize complete mutations for one private-chat thread.
+
+    A fixed stripe avoids retaining a lock for every historical thread. Callers
+    that also need request-id idempotency always take this lock first, then the
+    request lock.
+    """
+    return _THREAD_TURN_LOCKS[thread_id % len(_THREAD_TURN_LOCKS)]
+
+
 def _message_for_client_request(
     thread_id: int,
     request_id: str,
@@ -528,17 +539,18 @@ def call_chat_reply(
     appending or billing it twice."""
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
     normalized_request_id = _normalize_client_request_id(request_id)
-    with _request_lock(normalized_request_id):
-        user_message_row = append_user_message(
-            thread_id,
-            user_message,
-            attachment_ids=attachment_ids,
-            client_request_id=normalized_request_id,
-        )
-        existing = _reply_result_for_request(user_message_row)
-        if existing is not None:
-            return existing
-        return _call_assistant_reply_for_user_message(user_message_row, client, model)
+    with _thread_turn_lock(thread_id):
+        with _request_lock(normalized_request_id):
+            user_message_row = append_user_message(
+                thread_id,
+                user_message,
+                attachment_ids=attachment_ids,
+                client_request_id=normalized_request_id,
+            )
+            existing = _reply_result_for_request(user_message_row)
+            if existing is not None:
+                return existing
+            return _call_assistant_reply_for_user_message(user_message_row, client, model)
 
 
 def _call_assistant_reply_for_user_message(
@@ -581,18 +593,50 @@ def stream_chat_reply(
     post-processing (persist, suggestions, memory accounting) has finished."""
     attachment_ids = attachment_service.validate_attachment_ids(attachment_ids)
     normalized_request_id = _normalize_client_request_id(request_id)
-    with _request_lock(normalized_request_id):
-        user_message_row = append_user_message(
-            thread_id,
-            content,
-            attachment_ids=attachment_ids,
-            client_request_id=normalized_request_id,
-        )
-        existing = _reply_result_for_request(user_message_row)
-        if existing is not None:
-            yield {"type": "done", "result": asdict(existing)}
+    event_queue: queue.Queue = queue.Queue()
+    sentinel = object()
+
+    def run_turn() -> None:
+        try:
+            # A client retry can reuse one request_id on a different thread;
+            # every complete turn takes the thread stripe before that shared
+            # request stripe, so those two requests cannot form a lock cycle.
+            with _thread_turn_lock(thread_id):
+                with _request_lock(normalized_request_id):
+                    user_message_row = append_user_message(
+                        thread_id,
+                        content,
+                        attachment_ids=attachment_ids,
+                        client_request_id=normalized_request_id,
+                    )
+                    existing = _reply_result_for_request(user_message_row)
+                    if existing is not None:
+                        event_queue.put({"type": "done", "result": asdict(existing)})
+                    else:
+                        for event in _stream_assistant_reply_for_user_message(
+                            user_message_row, client, model
+                        ):
+                            event_queue.put(event)
+        except Exception as exc:
+            # A stream can finish successfully and then the enabled suggestion
+            # provider can time out in collect_reply_suggestions; wake a
+            # still-connected consumer instead of leaving it blocked forever.
+            event_queue.put({"type": "error", "exception": exc})
+        finally:
+            event_queue.put(sentinel)
+
+    # The owner survives a disconnected HTTP generator. It retains the thread
+    # lock from the user write through assistant persistence and post-processing;
+    # this generator only consumes the owner queue.
+    owner = threading.Thread(target=run_turn, daemon=True)
+    owner.start()
+    while True:
+        event = event_queue.get()
+        if event is sentinel:
             return
-        yield from _stream_assistant_reply_for_user_message(user_message_row, client, model)
+        if event["type"] == "error":
+            raise event["exception"]
+        yield event
 
 
 def _stream_assistant_reply_for_user_message(
@@ -608,8 +652,8 @@ def _stream_assistant_reply_for_user_message(
 
     # The router streams via an on_delta callback (blocking until done); bridge
     # that push-model into this pull-model generator with a queue + worker thread
-    # so deltas reach the client incrementally. Only the LLM call runs on the
-    # worker; every DB write stays on this thread, after the join.
+    # so deltas reach the owner incrementally. Only the LLM call runs on the
+    # worker; every DB write stays on the owner thread, after the join.
     delta_queue: queue.Queue = queue.Queue()
     sentinel = object()
     outcome: dict = {}
@@ -788,13 +832,14 @@ def append_unprompted_assistant_message(
     caller's bookkeeping — which posts this letter consumed, for instance —
     cannot survive a message that failed to persist, or vice versa.
     """
-    return _append_message(
-        thread_id,
-        "assistant",
-        content,
-        metadata=metadata,
-        transaction_hook=transaction_hook,
-    )
+    with _thread_turn_lock(thread_id):
+        return _append_message(
+            thread_id,
+            "assistant",
+            content,
+            metadata=metadata,
+            transaction_hook=transaction_hook,
+        )
 
 
 def _append_message(
@@ -954,18 +999,26 @@ def edit_user_message_and_reply(
     model: str,
     attachment_ids: list[str] | None = None,
 ) -> dict:
-    edited = edit_user_message(message_id, content, attachment_ids=attachment_ids)
-    result = _call_assistant_reply_for_user_message(edited["message"], client, model)
-    thread = get_thread(edited["thread"].id)
-    return {
-        "thread": thread,
-        "message": edited["message"],
-        "result": result,
-        "messages": list_thread_messages(thread.id),
-    }
+    thread_id = get_message(message_id).thread_id
+    with _thread_turn_lock(thread_id):
+        edited = edit_user_message(message_id, content, attachment_ids=attachment_ids)
+        result = _call_assistant_reply_for_user_message(edited["message"], client, model)
+        thread = get_thread(edited["thread"].id)
+        return {
+            "thread": thread,
+            "message": edited["message"],
+            "result": result,
+            "messages": list_thread_messages(thread.id),
+        }
 
 
 def rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> dict:
+    thread_id = get_message(message_id).thread_id
+    with _thread_turn_lock(thread_id):
+        return _rerun_assistant_message(message_id, client, model)
+
+
+def _rerun_assistant_message(message_id: int, client: LLMClient, model: str) -> dict:
     message = get_message(message_id)
     if message.role != "assistant":
         raise ValueError("只能重跑 SOUL 回复")

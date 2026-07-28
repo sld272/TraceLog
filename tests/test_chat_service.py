@@ -526,6 +526,194 @@ class ChatServiceTest(unittest.TestCase):
             0,
         )
 
+    def test_same_thread_turns_with_distinct_request_ids_do_not_interleave(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        first_reply_entered = threading.Event()
+        release_first_reply = threading.Event()
+        second_call_started = threading.Event()
+        second_reply_entered = threading.Event()
+        contexts: dict[str, list[chat_service.ChatMessage]] = {}
+        results: dict[str, chat_service.ChatReplyResult] = {}
+        failures: list[BaseException] = []
+
+        def fake_reply(client, model, context, soul, *, trace_context=None):
+            del client, model, soul, trace_context
+            current_message = context.messages[-1].content
+            if current_message == "用户 A":
+                first_reply_entered.set()
+                if not release_first_reply.wait(timeout=5):
+                    raise RuntimeError("first chat reply was not released")
+                return {"reply": "助手 A"}
+            contexts["B"] = context.messages
+            second_reply_entered.set()
+            return {"reply": "助手 B"}
+
+        def run_first() -> None:
+            try:
+                results["A"] = chat_service.call_chat_reply(
+                    thread.id,
+                    "用户 A",
+                    FakeClient(),
+                    "fake-model",
+                    request_id="turn-a",
+                )
+            except BaseException as exc:
+                failures.append(exc)
+
+        def run_second() -> None:
+            second_call_started.set()
+            try:
+                results["B"] = chat_service.call_chat_reply(
+                    thread.id,
+                    "用户 B",
+                    FakeClient(),
+                    "fake-model",
+                    request_id="turn-b",
+                )
+            except BaseException as exc:
+                failures.append(exc)
+
+        first = threading.Thread(target=run_first, daemon=True)
+        second = threading.Thread(target=run_second, daemon=True)
+        second_started = False
+        with patch("core.chat_service.reply_router.call_soul_chat_reply", side_effect=fake_reply):
+            first.start()
+            try:
+                self.assertTrue(first_reply_entered.wait(timeout=5))
+                second.start()
+                second_started = True
+                self.assertTrue(second_call_started.wait(timeout=5))
+                self.assertFalse(second_reply_entered.wait(timeout=0.2))
+                self.assertEqual(
+                    ["用户 A"],
+                    [message.content for message in chat_service.list_thread_messages(thread.id)],
+                )
+            finally:
+                release_first_reply.set()
+                first.join(timeout=5)
+                if second_started:
+                    second.join(timeout=5)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual([], failures)
+        self.assertEqual({"A", "B"}, set(results))
+        self.assertEqual(
+            ["用户 A", "助手 A", "用户 B"],
+            [message.content for message in contexts["B"]],
+        )
+        messages = chat_service.list_thread_messages(thread.id)
+        self.assertEqual(["user", "assistant", "user", "assistant"], [message.role for message in messages])
+        self.assertEqual(["用户 A", "助手 A", "用户 B", "助手 B"], [message.content for message in messages])
+
+    def test_closed_stream_keeps_turn_lock_until_assistant_and_proactive_write_finish(self) -> None:
+        thread = chat_service.get_or_create_thread("拾迹者")
+        release_stream = threading.Event()
+        second_lock_requested = threading.Event()
+        proactive_lock_requested = threading.Event()
+        second_reply_entered = threading.Event()
+        proactive_finished = threading.Event()
+        failures: list[BaseException] = []
+        original_thread_turn_lock = chat_service._thread_turn_lock
+
+        def fake_stream(client, model, context, soul, *, on_delta, trace_context=None):
+            del client, model, context, soul, trace_context
+            on_delta("A 的首个分片")
+            if not release_stream.wait(timeout=5):
+                raise RuntimeError("stream owner was not released")
+            return {"reply": "助手 A"}
+
+        def fake_reply(client, model, context, soul, *, trace_context=None):
+            del client, model, context, soul, trace_context
+            second_reply_entered.set()
+            return {"reply": "助手 B"}
+
+        def tracked_thread_turn_lock(thread_id: int):
+            name = threading.current_thread().name
+            if name == "second-chat-turn":
+                second_lock_requested.set()
+            elif name == "proactive-chat-write":
+                proactive_lock_requested.set()
+            return original_thread_turn_lock(thread_id)
+
+        def run_second() -> None:
+            try:
+                chat_service.call_chat_reply(
+                    thread.id,
+                    "用户 B",
+                    FakeClient(),
+                    "fake-model",
+                    request_id="turn-b",
+                )
+            except BaseException as exc:
+                failures.append(exc)
+
+        def run_proactive() -> None:
+            try:
+                chat_service.append_unprompted_assistant_message(
+                    thread.id,
+                    "主动消息",
+                    metadata={"status": "ok", "proactive_message": True},
+                )
+                proactive_finished.set()
+            except BaseException as exc:
+                failures.append(exc)
+
+        stream = chat_service.stream_chat_reply(
+            thread.id,
+            "用户 A",
+            FakeStreamingClient(),
+            "fake-model",
+            request_id="turn-a",
+        )
+        second = threading.Thread(target=run_second, name="second-chat-turn", daemon=True)
+        proactive = threading.Thread(target=run_proactive, name="proactive-chat-write", daemon=True)
+        second_started = False
+        proactive_started = False
+        with (
+            patch(
+                "core.chat_service.reply_router.call_soul_chat_reply_stream",
+                side_effect=fake_stream,
+            ),
+            patch("core.chat_service.reply_router.call_soul_chat_reply", side_effect=fake_reply),
+            patch("core.chat_service._thread_turn_lock", side_effect=tracked_thread_turn_lock),
+        ):
+            try:
+                first_event = next(stream)
+                self.assertEqual({"type": "delta", "text": "A 的首个分片"}, first_event)
+                stream.close()
+
+                second.start()
+                second_started = True
+                proactive.start()
+                proactive_started = True
+                self.assertTrue(second_lock_requested.wait(timeout=5))
+                self.assertTrue(proactive_lock_requested.wait(timeout=5))
+                self.assertFalse(second_reply_entered.wait(timeout=0.2))
+                self.assertFalse(proactive_finished.wait(timeout=0.2))
+                self.assertEqual(
+                    ["用户 A"],
+                    [message.content for message in chat_service.list_thread_messages(thread.id)],
+                )
+            finally:
+                stream.close()
+                release_stream.set()
+                if second_started:
+                    second.join(timeout=5)
+                if proactive_started:
+                    proactive.join(timeout=5)
+
+        self.assertFalse(second.is_alive())
+        self.assertFalse(proactive.is_alive())
+        self.assertEqual([], failures)
+        messages = chat_service.list_thread_messages(thread.id)
+        self.assertEqual(
+            [("user", "用户 A"), ("assistant", "助手 A")],
+            [(message.role, message.content) for message in messages[:2]],
+        )
+        self.assertIn(("assistant", "主动消息"), [(message.role, message.content) for message in messages])
+        self.assertIn(("assistant", "助手 B"), [(message.role, message.content) for message in messages])
+
     def test_non_stream_retry_reuses_completed_stream_request(self) -> None:
         thread = chat_service.get_or_create_thread("拾迹者")
         client = FakeStreamingClient(["第一", "次回复"])
