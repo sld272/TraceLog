@@ -12,29 +12,36 @@ interface AppShellProps {
 
 export function AppShell({ nav, main, panel, width = 'reading' }: AppShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [mobileLayout, setMobileLayout] = useState(() => window.innerWidth < 768)
   const menuButtonRef = useRef<HTMLButtonElement>(null)
   const closeMobileNav = useCallback(() => {
     setMobileNavOpen(false)
-    menuButtonRef.current?.focus()
-  }, [])
+    if (mobileLayout) menuButtonRef.current?.focus()
+  }, [mobileLayout])
 
-  /* Close on escape and when window grows past mobile breakpoint */
+  /* Close on escape */
   useEffect(() => {
     if (!mobileNavOpen) return
 
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') closeMobileNav()
     }
-    const handleResize = () => {
-      if (window.innerWidth >= 768) setMobileNavOpen(false)
-    }
     window.addEventListener('keydown', handleKey)
-    window.addEventListener('resize', handleResize)
     return () => {
       window.removeEventListener('keydown', handleKey)
-      window.removeEventListener('resize', handleResize)
     }
   }, [closeMobileNav, mobileNavOpen])
+
+  /* Resizing an open 375px drawer past the 768px breakpoint switches back to desktop navigation. */
+  useEffect(() => {
+    const handleResize = () => {
+      const nextMobileLayout = window.innerWidth < 768
+      setMobileLayout(nextMobileLayout)
+      if (!nextMobileLayout) setMobileNavOpen(false)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   /* Lock body scroll while drawer is open on mobile */
   useEffect(() => {
@@ -67,6 +74,7 @@ export function AppShell({ nav, main, panel, width = 'reading' }: AppShellProps)
           className={`${styles.nav} ${mobileNavOpen ? styles.navOpen : ''}`}
           aria-label="主导航"
           aria-hidden={!mobileNavOpen ? undefined : false}
+          inert={mobileLayout && !mobileNavOpen}
         >
           {navContent}
         </nav>
@@ -79,12 +87,12 @@ export function AppShell({ nav, main, panel, width = 'reading' }: AppShellProps)
         )}
         <main
           className={`${styles.main} ${width === 'workspace' ? styles.mainWide : ''}`}
-          inert={mobileNavOpen}
+          inert={mobileLayout && mobileNavOpen}
         >
           {main}
         </main>
         {panel && (
-          <aside className={styles.panel} aria-label="信息面板" inert={mobileNavOpen}>
+          <aside className={styles.panel} aria-label="信息面板" inert={mobileLayout && mobileNavOpen}>
             {panel}
           </aside>
         )}
