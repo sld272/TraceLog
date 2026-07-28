@@ -107,9 +107,8 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
 
   const syncHorizontalScroll = (source: HTMLDivElement) => {
     const scrollLeft = source.scrollLeft
-    for (const row of [headRowRef.current, allDayRowRef.current, bodyRef.current]) {
-      // 组件卸载前处理队列中的最后一次 scroll 事件时，对应 ref 可能已被 React 清空。
-      if (row !== null && row !== source) row.scrollLeft = scrollLeft
+    for (const row of [headRowRef.current!, allDayRowRef.current!, bodyRef.current!]) {
+      if (row !== source) row.scrollLeft = scrollLeft
     }
   }
 
