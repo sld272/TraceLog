@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { type ScheduleEvent } from '@/api/client'
 import {
   type ScheduleBlock,
@@ -44,6 +44,9 @@ function useNow(intervalMs = 60000): Date {
 export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCreateSlot, onCreateAllDay, pendingIds }: ScheduleWeekGridProps) {
   const now = useNow()
   const [hover, setHover] = useState<{ date: string; min: number } | null>(null)
+  const headRowRef = useRef<HTMLDivElement>(null)
+  const allDayRowRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   const weekKey = weekDays.join(',')
   const nowHour = now.getHours()
@@ -102,9 +105,17 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
 
   const nowMin = now.getHours() * 60 + now.getMinutes()
 
+  const syncHorizontalScroll = (source: HTMLDivElement) => {
+    const scrollLeft = source.scrollLeft
+    for (const row of [headRowRef.current, allDayRowRef.current, bodyRef.current]) {
+      // 组件卸载前处理队列中的最后一次 scroll 事件时，对应 ref 可能已被 React 清空。
+      if (row !== null && row !== source) row.scrollLeft = scrollLeft
+    }
+  }
+
   return (
     <div className={styles.card} style={{ '--hour-px': `${HOUR_PX}px` } as CSSProperties}>
-      <div className={styles.headRow}>
+      <div ref={headRowRef} className={styles.headRow} onScroll={(event) => syncHorizontalScroll(event.currentTarget)}>
         <div className={styles.corner} />
         {weekDays.map((key) => (
           <div key={key} className={`${styles.headCell} ${key === today ? styles.headToday : ''}`}>
@@ -116,7 +127,7 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
 
       {/* 全天行常驻：它同时是"这天有没有全天安排"的答案和新建入口，
           空着的格子点一下就是新建一条全天事件。 */}
-      <div className={styles.allDayRow}>
+      <div ref={allDayRowRef} className={styles.allDayRow} onScroll={(event) => syncHorizontalScroll(event.currentTarget)}>
         <div className={styles.allDayLabel}>全天</div>
         {weekDays.map((key) => (
           <div
@@ -159,7 +170,7 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
         ))}
       </div>
 
-      <div className={styles.body}>
+      <div ref={bodyRef} className={styles.body} onScroll={(event) => syncHorizontalScroll(event.currentTarget)}>
         <div className={styles.axisCol} style={{ height: bodyPx }}>
           {Array.from({ length: endH - startH + 1 }, (_, i) => (
             <span key={i} className={styles.axisLabel} style={{ top: i * HOUR_PX }}>

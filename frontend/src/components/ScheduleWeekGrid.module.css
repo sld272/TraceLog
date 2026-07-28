@@ -305,13 +305,24 @@
 
 @media (max-width: 640px) {
   .card {
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
+    overflow: visible;
   }
 
   .headRow,
   .allDayRow,
   .body {
-    min-width: 784px;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: 56px repeat(7, 104px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .headRow::-webkit-scrollbar,
+  .allDayRow::-webkit-scrollbar,
+  .body::-webkit-scrollbar {
+    display: none;
   }
 }
