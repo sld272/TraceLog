@@ -33,14 +33,15 @@ import { ACTIVITY_KIND_LABELS } from '@/utils/goalActivity'
 import { useSoulColors } from './SoulColorContext'
 import styles from './PostCard.module.css'
 
-const FEED_MAX_THREAD_MESSAGES = 4
-// Only fold the middle of a feed thread when it would hide at least this many
-// messages — collapsing to hide a single message isn't worth the detail-page trip.
-const FEED_MIN_COLLAPSED = 2
+/* 首页每位 SOUL 只留最新一个来回（我的追问 + TA 的回复），更早的去详情页看。
+   折叠掉的是已经读过的开头，眼前留的是刚发生的事——反过来会让人以为消息没发出去。 */
+const FEED_THREAD_TAIL = 2
 
 export interface CommentConversationState {
   conversation?: CommentConversation
   messages: CommentMessage[]
+  /** 追问总条数（含未随首页返回的部分）。缺省时按手上的消息数算。 */
+  threadTotal?: number
   sending?: boolean
   error?: string | null
 }
@@ -380,14 +381,25 @@ function CommentPreview({
   const [reply, setReply] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [replyOpen, setReplyOpen] = useState(false)
+  const [repliedHere, setRepliedHere] = useState(false)
   const replyInputRef = useRef<HTMLTextAreaElement>(null)
   const soulName = comment.soul_name
   const colors = useSoulColors(soulName)
   const trimmed = reply.trim()
   const messages = conversation?.messages ?? []
   const threadMessages = messages.filter((message) => message.seq > 0)
-  const visibleThreadMessages = visibleMessagesForVariant(threadMessages, variant)
-  const isThreadTruncated = visibleThreadMessages.length < threadMessages.length
+  /* 你在这张卡上追问过之后，这段就一直摊开——折叠是用来省掉读过的历史的，
+     不该把你正在进行的对话藏起来。刷新或离开首页后回到默认的折叠状态。 */
+  const expanded = variant === 'detail' || repliedHere
+  const visibleThreadMessages = expanded
+    ? threadMessages
+    : threadMessages.slice(-FEED_THREAD_TAIL)
+  const threadTotal = Math.max(
+    conversation?.threadTotal ?? threadMessages.length,
+    threadMessages.length,
+  )
+  const hiddenThreadCount = expanded ? 0 : threadTotal - visibleThreadMessages.length
+  const isThreadTruncated = hiddenThreadCount > 0
   const latestMessage = latestConversationMessage(comment, messages)
   const canRerunRoot = latestMessage?.id === comment.id && latestMessage.role === 'assistant'
   const rootBusy = busyCommentId === comment.id
@@ -414,6 +426,7 @@ function CommentPreview({
     const submittedAttachments = attachments
     setReply('')
     setAttachments([])
+    setRepliedHere(true)
     try {
       await onReply(soulName, trimmed, attachments)
     } catch (err) {
@@ -498,7 +511,7 @@ function CommentPreview({
       <div className={styles.threadBranch}>
         {isThreadTruncated && detailHref && (
           <a className={styles.threadMoreLink} href={detailHref}>
-            省略 {threadMessages.length - visibleThreadMessages.length} 条评论 · 在详情页查看完整对话
+            还有 {hiddenThreadCount} 条 · 在详情页查看完整对话
           </a>
         )}
         {visibleThreadMessages.map((message) => (
@@ -572,18 +585,6 @@ function CommentPreview({
       )}
     </div>
   )
-}
-
-function visibleMessagesForVariant(
-  messages: CommentMessage[],
-  variant: 'feed' | 'detail',
-): CommentMessage[] {
-  const tailSize = FEED_MAX_THREAD_MESSAGES - 1
-  if (variant === 'detail' || messages.length - tailSize < FEED_MIN_COLLAPSED) return messages
-  const tail = messages.slice(-tailSize)
-  const optimistic = messages.filter((message) => message.id < 0 && !tail.some((item) => item.id === message.id))
-  const visibleIds = new Set([...tail, ...optimistic].map((message) => message.id))
-  return messages.filter((message) => visibleIds.has(message.id))
 }
 
 function ReplyFailureInline({

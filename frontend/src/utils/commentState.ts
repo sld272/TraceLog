@@ -19,7 +19,7 @@ export function conversationsFromThreads(
   const next: Record<string, CommentConversationState> = Object.fromEntries(
     (threads ?? []).map((thread) => [
       thread.conversation.soul_name,
-      toConversationState(thread.conversation, thread.messages),
+      toConversationState(thread.conversation, thread.messages, thread.thread_total),
     ]),
   )
   for (const [soulName, state] of Object.entries(previous ?? {})) {
@@ -31,10 +31,12 @@ export function conversationsFromThreads(
 export function toConversationState(
   conversation: CommentConversation,
   messages: CommentMessage[],
+  threadTotal?: number,
 ): CommentConversationState {
   return {
     conversation,
     messages,
+    threadTotal: threadTotal ?? messages.filter((message) => message.seq > 0).length,
     sending: false,
     error: null,
   }
@@ -88,6 +90,7 @@ export function buildSendingCommentState(
   return {
     ...(current ?? { messages: [] }),
     messages: [...messages, optimisticUserMessage, optimisticAssistantMessage],
+    threadTotal: (current?.threadTotal ?? 0) + 2,
     sending: true,
     error: null,
   }

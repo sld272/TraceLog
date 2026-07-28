@@ -54,6 +54,10 @@ export interface Post {
   pipeline_status?: PipelineStatus
   attachments: Attachment[]
   goal_activities: PostGoalActivity[]
+  /** 每位 SOUL 的首条回应，随列表一起返回，首页不必再逐帖取详情。 */
+  comments: Comment[]
+  /** 每位 SOUL 的最新一个来回；再往前的追问留在详情页。 */
+  conversations: PostConversationThread[]
 }
 
 export type SearchMatchKind = 'keyword' | 'semantic' | 'both'
@@ -106,6 +110,8 @@ export interface PostDetail {
 export interface PostConversationThread {
   conversation: CommentConversation
   messages: CommentMessage[]
+  /** 这段对话的追问总条数。首页只带最新几条，靠它算出"省略了几条"。 */
+  thread_total: number
 }
 
 export interface Attachment {

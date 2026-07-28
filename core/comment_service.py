@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from core import (
@@ -31,6 +32,8 @@ from core.app_services import job_service, public_post_pipeline
 
 COMMENT_HISTORY_LIMIT = 30
 OTHER_SOUL_THREAD_CONTEXT_LIMIT = 6
+"""首页每位 SOUL 只展示最新一个来回（我的追问 + TA 的回复），再往前的留给详情页。"""
+FEED_THREAD_TAIL = 2
 _COMMENT_TURN_LOCKS = tuple(threading.RLock() for _ in range(64))
 
 
@@ -57,6 +60,16 @@ class CommentMessage:
     rerun_at: float | None
     metadata: str | None
     attachments: list[Attachment]
+
+
+@dataclass(frozen=True)
+class FeedThread:
+    """首页要展示的一段对话：首条回复、最新几条追问，以及追问总数。"""
+
+    conversation: CommentConversation
+    root: CommentMessage
+    tail: list[CommentMessage]
+    thread_total: int
 
 
 @dataclass(frozen=True)
@@ -142,7 +155,98 @@ def list_post_conversation_threads(
             """,
             (post_id, conversation.soul_name, limit),
         )
-        threads.append((conversation, [_message_from_row(row) for row in reversed(rows)]))
+        threads.append((conversation, _messages_from_rows(reversed(rows))))
+    return threads
+
+
+def list_feed_threads_by_posts(
+    post_ids: Sequence[str],
+    tail_limit: int = FEED_THREAD_TAIL,
+) -> dict[str, list[FeedThread]]:
+    """首页一屏所有帖子的回应，一次批量取完。
+
+    首页每位 SOUL 只展示首条回复加最新一个来回，整段历史留给详情页。所以这里
+    只取尾部若干条，另外带上追问总数，让前端能说清楚"省略了几条"。
+
+    查询条数固定，与帖子数无关：根评论、追问统计、尾部消息，各自的附件与建议快照
+    也都成批取。逐帖去查会让首页在帖子多时打出上百次往返。
+    """
+    ids = [str(post_id) for post_id in post_ids]
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    threads: dict[str, list[FeedThread]] = {post_id: [] for post_id in ids}
+
+    stats_rows = db.query_all(
+        f"""
+        SELECT post_id, soul_name, COUNT(*) AS total, MAX(created_at) AS last_message_at
+        FROM comments
+        WHERE post_id IN ({placeholders}) AND seq > 0
+        GROUP BY post_id, soul_name
+        """,
+        tuple(ids),
+    )
+    totals = {(row["post_id"], row["soul_name"]): int(row["total"]) for row in stats_rows}
+    last_message_ats = {
+        (row["post_id"], row["soul_name"]): row["last_message_at"] for row in stats_rows
+    }
+
+    tail_rows = db.query_all(
+        f"""
+        SELECT id, post_id, soul_name, role, content, seq, metadata, created_at, edited_at, rerun_at
+        FROM (
+            SELECT comments.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY post_id, soul_name ORDER BY seq DESC
+                   ) AS row_from_end
+            FROM comments
+            WHERE post_id IN ({placeholders}) AND seq > 0
+        )
+        WHERE row_from_end <= ?
+        ORDER BY post_id, soul_name, seq ASC
+        """,
+        (*ids, max(0, int(tail_limit))),
+    )
+    tails_by_key: dict[tuple[str, str], list[CommentMessage]] = {}
+    for message in _messages_from_rows(tail_rows):
+        tails_by_key.setdefault((message.post_id, message.soul_name), []).append(message)
+
+    root_rows = db.query_all(
+        f"""
+        SELECT comments.*
+        FROM comments
+        LEFT JOIN post_soul_orders
+          ON post_soul_orders.post_id = comments.post_id
+         AND post_soul_orders.soul_name = comments.soul_name
+        WHERE comments.post_id IN ({placeholders}) AND comments.seq = 0
+        ORDER BY
+            CASE WHEN post_soul_orders.sort_order IS NULL THEN 1 ELSE 0 END ASC,
+            post_soul_orders.sort_order ASC,
+            CASE WHEN post_soul_orders.sort_order IS NOT NULL THEN comments.soul_name END ASC,
+            comments.created_at ASC,
+            comments.id ASC
+        """,
+        tuple(ids),
+    )
+    for root in _messages_from_rows(root_rows):
+        key = (root.post_id, root.soul_name)
+        last_message_at = last_message_ats.get(key)
+        conversation = CommentConversation(
+            post_id=root.post_id,
+            soul_name=root.soul_name,
+            root_comment_id=root.id,
+            created_at=root.created_at,
+            updated_at=float(last_message_at or root.created_at),
+            last_message_at=float(last_message_at) if last_message_at is not None else None,
+        )
+        threads.setdefault(root.post_id, []).append(
+            FeedThread(
+                conversation=conversation,
+                root=root,
+                tail=tails_by_key.get(key, []),
+                thread_total=totals.get(key, 0),
+            )
+        )
     return threads
 
 
@@ -995,6 +1099,34 @@ def _message_from_row(row) -> CommentMessage:
         metadata=suggestion_service.metadata_with_live_suggestions(row["metadata"]),
         attachments=attachment_service.list_comment_attachments(message_id),
     )
+
+
+def _messages_from_rows(rows) -> list[CommentMessage]:
+    """行 → 消息，附件和建议快照都成批取，避免每条消息各查两次。"""
+    rows = list(rows)
+    if not rows:
+        return []
+    ids = [int(row["id"]) for row in rows]
+    attachments_by_id = attachment_service.comment_attachments_by_ids(ids)
+    metadatas = suggestion_service.metadata_with_live_suggestions_batch(
+        [row["metadata"] for row in rows]
+    )
+    return [
+        CommentMessage(
+            id=message_id,
+            post_id=row["post_id"],
+            soul_name=row["soul_name"],
+            role=row["role"],
+            content=row["content"],
+            seq=int(row["seq"]),
+            created_at=float(row["created_at"]),
+            edited_at=float(row["edited_at"]) if row["edited_at"] is not None else None,
+            rerun_at=float(row["rerun_at"]) if row["rerun_at"] is not None else None,
+            metadata=metadata,
+            attachments=attachments_by_id.get(message_id, []),
+        )
+        for message_id, row, metadata in zip(ids, rows, metadatas)
+    ]
 
 
 def _is_failed_reply_metadata(metadata: dict | None) -> bool:

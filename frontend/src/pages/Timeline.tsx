@@ -41,9 +41,6 @@ import { localDateKey, monthDayLabel, weekdayLabel } from '@/utils/schedule'
 import { dayAnchorLabel, dayKeyOf } from '@/utils/date'
 import styles from './Timeline.module.css'
 
-/** 进入首页时预取评论的条数。够铺满前两三屏，再往下靠展开时按需取。 */
-const COMMENT_PREFETCH_COUNT = 12
-
 interface TimelineProps {
   onActivitySettled?: () => void
   modelConfigured?: boolean | null
@@ -132,28 +129,22 @@ export function Timeline({
     }
   }, [])
 
-  /* 帖子列表接口只带评论数，不带评论本身。首页默认展开好友的回应，所以进页面后
-     顺手把靠前那几条的评论取回来 —— 都是本地请求，够快，也不会打乱滚动位置。
-     追问也一起取：默认展开后没人再点"展开"，只取首条回复会让追问整段看不见。 */
-  const prefetchComments = useCallback(async (list: Post[]) => {
-    const targets = list.slice(0, COMMENT_PREFETCH_COUNT).filter((post) => post.comment_count > 0)
-    await Promise.all(
-      targets.map(async (post) => {
-        try {
-          const detail = await getPost(post.post_id)
-          setPostComments((prev) =>
-            prev[post.post_id] ? prev : { ...prev, [post.post_id]: detail.comments },
-          )
-          setPostCommentConversations((prev) =>
-            prev[post.post_id]
-              ? prev
-              : { ...prev, [post.post_id]: conversationsFromThreads(detail.conversations) },
-          )
-        } catch {
-          /* 预取失败就退回原来的按需展开，不打扰用户 */
-        }
-      }),
-    )
+  /* 列表接口已经带回每位好友的首条回应和最新一个来回，直接铺进状态即可。
+     正在发送的那条原样留着：服务端快照是发送前拍的，盖上去会让刚打出去的
+     追问先消失、等回复到了再闪回来。 */
+  const adoptListedComments = useCallback((list: Post[]) => {
+    setPostComments((prev) => {
+      const next = { ...prev }
+      for (const post of list) next[post.post_id] = post.comments
+      return next
+    })
+    setPostCommentConversations((prev) => {
+      const next = { ...prev }
+      for (const post of list) {
+        next[post.post_id] = conversationsFromThreads(post.conversations, prev[post.post_id])
+      }
+      return next
+    })
   }, [])
 
   const fetchPosts = useCallback(async () => {
@@ -163,7 +154,7 @@ export function Timeline({
       setHasMorePosts(data.length >= API_LIMITS.POSTS_DEFAULT)
       setError(null)
       void refreshSuggestions()
-      void prefetchComments(data)
+      adoptListedComments(data)
       data.forEach((post) => {
         if (isActivePipeline(post)) void restorePostStream(post.post_id)
       })
@@ -172,7 +163,7 @@ export function Timeline({
     } finally {
       setLoading(false)
     }
-  }, [refreshSuggestions, prefetchComments])
+  }, [refreshSuggestions, adoptListedComments])
 
   useEffect(() => {
     fetchPosts()
@@ -196,7 +187,9 @@ export function Timeline({
     try {
       const response = await searchPosts(clean, 20, mode)
       if (searchTokenRef.current !== token) return
-      setSearchResults(Array.isArray(response.items) ? response.items : [])
+      const items = Array.isArray(response.items) ? response.items : []
+      setSearchResults(items)
+      adoptListedComments(items)
       setSearchMode(response.mode ?? mode)
       setSemanticAvailable(response.semantic_available ?? null)
     } catch (err) {
@@ -206,7 +199,7 @@ export function Timeline({
     } finally {
       if (searchTokenRef.current === token) setSearchLoading(false)
     }
-  }, [])
+  }, [adoptListedComments])
 
   const clearSearchTimer = useCallback(() => {
     if (searchTimerRef.current !== null) {
@@ -273,6 +266,8 @@ export function Timeline({
       },
       attachments,
       goal_activities: [],
+      comments: [],
+      conversations: [],
     }
     setPosts((prev) => [newPost, ...prev])
 
@@ -371,7 +366,7 @@ export function Timeline({
       setPosts((prev) => appendUniquePosts(prev, data))
       setHasMorePosts(data.length >= API_LIMITS.POSTS_DEFAULT)
       setError(null)
-      void prefetchComments(data)
+      adoptListedComments(data)
       data.forEach((post) => {
         if (isActivePipeline(post)) void restorePostStream(post.post_id)
       })
@@ -380,7 +375,7 @@ export function Timeline({
     } finally {
       setLoadingMore(false)
     }
-  }, [hasMorePosts, loadingMore, posts, searching, prefetchComments])
+  }, [hasMorePosts, loadingMore, posts, searching, adoptListedComments])
 
   useEffect(() => {
     if (searching || !hasMorePosts || loadingMore) return

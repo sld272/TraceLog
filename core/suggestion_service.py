@@ -135,15 +135,68 @@ def metadata_with_live_suggestions(metadata: str | None) -> str | None:
     if not isinstance(snapshot, list) or not snapshot:
         return metadata
 
-    ids = [item["id"] for item in snapshot if isinstance(item, dict) and isinstance(item.get("id"), str)]
+    ids = _snapshot_suggestion_ids(snapshot)
     if not ids:
         return metadata
+    return _metadata_keeping_live(metadata, parsed, snapshot, _pending_suggestion_ids(ids))
+
+
+def metadata_with_live_suggestions_batch(metadatas: list[str | None]) -> list[str | None]:
+    """成批过滤建议快照。首页一屏上百条评论，逐条查 suggestions 表就是上百次往返。"""
+    parsed_by_index: dict[int, tuple[dict, list]] = {}
+    all_ids: set[str] = set()
+    for index, metadata in enumerate(metadatas):
+        if not metadata or '"suggestions"' not in metadata:
+            continue
+        try:
+            parsed = json.loads(metadata)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(parsed, dict):
+            continue
+        snapshot = parsed.get("suggestions")
+        if not isinstance(snapshot, list) or not snapshot:
+            continue
+        ids = _snapshot_suggestion_ids(snapshot)
+        if not ids:
+            continue
+        parsed_by_index[index] = (parsed, snapshot)
+        all_ids.update(ids)
+
+    if not parsed_by_index:
+        return list(metadatas)
+    live_ids = _pending_suggestion_ids(sorted(all_ids))
+    result = list(metadatas)
+    for index, (parsed, snapshot) in parsed_by_index.items():
+        result[index] = _metadata_keeping_live(metadatas[index], parsed, snapshot, live_ids)
+    return result
+
+
+def _snapshot_suggestion_ids(snapshot: list) -> list[str]:
+    return [
+        item["id"]
+        for item in snapshot
+        if isinstance(item, dict) and isinstance(item.get("id"), str)
+    ]
+
+
+def _pending_suggestion_ids(ids: list[str]) -> set[str]:
+    if not ids:
+        return set()
     placeholders = ",".join("?" for _ in ids)
     rows = db.query_all(
         f"SELECT id FROM suggestions WHERE id IN ({placeholders}) AND status = 'pending'",
         tuple(ids),
     )
-    live_ids = {row["id"] for row in rows}
+    return {row["id"] for row in rows}
+
+
+def _metadata_keeping_live(
+    metadata: str | None,
+    parsed: dict,
+    snapshot: list,
+    live_ids: set[str],
+) -> str | None:
     kept = [
         item
         for item in snapshot

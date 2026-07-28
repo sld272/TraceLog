@@ -8,6 +8,7 @@ import io
 import os
 import secrets
 import time
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -213,6 +214,28 @@ def list_comment_attachments(comment_id: int) -> list[Attachment]:
         """,
         (int(comment_id),),
     )
+
+
+def comment_attachments_by_ids(comment_ids: Collection[int]) -> dict[int, list[Attachment]]:
+    """一次取回多条评论的附件。首页一屏有上百条评论，逐条查会打满往返。"""
+    ids = sorted({int(comment_id) for comment_id in comment_ids})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = db.query_all(
+        f"""
+        SELECT attachments.*, comment_attachments.comment_id AS linked_comment_id
+        FROM attachments
+        JOIN comment_attachments ON comment_attachments.attachment_id = attachments.id
+        WHERE comment_attachments.comment_id IN ({placeholders})
+        ORDER BY comment_attachments.sort_order, attachments.created_at, attachments.id
+        """,
+        tuple(ids),
+    )
+    by_comment: dict[int, list[Attachment]] = {comment_id: [] for comment_id in ids}
+    for row in rows:
+        by_comment[int(row["linked_comment_id"])].append(_row_to_attachment(row))
+    return by_comment
 
 
 def list_chat_message_attachments(message_id: int) -> list[Attachment]:

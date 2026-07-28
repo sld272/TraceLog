@@ -188,8 +188,13 @@ def _list_posts(
     )
     post_ids = [str(row["id"]) for row in rows]
     activities_by_post = _goal_activities_by_post_ids(post_ids)
+    threads_by_post = comment_service.list_feed_threads_by_posts(post_ids)
     return [
-        _post_summary(row, activities_by_post[str(row["id"])])
+        _post_summary(
+            row,
+            activities_by_post[str(row["id"])],
+            threads_by_post.get(str(row["id"]), []),
+        )
         for row in rows
     ]
 
@@ -213,8 +218,13 @@ def _search_posts(query: str, limit: int, mode: Literal["keyword", "hybrid"]) ->
         tuple(post_ids),
     )
     activities_by_post = _goal_activities_by_post_ids(post_ids)
+    threads_by_post = comment_service.list_feed_threads_by_posts(post_ids)
     by_id = {
-        row["id"]: _post_summary(row, activities_by_post[str(row["id"])])
+        row["id"]: _post_summary(
+            row,
+            activities_by_post[str(row["id"])],
+            threads_by_post.get(str(row["id"]), []),
+        )
         for row in rows
     }
     items = []
@@ -226,7 +236,11 @@ def _search_posts(query: str, limit: int, mode: Literal["keyword", "hybrid"]) ->
     return {"items": items, "semantic_available": search_result.semantic_available, "mode": mode}
 
 
-def _post_summary(row, goal_activities: list[dict[str, Any]]) -> dict[str, Any]:
+def _post_summary(
+    row,
+    goal_activities: list[dict[str, Any]],
+    threads: list[comment_service.FeedThread],
+) -> dict[str, Any]:
     return {
         "post_id": row["id"],
         "ts": row["ts"],
@@ -237,6 +251,17 @@ def _post_summary(row, goal_activities: list[dict[str, Any]]) -> dict[str, Any]:
         "pipeline_status": public_post_pipeline.summarize_pipeline_status(row["id"]),
         "attachments": [asdict(attachment) for attachment in attachment_service.list_post_attachments(row["id"])],
         "goal_activities": goal_activities,
+        # 首页要展示的回应随列表一起给。逐帖再取详情会让首屏和每次翻页都多打十几次
+        # 往返，而首页需要的只是每位 SOUL 的首条回复加最新一个来回。
+        "comments": [asdict(thread.root) for thread in threads],
+        "conversations": [
+            {
+                "conversation": asdict(thread.conversation),
+                "messages": [asdict(message) for message in thread.tail],
+                "thread_total": thread.thread_total,
+            }
+            for thread in threads
+        ],
     }
 
 
@@ -283,11 +308,12 @@ def _get_post_detail(post_id: str) -> dict[str, Any] | None:
             "goal_activities": _goal_activities_by_post_ids([post_id])[post_id],
         },
         "comments": comments,
-        # 首页默认展开评论，追问不能等到用户点"展开"才去取
+        # 详情页给整段对话，追问不能等到用户点"展开"才去取
         "conversations": [
             {
                 "conversation": asdict(conversation),
                 "messages": [asdict(message) for message in messages],
+                "thread_total": sum(1 for message in messages if message.seq > 0),
             }
             for conversation, messages in comment_service.list_post_conversation_threads(post_id)
         ],

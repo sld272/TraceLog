@@ -83,6 +83,9 @@ export function PostDetailPage({
       pipeline_status: detail.post.pipeline_status,
       attachments: detail.post.attachments,
       goal_activities: detail.post.goal_activities,
+      /* 详情页的评论由 usePostDetail 单独管着，卡片不从这里读 */
+      comments: [],
+      conversations: [],
     }
   }, [detail.comments.length, detail.post])
 

@@ -463,6 +463,91 @@ class ApiPostsTest(unittest.TestCase):
             [message["content"] for message in threads[0]["messages"]],
         )
 
+    def test_list_posts_carries_root_replies_and_latest_exchange(self) -> None:
+        """列表自带首页要展示的回应，省掉逐帖再取详情的那一串请求。"""
+        from core import db
+
+        with self._temp_db():
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("p-feed", "2026-06-01T10:00:00+08:00", "首页测试", 1.0, 1.0),
+            )
+            db.execute(
+                """
+                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, 1, 0, ?, ?)
+                """,
+                ("拾迹者", "souls/拾迹者.md", 1.0, 1.0),
+            )
+            for role, content, seq, created_at in [
+                ("assistant", "首条回复", 0, 2.0),
+                ("user", "第一次追问", 1, 3.0),
+                ("assistant", "第一次回答", 2, 4.0),
+                ("user", "第二次追问", 3, 5.0),
+                ("assistant", "第二次回答", 4, 6.0),
+            ]:
+                db.execute(
+                    """
+                    INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    ("p-feed", "拾迹者", role, content, seq, created_at),
+                )
+
+            with self._client() as client:
+                response = client.get("/posts")
+
+        self.assertEqual(200, response.status_code)
+        item = response.json()[0]
+        self.assertEqual(["首条回复"], [comment["content"] for comment in item["comments"]])
+        thread = item["conversations"][0]
+        self.assertEqual("拾迹者", thread["conversation"]["soul_name"])
+        # 只带最新一个来回，更早的追问留给详情页；总数让前端算得出省略了几条。
+        self.assertEqual(
+            ["第二次追问", "第二次回答"],
+            [message["content"] for message in thread["messages"]],
+        )
+        self.assertEqual(4, thread["thread_total"])
+
+    def test_list_posts_keeps_soul_without_follow_ups(self) -> None:
+        """只回了一句、没人追问的 SOUL 也要出现在列表里。"""
+        from core import db
+
+        with self._temp_db():
+            db.execute(
+                """
+                INSERT INTO posts(id, ts, content, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                ("p-quiet", "2026-06-01T10:00:00+08:00", "安静测试", 1.0, 1.0),
+            )
+            db.execute(
+                """
+                INSERT INTO souls(name, file_path, enabled, sort_order, created_at, updated_at)
+                VALUES (?, ?, 1, 0, ?, ?)
+                """,
+                ("毒舌好友", "souls/毒舌好友.md", 1.0, 1.0),
+            )
+            db.execute(
+                """
+                INSERT INTO comments(post_id, soul_name, role, content, seq, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                ("p-quiet", "毒舌好友", "assistant", "就这？", 0, 2.0),
+            )
+
+            with self._client() as client:
+                response = client.get("/posts")
+
+        item = response.json()[0]
+        thread = item["conversations"][0]
+        self.assertEqual([], thread["messages"])
+        self.assertEqual(0, thread["thread_total"])
+        self.assertIsNone(thread["conversation"]["last_message_at"])
+
     def test_sse_event_format_includes_id_event_and_payload(self) -> None:
         from api.routes.posts import _format_sse
 
