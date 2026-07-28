@@ -75,6 +75,7 @@ export function LeftNav({
           icon={<GoalIcon />}
           label="目标"
           badge={goalCount > 0 ? goalCount : undefined}
+          badgeLabel={`${goalCount} 个进行中目标`}
           active={activePage === 'goals'}
           onClick={() => navigate('goals')}
         />
@@ -152,11 +153,12 @@ interface NavItemProps {
   icon: React.ReactNode
   label: string
   badge?: number
+  badgeLabel?: string
   active: boolean
   onClick: () => void
 }
 
-function NavItem({ icon, label, badge, active, onClick }: NavItemProps) {
+function NavItem({ icon, label, badge, badgeLabel, active, onClick }: NavItemProps) {
   return (
     <button
       className={`${styles.item} ${active ? styles.active : ''}`}
@@ -166,7 +168,7 @@ function NavItem({ icon, label, badge, active, onClick }: NavItemProps) {
       <span className={styles.icon}>{icon}</span>
       <span className={styles.label}>{label}</span>
       {badge !== undefined && (
-        <span className={styles.badge} aria-label={`${badge} 条待处理`}>
+        <span className={styles.badge} aria-label={badgeLabel ?? `${badge} 条待处理`}>
           {badge > 99 ? '99+' : badge}
         </span>
       )}
