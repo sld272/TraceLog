@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Literal
 
@@ -29,6 +30,7 @@ from core.logging_service import default_config as default_logging_config
 from core.logging_service import normalize_config as normalize_logging_config
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+_MODEL_SETTINGS_WRITE_LOCK = threading.Lock()
 
 
 class LoggingSettings(BaseModel):
@@ -197,6 +199,15 @@ def _read_model_settings() -> dict[str, Any]:
 
 
 def _write_model_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    # Two PUT /settings/model requests from separate settings tabs can enter the
+    # threadpool together. They must not both read an old config before either
+    # one replaces the shared config.json.tmp file, or the later write can drop
+    # a freshly saved secret and race os.replace.
+    with _MODEL_SETTINGS_WRITE_LOCK:
+        return _write_model_settings_locked(payload)
+
+
+def _write_model_settings_locked(payload: dict[str, Any]) -> dict[str, Any]:
     existing = _load_config_file()
 
     api_key = _clean_optional(payload.get("api_key")) or existing.get("api_key")

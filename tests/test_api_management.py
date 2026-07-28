@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -453,6 +454,200 @@ class ApiManagementTest(unittest.TestCase):
         _atomic_write_json(self.config_path, {"api_key": "updated-secret"})
 
         self.assertEqual(0o600, stat.S_IMODE(self.config_path.stat().st_mode))
+
+    def test_settings_model_writes_serialize_read_merge_and_atomic_replace(self) -> None:
+        from api.routes import settings
+
+        existing = json.loads(self.config_path.read_text(encoding="utf-8"))
+        existing.update(
+            {
+                "embedding_api_key": "embedding-before",
+                "embedding_base_url": "https://embedding-before.invalid/v1",
+                "secondary_model": "secondary-before",
+                "secondary_api_key": "secondary-before-secret",
+                "secondary_base_url": "https://secondary-before.invalid/v1",
+                "vision": {
+                    "enabled": True,
+                    "model": "vision-before",
+                    "api_key": "vision-before-secret",
+                    "base_url": "https://vision-before.invalid/v1",
+                },
+                "web_search": {
+                    "enabled": True,
+                    "provider": "tavily",
+                    "tavily_api_key": "tavily-before-secret",
+                    "max_results": 5,
+                    "timeout_s": 8,
+                    "cache_ttl_s": 1800,
+                },
+                "proactive_message": {
+                    "enabled": True,
+                    "silence_days": 11,
+                    "notify_desktop": False,
+                },
+                "custom_sensitive_key": "keep-this-value",
+            }
+        )
+        self.config_path.write_text(json.dumps(existing), encoding="utf-8")
+
+        logging_payload = {
+            "enabled": False,
+            "level": "INFO",
+            "capture_content": True,
+            "rotate_max_bytes": 10 * 1024 * 1024,
+            "history_max_bytes": 50 * 1024 * 1024,
+            "history_max_days": 14,
+        }
+        first_payload = {
+            "api_key": None,
+            "base_url": "https://first.invalid/v1",
+            "model": "first-model",
+            "embedding_model": "first-embedding",
+            "embedding_api_key": "embedding-first-secret",
+            "embedding_base_url": "https://embedding-first.invalid/v1",
+            "reuse_embedding_config": False,
+            "secondary_model": "secondary-first",
+            "secondary_api_key": "secondary-first-secret",
+            "secondary_base_url": "https://secondary-first.invalid/v1",
+            "reuse_secondary_config": False,
+            "reuse_secondary_api_key": False,
+            "logging": logging_payload,
+            "vision": {
+                "enabled": True,
+                "model": "vision-first",
+                "api_key": "vision-first-secret",
+                "base_url": "https://vision-first.invalid/v1",
+            },
+            "web_search": {
+                "enabled": True,
+                "provider": "tavily",
+                "tavily_api_key": "tavily-first-secret",
+                "max_results": 5,
+                "timeout_s": 8,
+                "cache_ttl_s": 1800,
+            },
+        }
+        second_payload = {
+            "api_key": None,
+            "base_url": "https://second.invalid/v1",
+            "model": "second-model",
+            "embedding_model": "second-embedding",
+            "embedding_api_key": None,
+            "embedding_base_url": "https://embedding-second.invalid/v1",
+            "reuse_embedding_config": False,
+            "secondary_model": "secondary-second",
+            "secondary_api_key": None,
+            "secondary_base_url": "https://secondary-second.invalid/v1",
+            "reuse_secondary_config": False,
+            "reuse_secondary_api_key": False,
+            "logging": logging_payload,
+            "vision": {
+                "enabled": True,
+                "model": "vision-second",
+                "api_key": None,
+                "base_url": "https://vision-second.invalid/v1",
+            },
+            "web_search": {
+                "enabled": True,
+                "provider": "tavily",
+                "tavily_api_key": None,
+                "max_results": 6,
+                "timeout_s": 9,
+                "cache_ttl_s": 600,
+            },
+        }
+
+        first_write_entered = threading.Event()
+        release_first_write = threading.Event()
+        second_lock_attempted = threading.Event()
+        second_read_entered = threading.Event()
+        failures: list[BaseException] = []
+        results: dict[str, dict] = {}
+        write_count = 0
+        write_count_lock = threading.Lock()
+        original_atomic_write = settings._atomic_write_json
+        original_load_config = settings._load_config_file
+        original_write_lock = settings._MODEL_SETTINGS_WRITE_LOCK
+
+        class TrackingWriteLock:
+            def __enter__(self):
+                if threading.current_thread().name == "second-settings-write":
+                    second_lock_attempted.set()
+                return original_write_lock.__enter__()
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return original_write_lock.__exit__(exc_type, exc_value, traceback)
+
+        def blocking_atomic_write(path: Path, data: dict) -> None:
+            nonlocal write_count
+            with write_count_lock:
+                write_count += 1
+                ordinal = write_count
+            if ordinal == 1:
+                first_write_entered.set()
+                if not release_first_write.wait(timeout=5):
+                    raise RuntimeError("first settings write was not released")
+            original_atomic_write(path, data)
+
+        def tracked_load_config() -> dict:
+            if threading.current_thread().name == "second-settings-write":
+                second_read_entered.set()
+            return original_load_config()
+
+        def run_write(name: str, payload: dict) -> None:
+            try:
+                results[name] = settings._write_model_settings(payload)
+            except BaseException as exc:
+                failures.append(exc)
+
+        first = threading.Thread(
+            target=run_write,
+            args=("first", first_payload),
+            name="first-settings-write",
+            daemon=True,
+        )
+        second = threading.Thread(
+            target=run_write,
+            args=("second", second_payload),
+            name="second-settings-write",
+            daemon=True,
+        )
+        second_started = False
+        with (
+            patch.object(settings, "CONFIG_FILE", str(self.config_path)),
+            patch.object(settings, "_MODEL_SETTINGS_WRITE_LOCK", TrackingWriteLock()),
+            patch.object(settings, "_atomic_write_json", side_effect=blocking_atomic_write),
+            patch.object(settings, "_load_config_file", side_effect=tracked_load_config),
+        ):
+            first.start()
+            try:
+                self.assertTrue(first_write_entered.wait(timeout=5))
+                second.start()
+                second_started = True
+                self.assertTrue(second_lock_attempted.wait(timeout=5))
+                self.assertFalse(second_read_entered.wait(timeout=0.2))
+            finally:
+                release_first_write.set()
+                first.join(timeout=5)
+                if second_started:
+                    second.join(timeout=5)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual([], failures)
+        self.assertEqual({"first", "second"}, set(results))
+        self.assertEqual(2, write_count)
+        final_config = json.loads(self.config_path.read_text(encoding="utf-8"))
+        self.assertEqual("sk-test-secret-123456", final_config["api_key"])
+        self.assertEqual("https://second.invalid/v1", final_config["base_url"])
+        self.assertEqual("second-model", final_config["model"])
+        self.assertEqual("second-embedding", final_config["embedding_model"])
+        self.assertEqual("embedding-first-secret", final_config["embedding_api_key"])
+        self.assertEqual("secondary-first-secret", final_config["secondary_api_key"])
+        self.assertEqual("vision-first-secret", final_config["vision"]["api_key"])
+        self.assertEqual("tavily-first-secret", final_config["web_search"]["tavily_api_key"])
+        self.assertEqual("keep-this-value", final_config["custom_sensitive_key"])
+        self.assertEqual(existing["proactive_message"], final_config["proactive_message"])
 
     def test_settings_secondary_model_roundtrip_and_clear(self) -> None:
         base_payload = {
