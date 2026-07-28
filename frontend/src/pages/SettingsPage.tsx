@@ -252,9 +252,9 @@ export function SettingsPage({ firstRun = false, initialTab, onModelSettingsChan
       setModelForm(formFromModelSettings(saved))
       onModelSettingsChanged?.()
       if (saved.config_reloaded ?? saved.runtime_reloaded) {
-        setNotice('配置已保存，应用已重新加载配置。')
+        setNotice('配置已保存并生效。')
       } else if (saved.reload_error) {
-        setNotice(`配置已保存，但重新加载失败：${saved.reload_error}。当前仍在使用上一次可用配置。`)
+        setNotice('配置已保存，但暂时未能启用。请稍后再试。')
       } else {
         setNotice('配置已保存。')
       }
