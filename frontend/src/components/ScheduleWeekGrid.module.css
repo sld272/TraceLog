@@ -302,3 +302,16 @@
 
 /* 本地日历事件曾用虚线左边条区分。2px 宽的虚线只画得出三四个断点，读起来像
    渲染缺陷而不是编码，已改回实线——「本地日历（仅这台设备）」在事件详情里写着。 */
+
+@media (max-width: 640px) {
+  .card {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .headRow,
+  .allDayRow,
+  .body {
+    min-width: 784px;
+  }
+}
