@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -79,13 +81,17 @@ class JobWorkerCleanupTest(unittest.IsolatedAsyncioTestCase):
         worker = JobWorker(client=object(), model="test", concurrency=3)
 
         with (
-            patch("core.app_services.api_runtime.job_service.reset_running_to_pending", return_value=0) as reset,
+            patch("core.app_services.api_runtime._active_job_ids_snapshot", return_value=set()),
+            patch(
+                "core.app_services.api_runtime.job_service.reset_orphaned_running_to_pending",
+                return_value=0,
+            ) as reset,
             patch("core.app_services.api_runtime.asyncio.create_task", side_effect=fake_create_task),
         ):
             worker.start()
 
         self.assertEqual(4, len(created_tasks))
-        reset.assert_called_once_with()
+        reset.assert_called_once_with(set())
 
     async def test_run_does_not_reset_running_jobs_per_task(self) -> None:
         worker = JobWorker(client=object(), model="test")
@@ -98,7 +104,7 @@ class JobWorkerCleanupTest(unittest.IsolatedAsyncioTestCase):
             del delay
 
         with (
-            patch("core.app_services.api_runtime.job_service.reset_running_to_pending") as reset,
+            patch("core.app_services.api_runtime.job_service.reset_orphaned_running_to_pending") as reset,
             patch("core.app_services.api_runtime.job_service.claim_next_pending", side_effect=claim_none_and_stop),
             patch("core.app_services.api_runtime.asyncio.sleep", side_effect=sleep_noop),
         ):
@@ -142,6 +148,137 @@ class JobWorkerCleanupTest(unittest.IsolatedAsyncioTestCase):
 
         reconcile_retry.assert_called_once_with(7, "memory reconcile failed")
         generic_retry.assert_not_called()
+
+
+class JobWorkerHandoffTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.workspace = Path(self.tmp.name) / "workspace"
+        self.old_workspace = db.WORKSPACE_DIR
+        self.old_db_path = db.DB_PATH
+        db.WORKSPACE_DIR = self.workspace
+        db.DB_PATH = self.workspace / "state.db"
+        db.init_db()
+
+    async def asyncTearDown(self) -> None:
+        db.WORKSPACE_DIR = self.old_workspace
+        db.DB_PATH = self.old_db_path
+        self.tmp.cleanup()
+
+    async def _wait_for(self, predicate) -> None:
+        for _ in range(100):
+            if predicate():
+                return
+            await asyncio.sleep(0.01)
+        self.fail("condition did not become true")
+
+    async def test_timeout_handoff_keeps_live_sync_job_owned_until_terminal_pipeline_done(self) -> None:
+        job_id = job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": "p1"})
+        started = threading.Event()
+        release = threading.Event()
+        executions: list[int] = []
+        old_worker = JobWorker(
+            client=object(),
+            model="old-model",
+            poll_interval=0.01,
+            orphan_attachment_cleanup_interval=3600,
+        )
+        new_worker = JobWorker(
+            client=object(),
+            model="new-model",
+            poll_interval=0.01,
+            orphan_attachment_cleanup_interval=3600,
+        )
+
+        def blocking_execute(job, client, model) -> None:
+            del client, model
+            executions.append(int(job["id"]))
+            started.set()
+            if not release.wait(timeout=2):
+                raise RuntimeError("test job was not released")
+
+        try:
+            with (
+                patch(
+                    "core.app_services.api_runtime.public_post_pipeline.execute_job",
+                    side_effect=blocking_execute,
+                ),
+                patch(
+                    "core.app_services.api_runtime.public_post_pipeline.maybe_emit_pipeline_done_for_job"
+                ) as pipeline_done,
+                patch(
+                    "core.app_services.api_runtime.attachment_service.cleanup_orphan_attachments",
+                    return_value=0,
+                ),
+            ):
+                old_worker.start()
+                self.assertTrue(await asyncio.to_thread(started.wait, 1))
+
+                await old_worker.stop(timeout=0.01)
+                running = job_service.get_job(job_id)
+                self.assertEqual(job_service.STATUS_RUNNING, running["status"])
+                self.assertEqual(1, running["attempts"])
+                pipeline_done.assert_not_called()
+
+                new_worker.start()
+                await asyncio.sleep(0.05)
+                self.assertEqual([job_id], executions)
+                still_running = job_service.get_job(job_id)
+                self.assertEqual(job_service.STATUS_RUNNING, still_running["status"])
+                self.assertEqual(1, still_running["attempts"])
+
+                release.set()
+                await self._wait_for(
+                    lambda: job_service.get_job(job_id)["status"] == job_service.STATUS_SUCCEEDED
+                )
+                self.assertEqual([job_id], executions)
+                pipeline_done.assert_called_once()
+                self.assertEqual(job_id, int(pipeline_done.call_args.args[0]["id"]))
+        finally:
+            release.set()
+            await old_worker.stop(timeout=1)
+            await new_worker.stop(timeout=1)
+
+    async def test_start_recovers_running_job_without_a_live_owner(self) -> None:
+        job_id = job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": "p2"})
+        claimed = job_service.claim_next_pending()
+        self.assertIsNotNone(claimed)
+        self.assertEqual(job_id, int(claimed["id"]))
+        self.assertEqual(job_service.STATUS_RUNNING, job_service.get_job(job_id)["status"])
+        executions: list[int] = []
+        worker = JobWorker(
+            client=object(),
+            model="test-model",
+            poll_interval=0.01,
+            orphan_attachment_cleanup_interval=3600,
+        )
+
+        def execute_recovered(job, client, model) -> None:
+            del client, model
+            executions.append(int(job["id"]))
+
+        try:
+            with (
+                patch(
+                    "core.app_services.api_runtime.public_post_pipeline.execute_job",
+                    side_effect=execute_recovered,
+                ),
+                patch("core.app_services.api_runtime.public_post_pipeline.maybe_emit_pipeline_done_for_job"),
+                patch(
+                    "core.app_services.api_runtime.attachment_service.cleanup_orphan_attachments",
+                    return_value=0,
+                ),
+            ):
+                worker.start()
+                await self._wait_for(
+                    lambda: job_service.get_job(job_id)["status"] == job_service.STATUS_SUCCEEDED
+                )
+
+            recovered = job_service.get_job(job_id)
+            self.assertEqual([job_id], executions)
+            self.assertEqual(2, recovered["attempts"])
+        finally:
+            await worker.stop(timeout=1)
 
 
 class MemoryReconcileWorkerStateTest(unittest.IsolatedAsyncioTestCase):

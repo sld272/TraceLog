@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Collection
 
 from core import db
 
@@ -290,18 +290,29 @@ def cancel_pending_jobs_for_post(post_id: str) -> int:
     return cancelled
 
 
-def reset_running_to_pending() -> int:
-    """Return running jobs to pending after an interrupted API worker shutdown."""
+def reset_orphaned_running_to_pending(active_job_ids: Collection[int]) -> int:
+    """Return only unowned running jobs to pending when a worker starts.
+
+    After a settings save times out during a synchronous embedding or LLM job,
+    the old in-process executor can still be alive. Its id is supplied here so
+    only rows left by a crashed process are recovered.
+    """
+    active_ids = tuple(sorted({int(job_id) for job_id in active_job_ids}))
+    where = "status = ?"
+    params: list[object] = [STATUS_RUNNING]
+    if active_ids:
+        where += f" AND id NOT IN ({','.join('?' for _ in active_ids)})"
+        params.extend(active_ids)
     now = db.now_ts()
     with db.transaction() as conn:
-        rows = conn.execute("SELECT id FROM jobs WHERE status = ?", (STATUS_RUNNING,)).fetchall()
+        rows = conn.execute(f"SELECT id FROM jobs WHERE {where}", tuple(params)).fetchall()
         conn.execute(
-            """
+            f"""
             UPDATE jobs
             SET status = ?, updated_at = ?, started_at = NULL
-            WHERE status = ?
+            WHERE {where}
             """,
-            (STATUS_PENDING, now, STATUS_RUNNING),
+            (STATUS_PENDING, now, *params),
         )
     return len(rows)
 

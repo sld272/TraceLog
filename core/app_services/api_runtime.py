@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
 from dataclasses import dataclass
 
 from core import attachment_service, logging_service
@@ -12,6 +13,27 @@ from core.llm.types import LLMClient
 
 ORPHAN_ATTACHMENT_MAX_AGE_SECONDS = 24 * 3600
 ORPHAN_ATTACHMENT_CLEANUP_INTERVAL_SECONDS = 3600
+_ACTIVE_JOB_OWNERS: dict[int, int] = {}
+_ACTIVE_JOB_IDS_LOCK = threading.Lock()
+
+
+def _active_job_ids_snapshot() -> set[int]:
+    with _ACTIVE_JOB_IDS_LOCK:
+        return set(_ACTIVE_JOB_OWNERS)
+
+
+def _claim_active_job(job_id: int) -> None:
+    with _ACTIVE_JOB_IDS_LOCK:
+        _ACTIVE_JOB_OWNERS[job_id] = _ACTIVE_JOB_OWNERS.get(job_id, 0) + 1
+
+
+def _release_active_job(job_id: int) -> None:
+    with _ACTIVE_JOB_IDS_LOCK:
+        remaining_owners = _ACTIVE_JOB_OWNERS[job_id] - 1
+        if remaining_owners:
+            _ACTIVE_JOB_OWNERS[job_id] = remaining_owners
+        else:
+            del _ACTIVE_JOB_OWNERS[job_id]
 
 
 @dataclass(frozen=True)
@@ -49,7 +71,7 @@ class JobWorker:
 
     def start(self) -> None:
         if not self._tasks or all(task.done() for task in self._tasks):
-            job_service.reset_running_to_pending()
+            job_service.reset_orphaned_running_to_pending(_active_job_ids_snapshot())
             self._stop.clear()
             self._tasks = [asyncio.create_task(self._run()) for _ in range(self.concurrency)]
         if self._cleanup_task is None or self._cleanup_task.done():
@@ -88,24 +110,33 @@ class JobWorker:
             if job is None:
                 await asyncio.sleep(self.poll_interval)
                 continue
+            job_id = int(job["id"])
+            _claim_active_job(job_id)
+            await asyncio.to_thread(self._execute_claimed_job, job)
+
+    def _execute_claimed_job(self, job: dict) -> None:
+        """Run one claimed job through its terminal status and pipeline event."""
+        job_id = int(job["id"])
+        try:
             try:
-                await asyncio.to_thread(public_post_pipeline.execute_job, job, self.client, self.model)
+                public_post_pipeline.execute_job(job, self.client, self.model)
             except Exception as exc:
                 if job["type"] == job_service.TYPE_RUN_MEMORY_RECONCILE:
-                    job_service.mark_memory_reconcile_failed_or_retry(int(job["id"]), str(exc))
+                    job_service.mark_memory_reconcile_failed_or_retry(job_id, str(exc))
                 else:
-                    job_service.mark_failed_or_retry(int(job["id"]), str(exc))
+                    job_service.mark_failed_or_retry(job_id, str(exc))
                 logging_service.log_event(
                     "api_job_failed",
                     level="WARNING",
-                    job_id=job["id"],
+                    job_id=job_id,
                     job_type=job["type"],
                     error=str(exc),
                 )
             else:
-                job_service.mark_succeeded(int(job["id"]))
-            # Emit pipeline_done if this was the last job for its post
-            await asyncio.to_thread(public_post_pipeline.maybe_emit_pipeline_done_for_job, job)
+                job_service.mark_succeeded(job_id)
+            public_post_pipeline.maybe_emit_pipeline_done_for_job(job)
+        finally:
+            _release_active_job(job_id)
 
     async def _run_orphan_attachment_cleanup(self) -> None:
         while not self._stop.is_set():
@@ -116,12 +147,18 @@ class JobWorker:
     async def _stop_job_tasks(self, timeout: float) -> None:
         if not self._tasks:
             return
+        done, pending = await asyncio.wait(self._tasks, timeout=timeout)
+        if pending:
+            # A settings save can time out while an embedding or LLM job is still
+            # running inside asyncio.to_thread; cancelling this Task would not stop
+            # that synchronous executor, so keep its owner and running row intact.
+            for task in done:
+                with contextlib.suppress(asyncio.CancelledError):
+                    task.exception()
+            self._tasks = list(pending)
+            return
         try:
-            await asyncio.wait_for(asyncio.gather(*self._tasks), timeout=timeout)
-        except asyncio.TimeoutError:
-            for task in self._tasks:
-                task.cancel()
-            job_service.reset_running_to_pending()
+            await asyncio.gather(*done)
         finally:
             self._tasks = []
 
