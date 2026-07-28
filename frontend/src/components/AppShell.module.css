@@ -104,12 +104,15 @@
     overflow-y: auto;
     background: var(--color-bg-card);
     box-shadow: var(--shadow-lg);
+    visibility: hidden;
     transform: translateX(-100%);
-    transition: transform var(--transition-normal);
+    transition: transform var(--transition-normal), visibility 0s linear 200ms;
   }
 
   .navOpen {
+    visibility: visible;
     transform: translateX(0);
+    transition: transform var(--transition-normal), visibility 0s;
   }
 
   .navBackdrop {
