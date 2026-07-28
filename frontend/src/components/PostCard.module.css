@@ -297,13 +297,6 @@
   word-break: break-word;
 }
 
-.messageActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: 20px;
-}
-
 .messageMarker,
 .threadMarker {
   display: inline-flex;
@@ -694,24 +687,6 @@
   flex-wrap: wrap;
   gap: var(--space-2);
   justify-content: flex-end;
-}
-
-.pipelineDetails {
-  display: block;
-  margin-top: var(--space-2);
-  color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
-}
-
-.pipelineDetails summary {
-  min-height: 28px;
-  cursor: pointer;
-  line-height: 28px;
-  white-space: nowrap;
-}
-
-.pipelineDetails summary:hover {
-  color: var(--color-accent);
 }
 
 .pipelineRetryButton {

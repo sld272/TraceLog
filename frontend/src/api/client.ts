@@ -1106,18 +1106,6 @@ export function cancelJob(jobId: number) {
 }
 
 /* Comment conversations */
-export function listCommentConversations(postId: string) {
-  return request<CommentConversation[]>(
-    `/comments/posts/${encodeURIComponent(postId)}/conversations`,
-  )
-}
-
-export function getCommentConversation(postId: string, soulName: string, limit = DEFAULT_MESSAGE_LIMIT) {
-  return request<{ conversation: CommentConversation; messages: CommentMessage[] }>(
-    `/comments/posts/${encodeURIComponent(postId)}/souls/${encodeURIComponent(soulName)}?limit=${limit}`,
-  )
-}
-
 export function sendCommentMessage(postId: string, soulName: string, content: string, attachmentIds: string[] = []) {
   return request<{
     conversation: CommentConversation

@@ -195,16 +195,6 @@ def _start_runtime(runtime: ApiRuntime) -> ApiRuntime:
     return runtime
 
 
-def _start_configured_runtime(config: dict) -> ApiRuntime:
-    """Build and start a configured runtime.
-
-    Kept as a small compatibility wrapper for tests and ad-hoc callers; reload
-    uses the build/start split so the old worker can stop before the new one
-    resets interrupted jobs.
-    """
-    return _start_runtime(_build_configured_runtime(config))
-
-
 async def shutdown_runtime() -> None:
     global _runtime, _schedule_sync_task
     async with _runtime_lifecycle_gate():
