@@ -107,8 +107,8 @@ export function ScheduleWeekGrid({ weekDays, today, events, onEventClick, onCrea
 
   const syncHorizontalScroll = (source: HTMLDivElement) => {
     const scrollLeft = source.scrollLeft
-    for (const row of [headRowRef.current!, allDayRowRef.current!, bodyRef.current!]) {
-      if (row !== source) row.scrollLeft = scrollLeft
+    for (const row of [headRowRef.current, allDayRowRef.current, bodyRef.current]) {
+      if (row && row !== source) row.scrollLeft = scrollLeft
     }
   }
 
