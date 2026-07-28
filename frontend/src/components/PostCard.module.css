@@ -5,7 +5,10 @@
   border-radius: var(--radius-lg);
   background: var(--color-bg-card);
   padding: var(--space-8) var(--space-8) var(--space-7);
-  animation: fadeInUp 200ms ease-out both;
+  /* 入场动画的时长交给外面。搜索结果每换一个词就整片重挂（尤其是中间搜出 0 条
+     那一下），每张卡都会从 opacity: 0 重新淡入一次——那不是"新内容来了"，是同一
+     批记录换了个筛法，闪的就是这个。 */
+  animation: fadeInUp var(--card-enter-duration, 200ms) ease-out both;
 }
 
 /* fadeInUp 的 fill-mode: both 会让 transform: translateY(0) 一直挂着，

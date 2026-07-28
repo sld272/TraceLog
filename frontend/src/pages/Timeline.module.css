@@ -293,6 +293,7 @@
 }
 
 .searchResultCard {
+  --card-enter-duration: 0s;
   cursor: pointer;
   border-radius: var(--radius-lg);
 }
