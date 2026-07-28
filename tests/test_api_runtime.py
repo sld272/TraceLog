@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from api import deps
 from core import db, memory_events_service as mes, memory_reconcile_runner
-from core.app_services import job_service, public_post_pipeline
+from core.app_services import api_runtime, job_service, public_post_pipeline
 from core.app_services.api_runtime import JobWorker
 
 
@@ -279,6 +279,30 @@ class JobWorkerHandoffTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(2, recovered["attempts"])
         finally:
             await worker.stop(timeout=1)
+
+    async def test_cancelled_before_execution_leaves_no_owner_behind(self) -> None:
+        """取消发生在认领与执行之间时，不能留下一个没人销的 owner。
+
+        留下来的 owner 恰恰是挡住后续 worker 回收这一行的东西，那条任务就会永远
+        停在"处理中"，重启进程才能恢复。
+        """
+        job_id = job_service.enqueue(job_service.TYPE_INDEX_POST_EMBEDDING, {"post_id": "p1"})
+        worker = JobWorker(client=object(), model="test", poll_interval=0.01)
+
+        async def cancel_during_handoff(func, *args):
+            del func, args
+            raise asyncio.CancelledError
+
+        with (
+            patch("core.app_services.api_runtime.asyncio.to_thread", side_effect=cancel_during_handoff),
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await worker._run()
+
+        self.assertEqual(set(), api_runtime._active_job_ids_snapshot())
+        self.assertEqual(job_service.STATUS_RUNNING, job_service.get_job(job_id)["status"])
+        # owner 已经清干净，新 worker 起来时这一行就能被当成孤儿收回去。
+        self.assertEqual(1, job_service.reset_orphaned_running_to_pending(set()))
 
 
 class MemoryReconcileWorkerStateTest(unittest.IsolatedAsyncioTestCase):

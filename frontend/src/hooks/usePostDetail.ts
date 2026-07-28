@@ -7,6 +7,7 @@ import {
   deleteCommentMessage,
   getPost,
   rerunCommentMessage,
+  restartJob,
   retryJob,
   sendCommentMessage,
   streamPostEvents,
@@ -37,6 +38,7 @@ export interface UsePostDetailResult {
   deleteComment(commentId: number): Promise<void>
   rerunComment(commentId: number): Promise<void>
   retryJobs(jobIds: number[]): Promise<void>
+  restartJobs(jobIds: number[]): Promise<void>
   refresh(): Promise<PostDetail | null>
 }
 
@@ -205,7 +207,10 @@ export function usePostDetail(postId: string): UsePostDetailResult {
     if (retryPollTokenRef.current === token) await refresh()
   }, [refresh])
 
-  const retryJobs = useCallback(async (jobIds: number[]) => {
+  const runJobsAgain = useCallback(async (
+    jobIds: number[],
+    submit: (jobId: number) => Promise<unknown>,
+  ) => {
     const firstJobId = jobIds[0]
     if (firstJobId === undefined) return
     setRetryingJobId(firstJobId)
@@ -213,7 +218,7 @@ export function usePostDetail(postId: string): UsePostDetailResult {
     try {
       const beforeRetry = await getPost(postId)
       const afterEventId = latestEventId(beforeRetry.events)
-      await Promise.all(jobIds.map((jobId) => retryJob(jobId)))
+      await Promise.all(jobIds.map((jobId) => submit(jobId)))
       await refresh()
       stopStream()
       unsubscribeRef.current = streamPostEvents(
@@ -236,6 +241,17 @@ export function usePostDetail(postId: string): UsePostDetailResult {
     }
   }, [pollPostPipelineUntilSettled, postId, refresh, stopStream])
 
+  const retryJobs = useCallback(
+    (jobIds: number[]) => runJobsAgain(jobIds, retryJob),
+    [runJobsAgain],
+  )
+
+  /* 等太久时用户自己按下的重试：放弃还没有结果的那几个，重排一份新的。 */
+  const restartJobs = useCallback(
+    (jobIds: number[]) => runJobsAgain(jobIds, restartJob),
+    [runJobsAgain],
+  )
+
   return {
     post,
     comments,
@@ -249,6 +265,7 @@ export function usePostDetail(postId: string): UsePostDetailResult {
     deleteComment,
     rerunComment,
     retryJobs,
+    restartJobs,
     refresh,
   }
 }

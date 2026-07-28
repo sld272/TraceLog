@@ -261,12 +261,20 @@ def summarize_pipeline_status(post_id: str) -> dict[str, Any]:
     else:
         state = "idle"
 
+    unfinished_jobs = pending_jobs + running_jobs
     return {
         "state": state,
         "pending_count": len(pending_jobs),
         "running_count": len(running_jobs),
         "retrying_count": len(retrying_jobs),
         "failed_jobs": [_job_summary(job) for job in failed_jobs],
+        # 卡住的处理在界面上和正常的处理长得一模一样，用户没法判断该不该等下去。
+        # 带上开工时间和还没结束的任务，前端才能在等得够久时给出一个重试的出口。
+        "unfinished_since": min(
+            (float(job["started_at"] or job["created_at"]) for job in unfinished_jobs),
+            default=None,
+        ),
+        "unfinished_job_ids": [int(job["id"]) for job in unfinished_jobs],
     }
 
 

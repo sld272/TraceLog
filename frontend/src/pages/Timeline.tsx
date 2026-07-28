@@ -14,6 +14,7 @@ import {
   listPendingSuggestions,
   listPosts,
   postIdFromEvidenceRef,
+  restartJob,
   retryJob,
   searchPosts,
   sendCommentMessage,
@@ -594,7 +595,11 @@ export function Timeline({
     }
   }
 
-  const handleRetryPostJobs = async (postId: string, jobIds: number[]) => {
+  const runPostJobsAgain = async (
+    postId: string,
+    jobIds: number[],
+    submit: (jobId: number) => Promise<unknown>,
+  ) => {
     const firstJobId = jobIds[0]
     if (firstJobId === undefined) return
     setRetryingJobId(firstJobId)
@@ -602,7 +607,7 @@ export function Timeline({
     try {
       const beforeRetry = await getPost(postId)
       const afterEventId = latestEventId(beforeRetry.events)
-      await Promise.all(jobIds.map((jobId) => retryJob(jobId)))
+      await Promise.all(jobIds.map((jobId) => submit(jobId)))
       await refreshPostDetail(postId)
       subscribeToPost(postId, afterEventId)
       pollPostPipelineUntilSettled(postId)
@@ -612,6 +617,13 @@ export function Timeline({
       setRetryingJobId(null)
     }
   }
+
+  const handleRetryPostJobs = (postId: string, jobIds: number[]) =>
+    runPostJobsAgain(postId, jobIds, retryJob)
+
+  /* 等太久时用户自己按下的重试：放弃还没有结果的那几个，重排一份新的。 */
+  const handleRestartPostJobs = (postId: string, jobIds: number[]) =>
+    runPostJobsAgain(postId, jobIds, restartJob)
 
   const pollPostPipelineUntilSettled = async (postId: string) => {
     const token = retryPollTokenRef.current + 1
@@ -664,6 +676,7 @@ export function Timeline({
       onDeleteCommentById={handleDeleteComment}
       onRerunCommentById={handleRerunComment}
       onRetryPostJobs={handleRetryPostJobs}
+      onRestartPostJobs={handleRestartPostJobs}
     />
   )
 
@@ -900,6 +913,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
   onDeleteCommentById,
   onRerunCommentById,
   onRetryPostJobs,
+  onRestartPostJobs,
 }: {
   post: Post
   comments?: Comment[]
@@ -917,6 +931,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
   onDeleteCommentById: (postId: string, commentId: number) => Promise<void>
   onRerunCommentById: (postId: string, commentId: number) => Promise<void>
   onRetryPostJobs: (postId: string, jobIds: number[]) => Promise<void>
+  onRestartPostJobs: (postId: string, jobIds: number[]) => Promise<void>
 }) {
   const detailHref = formatRoute({ kind: 'post', postId: post.post_id })
   const handleExpand = useCallback(() => onExpandPost(post.post_id), [onExpandPost, post.post_id])
@@ -937,6 +952,10 @@ const TimelinePostCard = memo(function TimelinePostCard({
   const handleRetryJobs = useCallback(
     (jobIds: number[]) => onRetryPostJobs(post.post_id, jobIds),
     [onRetryPostJobs, post.post_id],
+  )
+  const handleRestartJobs = useCallback(
+    (jobIds: number[]) => onRestartPostJobs(post.post_id, jobIds),
+    [onRestartPostJobs, post.post_id],
   )
 
   return (
@@ -964,6 +983,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
         onDeleteComment={handleDeleteComment}
         onRerunComment={handleRerunComment}
         onRetryFailedJobs={handleRetryJobs}
+        onRestartStuckJobs={handleRestartJobs}
       />
     </ErrorBoundary>
   )

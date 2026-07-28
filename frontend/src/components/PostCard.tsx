@@ -67,6 +67,8 @@ interface PostCardProps {
   onDeleteComment?: (commentId: number) => Promise<void>
   onRerunComment?: (commentId: number) => Promise<void>
   onRetryFailedJobs?: (jobIds: number[]) => Promise<void>
+  /** 处理迟迟没有结果时，用户主动放弃这一次并重排。 */
+  onRestartStuckJobs?: (jobIds: number[]) => Promise<void>
 }
 
 export const PostCard = memo(function PostCard({
@@ -89,6 +91,7 @@ export const PostCard = memo(function PostCard({
   onDeleteComment,
   onRerunComment,
   onRetryFailedJobs,
+  onRestartStuckJobs,
 }: PostCardProps) {
   const timeAgo = timeStyle === 'clock' ? formatTimeOfDay(post.ts) : formatSmartTime(post.ts)
   const [goalActivities, setGoalActivities] = useState(post.goal_activities)
@@ -287,6 +290,7 @@ export const PostCard = memo(function PostCard({
         post={post}
         retryingJobId={retryingJobId}
         onRetryFailedJobs={onRetryFailedJobs}
+        onRestartStuckJobs={onRestartStuckJobs}
       />
     </article>
   )
@@ -296,14 +300,17 @@ function PipelineNotice({
   post,
   retryingJobId,
   onRetryFailedJobs,
+  onRestartStuckJobs,
 }: {
   post: Post
   retryingJobId: number | null
   onRetryFailedJobs?: (jobIds: number[]) => Promise<void>
+  onRestartStuckJobs?: (jobIds: number[]) => Promise<void>
 }) {
   const status = post.pipeline_status
   const failedJobs = status?.failed_jobs ?? []
   const retryableJobIds = failedJobs.filter((job) => job.retryable).map((job) => job.id)
+  const overdue = useOverdue(status?.unfinished_since ?? null)
 
   if (failedJobs.length > 0) {
     return (
@@ -330,25 +337,61 @@ function PipelineNotice({
     )
   }
 
-  if (status?.state === 'retrying') {
+  const isProcessing = status?.state === 'running'
+    || status?.state === 'retrying'
+    || (!status && post.latest_event_type && post.latest_event_type !== 'pipeline_done')
+  if (!isProcessing) return null
+
+  /* 卡住的处理和正常的处理长得一模一样，用户只能干等。等得够久就给一个出口，
+     由他自己决定要不要放弃这一次重来——系统不去猜一个还在跑的任务是不是死了。 */
+  const stuckJobIds = status?.unfinished_job_ids ?? []
+  if (overdue && onRestartStuckJobs && stuckJobIds.length > 0) {
     return (
       <div className={styles.processing}>
         <LoadingDots />
-        <span>正在自动重试...</span>
+        <span>处理得有点久了</span>
+        <button
+          className={styles.processingRetry}
+          onClick={() => onRestartStuckJobs(stuckJobIds)}
+          disabled={retryingJobId !== null}
+        >
+          重试
+        </button>
       </div>
     )
   }
 
-  const isProcessing = status?.state === 'running'
-    || (!status && post.latest_event_type && post.latest_event_type !== 'pipeline_done')
-  if (!isProcessing) return null
-
   return (
     <div className={styles.processing}>
       <LoadingDots />
-      <span>TA 们正在思考...</span>
+      <span>{status?.state === 'retrying' ? '正在自动重试...' : 'TA 们正在思考...'}</span>
     </div>
   )
+}
+
+/** 处理超过这么久还没结果，就该让用户能自己叫停重来。 */
+const PIPELINE_OVERDUE_SECONDS = 120
+
+/** 到点之前不重渲染，到点之后不再计时——只为翻一次牌子。 */
+function useOverdue(since: number | null): boolean {
+  const [overdue, setOverdue] = useState(
+    () => since !== null && Date.now() / 1000 - since >= PIPELINE_OVERDUE_SECONDS,
+  )
+  useEffect(() => {
+    if (since === null) {
+      setOverdue(false)
+      return
+    }
+    const remainingMs = (since + PIPELINE_OVERDUE_SECONDS) * 1000 - Date.now()
+    if (remainingMs <= 0) {
+      setOverdue(true)
+      return
+    }
+    setOverdue(false)
+    const timer = window.setTimeout(() => setOverdue(true), remainingMs)
+    return () => window.clearTimeout(timer)
+  }, [since])
+  return overdue
 }
 
 function pipelineFailureTitle(failedJobs: PipelineJobSummary[]): string {

@@ -42,6 +42,18 @@ async def retry_job(job_id: int):
     return {"job_id": new_job_id, "status": "queued"}
 
 
+@router.post("/{job_id}/restart")
+async def restart_job(job_id: int):
+    """用户等得太久时主动重排一个还没有结果的任务。"""
+    try:
+        new_job_id = await run_sync(job_service.restart_unfinished_job, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if new_job_id is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return {"job_id": new_job_id, "status": "queued"}
+
+
 @router.post("/{job_id}/cancel")
 async def cancel_job(job_id: int):
     try:

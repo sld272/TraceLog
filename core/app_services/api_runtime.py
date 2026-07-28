@@ -110,13 +110,19 @@ class JobWorker:
             if job is None:
                 await asyncio.sleep(self.poll_interval)
                 continue
-            job_id = int(job["id"])
-            _claim_active_job(job_id)
             await asyncio.to_thread(self._execute_claimed_job, job)
 
     def _execute_claimed_job(self, job: dict) -> None:
-        """Run one claimed job through its terminal status and pipeline event."""
+        """Run one claimed job through its terminal status and pipeline event.
+
+        The owner is registered here rather than before ``to_thread`` so that
+        registering and clearing it always happen together. Splitting them
+        leaves a window where a cancelled task registers an owner nothing will
+        ever clear, and that owner is precisely what stops a later worker from
+        recovering the row — the job would stay ``running`` forever.
+        """
         job_id = int(job["id"])
+        _claim_active_job(job_id)
         try:
             try:
                 public_post_pipeline.execute_job(job, self.client, self.model)

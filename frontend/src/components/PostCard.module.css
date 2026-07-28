@@ -629,6 +629,28 @@
   font-size: var(--text-xs);
 }
 
+/* 等太久时出现的出口。它长得像一条链接而不是按钮：这不是让人天天点的东西，
+   只是在等不下去的时候有个地方可去。 */
+.processingRetry {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-tertiary);
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.processingRetry:hover:not(:disabled) {
+  color: var(--color-text-secondary);
+}
+
+.processingRetry:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .pipelineFailure {
   margin-top: var(--space-3);
   padding: var(--space-3);

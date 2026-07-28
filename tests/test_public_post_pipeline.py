@@ -251,6 +251,48 @@ class PublicPostPipelineTest(unittest.TestCase):
             )
         )
 
+    def test_pipeline_status_exposes_unfinished_jobs_for_manual_retry(self) -> None:
+        """卡住的处理和正常的处理长得一样，界面得知道它开工多久了才能给出口。"""
+        created = public_post_pipeline.create_post("等太久了")
+        claimed = job_service.claim_next_pending()
+        assert claimed is not None
+
+        status = public_post_pipeline.summarize_pipeline_status(created.post_id)
+
+        self.assertEqual("running", status["state"])
+        self.assertIsNotNone(status["unfinished_since"])
+        self.assertIn(int(claimed["id"]), status["unfinished_job_ids"])
+
+    def test_restart_unfinished_job_fails_the_stuck_row_and_requeues(self) -> None:
+        """用户等太久后主动重试：旧行判失败让界面往前走，同时重排一份新的。"""
+        created = public_post_pipeline.create_post("重试测试")
+        claimed = job_service.claim_next_pending()
+        assert claimed is not None
+        stuck_id = int(claimed["id"])
+
+        new_job_id = job_service.restart_unfinished_job(stuck_id)
+
+        assert new_job_id is not None
+        self.assertEqual(job_service.STATUS_FAILED, job_service.get_job(stuck_id)["status"])
+        fresh = job_service.get_job(new_job_id)
+        self.assertEqual(job_service.STATUS_PENDING, fresh["status"])
+        self.assertEqual(claimed["type"], fresh["type"])
+        self.assertEqual(stuck_id, fresh["payload"]["retry_of_job_id"])
+        # 被重试过的那一行不再计入帖子的失败提示，界面上只剩"处理中"。
+        status = public_post_pipeline.summarize_pipeline_status(created.post_id)
+        self.assertEqual([], status["failed_jobs"])
+        self.assertEqual("running", status["state"])
+
+    def test_restart_rejects_a_job_that_already_finished(self) -> None:
+        created = public_post_pipeline.create_post("已完成")
+        claimed = job_service.claim_next_pending()
+        assert claimed is not None
+        job_service.mark_succeeded(int(claimed["id"]))
+        del created
+
+        with self.assertRaises(ValueError):
+            job_service.restart_unfinished_job(int(claimed["id"]))
+
 
 if __name__ == "__main__":
     unittest.main()

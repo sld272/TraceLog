@@ -384,6 +384,10 @@ export interface PipelineStatus {
   running_count: number
   retrying_count: number
   failed_jobs: PipelineJobSummary[]
+  /** 最早一个还没结束的任务的开工时间；据此判断是不是等得太久了。 */
+  unfinished_since?: number | null
+  /** 还没有结果的任务，用户主动重试时重排它们。 */
+  unfinished_job_ids?: number[]
 }
 
 export interface ModelSettings {
@@ -1079,6 +1083,14 @@ export function getJob(jobId: number) {
 
 export function retryJob(jobId: number) {
   return request<JobQueued>(`/jobs/${jobId}/retry`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+/** 放弃一个迟迟没有结果的任务并重排一份。只在用户等得够久、自己按下时调用。 */
+export function restartJob(jobId: number) {
+  return request<JobQueued>(`/jobs/${jobId}/restart`, {
     method: 'POST',
     body: JSON.stringify({}),
   })

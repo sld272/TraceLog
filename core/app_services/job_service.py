@@ -248,6 +248,43 @@ def retry_failed_job(job_id: int) -> int | None:
     return enqueue(job["type"], payload, max_attempts=int(job["max_attempts"]))
 
 
+def restart_unfinished_job(job_id: int) -> int | None:
+    """放弃一个迟迟没有结果的任务，并重排一份新的。
+
+    进程内的 worker 抢不走已经在跑的执行体，所以这里只把旧行判失败让界面能往前
+    走，再排一份新的。旧执行体如果其实还活着，它写下自己的结果也不影响：这一行
+    已经被标成"被重试过的"，不会再计入帖子的失败提示。
+
+    这条路只在用户等得够久、自己按下重试时才会走到——系统不去猜一个还在跑的任务
+    是不是已经死了。
+    """
+    job = get_job(job_id)
+    if job is None:
+        return None
+    if job["status"] not in (STATUS_PENDING, STATUS_RUNNING):
+        raise ValueError("only unfinished jobs can be restarted")
+    now = db.now_ts()
+    db.execute(
+        """
+        UPDATE jobs
+        SET status = ?, error = ?, finished_at = ?, updated_at = ?
+        WHERE id = ? AND status IN (?, ?)
+        """,
+        (
+            STATUS_FAILED,
+            "用户在等待过久后主动重试",
+            now,
+            now,
+            job_id,
+            STATUS_PENDING,
+            STATUS_RUNNING,
+        ),
+    )
+    payload = dict(job.get("payload") or {})
+    payload["retry_of_job_id"] = job_id
+    return enqueue(job["type"], payload, max_attempts=int(job["max_attempts"]))
+
+
 def cancel_pending_job(job_id: int) -> bool | None:
     """Cancel a pending job. Running jobs are not preempted in the in-process worker."""
     job = get_job(job_id)

@@ -184,6 +184,11 @@ export function PostDetailPage({
     onPostMutated?.(postId, 'updated')
   }
 
+  const handleRestartJobs = async (jobIds: number[]) => {
+    await detail.restartJobs(jobIds)
+    onPostMutated?.(postId, 'updated')
+  }
+
   if (detail.loading) {
     return (
       <section className={styles.page}>
@@ -245,6 +250,7 @@ export function PostDetailPage({
             onDeleteComment={handleDeleteComment}
             onRerunComment={handleRerunComment}
             onRetryFailedJobs={handleRetryJobs}
+            onRestartStuckJobs={handleRestartJobs}
           />
         </ErrorBoundary>
       )}
