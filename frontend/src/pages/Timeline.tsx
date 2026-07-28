@@ -859,9 +859,15 @@ function SearchResults({
       {mode === 'hybrid' && semanticAvailable === false && !error && (
         <p className={styles.searchHint}>语义检索暂不可用，以下为关键词结果</p>
       )}
-      {!loading && !error && results.length === 0 && (
+      {/* 搜索途中不清空这一块：上一次的结果（或上一次的"没找到"）一直留着，
+          直到新结果回来才整块换掉。摘要行已经在说"正在搜索..."，这里再空一次，
+          整块就会塌成一行再撑开——一边打字一边闪的就是这个。
+          注意别加 !loading：那会让"结果为 0 时又发起新搜索"这一段什么都不渲染。 */}
+      {!error && results.length === 0 && (
         <div className={styles.empty}>
-          <p className={styles.emptyTitle}>没有找到与「{query}」相关的记录</p>
+          <p className={styles.emptyTitle}>
+            {loading ? '正在查找…' : `没有找到与「${query}」相关的记录`}
+          </p>
         </div>
       )}
       {results.length > 0 && (
