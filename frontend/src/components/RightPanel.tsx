@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   type MemoryOperation,
   type ScheduleEvent,
@@ -69,20 +69,37 @@ export function RightPanel({
   const [panelRef, panelHeight] = useMeasuredHeight<HTMLDivElement>()
   const scheduleLimit = scheduleLimitFor(panelHeight)
 
+  /* 中文输入法拼到一半时，输入框里是"jiazhao"这样的拼音，每敲一下都会触发 onChange。
+     照单去搜，搜的是没人写过的拼音，结果整片清空、上屏后又长回来——打一个词，下面
+     就闪好几次。所以拼音阶段只更新输入框自己，词上屏了才去搜。 */
+  const [draft, setDraft] = useState(searchQuery)
+  const composingRef = useRef(false)
+  useEffect(() => {
+    setDraft(searchQuery)
+  }, [searchQuery])
+
   return (
     <div className={styles.panel} ref={panelRef}>
       <div className={styles.panelSearch}>
         <SearchIcon />
         <input
-          value={searchQuery}
-          onChange={(event) => onSearchQueryChange(event.target.value)}
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value)
+            if (!composingRef.current) onSearchQueryChange(event.target.value)
+          }}
+          onCompositionStart={() => { composingRef.current = true }}
+          onCompositionEnd={(event) => {
+            composingRef.current = false
+            onSearchQueryChange(event.currentTarget.value)
+          }}
           onKeyDown={(event) => {
             if (event.key === 'Escape') onSearchQueryChange('')
           }}
           placeholder="搜索动态…"
           aria-label="搜索动态"
         />
-        {searchQuery && (
+        {draft && (
           <button className={styles.panelSearchClear} onClick={() => onSearchQueryChange('')} aria-label="清空搜索" data-tip="清空搜索" data-tip-align="end">
             ×
           </button>

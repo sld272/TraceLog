@@ -210,14 +210,15 @@ export function Timeline({
     }
   }, [])
 
+  /* 按去掉首尾空格后的词去防抖：多敲一个空格不该让整片结果重跑一遍。 */
   useEffect(() => {
     lastHybridQueryRef.current = null
     searchTimerRef.current = window.setTimeout(() => {
       searchTimerRef.current = null
-      void runSearch(searchQuery, 'keyword')
+      void runSearch(trimmedSearchQuery, 'keyword')
     }, 300)
     return clearSearchTimer
-  }, [clearSearchTimer, runSearch, searchQuery])
+  }, [clearSearchTimer, runSearch, trimmedSearchQuery])
 
   useEffect(() => {
     return () => {
