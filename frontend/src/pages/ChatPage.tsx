@@ -291,6 +291,11 @@ export function ChatPage({ soulName, modelConfigured, onOpenSettings, onThreadRe
         setMessages((prev) =>
           applyStreamResult(prev, result, optimisticUserId, optimisticAssistantId, createdAt),
         )
+        if (thread === null) {
+          const detail = await getChatThread(result.thread_id, CHAT_HISTORY_PAGE_SIZE)
+          setThread(detail.thread)
+          setMessages((prev) => mergeMessageWindow(prev, detail.messages))
+        }
         setRetryErrors({})
       } catch {
         // streaming unavailable -> reset the bubble to "thinking" and retry
