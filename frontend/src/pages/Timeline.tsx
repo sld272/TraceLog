@@ -593,6 +593,7 @@ export function Timeline({
     } catch {
       setPostCommentConversations(previousConversations)
       await refreshPostDetail(postId)
+      setError('本次重跑未完成，请稍后再试。')
     } finally {
       setBusyCommentId(null)
     }
