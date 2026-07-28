@@ -835,9 +835,9 @@ function SearchResults({
   onRetry: () => void
 }) {
   const deepDisabled = semanticAvailable === false
-  /* 本地搜索几毫秒就回来，报一句"正在搜索..."再换回来，只是让字闪一下。
-     慢到人能察觉了才说，深度搜索那种真要等的才会走到这里。 */
-  const slowLoading = useDelayedTrue(loading, LOADING_ANNOUNCE_DELAY_MS)
+  /* 本地搜索几毫秒就回来，报一句"正在搜索..."再换回来，只是让字闪一下；
+     真等起来的（深度搜索、库大了之后的关键词搜索）该说还是要说。 */
+  const slowLoading = useSlowIndicator(loading, LOADING_ANNOUNCE_DELAY_MS, LOADING_ANNOUNCE_MIN_MS)
   const summary = searchSummaryText(results.length, mode, slowLoading, semanticAvailable)
 
   return (
@@ -1005,21 +1005,38 @@ const TimelinePostCard = memo(function TimelinePostCard({
   )
 })
 
-/** 搜索慢过这个时长才提示"正在搜索"，否则本地毫秒级返回只会让字闪一下。 */
-const LOADING_ANNOUNCE_DELAY_MS = 400
+/** 搜索超过这么久还没回来，才值得说一句"正在搜索"。之前的都快到来不及看。 */
+const LOADING_ANNOUNCE_DELAY_MS = 250
+/** 一旦说了，至少留这么久。否则 300ms 就返回的那种，提示刚冒出来又没了，更晃眼。 */
+const LOADING_ANNOUNCE_MIN_MS = 500
 
-/** active 持续为真超过 delayMs 才返回 true；中途变假就一直是 false。 */
-function useDelayedTrue(active: boolean, delayMs: number): boolean {
-  const [delayed, setDelayed] = useState(false)
+/** 慢操作提示的显隐时机：够慢才显示，显示了就留够看一眼的时间。
+ *
+ * 只做延迟是不够的——搜索恰好卡在阈值附近时，提示会冒出来一下又立刻消失，
+ * 比不提示还晃。所以两头都收：太快的不提示，提示了的不闪走。 */
+function useSlowIndicator(active: boolean, delayMs: number, minVisibleMs: number): boolean {
+  const [shown, setShown] = useState(false)
+  const shownAtRef = useRef(0)
+
   useEffect(() => {
-    if (!active) {
-      setDelayed(false)
+    if (active) {
+      const timer = window.setTimeout(() => {
+        shownAtRef.current = Date.now()
+        setShown(true)
+      }, delayMs)
+      return () => window.clearTimeout(timer)
+    }
+    if (!shown) return
+    const remaining = minVisibleMs - (Date.now() - shownAtRef.current)
+    if (remaining <= 0) {
+      setShown(false)
       return
     }
-    const timer = window.setTimeout(() => setDelayed(true), delayMs)
+    const timer = window.setTimeout(() => setShown(false), remaining)
     return () => window.clearTimeout(timer)
-  }, [active, delayMs])
-  return delayed
+  }, [active, shown, delayMs, minVisibleMs])
+
+  return shown
 }
 
 function searchSummaryText(
