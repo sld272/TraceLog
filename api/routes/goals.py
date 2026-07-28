@@ -52,7 +52,14 @@ async def list_goals(
     status: Literal["active", "done", "abandoned", "paused"] | None = Query(default=None),
     horizon: Literal["short", "long"] | None = Query(default=None),
 ):
-    return await run_sync(goal_service.list_goals, status=status, horizon=horizon)
+    goals = await run_sync(goal_service.list_goals, status=status, horizon=horizon)
+    # 本周节奏是目标页最该先看到的东西（"跑步 3 次/周，这周跑了几次"）。跟着列表
+    # 一起给，页面出来就是完整的，也不会因为逐个目标去问而把新数字盖回旧值。
+    progress = await run_sync(
+        goal_schedule_service.weekly_progress_by_goals,
+        [goal["id"] for goal in goals],
+    )
+    return [{**goal, "weekly_progress": progress.get(goal["id"])} for goal in goals]
 
 
 @router.post("")

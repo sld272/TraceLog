@@ -83,6 +83,42 @@ class GoalScheduleServiceTest(unittest.TestCase):
         self.assertEqual("2/3", progress["text"])
         self.assertEqual(expectation, progress["expectation"])
 
+    def test_weekly_progress_by_goals_matches_the_single_goal_path(self) -> None:
+        """成批算出来的节奏必须和逐个算的一模一样，页面才敢一次铺完。"""
+        zone = ZoneInfo("Asia/Shanghai")
+        now = datetime(2026, 7, 15, 12, 0, tzinfo=zone)
+        with_target = goal_service.create_goal("每周健身", None, "short")
+        goal_schedule_service.update_expectation(
+            with_target["id"],
+            {"period": "week", "target": 3, "label": "每周健身 3 次"},
+        )
+        without_target = goal_service.create_goal("读完那本书", None, "long")
+        for event_id, local_start in (
+            ("monday", datetime(2026, 7, 13, 9, 0, tzinfo=zone)),
+            ("wednesday", datetime(2026, 7, 15, 9, 0, tzinfo=zone)),
+            ("next-monday", datetime(2026, 7, 20, 9, 0, tzinfo=zone)),
+        ):
+            self._insert_event(event_id, event_id, local_start.timestamp(), local_start.timestamp() + 3600)
+            goal_schedule_service.link(with_target["id"], event_id)
+
+        batch = goal_schedule_service.weekly_progress_by_goals(
+            [with_target["id"], without_target["id"], "missing-goal"],
+            now=now,
+        )
+
+        self.assertEqual(
+            goal_schedule_service.weekly_progress(with_target["id"], now=now),
+            batch[with_target["id"]],
+        )
+        self.assertEqual(
+            goal_schedule_service.weekly_progress(without_target["id"], now=now),
+            batch[without_target["id"]],
+        )
+        self.assertEqual(2, batch[with_target["id"]]["current"])
+        self.assertIsNone(batch[without_target["id"]]["target"])
+        # 不存在的目标只是不出现，不该让整页的节奏一起垮掉。
+        self.assertNotIn("missing-goal", batch)
+
     def test_weekly_progress_counts_a_linked_local_event(self) -> None:
         class DisconnectedAuth:
             def client_id(self):

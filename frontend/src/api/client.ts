@@ -153,6 +153,8 @@ export interface Goal {
   last_progress_at: number | null
   created_at: number
   updated_at: number
+  /** 本周节奏，随列表一起返回；没设每周目标时为 null。 */
+  weekly_progress?: ScheduleProgress | null
 }
 
 export interface GoalActivity {

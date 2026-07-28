@@ -36,6 +36,20 @@ def _release_active_job(job_id: int) -> None:
             del _ACTIVE_JOB_OWNERS[job_id]
 
 
+def _log_task_failure(task: asyncio.Task) -> None:
+    """Record why a worker task died. Silence here costs the only diagnosis left."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is None:
+        return
+    logging_service.log_event(
+        "api_job_worker_task_failed",
+        level="ERROR",
+        error=f"{type(exc).__name__}: {exc}",
+    )
+
+
 @dataclass(frozen=True)
 class ApiRuntime:
     config: dict
@@ -159,8 +173,12 @@ class JobWorker:
             # running inside asyncio.to_thread; cancelling this Task would not stop
             # that synchronous executor, so keep its owner and running row intact.
             for task in done:
-                with contextlib.suppress(asyncio.CancelledError):
-                    task.exception()
+                _log_task_failure(task)
+            # Nobody awaits the leftovers, so their failures would otherwise
+            # surface only as an interpreter-exit warning — and the visible
+            # error text now lives in the log rather than on the card.
+            for task in pending:
+                task.add_done_callback(_log_task_failure)
             self._tasks = list(pending)
             return
         try:

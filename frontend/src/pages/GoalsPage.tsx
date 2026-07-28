@@ -59,19 +59,14 @@ export function GoalsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [form, setForm] = useState<GoalForm>(EMPTY_FORM)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  /* 每周节奏是这一页最该先看到的东西（"跑步 3 次/周，这周跑了几次"），
-     但它只在 /goals/{id}/schedule 里。目标数量是个位数，进页面顺手一起取。 */
-  const [weeklyProgress, setWeeklyProgress] = useState<Record<string, ScheduleProgress>>({})
   const selectedGoal = selectedId ? goals.find((goal) => goal.id === selectedId) ?? null : null
   const groups = useMemo(() => groupGoals(goals), [goals])
 
   const refresh = useCallback(async () => {
     try {
       setLoading(true)
-      const data = await listGoals()
-      setGoals(data)
+      setGoals(await listGoals())
       setError(null)
-      void loadWeeklyProgress(data, setWeeklyProgress)
     } catch (err) {
       setError(err instanceof Error ? err.message : '目标加载失败')
     } finally {
@@ -194,7 +189,6 @@ export function GoalsPage() {
                 title={group.title}
                 count={group.goals.length}
                 defaultCollapsed={
-                  group.goals.length === 0 ||
                   group.key === 'paused' ||
                   group.key === 'done' ||
                   group.key === 'abandoned'
@@ -209,7 +203,7 @@ export function GoalsPage() {
                         key={goal.id}
                         goal={goal}
                         busy={busyId === goal.id}
-                        progress={weeklyProgress[goal.id]}
+                        progress={goal.weekly_progress ?? undefined}
                         onEdit={() => openEdit(goal)}
                         onPatch={(changes) => void patchGoal(goal, changes)}
                       />
@@ -253,28 +247,6 @@ export function GoalsPage() {
       />
     </div>
   )
-}
-
-/** 并发取回每个目标的本周节奏。失败的目标就不显示节奏，不打断整页。 */
-async function loadWeeklyProgress(
-  goals: Goal[],
-  apply: (next: Record<string, ScheduleProgress>) => void,
-) {
-  const entries = await Promise.all(
-    goals.map(async (goal) => {
-      try {
-        const schedule = await getGoalSchedule(goal.id)
-        return [goal.id, schedule.progress] as const
-      } catch {
-        return null
-      }
-    }),
-  )
-  const next: Record<string, ScheduleProgress> = {}
-  for (const entry of entries) {
-    if (entry && entry[1]?.target) next[entry[0]] = entry[1]
-  }
-  apply(next)
 }
 
 /** 本周节奏：一次一个点，做到的填实。比进度条更贴近"每周几次"这件事本身。 */

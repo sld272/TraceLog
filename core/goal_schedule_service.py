@@ -496,6 +496,70 @@ def weekly_progress(
     }
 
 
+def weekly_progress_by_goals(
+    goal_ids: Sequence[str],
+    *,
+    now: datetime | None = None,
+) -> dict[str, dict[str, Any]]:
+    """一次算完多个目标的本周节奏。
+
+    "这周跑了几次"是目标页最该先看到的东西，逐个目标去问会让整页的数字零零散散
+    地冒出来，还会因为先发后回把新结果盖回旧值。
+    """
+    ids = [str(goal_id) for goal_id in goal_ids]
+    if not ids:
+        return {}
+    local_now = now or datetime.now(LOCAL_TIMEZONE)
+    if local_now.tzinfo is None:
+        local_now = local_now.replace(tzinfo=LOCAL_TIMEZONE)
+    else:
+        local_now = local_now.astimezone(LOCAL_TIMEZONE)
+    monday = local_now.date() - timedelta(days=local_now.weekday())
+    week_start = datetime.combine(monday, time.min, LOCAL_TIMEZONE)
+    week_end = week_start + timedelta(days=7)
+    placeholders = ",".join("?" for _ in ids)
+
+    expectation_rows = db.query_all(
+        f"SELECT id, schedule_expectation FROM goals WHERE id IN ({placeholders})",
+        tuple(ids),
+    )
+    expectations = {
+        row["id"]: _decode_expectation(row["schedule_expectation"]) for row in expectation_rows
+    }
+    count_rows = db.query_all(
+        f"""
+        SELECT link.goal_id AS goal_id, COUNT(*) AS event_count
+        FROM goal_schedule_links AS link
+        JOIN schedule_events AS event ON event.id = link.event_id
+        WHERE link.goal_id IN ({placeholders})
+          AND event.is_cancelled = 0
+          AND event.start_ts >= ?
+          AND event.start_ts < ?
+        GROUP BY link.goal_id
+        """,
+        (*ids, week_start.timestamp(), week_end.timestamp()),
+    )
+    counts = {row["goal_id"]: int(row["event_count"]) for row in count_rows}
+
+    progress: dict[str, dict[str, Any]] = {}
+    for goal_id in ids:
+        if goal_id not in expectations:
+            continue
+        expectation = expectations[goal_id]
+        current = counts.get(goal_id, 0)
+        target = expectation["target"] if expectation is not None else None
+        progress[goal_id] = {
+            "goal_id": goal_id,
+            "week_start": monday.isoformat(),
+            "week_end": (monday + timedelta(days=6)).isoformat(),
+            "current": current,
+            "target": target,
+            "text": f"{current}/{target}" if target is not None else None,
+            "expectation": expectation,
+        }
+    return progress
+
+
 def _event_from_row(row: Any) -> dict[str, Any]:
     event = dict(row)
     account_id = str(event.get("account_id") or "outlook")
