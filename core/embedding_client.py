@@ -8,11 +8,18 @@ import numpy as np
 from openai import OpenAI
 
 EMBEDDING_BATCH_SIZE = 64
+EMBEDDING_TIMEOUT_SECONDS = 30.0
+EMBEDDING_MAX_RETRIES = 1
 
 
 class EmbeddingClient:
     def __init__(self, *, api_key: str, base_url: str, model: str) -> None:
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=EMBEDDING_TIMEOUT_SECONDS,
+            max_retries=EMBEDDING_MAX_RETRIES,
+        )
         self._model = model
 
     def embed_texts(self, texts: Sequence[str]) -> list[np.ndarray]:

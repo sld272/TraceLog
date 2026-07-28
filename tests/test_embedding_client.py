@@ -6,7 +6,11 @@ from unittest.mock import patch
 
 import numpy as np
 
-from core.embedding_client import EmbeddingClient
+from core.embedding_client import (
+    EMBEDDING_MAX_RETRIES,
+    EMBEDDING_TIMEOUT_SECONDS,
+    EmbeddingClient,
+)
 
 
 class EmbeddingClientTest(unittest.TestCase):
@@ -25,7 +29,7 @@ class EmbeddingClientTest(unittest.TestCase):
                 return SimpleNamespace(data=data)
 
         fake_openai = SimpleNamespace(embeddings=FakeEmbeddings())
-        with patch("core.embedding_client.OpenAI", return_value=fake_openai):
+        with patch("core.embedding_client.OpenAI", return_value=fake_openai) as openai_cls:
             client = EmbeddingClient(
                 api_key="key",
                 base_url="https://example.invalid/v1",
@@ -33,6 +37,12 @@ class EmbeddingClientTest(unittest.TestCase):
             )
             vectors = client.embed_texts([f"text-{index}" for index in range(130)])
 
+        openai_cls.assert_called_once_with(
+            api_key="key",
+            base_url="https://example.invalid/v1",
+            timeout=EMBEDDING_TIMEOUT_SECONDS,
+            max_retries=EMBEDDING_MAX_RETRIES,
+        )
         self.assertEqual([64, 64, 2], batch_sizes)
         self.assertEqual(130, len(vectors))
         np.testing.assert_array_equal(np.asarray([0.0, 1.0], dtype=np.float32), vectors[0])
