@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import styles from './AppShell.module.css'
 
 interface AppShellProps {
@@ -12,13 +12,18 @@ interface AppShellProps {
 
 export function AppShell({ nav, main, panel, width = 'reading' }: AppShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const closeMobileNav = useCallback(() => {
+    setMobileNavOpen(false)
+    menuButtonRef.current?.focus()
+  }, [])
 
   /* Close on escape and when window grows past mobile breakpoint */
   useEffect(() => {
     if (!mobileNavOpen) return
 
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMobileNavOpen(false)
+      if (event.key === 'Escape') closeMobileNav()
     }
     const handleResize = () => {
       if (window.innerWidth >= 768) setMobileNavOpen(false)
@@ -29,7 +34,7 @@ export function AppShell({ nav, main, panel, width = 'reading' }: AppShellProps)
       window.removeEventListener('keydown', handleKey)
       window.removeEventListener('resize', handleResize)
     }
-  }, [mobileNavOpen])
+  }, [closeMobileNav, mobileNavOpen])
 
   /* Lock body scroll while drawer is open on mobile */
   useEffect(() => {
@@ -41,12 +46,12 @@ export function AppShell({ nav, main, panel, width = 'reading' }: AppShellProps)
     }
   }, [mobileNavOpen])
 
-  const closeMobileNav = () => setMobileNavOpen(false)
   const navContent = typeof nav === 'function' ? nav(closeMobileNav) : nav
 
   return (
     <div className={styles.shell}>
       <button
+        ref={menuButtonRef}
         type="button"
         className={styles.menuButton}
         onClick={() => setMobileNavOpen((open) => !open)}
