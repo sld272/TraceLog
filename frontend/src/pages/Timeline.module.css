@@ -292,6 +292,12 @@
   font-size: var(--text-sm);
 }
 
+/* 首页的帖子间距挂在日期分组的 .dayPosts 上，搜索结果没有那一层，
+   所以在这里补回同样的间距，否则几张卡会直接贴在一起。 */
+.searchResults .feed {
+  gap: var(--space-2);
+}
+
 .searchResultCard {
   --card-enter-duration: 0s;
   cursor: pointer;
