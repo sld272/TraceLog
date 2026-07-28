@@ -618,9 +618,9 @@ def stream_chat_reply(
                         ):
                             event_queue.put(event)
         except Exception as exc:
-            # A stream can finish successfully and then the enabled suggestion
-            # provider can time out in collect_reply_suggestions; wake a
-            # still-connected consumer instead of leaving it blocked forever.
+            # The workspace disk can fill after the streamed reply completes but
+            # before _append_message inserts it; wake a still-connected consumer
+            # instead of leaving it blocked on this queue forever.
             event_queue.put({"type": "error", "exception": exc})
         finally:
             event_queue.put(sentinel)
