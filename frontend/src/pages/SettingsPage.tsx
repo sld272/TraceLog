@@ -41,6 +41,7 @@ import {
   requestNotificationPermission,
 } from '@/utils/notifications'
 import { invalidateScheduleStatusCache, setCachedScheduleStatus } from '@/utils/scheduleStatusCache'
+import { DiagnosticsButton } from '@/components/DiagnosticsButton'
 import { Notice } from '@/components/Notice'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ScheduleMigrationDialog } from '@/components/ScheduleMigrationDialog'
@@ -198,6 +199,9 @@ export function SettingsPage({ firstRun = false, initialTab, onModelSettingsChan
   const [confirmClearLogs, setConfirmClearLogs] = useState(false)
   const [logRevealPath, setLogRevealPath] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  /* 配置存下来了但没能启用时的原始报错。界面上只说"暂时未能启用"，
+     原文收在诊断信息里——报障的人需要它，日常使用的人不需要看见它。 */
+  const [reloadError, setReloadError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -247,6 +251,7 @@ export function SettingsPage({ firstRun = false, initialTab, onModelSettingsChan
     setNotice(null)
     setError(null)
     try {
+      setReloadError(null)
       const saved = await saveModelSettings(toModelUpdate(modelForm))
       setModelSettings(saved)
       setModelForm(formFromModelSettings(saved))
@@ -255,6 +260,7 @@ export function SettingsPage({ firstRun = false, initialTab, onModelSettingsChan
         setNotice('配置已保存并生效。')
       } else if (saved.reload_error) {
         setNotice('配置已保存，但暂时未能启用。请稍后再试。')
+        setReloadError(saved.reload_error)
       } else {
         setNotice('配置已保存。')
       }
@@ -604,7 +610,12 @@ export function SettingsPage({ firstRun = false, initialTab, onModelSettingsChan
       {firstRun && (
         <Notice kind="info">首次使用 TraceLog，请先配置主模型和 Embedding。保存后应用会自动重新加载配置。</Notice>
       )}
-      {notice && <Notice kind="success" onClose={() => setNotice(null)}>{notice}</Notice>}
+      {notice && (
+        <Notice kind="success" onClose={() => { setNotice(null); setReloadError(null) }}>
+          {notice}
+          {reloadError && <DiagnosticsButton context="启用模型配置" detail={reloadError} />}
+        </Notice>
+      )}
 
       <div className={styles.settingsGrid}>
         <nav className={styles.settingsSide} role="tablist" aria-label="设置分类">

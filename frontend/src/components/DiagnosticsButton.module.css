@@ -1,0 +1,35 @@
+.wrap {
+  margin-top: var(--space-2);
+}
+
+/* 一条低声的链接。真出事时才有人找它，平时不该在失败提示里抢走注意力。 */
+.toggle {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  color: var(--color-text-secondary);
+}
+
+.detail {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* 报错可以很长，别把卡片撑开 */
+  max-height: 12em;
+  overflow: auto;
+}

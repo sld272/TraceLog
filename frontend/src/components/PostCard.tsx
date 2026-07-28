@@ -12,6 +12,7 @@ import {
   parseMessageSuggestions,
   rejectGoalActivity,
 } from '@/api/client'
+import { DiagnosticsButton } from './DiagnosticsButton'
 import { EvidencePanel } from './EvidencePanel'
 import { GoalActivityTagger } from './GoalActivityTagger'
 import { ImageGrid } from './ImageGrid'
@@ -333,6 +334,10 @@ function PipelineNotice({
           </div>
         </div>
         <p className={styles.pipelineDiagnostics}>请稍后重试。</p>
+        <DiagnosticsButton
+          context={`处理记录 ${post.post_id}`}
+          detail={failedJobs.map((job) => `${job.type}: ${job.error ?? '未知错误'}`).join('\n')}
+        />
       </div>
     )
   }
@@ -622,6 +627,7 @@ function CommentPreview({
       )}
       {conversation?.error && (
         <ReplyFailureInline
+          error={conversation.error}
           onRetry={latestMessage.role === 'assistant' && onRerun ? () => onRerun(latestMessage.id) : undefined}
           busy={replyBusy}
         />
@@ -631,9 +637,11 @@ function CommentPreview({
 }
 
 function ReplyFailureInline({
+  error,
   onRetry,
   busy,
 }: {
+  error: string
   onRetry?: () => void
   busy: boolean
 }) {
@@ -651,6 +659,7 @@ function ReplyFailureInline({
         </div>
       </div>
       <p className={styles.pipelineDiagnostics}>请稍后重试。</p>
+      <DiagnosticsButton context="生成回应" detail={error} />
     </div>
   )
 }
@@ -714,6 +723,7 @@ function ThreadMessage({
         </div>
       ) : isFailedAssistant ? (
         <ReplyFailureBubble
+          error={failedCommentReplyError(message)}
           onRetry={isPersisted && onRerun ? () => onRerun(message.id) : undefined}
           busy={busy}
         />
@@ -756,9 +766,11 @@ function RerunMarker({ at, className }: { at?: number | null; className?: string
 }
 
 function ReplyFailureBubble({
+  error,
   onRetry,
   busy,
 }: {
+  error: string | null
   onRetry?: () => void
   busy: boolean
 }) {
@@ -776,6 +788,7 @@ function ReplyFailureBubble({
         </div>
       </div>
       <p className={styles.pipelineDiagnostics}>请稍后重试。</p>
+      <DiagnosticsButton context="生成回应" detail={error} />
     </div>
   )
 }
@@ -787,6 +800,17 @@ function hasFailedCommentReply(message: CommentMessage): boolean {
     return parsed.status === 'failed'
   } catch {
     return false
+  }
+}
+
+/** 失败回复里存着的原始报错。界面上不显示，只在展开诊断信息时才拿出来。 */
+function failedCommentReplyError(message: CommentMessage): string | null {
+  if (!message.metadata) return null
+  try {
+    const parsed = JSON.parse(message.metadata) as { error?: unknown }
+    return typeof parsed.error === 'string' ? parsed.error : null
+  } catch {
+    return null
   }
 }
 
