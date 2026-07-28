@@ -470,5 +470,217 @@ class ApiRuntimeReloadTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class ApiRuntimeLifecycleSerializationTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self) -> None:
+        task = deps._schedule_sync_task  # type: ignore[attr-defined]
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        deps._schedule_sync_task = None  # type: ignore[attr-defined]
+        deps._runtime = None  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _runtime(name: str, worker) -> deps.ApiRuntime:
+        return deps.ApiRuntime(
+            config={"model": name},
+            client=object(),
+            model=name,
+            worker=worker,
+            vectorstore_initialized=True,
+            configured=True,
+        )
+
+    async def test_concurrent_reloads_stop_each_published_worker_before_next_start(self) -> None:
+        events: list[str] = []
+        old_stop_entered = asyncio.Event()
+        release_old_stop = asyncio.Event()
+
+        class Worker:
+            def __init__(self, name: str, *, block_on_stop: bool = False) -> None:
+                self.name = name
+                self.block_on_stop = block_on_stop
+                self.start_calls = 0
+                self.stop_calls = 0
+
+            def start(self) -> None:
+                self.start_calls += 1
+                events.append(f"{self.name}.start")
+
+            async def stop(self) -> None:
+                self.stop_calls += 1
+                events.append(f"{self.name}.stop")
+                if self.block_on_stop:
+                    old_stop_entered.set()
+                    await release_old_stop.wait()
+
+        old_worker = Worker("old", block_on_stop=True)
+        middle_worker = Worker("middle")
+        final_worker = Worker("final")
+        old_runtime = self._runtime("old-model", old_worker)
+        middle_runtime = self._runtime("middle-model", middle_worker)
+        final_runtime = self._runtime("final-model", final_worker)
+        deps._runtime = old_runtime  # type: ignore[attr-defined]
+        configs = [
+            {"api_key": "sk", "base_url": "https://example.invalid/v1", "model": "middle"},
+            {"api_key": "sk", "base_url": "https://example.invalid/v1", "model": "final"},
+        ]
+
+        with (
+            patch("api.deps._load_api_config", side_effect=configs),
+            patch("api.deps.logging_service.update_config"),
+            patch("api.deps.workspace_service.migrate_workspace_permissions"),
+            patch("api.deps.workspace_service.init_workspace"),
+            patch("api.deps._is_model_configured", return_value=True),
+            patch(
+                "api.deps._build_configured_runtime",
+                side_effect=[middle_runtime, final_runtime],
+            ) as build_runtime,
+            patch("api.deps._enqueue_startup_retries"),
+        ):
+            first_reload = asyncio.create_task(deps.reload_runtime())
+            await old_stop_entered.wait()
+            second_reload = asyncio.create_task(deps.reload_runtime())
+            await asyncio.sleep(0.03)
+
+            self.assertEqual(["old.stop"], events)
+            self.assertEqual(1, build_runtime.call_count)
+            self.assertFalse(second_reload.done())
+
+            release_old_stop.set()
+            first_runtime, second_runtime = await asyncio.gather(first_reload, second_reload)
+
+        self.assertIs(middle_runtime, first_runtime)
+        self.assertIs(final_runtime, second_runtime)
+        self.assertIs(final_runtime, deps._runtime)  # type: ignore[attr-defined]
+        self.assertEqual(["old.stop", "middle.start", "middle.stop", "final.start"], events)
+        self.assertEqual(1, old_worker.stop_calls)
+        self.assertEqual(1, middle_worker.start_calls)
+        self.assertEqual(1, middle_worker.stop_calls)
+        self.assertEqual(1, final_worker.start_calls)
+        self.assertEqual(0, final_worker.stop_calls)
+
+    async def test_concurrent_init_builds_and_starts_once(self) -> None:
+        events: list[str] = []
+
+        class Worker:
+            def start(self) -> None:
+                events.append("worker.start")
+
+        runtime = self._runtime("configured-model", Worker())
+        config = {
+            "api_key": "sk",
+            "base_url": "https://example.invalid/v1",
+            "model": "configured-model",
+            "embedding_model": "embed",
+        }
+
+        def start_schedule_sync_task() -> None:
+            self.assertIs(runtime, deps._runtime)  # type: ignore[attr-defined]
+            events.append("schedule.start")
+
+        with (
+            patch("api.deps._load_api_config", return_value=config),
+            patch("api.deps.logging_service.init_logging") as init_logging,
+            patch("api.deps.workspace_service.migrate_workspace_permissions"),
+            patch("api.deps.workspace_service.init_workspace"),
+            patch("api.deps._is_model_configured", return_value=True),
+            patch("api.deps._build_configured_runtime", return_value=runtime) as build_runtime,
+            patch("api.deps._enqueue_startup_retries"),
+            patch("api.deps._start_schedule_sync_task", side_effect=start_schedule_sync_task),
+        ):
+            async with deps._runtime_lifecycle_gate():  # type: ignore[attr-defined]
+                first_init = asyncio.create_task(deps.init_runtime())
+                second_init = asyncio.create_task(deps.init_runtime())
+                await asyncio.sleep(0.03)
+                self.assertFalse(first_init.done())
+                self.assertFalse(second_init.done())
+            first_runtime, second_runtime = await asyncio.gather(first_init, second_init)
+
+        self.assertIs(runtime, first_runtime)
+        self.assertIs(runtime, second_runtime)
+        self.assertIs(runtime, deps._runtime)  # type: ignore[attr-defined]
+        self.assertEqual(["worker.start", "schedule.start"], events)
+        build_runtime.assert_called_once_with(config)
+        init_logging.assert_called_once_with(config.get("logging"))
+
+    async def test_reload_start_failure_stops_candidate_and_publishes_safe_runtime(self) -> None:
+        events: list[str] = []
+
+        class Worker:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            async def stop(self) -> None:
+                events.append(f"{self.name}.stop")
+
+        old_runtime = self._runtime("old-model", Worker("old"))
+        candidate_runtime = self._runtime("new-model", Worker("candidate"))
+        deps._runtime = old_runtime  # type: ignore[attr-defined]
+        config = {
+            "api_key": "sk",
+            "base_url": "https://example.invalid/v1",
+            "model": "new-model",
+            "embedding_model": "embed",
+        }
+
+        def fail_start(runtime) -> None:
+            self.assertIs(candidate_runtime, runtime)
+            self.assertIs(old_runtime, deps._runtime)  # type: ignore[attr-defined]
+            raise RuntimeError("candidate start failed")
+
+        with (
+            patch("api.deps._load_api_config", return_value=config),
+            patch("api.deps.logging_service.update_config"),
+            patch("api.deps.workspace_service.migrate_workspace_permissions"),
+            patch("api.deps.workspace_service.init_workspace"),
+            patch("api.deps._is_model_configured", return_value=True),
+            patch("api.deps._build_configured_runtime", return_value=candidate_runtime),
+            patch("api.deps._start_runtime", side_effect=fail_start),
+            patch("api.deps.secondary_model.reset") as reset_secondary,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "candidate start failed"):
+                await deps.reload_runtime()
+
+        self.assertEqual(["old.stop", "candidate.stop"], events)
+        safe_runtime = deps.get_runtime()
+        self.assertFalse(safe_runtime.configured)
+        self.assertIsNone(safe_runtime.worker)
+        reset_secondary.assert_called_once_with()
+
+
+class RuntimeLifecycleGateCrossLoopTest(unittest.TestCase):
+    def test_gate_handles_contention_in_separate_event_loops(self) -> None:
+        async def contend_once() -> list[str]:
+            order: list[str] = []
+            holder_entered = asyncio.Event()
+            release_holder = asyncio.Event()
+
+            async def holder() -> None:
+                async with deps._runtime_lifecycle_gate():  # type: ignore[attr-defined]
+                    order.append("holder")
+                    holder_entered.set()
+                    await release_holder.wait()
+
+            async def waiter() -> None:
+                await holder_entered.wait()
+                async with deps._runtime_lifecycle_gate():  # type: ignore[attr-defined]
+                    order.append("waiter")
+
+            holder_task = asyncio.create_task(holder())
+            await holder_entered.wait()
+            waiter_task = asyncio.create_task(waiter())
+            await asyncio.sleep(0.03)
+            self.assertEqual(["holder"], order)
+            release_holder.set()
+            await asyncio.gather(holder_task, waiter_task)
+            return order
+
+        self.assertEqual(["holder", "waiter"], asyncio.run(contend_once()))
+        self.assertEqual(["holder", "waiter"], asyncio.run(contend_once()))
+
+
 if __name__ == "__main__":
     unittest.main()

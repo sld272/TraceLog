@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from typing import Any, TypeVar
 
 from openai import OpenAI
@@ -22,6 +24,7 @@ T = TypeVar("T")
 
 _runtime: ApiRuntime | None = None
 _schedule_sync_task: asyncio.Task[None] | None = None
+_RUNTIME_LIFECYCLE_LOCK = threading.Lock()
 MODEL_NOT_CONFIGURED_MESSAGE = "请先在设置页完成模型配置"
 SCHEDULE_SYNC_INTERVAL_SECONDS = 15 * 60
 
@@ -29,6 +32,18 @@ SCHEDULE_SYNC_INTERVAL_SECONDS = 15 * 60
 async def run_sync(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     """Run synchronous core work outside the event loop."""
     return await run_in_threadpool(func, *args, **kwargs)
+
+
+@asynccontextmanager
+async def _runtime_lifecycle_gate():
+    # 两次模型设置保存同时触发 reload 时，后一个调用必须异步等待，不能阻塞
+    # 正在停止旧 worker 的前一个调用所在 event loop。
+    while not _RUNTIME_LIFECYCLE_LOCK.acquire(blocking=False):
+        await asyncio.sleep(0.01)
+    try:
+        yield
+    finally:
+        _RUNTIME_LIFECYCLE_LOCK.release()
 
 
 def get_runtime() -> ApiRuntime:
@@ -56,45 +71,69 @@ def require_configured_runtime_or_409() -> ApiRuntime:
 async def init_runtime() -> ApiRuntime:
     """Initialize workspace, vectorstore, LLM client, and the API worker."""
     global _runtime
-    config = _load_api_config(strict=False)
-    logging_service.init_logging(config.get("logging"))
-    workspace_service.migrate_workspace_permissions()
-    workspace_service.init_workspace()
-    _start_schedule_sync_task()
-
-    if not _is_model_configured(config):
-        _runtime = ApiRuntime(
-            config=config,
-            client=None,
-            model=None,
-            worker=None,
-            vectorstore_initialized=False,
-            configured=False,
+    async with _runtime_lifecycle_gate():
+        if _runtime is not None:
+            return _runtime
+        config = _load_api_config(strict=False)
+        logging_service.init_logging(config.get("logging"))
+        workspace_service.migrate_workspace_permissions()
+        workspace_service.init_workspace()
+        next_runtime = (
+            _unconfigured_runtime(config)
+            if not _is_model_configured(config)
+            else _build_configured_runtime(config)
         )
+        try:
+            _start_runtime(next_runtime)
+        except Exception:
+            # 首次启动时，state.db 被另一进程写锁会使新 worker 启动失败；候选
+            # 尚未发布，必须停止它并重置已安装的副模型配置。
+            try:
+                if next_runtime.worker is not None:
+                    await next_runtime.worker.stop()
+            finally:
+                secondary_model.reset()
+            raise
+        _runtime = next_runtime
+        _start_schedule_sync_task()
         return _runtime
-
-    _runtime = _start_runtime(_build_configured_runtime(config))
-    return _runtime
 
 
 async def reload_runtime() -> ApiRuntime:
-    """Reload runtime after settings are saved, keeping the previous runtime on failure."""
+    """Reload after settings are saved, preserving the previous runtime on build failure."""
     global _runtime
-    previous_runtime = _runtime
-    config = _load_api_config(strict=False)
-    logging_service.update_config(config.get("logging"))
-    workspace_service.migrate_workspace_permissions()
-    workspace_service.init_workspace()
-    next_runtime = (
-        _unconfigured_runtime(config)
-        if not _is_model_configured(config)
-        else _build_configured_runtime(config)
-    )
-    if previous_runtime is not None and previous_runtime.worker is not None:
-        await previous_runtime.worker.stop()
-    _runtime = next_runtime
-    _start_runtime(_runtime)
-    return _runtime
+    async with _runtime_lifecycle_gate():
+        previous_runtime = _runtime
+        config = _load_api_config(strict=False)
+        logging_service.update_config(config.get("logging"))
+        workspace_service.migrate_workspace_permissions()
+        workspace_service.init_workspace()
+        next_runtime = (
+            _unconfigured_runtime(config)
+            if not _is_model_configured(config)
+            else _build_configured_runtime(config)
+        )
+        try:
+            if previous_runtime is not None and previous_runtime.worker is not None:
+                await previous_runtime.worker.stop()
+        except Exception:
+            # 保存模型设置时，旧 worker 的已完成 job task 若抛出未捕获异常，stop
+            # 已开始，不能继续把这个已置 stop 的 runtime 当作可用实例发布。
+            _runtime = _unconfigured_runtime(config)
+            raise
+        try:
+            _start_runtime(next_runtime)
+        except Exception:
+            # 保存模型设置时，state.db 被另一进程写锁会使新 worker 启动失败；不能
+            # 发布它，即使已创建后台任务也要先停止候选再降级到安全未配置状态。
+            try:
+                if next_runtime.worker is not None:
+                    await next_runtime.worker.stop()
+            finally:
+                _runtime = _unconfigured_runtime(config)
+            raise
+        _runtime = next_runtime
+        return _runtime
 
 
 def _unconfigured_runtime(config: dict) -> ApiRuntime:
@@ -168,21 +207,29 @@ def _start_configured_runtime(config: dict) -> ApiRuntime:
 
 async def shutdown_runtime() -> None:
     global _runtime, _schedule_sync_task
-    task = _schedule_sync_task
-    _schedule_sync_task = None
-    if task is not None and not task.done():
-        task.cancel()
+    async with _runtime_lifecycle_gate():
+        task = _schedule_sync_task
+        runtime = _runtime
+        _schedule_sync_task = None
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
-    from api.routes import schedule as schedule_routes
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        finally:
+            try:
+                from api.routes import schedule as schedule_routes
 
-    await schedule_routes.cancel_device_login()
-    if _runtime is not None and _runtime.worker is not None:
-        await _runtime.worker.stop()
-    _runtime = None
-    secondary_model.reset()
+                await schedule_routes.cancel_device_login()
+            finally:
+                try:
+                    if runtime is not None and runtime.worker is not None:
+                        await runtime.worker.stop()
+                finally:
+                    _runtime = None
+                    secondary_model.reset()
 
 
 def _start_schedule_sync_task() -> None:
