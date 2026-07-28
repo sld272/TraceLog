@@ -77,6 +77,9 @@ export function Timeline({
   const [expandingPostIds, setExpandingPostIds] = useState<Record<string, boolean>>({})
   const [expandErrors, setExpandErrors] = useState<Record<string, boolean>>({})
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([])
+  /* 界面上说的是"这批结果对应的词"，不是你正在敲的词。用后者的话，每敲一下
+     文案就先变一次、结果回来又变一次，字一直在跳。 */
+  const [searchedQuery, setSearchedQuery] = useState('')
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [semanticAvailable, setSemanticAvailable] = useState<boolean | null>(null)
   const [searchLoading, setSearchLoading] = useState(false)
@@ -177,6 +180,7 @@ export function Timeline({
     searchTokenRef.current = token
     if (!clean) {
       setSearchResults([])
+      setSearchedQuery('')
       setSearchError(null)
       setSearchMode('keyword')
       setSemanticAvailable(null)
@@ -191,6 +195,7 @@ export function Timeline({
       if (searchTokenRef.current !== token) return
       const items = Array.isArray(response.items) ? response.items : []
       setSearchResults(items)
+      setSearchedQuery(clean)
       adoptListedComments(items)
       setSearchMode(response.mode ?? mode)
       setSemanticAvailable(response.semantic_available ?? null)
@@ -747,7 +752,7 @@ export function Timeline({
           )}
           {searching ? (
             <SearchResults
-              query={trimmedSearchQuery}
+              query={searchedQuery}
               results={searchResults}
               mode={searchMode}
               semanticAvailable={semanticAvailable}
@@ -830,7 +835,10 @@ function SearchResults({
   onRetry: () => void
 }) {
   const deepDisabled = semanticAvailable === false
-  const summary = searchSummaryText(results.length, mode, loading, semanticAvailable)
+  /* 本地搜索几毫秒就回来，报一句"正在搜索..."再换回来，只是让字闪一下。
+     慢到人能察觉了才说，深度搜索那种真要等的才会走到这里。 */
+  const slowLoading = useDelayedTrue(loading, LOADING_ANNOUNCE_DELAY_MS)
+  const summary = searchSummaryText(results.length, mode, slowLoading, semanticAvailable)
 
   return (
     <div className={styles.searchResults}>
@@ -866,7 +874,7 @@ function SearchResults({
       {!error && results.length === 0 && (
         <div className={styles.empty}>
           <p className={styles.emptyTitle}>
-            {loading ? '正在查找…' : `没有找到与「${query}」相关的记录`}
+            {slowLoading || !query ? '正在查找…' : `没有找到与「${query}」相关的记录`}
           </p>
         </div>
       )}
@@ -996,6 +1004,23 @@ const TimelinePostCard = memo(function TimelinePostCard({
     </ErrorBoundary>
   )
 })
+
+/** 搜索慢过这个时长才提示"正在搜索"，否则本地毫秒级返回只会让字闪一下。 */
+const LOADING_ANNOUNCE_DELAY_MS = 400
+
+/** active 持续为真超过 delayMs 才返回 true；中途变假就一直是 false。 */
+function useDelayedTrue(active: boolean, delayMs: number): boolean {
+  const [delayed, setDelayed] = useState(false)
+  useEffect(() => {
+    if (!active) {
+      setDelayed(false)
+      return
+    }
+    const timer = window.setTimeout(() => setDelayed(true), delayMs)
+    return () => window.clearTimeout(timer)
+  }, [active, delayMs])
+  return delayed
+}
 
 function searchSummaryText(
   count: number,
