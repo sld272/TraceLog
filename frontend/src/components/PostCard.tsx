@@ -59,7 +59,7 @@ interface PostCardProps {
   timeStyle?: 'smart' | 'clock'
   modelConfigured?: boolean | null
   expandLoading?: boolean
-  expandError?: string | null
+  expandError?: boolean
   onExpand?: () => void
   onReply?: (soulName: string, content: string, attachments: Attachment[]) => Promise<void>
   onDeletePost?: () => Promise<void>
@@ -81,7 +81,7 @@ export const PostCard = memo(function PostCard({
   timeStyle = 'smart',
   modelConfigured = true,
   expandLoading = false,
-  expandError = null,
+  expandError = false,
   onExpand,
   onReply,
   onDeletePost,
@@ -272,9 +272,14 @@ export const PostCard = memo(function PostCard({
       )}
 
       {showComments && expandError && (
-        <p className={styles.expandError}>
-          加载失败，点击重试：{expandError}
-        </p>
+        <button
+          type="button"
+          className={styles.expandError}
+          onClick={onExpand}
+          disabled={expandLoading}
+        >
+          这条回应暂时没有加载出来，点击重试。
+        </button>
       )}
 
       <PipelineNotice

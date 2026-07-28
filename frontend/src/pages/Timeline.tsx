@@ -76,7 +76,7 @@ export function Timeline({
   const [busyCommentId, setBusyCommentId] = useState<number | null>(null)
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null)
   const [expandingPostIds, setExpandingPostIds] = useState<Record<string, boolean>>({})
-  const [expandErrors, setExpandErrors] = useState<Record<string, string | null>>({})
+  const [expandErrors, setExpandErrors] = useState<Record<string, boolean>>({})
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([])
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [semanticAvailable, setSemanticAvailable] = useState<boolean | null>(null)
@@ -452,7 +452,7 @@ export function Timeline({
 
   const handleExpand = async (postId: string) => {
     setExpandingPostIds((prev) => ({ ...prev, [postId]: true }))
-    setExpandErrors((prev) => ({ ...prev, [postId]: null }))
+    setExpandErrors((prev) => ({ ...prev, [postId]: false }))
     try {
       const detail = await getPost(postId)
       setPostComments((prev) => ({ ...prev, [postId]: detail.comments }))
@@ -460,10 +460,10 @@ export function Timeline({
         ...prev,
         [postId]: conversationsFromThreads(detail.conversations, prev[postId]),
       }))
-    } catch (err) {
+    } catch {
       setExpandErrors((prev) => ({
         ...prev,
-        [postId]: err instanceof Error ? err.message : '加载失败',
+        [postId]: true,
       }))
     } finally {
       setExpandingPostIds((prev) => ({ ...prev, [postId]: false }))
@@ -662,7 +662,7 @@ export function Timeline({
       retryingJobId={retryingJobId}
       modelConfigured={modelConfigured}
       expandLoading={expandingPostIds[post.post_id] ?? false}
-      expandError={expandErrors[post.post_id] ?? null}
+      expandError={expandErrors[post.post_id] ?? false}
       onExpandPost={handleExpand}
       onReplyPost={handleCommentReply}
       onDeletePostById={handleDeletePost}
@@ -915,7 +915,7 @@ const TimelinePostCard = memo(function TimelinePostCard({
   retryingJobId: number | null
   modelConfigured?: boolean | null
   expandLoading: boolean
-  expandError: string | null
+  expandError: boolean
   onExpandPost: (postId: string) => Promise<void>
   onReplyPost: (postId: string, soulName: string, content: string, attachments: Attachment[]) => Promise<void>
   onDeletePostById: (postId: string) => Promise<void>

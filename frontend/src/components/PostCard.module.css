@@ -594,10 +594,28 @@
 }
 
 .expandError {
+  display: block;
   margin-top: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--color-error);
+  font: inherit;
   font-size: var(--text-xs);
   line-height: var(--leading-normal);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.expandError:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.expandError:disabled {
+  cursor: wait;
 }
 
 /* 处理中：一行安静的说明，不是需要盯着的进度指示器 */
