@@ -9,11 +9,15 @@ The reply paths use these read functions:
     units already carried by the portrait or the state block, to avoid double
     injection).
 
-Both run every candidate through memory_scope_policy: public-scene memory is
-shared across souls; a soul's own private memory is admitted but flagged
-needs_discretion in public scenes; other souls' private memory is never
-returned. Units the policy forbids are filtered in SQL/▸code before they can
-reach a prompt — never left to the model to self-censor.
+Both run every candidate through memory_scope_policy, on both of its axes.
+By visibility: public-scene memory is shared across souls; a soul's own private
+memory is admitted but flagged needs_discretion in public scenes; other souls'
+private memory is never returned. By owner: a soul retrieves global beliefs and
+its own, never another soul's read of its relationship with the user — public
+visibility shares the user's words, not another soul's reading of them.
+
+Units the policy forbids are filtered in SQL/▸code before they can reach a
+prompt — never left to the model to self-censor.
 """
 
 from __future__ import annotations
@@ -228,6 +232,33 @@ def _allowed_visibility_sql(plan: dict) -> tuple[str, list]:
     return "(" + clauses[0] + ")", params
 
 
+def _allowed_owner_sql(reply_soul: str | None) -> tuple[str, list]:
+    """Build a WHERE fragment + params admitting global beliefs and the reply
+    soul's own — never another SOUL's read of its relationship with the user,
+    which stays with that SOUL even when its visibility is public."""
+    owners = policy.admissible_owner_scopes(reply_soul)
+    placeholders = ",".join("?" for _ in owners)
+    return f"owner_scope IN ({placeholders})", list(owners)
+
+
+def _assert_owner_boundary(items: list[MemoryItem], reply_soul: str | None, *, block: str) -> None:
+    """Backstop for the owner filter, checked on what actually reaches a prompt.
+
+    The SQL already excludes other SOULs' beliefs; this catches a future recall
+    path that forgets to apply it. Logged rather than raised — a boundary slip
+    must not take a reply down, but it must never be silent either."""
+    stray = [item for item in items if not policy.owns(item.owner_scope, reply_soul)]
+    if stray:
+        logging_service.log_event(
+            "memory_owner_boundary_violation",
+            level="WARNING",
+            block=block,
+            reply_soul=reply_soul,
+            unit_ids=[item.unit_id for item in stray],
+            owner_scopes=sorted({item.owner_scope for item in stray}),
+        )
+
+
 def _discretion_for(visibility_scope: str, channel: str, reply_soul: str | None) -> bool:
     return policy.classify(visibility_scope, channel=channel, reply_soul=reply_soul).needs_discretion
 
@@ -245,6 +276,7 @@ def recent_state_block(
     cutoff = now - STATE_WINDOW_DAYS * DAY_SECONDS
     plan = policy.admissible_visibility_filters(channel, reply_soul)
     vis_sql, params = _allowed_visibility_sql(plan)
+    owner_sql, owner_params = _allowed_owner_sql(reply_soul)
 
     rows = db.query_all(
         f"""
@@ -256,8 +288,9 @@ def recent_state_block(
           AND prompt_policy = 'allow'
           AND last_confirmed >= ?
           AND {vis_sql}
+          AND {owner_sql}
         """,
-        (cutoff, *params),
+        (cutoff, *params, *owner_params),
     )
     ranked = sorted(
         rows,
@@ -324,6 +357,7 @@ def retrieve_units_with_anchors(
     candidate set cannot vouch for them), ready for direct injection."""
     plan = policy.admissible_visibility_filters(channel, reply_soul)
     vis_sql, params = _allowed_visibility_sql(plan)
+    owner_sql, owner_params = _allowed_owner_sql(reply_soul)
     type_placeholders = ",".join("?" for _ in _RETRIEVE_EXCLUDED_TYPES)
 
     rows = db.query_all(
@@ -336,8 +370,9 @@ def retrieve_units_with_anchors(
           AND in_portrait = 0
           AND type NOT IN ({type_placeholders})
           AND {vis_sql}
+          AND {owner_sql}
         """,
-        (*_RETRIEVE_EXCLUDED_TYPES, *params),
+        (*_RETRIEVE_EXCLUDED_TYPES, *params, *owner_params),
     )
 
     now = db.now_ts()
@@ -1469,6 +1504,7 @@ def build_memory_section(
     # 2. current-state block (always-on)
     has_contested = False
     state_items = _fold_linked_items(recent_state_block(channel, reply_soul))
+    _assert_owner_boundary(state_items, reply_soul, block="state")
     if state_items:
         lines = []
         for item in state_items:
@@ -1488,6 +1524,7 @@ def build_memory_section(
         excluded_sources=excluded_sources, prefetched=prefetched, trace_context=trace_context,
     )
     hits = _fold_linked_items(retrieved)
+    _assert_owner_boundary(hits, reply_soul, block="retrieved")
     terms = fts_query.search_terms(query)
     if hits:
         lines = []

@@ -1,7 +1,10 @@
 """Read-side boundary policy: which memory a SOUL may retrieve in each scene.
 
-This encodes the product's desired human-like boundary model (orthogonal to the
-write-side owner/visibility labels):
+This encodes the product's desired human-like boundary model over two
+independent axes of the write-side labels — visibility (which scene the memory
+came from) and owner (whose belief it is).
+
+Visibility — what was said, and where:
 
   * Comments under a post are a PUBLIC scene: every SOUL may retrieve the user's
     public conversations with *any* SOUL (posts + all comment threads) and
@@ -10,6 +13,19 @@ write-side owner/visibility labels):
   * When replying in a public scene, a SOUL may still retrieve its OWN private
     memory, but must judge whether it is appropriate to reveal publicly (a soft
     discretion gate, like a real person — NOT a hard wall).
+
+Owner — whose read of the user it is:
+
+  * ``global`` units are beliefs about the user; every SOUL may retrieve them.
+  * ``soul:X`` units are X's own read of its relationship with the user. They
+    stay with X even when their visibility is public, because a public scene
+    makes the user's *words* shared, not another SOUL's reading of them. This
+    one is a hard wall, not a discretion gate: it is not "knows but shouldn't
+    say", it is "should never have known".
+
+Raw user evidence (the freshness seam, orphan evidence, recalled conversation
+text) is filtered by visibility only — what the user said in a public thread
+stays shared no matter which SOUL's thread it was.
 
 The read path uses this module to filter and annotate every candidate before it
 can reach a prompt.
@@ -22,6 +38,12 @@ from dataclasses import dataclass
 # reply scenes
 PUBLIC_CHANNELS = frozenset({"public_post", "comment"})
 PRIVATE_CHANNELS = frozenset({"chat"})
+
+# Owner of beliefs about the user rather than about one relationship. Mirrors
+# memory_unit_service.OWNER_GLOBAL, which owns the write-side vocabulary; kept
+# literal so this policy module stays free of the storage layer (a test pins
+# the two together).
+OWNER_GLOBAL = "global"
 
 # a unit is admissible either freely ("hard") or with discretion ("soft");
 # otherwise it is "forbidden" and must never reach the prompt.
@@ -77,6 +99,23 @@ def classify(visibility_scope: str, *, channel: str, reply_soul: str | None) -> 
     if channel in PUBLIC_CHANNELS:
         return ScopeDecision(SOFT)
     return ScopeDecision(HARD)
+
+
+def admissible_owner_scopes(reply_soul: str | None) -> list[str]:
+    """Whose beliefs ``reply_soul`` may retrieve, as owner_scope values.
+
+    Global beliefs are about the user and belong to everyone. A SOUL's own
+    beliefs are its own read of the relationship, so no other SOUL may retrieve
+    them — regardless of visibility. Callers with no acting SOUL get global only.
+    """
+    if reply_soul is None:
+        return [OWNER_GLOBAL]
+    return [OWNER_GLOBAL, f"soul:{reply_soul}"]
+
+
+def owns(owner_scope: str, reply_soul: str | None) -> bool:
+    """Whether ``reply_soul`` may hold a belief owned by ``owner_scope``."""
+    return owner_scope in admissible_owner_scopes(reply_soul)
 
 
 def admissible_visibility_filters(channel: str, reply_soul: str | None) -> dict:

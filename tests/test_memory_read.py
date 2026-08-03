@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -153,6 +154,70 @@ class MemoryReadTest(unittest.TestCase):
         )
         hits = memory_read.retrieve_units("弹吉他", "public_post", "gotoh")
         self.assertIn(uid, [h.unit_id for h in hits])  # gotoh can retrieve user's public convo with kita
+
+    def _relationship_unit(self, soul: str, content: str, *, comment_id: int, type: str = "relationship") -> str:
+        """A soul's public relationship belief, written the way the comment
+        dual-lens writes it: owner soul:<name>, visibility public."""
+        with db.transaction() as conn:
+            mes.record_comment_mutation(
+                conn, comment_id=comment_id, post_id="20260616-001", soul_name=soul,
+                role="user", op="create", content=content, occurred_at=1.0,
+            )
+            row = conn.execute(
+                "SELECT id FROM memory_ingest_events WHERE owner_scope = ? AND source_type = 'comment_relationship'"
+                " ORDER BY id DESC LIMIT 1",
+                (f"soul:{soul}",),
+            ).fetchone()
+        return mus.add_unit(
+            owner_scope=f"soul:{soul}", visibility_scope="public", source_channel="comment",
+            type=type, content=content, importance=0.6, evidence_event_ids=[int(row["id"])],
+        )
+
+    def test_retrieve_excludes_other_souls_public_belief_whatever_its_type(self) -> None:
+        # The type exclusion above only covers units the model happened to label
+        # 'relationship'. The same dyadic observation gets filed as preference or
+        # insight just as often, and those used to reach every other soul.
+        self._relationship_unit("kita", "与kita互动时用户偏好被直接点出问题", comment_id=913, type="preference")
+        self._relationship_unit("kita", "与kita互动时用户乐于自曝糗事", comment_id=914, type="insight")
+        hits = memory_read.retrieve_units("与kita互动 偏好 自曝", "public_post", "gotoh")
+        self.assertEqual(hits, [])
+
+    def test_retrieve_keeps_own_public_belief(self) -> None:
+        uid = self._relationship_unit("gotoh", "与gotoh互动时用户乐于自曝糗事", comment_id=912, type="insight")
+        hits = memory_read.retrieve_units("与gotoh互动 自曝", "public_post", "gotoh")
+        self.assertIn(uid, [h.unit_id for h in hits])
+
+    def test_retrieve_without_reply_soul_sees_only_global(self) -> None:
+        self._relationship_unit("kita", "用户跟kita约好每周汇报进度", comment_id=915, type="preference")
+        self.assertEqual(memory_read.retrieve_units("每周汇报进度", "public_post", None), [])
+
+    def test_state_block_excludes_other_souls_public_state(self) -> None:
+        now = db.now_ts()
+        self._relationship_unit("kita", "用户最近在跟kita赶一个进度", comment_id=916, type="state")
+        with db.transaction() as conn:
+            conn.execute("UPDATE memory_units SET last_confirmed = ? WHERE type = 'state'", (now,))
+        self.assertEqual(memory_read.recent_state_block("public_post", "gotoh", now=now), [])
+
+    def test_owner_boundary_violation_is_logged(self) -> None:
+        from core import logging_service
+
+        logging_service.init_logging({"enabled": True})
+        try:
+            stray = memory_read.MemoryItem(
+                unit_id="mu_stray", type="relationship", content="别人的相处观察",
+                confidence=0.8, importance=0.6, owner_scope="soul:kita",
+                visibility_scope="public", needs_discretion=False,
+            )
+            memory_read._assert_owner_boundary([stray], "gotoh", block="retrieved")
+        finally:
+            logging_service.update_config({"enabled": False})
+
+        lines = (self.workspace / "logs" / "current.jsonl").read_text(encoding="utf-8").splitlines()
+        record = json.loads(lines[-1])
+        self.assertEqual("memory_owner_boundary_violation", record["event"])
+        self.assertEqual("WARNING", record["level"])
+        self.assertEqual(["mu_stray"], record["unit_ids"])
+        self.assertEqual(["soul:kita"], record["owner_scopes"])
 
     def test_retrieve_excludes_other_souls_private(self) -> None:
         ev = self._ev("soul:kita", "private:soul:kita", "chat")

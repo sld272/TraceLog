@@ -65,6 +65,23 @@ class ScopePolicyTest(unittest.TestCase):
         self.assertTrue(plan["public"])
         self.assertIsNone(plan["private_self"])
 
+    def test_owner_scopes_admit_global_and_own_only(self) -> None:
+        self.assertEqual(["global", "soul:gotoh"], policy.admissible_owner_scopes("gotoh"))
+        self.assertEqual(["global"], policy.admissible_owner_scopes(None))
+
+    def test_owns_rejects_another_souls_belief(self) -> None:
+        self.assertTrue(policy.owns("global", "gotoh"))
+        self.assertTrue(policy.owns("soul:gotoh", "gotoh"))
+        self.assertFalse(policy.owns("soul:kita", "gotoh"))
+        self.assertFalse(policy.owns("soul:kita", None))
+
+    def test_global_owner_matches_the_write_side_vocabulary(self) -> None:
+        # policy stays free of the storage layer, so the constant is duplicated;
+        # this pins the copy to the module that defines the vocabulary.
+        from core import memory_unit_service as mus
+
+        self.assertEqual(mus.OWNER_GLOBAL, policy.OWNER_GLOBAL)
+
     def test_helpers(self) -> None:
         self.assertTrue(policy.is_public_visibility("public"))
         self.assertTrue(policy.is_public_visibility("thread:p1"))
