@@ -11,6 +11,10 @@ from typing import Any, Callable
 from core import logging_service
 from core.llm.types import LLMClient
 
+# Extra sends allowed when a provider hands back an empty answer. Two brings a
+# ~5% per-call blank rate down to roughly one in ten thousand.
+EMPTY_CONTENT_RETRIES = 2
+
 
 class StreamCompletionError(Exception):
     """A streaming chat completion failed mid-flight.
@@ -52,8 +56,50 @@ def call_json_completion(
     response_format: dict | None = None,
     trace_context: dict | None = None,
     status_callback: Callable[[dict[str, Any]], None] | None = None,
+    empty_content_retries: int = EMPTY_CONTENT_RETRIES,
 ) -> dict | None:
-    """Call a JSON-mode chat completion and log the full lifecycle."""
+    """Call a JSON-mode chat completion and log the full lifecycle.
+
+    Reasoning models sometimes end a generation right after their thinking pass
+    and hand back an empty ``content`` with ``finish_reason='stop'`` — measured
+    at roughly 5% of calls on long structured-JSON prompts. It is a per-call
+    fluke rather than a property of the prompt, so a blank answer is re-sent
+    instead of being reported as unparseable. Each attempt is logged on its own,
+    so the retries stay visible.
+    """
+    attempts = max(1, empty_content_retries + 1)
+    for attempt in range(1, attempts + 1):
+        parsed, retry = _json_completion_attempt(
+            client=client,
+            model=model,
+            operation=operation,
+            messages=messages,
+            parser=parser,
+            timeout=timeout,
+            response_format=response_format,
+            trace_context=trace_context,
+            status_callback=status_callback,
+            last_attempt=attempt == attempts,
+        )
+        if not retry:
+            return parsed
+    return None
+
+
+def _json_completion_attempt(
+    *,
+    client: LLMClient,
+    model: str,
+    operation: str,
+    messages: list[dict[str, Any]],
+    parser: Callable[[str | None], dict | None],
+    timeout: int,
+    response_format: dict | None,
+    trace_context: dict | None,
+    status_callback: Callable[[dict[str, Any]], None] | None,
+    last_attempt: bool,
+) -> tuple[dict | None, bool]:
+    """One request. Returns (parsed, whether an empty answer is worth retrying)."""
     call_id = _new_call_id()
     started = perf_counter()
     response_content: str | None = None
@@ -62,6 +108,7 @@ def call_json_completion(
     error: dict | str | None = None
     usage: dict | None = None
     finish_reason: str | None = None
+    retry = False
 
     try:
         kwargs: dict[str, Any] = {
@@ -74,20 +121,34 @@ def call_json_completion(
         response = client.chat.completions.create(**kwargs)
         usage = _completion_usage(response)
         finish_reason = _completion_finish_reason(response)
-        response_content = response.choices[0].message.content
+        response_content = _message_content(response)
+        if not (response_content or "").strip():
+            if not last_attempt:
+                status = "empty_content"
+                retry = True
+                return None, True
+            # Last chance: the answer is sometimes left in the thinking channel.
+            salvaged = _json_object_tail(_reasoning_content(response))
+            parsed = parser(salvaged) if salvaged is not None else None
+            if parsed is None:
+                status = "empty_content"
+                return None, False
+            status = "ok_from_reasoning"
+            response_content = salvaged
+            return parsed, False
         parsed = parser(response_content)
         if parsed is None:
-            status = _invalid_response_status(response_content)
-            return None
-        return parsed
+            status = _invalid_response_status(response_content, finish_reason)
+            return None, False
+        return parsed, False
     except Exception as exc:
         status = "api_error"
         error = _api_error_details(exc, operation=operation, model=model, timeout_s=timeout)
-        return None
+        return None, False
     finally:
         duration_ms = int((perf_counter() - started) * 1000)
         if status_callback is not None:
-            status_callback({"status": status, "error": error})
+            status_callback({"status": status, "error": error, "will_retry": retry})
         logging_service.log_llm_call(
             call_id=call_id,
             operation=operation,
@@ -207,12 +268,52 @@ def _completion_finish_reason(response: Any) -> str | None:
     return str(value) if value is not None else None
 
 
-def _invalid_response_status(content: str | None) -> str:
+def _invalid_response_status(content: str | None, finish_reason: str | None = None) -> str:
     try:
         json.loads(clean_json_content(content))
     except json.JSONDecodeError:
-        return "invalid_json"
+        # Broken JSON that stopped at the token cap is a length problem, not a
+        # formatting one — retrying the same request would truncate again.
+        return "truncated" if finish_reason == "length" else "invalid_json"
     return "invalid_response"
+
+
+def _message(response: Any) -> Any:
+    choices = getattr(response, "choices", None) or []
+    return getattr(choices[0], "message", None) if choices else None
+
+
+def _message_content(response: Any) -> str | None:
+    message = _message(response)
+    return getattr(message, "content", None) if message is not None else None
+
+
+def _reasoning_content(response: Any) -> str | None:
+    """The provider's thinking channel, wherever the SDK parked it."""
+    message = _message(response)
+    if message is None:
+        return None
+    value = getattr(message, "reasoning_content", None)
+    if value is None:
+        extra = getattr(message, "model_extra", None) or {}
+        value = extra.get("reasoning_content") or extra.get("reasoning")
+    return str(value) if value else None
+
+
+def _json_object_tail(text: str | None) -> str | None:
+    """Last complete JSON object in free text, or None when there is none."""
+    if not text:
+        return None
+    decoder = json.JSONDecoder()
+    for index in range(len(text) - 1, -1, -1):
+        if text[index] != "{":
+            continue
+        try:
+            _, end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        return text[index : index + end]
+    return None
 
 
 def _api_error_details(exc: Exception, *, operation: str, model: str, timeout_s: int | float | None) -> dict:
