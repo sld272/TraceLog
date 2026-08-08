@@ -7,13 +7,15 @@
   padding: 0 var(--space-5) var(--space-5);
 }
 
-/* 列头吸顶：贴页面顶部（无固定顶栏），保留卡片上圆角。 */
+/* 列头不再吸顶：网格自己滚了，列头本来就固定在卡片上沿。吸顶反而会在页面
+   稍一滚动时让它脱离网格浮到视口顶上，和下面的格子对不上。
+   padding-right 补的是 body 纵向滚动条占掉的宽度，否则七列会和网格错开。 */
 .headRow {
   display: grid;
   grid-template-columns: 56px repeat(7, 1fr);
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 6;
+  padding-right: var(--scrollbar-px, 0px);
   background: var(--color-bg-card);
   border-bottom: 1px solid var(--color-rule);
   border-top-left-radius: var(--radius-lg);
@@ -63,6 +65,7 @@
 .allDayRow {
   display: grid;
   grid-template-columns: 56px repeat(7, 1fr);
+  padding-right: var(--scrollbar-px, 0px);
   border-bottom: 1px solid var(--color-rule);
   min-height: 30px;
 }
@@ -143,10 +146,15 @@
   border-left-color: var(--color-warm);
 }
 
+/* 一整天（24 行）都在这里，靠视口高度开一扇窗看它。窗口矮到放不下 7 小时
+   就不再压缩，宁可让页面滚——比把一天挤成几条带子强。滚到头不带着页面一起走。 */
 .body {
   display: grid;
   grid-template-columns: 56px repeat(7, 1fr);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  height: clamp(420px, calc(100vh - 340px), calc(24 * var(--hour-px) + 20px));
+  overscroll-behavior-y: contain;
   border-bottom-left-radius: var(--radius-lg);
   border-bottom-right-radius: var(--radius-lg);
   /* 首尾轴标签探出半行，留出空间避免被 overflow 裁剪 */
@@ -315,9 +323,18 @@
     min-width: 0;
     grid-template-columns: 56px repeat(7, 104px);
     overflow-x: auto;
-    overflow-y: hidden;
     overscroll-behavior-x: contain;
     scrollbar-width: none;
+  }
+
+  /* 触摸端滚动条不占位，补出来的那点宽度反而会让列头比网格多探出一截 */
+  .headRow,
+  .allDayRow {
+    padding-right: 0;
+  }
+
+  .body {
+    overflow-y: auto;
   }
 
   .headRow::-webkit-scrollbar,
