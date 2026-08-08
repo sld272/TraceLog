@@ -350,8 +350,42 @@
   flex-shrink: 0;
 }
 
-/* 编辑/不要提起/忘记都是偶尔用一次的动作，鼠标进卡才出现。
-   绝对定位是为了它们不出现时不撑高卡片 —— 否则每条记忆下面都挂着一段空白。 */
+/* 编辑/不要提起/忘记都是偶尔用一次的动作，鼠标进卡才出现，平时不和记忆本身
+   抢注意力。它们不出现时也不该撑高卡片——所以是和标签换位，而不是另起一行。
+
+   操作和标签占同一格，鼠标进卡时一个淡出、一个淡入：两者永远不同框，谁也不
+   用去盖谁。格子按两者里较宽的那个定宽，所以互换时正文不会重排。原来是让操
+   作绝对定位、竖直居中，拿一条 32px 的渐变盖住标签——记忆条目一旦有两行，
+   它就落在两行之间，正文从按钮上下露出来（渐变只挡得住左边缘那一小段）。 */
+.unit:not(.unitEditing) > .unitActions,
+.unit:not(.unitEditing) > .unitMeta {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.unitActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.unitMeta {
+  transition: opacity var(--transition-fast);
+}
+
+.unit:hover .unitActions,
+.unit:focus-within .unitActions {
+  opacity: 1;
+}
+
+.unit:hover .unitMeta,
+.unit:focus-within .unitMeta {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* 窄屏放不下"正文在左、标签在右"，退回上下堆叠 */
 @media (max-width: 860px) {
   .unit:not(.unitEditing) {
@@ -362,33 +396,22 @@
     justify-content: flex-start;
   }
 
+  /* 窄屏没有 hover：标签和操作各占一行常驻，不再叠在同一格 */
+  .unit:not(.unitEditing) > .unitActions,
+  .unit:not(.unitEditing) > .unitMeta {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
   .unitActions {
-    position: static;
-    transform: none;
-    padding-left: 0;
-    background: none;
     opacity: 1;
     justify-content: flex-end;
   }
-}
 
-/* 操作浮在行尾、竖直居中，用渐变盖住底下的标签——常驻会在每行右边留一块空位 */
-.unitActions {
-  position: absolute;
-  right: var(--space-6);
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  gap: 2px;
-  padding-left: var(--space-8);
-  background: linear-gradient(90deg, transparent, var(--color-bg-card) var(--space-8));
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-}
-
-.unit:hover .unitActions,
-.unit:focus-within .unitActions {
-  opacity: 1;
+  .unit:hover .unitMeta,
+  .unit:focus-within .unitMeta {
+    opacity: 1;
+  }
 }
 
 .unitAction {

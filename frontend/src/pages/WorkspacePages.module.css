@@ -177,7 +177,8 @@
 }
 
 .itemRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-6);
 }
@@ -205,16 +206,28 @@
   flex-shrink: 0;
 }
 
-/* 操作浮在行尾、竖直居中，用一段渐变盖住底下的节奏和时间：
-   常驻会在每行右边留一块空位，进出流又会让整行跳动 */
+/* 操作和"节奏 + 最近推进"占同一格，鼠标进卡时一个淡出、一个淡入：两者永远
+   不同框，也就不需要谁去盖住谁。格子按两者里较宽的那个定宽，所以互换时行不
+   会跳。原来是把操作绝对定位，拿一条 32px 的渐变去盖住底下的元数据——渐变
+   起手那一段是半透的，元数据先透出半个字；卡片一多行，操作落在行间，正文更
+   是从按钮上下两边露出来。 */
 .itemCard .rowActs {
-  position: absolute;
-  top: 50%;
-  right: var(--space-6);
-  transform: translateY(-50%);
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: flex-end;
   margin-left: 0;
-  padding-left: var(--space-8);
-  background: linear-gradient(90deg, transparent, var(--color-bg-card) var(--space-8));
+}
+
+.itemCard .goalMeta {
+  grid-column: 2;
+  grid-row: 1;
+  transition: opacity var(--transition-fast);
+}
+
+.itemCard:hover .goalMeta,
+.itemCard:focus-within .goalMeta {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* 目标卡上的操作平时不出声，鼠标进卡才现身 —— 它们是偶尔用一次的动作，
@@ -728,11 +741,18 @@
 }
 
 /* 窄屏放不下"标题在左、指标在右"，退回上下堆叠 */
+/* 窄屏没有 hover，元数据和操作各占一行常驻，不再叠在一起 */
 @media (max-width: 860px) {
   .itemRow {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
     align-items: flex-start;
     gap: var(--space-2);
+  }
+
+  .itemCard .goalMeta,
+  .itemCard .rowActs {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .goalMeta {
@@ -741,10 +761,12 @@
   }
 
   .itemCard .rowActs {
-    position: static;
-    transform: none;
-    padding-left: 0;
-    background: none;
+    justify-content: flex-start;
+    opacity: 1;
+  }
+
+  .itemCard:hover .goalMeta,
+  .itemCard:focus-within .goalMeta {
     opacity: 1;
   }
 }
