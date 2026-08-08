@@ -1705,6 +1705,8 @@ class EvidenceRef:
     author: str | None
     state: str
     review_pending: bool = False
+    #: 这条证据落在哪条帖子下 —— 评论只带自己的 id，前端没法自己算出原帖
+    post_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1724,6 +1726,21 @@ class UnitDetail:
     prompt_policy: str
     portrait_policy: str
     evidence: list[EvidenceRef]
+
+
+def _evidence_post_id(source_type: str, source_id: str) -> str | None:
+    """The post an evidence source sits under, so the workbench can jump back to
+    the original record. A post is its own anchor; a comment only carries its own
+    row id, so the post has to be looked up; chat lines have no post at all."""
+    if source_type in ("post", "post_vision"):
+        return source_id
+    if source_type not in mes.COMMENT_SOURCE_TYPES:
+        return None
+    try:
+        target = _comment_target(source_id)
+    except (TypeError, ValueError):
+        return None  # 历史脏数据：source_id 不是评论 id
+    return str(target["post_id"]) if target is not None else None
 
 
 def unit_detail(unit_id: str) -> UnitDetail | None:
@@ -1753,6 +1770,7 @@ def unit_detail(unit_id: str) -> UnitDetail | None:
                 author=e["author"],
                 state=state,
                 review_pending=bool(e["review_pending"]),
+                post_id=_evidence_post_id(str(e["source_type"]), str(e["source_id"])),
             )
         )
     return UnitDetail(

@@ -1215,6 +1215,8 @@ export interface MemoryEvidenceRef {
   author: string | null
   state: string
   review_pending: boolean
+  /** 这条证据所属的帖子；私聊证据没有，为 null。 */
+  post_id: string | null
 }
 
 /** GET /memory/units/{id} — unit plus its evidence trail. */

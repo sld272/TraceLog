@@ -1143,6 +1143,78 @@ class MemoryReadTest(unittest.TestCase):
         self.assertIn("（评论区） 我自学吉他三个月了", seen_by_kita)
         self.assertNotIn("用户在 kita 的评论区", seen_by_kita)
 
+    # --- unit_detail: 证据回跳原帖 ------------------------------------------
+
+    def test_unit_detail_resolves_comment_evidence_to_its_post(self) -> None:
+        # 评论证据的 source_id 是评论 id，工作台光凭它跳不回原帖；detail 必须
+        # 把评论落在哪条帖子下一起带出来（帖子证据则是它自己）。
+        now = 1000.0
+        db.execute(
+            "INSERT INTO souls(name, file_path, created_at, updated_at) VALUES(?, ?, ?, ?)",
+            ("kita", "souls/kita.md", now, now),
+        )
+        db.execute(
+            "INSERT INTO posts(id, ts, content, created_at, updated_at) VALUES(?, ?, ?, ?, ?)",
+            ("p-guitar", "2026-06-16", "练吉他", now, now),
+        )
+        db.execute(
+            "INSERT INTO comments(id, post_id, soul_name, role, content, seq, created_at) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?)",
+            (901, "p-guitar", "kita", "user", "我自学吉他三个月了", 0, now),
+        )
+        with db.transaction() as conn:
+            cev = mes.record_comment_mutation(
+                conn, comment_id=901, post_id="p-guitar", soul_name="kita",
+                role="user", op="create", content="我自学吉他三个月了", occurred_at=now,
+            )
+            pev = mes.record_post_mutation(
+                conn, post_id="p-guitar", op="create", content="练吉他", occurred_at=now,
+            )
+            chat_ev = mes.record_chat_mutation(
+                conn, message_id=7, soul_name="kita", op="create",
+                content="今天很累", occurred_at=now, role="user",
+            )
+        uid = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="comment",
+            type="preference", content="用户在自学吉他", confidence=0.8, importance=0.5,
+            evidence_event_ids=[cev.id, pev.id],
+        )
+        chat_uid = mus.add_unit(
+            owner_scope="soul:kita", visibility_scope="private:soul:kita", source_channel="chat",
+            type="state", content="用户今天很累", confidence=0.8, importance=0.5,
+            evidence_event_ids=[chat_ev.id],
+        )
+
+        detail = memory_read.unit_detail(uid)
+        assert detail is not None
+        by_event = {ref.event_id: ref for ref in detail.evidence}
+        self.assertEqual("p-guitar", by_event[cev.id].post_id)   # 评论 -> 原帖
+        self.assertEqual("901", by_event[cev.id].source_id)      # 定位到具体那条评论
+        self.assertEqual("p-guitar", by_event[pev.id].post_id)   # 帖子就是自己
+
+        chat_detail = memory_read.unit_detail(chat_uid)
+        assert chat_detail is not None
+        self.assertIsNone(chat_detail.evidence[0].post_id)       # 私聊没有原帖
+
+    def test_unit_detail_comment_evidence_without_row_has_no_post(self) -> None:
+        # 评论行已被删掉（帖子连带删除）时，跳转目标不存在，post_id 必须是 None，
+        # 而不是抛错让整个证据抽屉打不开。
+        now = 1000.0
+        with db.transaction() as conn:
+            cev = mes.record_comment_mutation(
+                conn, comment_id=404, post_id="p-gone", soul_name="kita",
+                role="user", op="create", content="没了", occurred_at=now,
+            )
+        uid = mus.add_unit(
+            owner_scope="global", visibility_scope="public", source_channel="comment",
+            type="preference", content="没了", confidence=0.8, importance=0.5,
+            evidence_event_ids=[cev.id],
+        )
+
+        detail = memory_read.unit_detail(uid)
+        assert detail is not None
+        self.assertIsNone(detail.evidence[0].post_id)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -887,11 +887,13 @@ function EvidenceRow({ ev }: { ev: MemoryEvidenceRef }) {
         : null
   const dim = ev.state === 'superseded' || ev.state === 'deleted'
   const authorLabel = ev.author === 'user' ? '你' : ev.author === 'assistant' ? 'TA' : null
-  const postId = (ev.source_type === 'post' || ev.source_type === 'post_vision') && ev.state !== 'deleted'
-    ? ev.source_id
-    : null
+  const isComment = ev.source_type === 'comment_message' || ev.source_type === 'comment_relationship'
+  const postId = ev.state !== 'deleted' ? ev.post_id : null
+  /* 评论证据落在原帖的评论区里，光跳到帖子还得自己找；带上锚点直接闪那一条 */
+  const highlight = isComment ? `comment-${ev.source_id}` : `post-${ev.source_id}`
+  const jumpLabel = isComment ? '查看原评论 ↗' : '查看原帖 ↗'
   const openPost = () => {
-    if (postId) window.location.hash = formatRoute({ kind: 'post', postId })
+    if (postId) window.location.hash = formatRoute({ kind: 'post', postId, highlight })
   }
   return (
     <div className={`${styles.ev} ${dim ? styles.evDim : ''}`}>
@@ -912,11 +914,11 @@ function EvidenceRow({ ev }: { ev: MemoryEvidenceRef }) {
           </span>
         )}
         {postId && (
-          <button className={styles.evJump} onClick={openPost}>查看原帖 ↗</button>
+          <button className={styles.evJump} onClick={openPost}>{jumpLabel}</button>
         )}
       </div>
       {postId ? (
-        <button className={`${styles.evText} ${styles.evTextLink}`} onClick={openPost} title="查看原帖">
+        <button className={`${styles.evText} ${styles.evTextLink}`} onClick={openPost} title={isComment ? '查看原评论' : '查看原帖'}>
           {ev.content}
         </button>
       ) : (
