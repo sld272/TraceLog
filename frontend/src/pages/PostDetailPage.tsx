@@ -47,6 +47,10 @@ export function PostDetailPage({
   const [actionError, setActionError] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const highlightDoneRef = useRef(false)
+  /* 首页 feed 一直挂在 DOM 里（App 用 hiddenPage 藏起来保住滚动位置），同一条帖子
+     因此有两份卡片、两个同名锚点。全局 getElementById 只会命中文档序在前的那份
+     ——那是首页里零高度的隐藏节点，滚不动也闪不出来。所以只在详情页内部找。 */
+  const pageRef = useRef<HTMLElement>(null)
 
   /* Pending suggestions belong to the post itself; fetch them independently
      so the prompt shows under the post regardless of comment state. */
@@ -99,7 +103,10 @@ export function PostDetailPage({
     if (!highlight || detail.loading || detail.notFound || highlightDoneRef.current) return
     const targetId = highlightTargetId(highlight, postId)
     if (!targetId) return
-    const target = document.getElementById(targetId) ?? document.getElementById(`post-${postId}`)
+    const root = pageRef.current
+    if (!root) return
+    const find = (id: string) => root.querySelector<HTMLElement>(`#${CSS.escape(id)}`)
+    const target = find(targetId) ?? find(`post-${postId}`)
     if (!target) return
     highlightDoneRef.current = true
     target.scrollIntoView({ block: 'center', behavior: 'smooth' })
@@ -214,7 +221,7 @@ export function PostDetailPage({
   }
 
   return (
-    <section className={styles.page}>
+    <section className={styles.page} ref={pageRef}>
       <DetailHeader onBack={goBack} />
       {modelUnavailable && (
         <Notice
