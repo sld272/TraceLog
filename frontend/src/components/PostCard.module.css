@@ -409,16 +409,39 @@
 /* quiet, borderless comment actions (引用 / 重跑) on one row */
 .commentFooter {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
-  gap: var(--space-4);
+  column-gap: var(--space-4);
+  row-gap: 0;
   width: 100%;
   margin-top: var(--space-2);
 }
 
-/* neutralize EvidencePanel's own top margin so it lines up with the buttons */
+/* The 引用记忆 panel is a <details>, so opening it used to shove 重跑/回复 along
+   with the whole expanded box. display:contents dissolves the <details> box and
+   lets its two halves join this flex row on their own: the summary stays on line
+   one next to the buttons, the citation list gets flex-basis 100% and drops to
+   line two. So 重跑/回复 hold their spot whether the panel is open or closed.
+   ::details-content is the wrapper Chrome ≥131 puts around the panel body; the
+   child selector is the same rule for engines that predate it, where the panel's
+   children are the flex items directly. */
 .commentFooter > details {
-  margin-top: 0;
+  display: contents;
+}
+
+.commentFooter > details > summary {
+  order: 0;
+}
+
+.commentFooter > :not(details) {
+  order: 1;
+}
+
+.commentFooter > details::details-content,
+.commentFooter > details > :not(summary) {
+  order: 2;
+  display: block;
+  flex-basis: 100%;
 }
 
 .quietAction {

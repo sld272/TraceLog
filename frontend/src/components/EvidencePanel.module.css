@@ -1,12 +1,15 @@
 .panel {
   width: fit-content;
-  max-width: min(100%, 520px);
+  max-width: 100%;
   margin-top: var(--space-2);
   color: var(--color-text-secondary);
   font-size: var(--text-xs);
 }
 
-.compact {
+/* The width cap lives on the list (see .items), not on the <details>: PostCard
+   dissolves the details box (display:contents) to keep its action buttons on the
+   summary line, and a max-width set there would go with it. */
+.compact .items {
   max-width: min(100%, 460px);
 }
 
@@ -43,6 +46,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  max-width: min(100%, 520px);
   margin-top: var(--space-2);
   padding: var(--space-2);
   border-radius: var(--radius-md);
